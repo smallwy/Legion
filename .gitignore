@@ -1,0 +1,30 @@
+# ---- 操作系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Cocos Creator 生成目录（可重建，不入库）----
+library/
+temp/
+local/
+build/
+profiles/
+native/
+.cocos-*/
+
+# ---- Node / 工具链 ----
+node_modules/
+*.tsbuildinfo
+
+# ---- 沙箱侧临时产物 ----
+client/tools/*.log
+/tmp/
+
+# ---- 编辑器 ----
+.vscode/
+.idea/
+*.suo
+*.user
+
+# ---- 本地工具状态（WorkBuddy 工作区记忆/总览）----
+.workbuddy/

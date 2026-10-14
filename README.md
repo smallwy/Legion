@@ -22,10 +22,18 @@ Legion/
 │   ├── ref-battle.png             #   战斗场景概念锚点
 │   ├── sprite-pet.png             #   宠物战斗精灵（洋红底，色键抠图）
 │   └── sprite-bug.png             #   昆虫敌人精灵（洋红底）
+├── client/                        # ★★ 正式游戏工程源码（Cocos Creator 3.8+）
+│   ├── assets/scripts/            #   全套战斗脚本（入口 GameBootstrap）
+│   ├── assets/resources/art/      #   透明占位精灵（宠物 + 3 种敌人）
+│   ├── tools/                     #   沙箱侧：占位图预处理 + cc 类型桩 + 静态检查
+│   └── README.md                  #   ★ 5 分钟组装步骤 / 操作 / 调参 / DrawCall 预算
 ├── archive/web-prototype-legacy/  # ★ 遗留 Web 原型（非官方路径，已降级）
 │   └── index.html
 └── README.md
 ```
+
+> **怎么开始？** 看 `client/README.md`：Dashboard 建 Empty(2D) 项目 → 拷 `assets/` → 场景挂
+> `GameBootstrap` → 运行。整个 demo 只挂一个组件，其余由代码搭建。
 
 ## 关键设计决策（摘要，详见 docs/）
 - **双线互补**（Hub-and-Spoke 资源网，非推图）：家园养宠 ←→ 远征打怪，宠物不是子弹，是有状态/关系/记忆的活物。

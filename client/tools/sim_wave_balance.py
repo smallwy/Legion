@@ -32,7 +32,7 @@ WAVE_MAX_ALIVE = 32
 SPAWN_RADIUS = 600
 
 SAT_MAX = 100.0
-SAT_DECAY = 0.5
+SAT_DECAY = 0.7   # 与 BattleConfig 同步（0.5 时一局只掉 83 点，喂食系统等于不存在）
 FEED_AMOUNT = 35.0
 FEED_CD = 0.8
 FULL_LINE = 70.0

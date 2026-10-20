@@ -45,7 +45,7 @@ export const PET = {
     telegraph: 0.25,     // ★ 前摇
     cast: 0.1,           // ★ 施法
     recovery: 0.3,       // ★ 后摇
-    displaySize: 48,     // 显示宽度 = 贴图 24px × 2（★ 像素风必须整数倍）
+    displaySize: 64,     // 显示宽度 = 贴图 32px × 2（★ 像素风必须整数倍）
     powerMultiplier: 1,  // Day 2「半饿最强」挂钩点（半饿 1.5 / 满饱 1.0 / 全饿 0.6）
 } as const;
 
@@ -69,12 +69,13 @@ export interface EnemyDef {
 
 /** 首版 3 种敌人（美术指引 §5.6：步行虫/飞虫/甲虫，换色复用）
  *  ⚠️ 像素风铁律（美术指引 §1）：displaySize 必须是工作分辨率的整数倍，否则
- *  非整数缩放 + 线性采样会糊掉颗粒感。当前占位贴图 24/24/24/28px，全部 ×2 → 48/48/48/56。
- *  换正式美术时同步遵守「workRes × 整数 = displaySize」。 */
+ *  非整数缩放 + 线性采样会糊掉颗粒感。当前占位贴图 32/32/32/32px，全部 ×2 → 64。
+ *  换正式美术时同步遵守「workRes × 整数 = displaySize」。
+ *  ⚠️ 体型差异靠造型表达（甲壳更宽 / 翅膀更开），不要用非整数 displaySize 硬拉。 */
 export const ENEMIES: { [k in EnemyType]: EnemyDef } = {
-    walker: { hp: 20, speed: 70, radius: 15, displaySize: 48, aggroRange: 300, attackRange: 60, castRange: 0, windup: 0.3, attackCd: 1.0, damage: 1, projectileSpeed: 0, color: 0x6B8E23, weight: 0.6 },
-    flyer: { hp: 12, speed: 120, radius: 12, displaySize: 48, aggroRange: 320, attackRange: 0, castRange: 140, windup: 0.8, attackCd: 2.2, damage: 1, projectileSpeed: 260, color: 0xC0392B, weight: 0.25 },
-    tank: { hp: 60, speed: 38, radius: 21, displaySize: 56, aggroRange: 260, attackRange: 60, castRange: 0, windup: 0.45, attackCd: 1.4, damage: 1, projectileSpeed: 0, color: 0x34495E, weight: 0.15 },
+    walker: { hp: 20, speed: 70, radius: 15, displaySize: 64, aggroRange: 300, attackRange: 60, castRange: 0, windup: 0.3, attackCd: 1.0, damage: 1, projectileSpeed: 0, color: 0x6B8E23, weight: 0.6 },
+    flyer: { hp: 12, speed: 120, radius: 12, displaySize: 64, aggroRange: 320, attackRange: 0, castRange: 140, windup: 0.8, attackCd: 2.2, damage: 1, projectileSpeed: 260, color: 0xC0392B, weight: 0.25 },
+    tank: { hp: 60, speed: 38, radius: 21, displaySize: 64, aggroRange: 260, attackRange: 60, castRange: 0, windup: 0.45, attackCd: 1.4, damage: 1, projectileSpeed: 0, color: 0x34495E, weight: 0.15 },
 };
 
 /** 怪窝（CR-008：玩家抵达地点后成批生成，非追踪刷新）★ 12 只/窝 */

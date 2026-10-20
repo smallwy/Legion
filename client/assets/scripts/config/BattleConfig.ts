@@ -23,7 +23,7 @@ export const CAMERA = {
     followLerp: 8,     // 跟随平滑系数（越大越跟手；指数平滑，帧率无关）
 } as const;
 
-/** 玩家：WASD 只控中心点（CR-007）★ HP 6 / 移速 190 */
+/** 玩家：WASD 只控主角（CR-007）★ HP 6 / 移速 190 */
 export const PLAYER = {
     hp: 6,
     speed: 190,
@@ -31,22 +31,38 @@ export const PLAYER = {
     invincibleAfterHit: 0.8,   // △ 受击无敌帧，防止 6 点 HP 被瞬间融化
 } as const;
 
-/** 宠物自动施法（CR-009 三段链路）★ 前摇 0.25 + 施法 0.1 + 后摇 0.3 = 0.65s/轮
- *  ✅ 口径已定案（CR-011，2026-10-18）：采 CR-009 三段时长，§2.7 改为 **1.54 次/秒**，
- *  原「2.2 次/秒」作废。若要回到 2.2 次/秒需把 recovery 压到 0.1（会失去火力空窗期可读性）。 */
-export const PET = {
-    count: 1,            // Day 1 排期 = 1 只；Day 2 改 3（系统已支持 N 只，不用改代码）
-    orbitDist: 48,       // 环绕半径（Day1 验收：稳定在 45-50px）
-    orbitSpeed: 0.8,     // 环绕角速度 rad/s
-    springStiffness: 90, // 弹性跟随刚度
-    springDamping: 12,   // 弹性跟随阻尼
-    acquireRange: 340,   // 自动索敌半径 △
-    damage: 10,          // ★ 宠物基础火力 10 dmg/次
-    telegraph: 0.25,     // ★ 前摇
-    cast: 0.1,           // ★ 施法
-    recovery: 0.3,       // ★ 后摇
-    displaySize: 64,     // 显示宽度 = 贴图 32px × 2（★ 像素风必须整数倍）
-    powerMultiplier: 1,  // Day 2「半饿最强」挂钩点（半饿 1.5 / 满饱 1.0 / 全饿 0.6）
+/**
+ * 队伍队形槽位（CR-014：**环绕 → 列队跟随**）
+ *
+ * 局部坐标 `[f, r]`：f = 沿队伍前进方向的距离（负值 = 在主角身后），r = 向右的偏移。
+ * 主角固定占 f=0 / r=0（队伍最前方），英雄依次排在身后 —— 这才是「佣兵团」的观感：
+ * 你带头往前冲，几个小跟班在身后列队跟着。
+ *
+ * ⚠️ 槽位数量必须 = HERO.count。
+ */
+export const HERO_SLOTS: ReadonlyArray<readonly [number, number]> = [
+    [-28, -24],   // 左后
+    [-28, 24],    // 右后
+    [-52, 0],     // 正后（最远，视觉上拉出一条纵列）
+];
+
+/** 英雄（原「宠物」）：CR-009 三段施法链路 + CR-014 列队跟随
+ *  ★ 前摇 0.25 + 施法 0.1 + 后摇 0.3 = 0.65s/轮 = **1.54 次/秒**（CR-011 定案，原「2.2 次/秒」作废）。 */
+export const HERO = {
+    count: 3,              // 队伍人数（不含主角）；改这里必须同步 HERO_SLOTS
+    // 跟随参数按「跟得上但不僵硬」调：稳态落后距离 ≈ 移速 × damping / stiffness
+    // = 190 × 24 / 220 ≈ 21px（不到半个身位）。调硬会像贴在身上，调软队形会被甩散。
+    followStiffness: 220,  // 弹性跟随刚度
+    followDamping: 24,     // 弹性跟随阻尼（ζ ≈ 0.81，轻微过冲但收敛快）
+    turnRate: 8,           // 队形朝向角速度 rad/s（限速，防止瞬转抽帧）
+    turnDeadzone: 12,      // 移速低于此值不更新朝向（防静止时抖动）
+    acquireRange: 340,     // 自动索敌半径 △
+    damage: 10,            // ★ 基础火力 10 dmg/次
+    telegraph: 0.25,       // ★ 前摇
+    cast: 0.1,             // ★ 施法
+    recovery: 0.3,         // ★ 后摇
+    displaySize: 64,       // 显示宽度 = 贴图 32px × 2（★ 像素风必须整数倍）
+    powerMultiplier: 1,    // 「半饿最强」挂钩点（半饿 1.5 / 满饱 1.0 / 全饿 0.6）
 } as const;
 
 export type EnemyType = 'walker' | 'flyer' | 'tank';
@@ -70,7 +86,6 @@ export interface EnemyDef {
 /** 首版 3 种敌人（美术指引 §5.6：步行虫/飞虫/甲虫，换色复用）
  *  ⚠️ 像素风铁律（美术指引 §1）：displaySize 必须是工作分辨率的整数倍，否则
  *  非整数缩放 + 线性采样会糊掉颗粒感。当前占位贴图 32/32/32/32px，全部 ×2 → 64。
- *  换正式美术时同步遵守「workRes × 整数 = displaySize」。
  *  ⚠️ 体型差异靠造型表达（甲壳更宽 / 翅膀更开），不要用非整数 displaySize 硬拉。 */
 export const ENEMIES: { [k in EnemyType]: EnemyDef } = {
     walker: { hp: 20, speed: 70, radius: 15, displaySize: 64, aggroRange: 300, attackRange: 60, castRange: 0, windup: 0.3, attackCd: 1.0, damage: 1, projectileSpeed: 0, color: 0x6B8E23, weight: 0.6 },
@@ -78,15 +93,37 @@ export const ENEMIES: { [k in EnemyType]: EnemyDef } = {
     tank: { hp: 60, speed: 38, radius: 21, displaySize: 64, aggroRange: 260, attackRange: 60, castRange: 0, windup: 0.45, attackCd: 1.4, damage: 1, projectileSpeed: 0, color: 0x34495E, weight: 0.15 },
 };
 
-/** 怪窝（CR-008：玩家抵达地点后成批生成，非追踪刷新）★ 12 只/窝 */
+/** 怪窝（CR-008：玩家抵达地点后成批生成，非追踪刷新）★ 10 只/窝
+ *  CR-014：**清完即永久 cleared，不再冷却重刷** —— 一局目标是「把窝清完 → 打 BOSS」，
+ *  不是「在刷怪场里活满 N 分钟」。原来那句 `respawnDelay: 18` 已删除。 */
 export const NEST = {
     count: 4,
     positions: [[620, 340], [-700, 300], [220, -520], [-760, -360]] as number[][],
     triggerRange: 240,   // 玩家进圈才激活
-    batch: 12,           // ★ 每窝一批
-    spawnInterval: 0.1,  // 一批内的生成间隔 △
-    respawnDelay: 18,    // 清空后重新刷新的冷却 △（0 = 不刷新）
+    batch: 10,           // ★ 每窝一批
+    spawnInterval: 0.12, // 一批内的生成间隔 △
+    settleDelay: 0.6,    // 最后一只死亡到判定"清空"的缓冲（等死亡动画播完）△
     roamRadius: 220,     // 怪物活动范围（不必然追玩家）
+} as const;
+
+/** 最终 BOSS（CR-014 新增）：全部怪窝清空后，在**最后清空的那一窝**召唤。
+ *  AOE 是它的主要威胁 —— 必须给足读条窗口，玩家靠走位离开红圈。
+ *  displaySize = 32px 贴图 × 4（像素风整数倍铁律） */
+export const BOSS = {
+    name: '腐甲巨虫',
+    hp: 620,
+    speed: 54,
+    radius: 40,
+    displaySize: 128,      // 32 × 4
+    aoeRadius: 155,
+    aoeWindup: 1.2,        // 读条窗口：1.2s 足够从圈心走到圈外
+    aoeCd: 4.2,            // 两次 AOE 的间隔
+    aoeDamage: 2,
+    touchRange: 88,        // 贴身推挤
+    touchDamage: 1,
+    touchCd: 1.6,
+    triggerDelay: 0.8,     // 登场停顿（给玩家反应与拉开距离）
+    deathTime: 0.8,        // 死亡缩小消失时长
 } as const;
 
 /** 弹道 */
@@ -98,14 +135,16 @@ export const PROJECTILE = {
     enemyLife: 3,
 } as const;
 
-/** 经验珠 */
+/** 经验珠（战利品） */
 export const ORB = {
     magnetRange: 140,
     collectRange: 22,
     maxSpeed: 620,
 } as const;
 
-/** 战斗节奏 ★ 远征 3 分钟（可主动撤离） */
+/** 战斗节奏 ★ 远征参考时长 3 分钟
+ *  CR-014：**不再是硬结束条件**。结束条件改为：清完所有窝 + 击杀 BOSS（通关）、
+ *  HP 归零（撤退）、或玩家主动撤离（红线②：无失败惩罚）。此值只用于 HUD 显示。 */
 export const BATTLE = {
     durationMs: 180000,
     maxAlive: 28,        // 同屏敌人上限（性能预算）△

@@ -82,7 +82,7 @@
 | 2 | **命中顿帧（hitstop）** | 命中瞬间全局 `timeScale = 0.05`，持续 2–3 帧 | `GameBootstrap.update` 里拦 `dt` | 打击感的第一来源，成本几乎为零 |
 | 3 | **死亡爆散** | 4–6 个菱形碎片向外飞散 + 缩小消失 | `EntityRenderer` 新增碎片池 | 替代"死亡帧"，比缩小消失爽得多 |
 | 4 | **伤害飘字** | 命中位置冒出数字，0.4s 上浮消失 | `EntityRenderer` + Label 池 | 让玩家知道"打中了、打多少" |
-| 5 | **前摇圈进度填充** | 圈内扇形/圆形从 0 填到满 | `EntityRenderer.drawTelegraphs` | **现有圈只画轮廓，玩家不知道还剩多久** |
+| 5 | **前摇圈进度填充** | 外圈=危险边界（固定），内填充=剩余时间（涨满即落地） | `EntityRenderer.drawTelegraphs` | ✅ **已实现**（原只有轮廓，玩家读不出"还剩多久"） |
 | 6 | **玩家受击反馈** | 屏幕红闪 + 整像素震屏（±3px） | 新增 `ScreenFx` | HP 只有 6，每次受伤都要"有感觉" |
 
 ### P1 · Day 2–3，0 帧，体验提升最大
@@ -148,11 +148,34 @@
 观感是「整只怪闪白但轮廓仍在」而不是「变成一个白多边形」。两档（强闪/余晖）各一次 `fill`，
 仍合并进同一 mesh，不影响 DrawCall。
 
+### ✅ 已修 3：BOSS 阶段英雄永不开火（打通关不可能）
+
+CR-014 新增 BOSS 后，`BossController` **不在 `EnemyManager` 里**，而 `HeroSquad` 的索敌只有一句
+`this._enemies.getNearest(...)` —— 结果：BOSS 登场后**没有任何单位会对它开火**，
+620 HP 一点都掉不了，一局永远不可能通关。`ProjectileManager.boss` 虽然接好了碰撞判定，
+但没有子弹飞向 BOSS，等于空转。
+
+**修法**：给 `HeroSquad` 加一条 `boss` 迟到接线（与 `ProjectileManager.boss` 同一套做法，
+避免构造依赖），索敌改为在「最近杂兵」与「BOSS」之间取更近的那个；
+`Enemy` 与 `Boss` 都满足 `CastTarget { x, y, active, dying }`，所以不用写成两条代码路径。
+
+### ✅ 已修 4：BOSS 死亡动画被跳过（凭空消失）
+
+`GameBootstrap` 传渲染器时用的是 `boss.alive ? boss.boss : null`，
+而 `alive = active && dying <= 0` —— **死亡那一刻 `alive` 立刻变 false**，
+于是 `EntityRenderer.drawBoss()` 直接 return，0.8s 的缩小消失整段没播，BOSS 像被删了。
+
+**修法**：渲染判据改用 `boss.boss.active`（`active` 到动画播完才置 false）。
+HUD 血条仍用 `alive`，因为血条应该立刻消失。
+
 ### ⚠️ 待修：施法/前摇的缩放倍率超标
 
-`PetSquad` 的 `1.28`、`1.18`、`1.28`，以及 `EnemyManager` 受击的 `1.3`，
+`HeroSquad` 的 `1.18`、`1.28`、`1.28`，以及 `EnemyManager` 受击的 `1.3`，
 在 Point 采样下会产生像素颗粒抖动（见 §三约束 1）。属于手感调参，需看过实机效果再定，
 建议收敛到 ≤1.12，或改用整像素位移。
+
+> BOSS 的 0.8s 死亡缩小（`baseScale × k`）是**故意保留的例外**：一次性收尾动画，
+> 短暂的非整数缩放不会被读成"颗粒在抖"；而受击/读条那种**反复回弹**的缩放才会。
 
 ---
 

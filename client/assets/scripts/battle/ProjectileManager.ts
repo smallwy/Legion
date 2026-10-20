@@ -1,5 +1,6 @@
 import { FIELD, PLAYER, PROJECTILE } from '../config/BattleConfig';
 import { Pool } from '../core/Pool';
+import type { BossController } from './BossController';
 import type { EnemyManager } from './EnemyManager';
 import type { PlayerController } from './PlayerController';
 
@@ -22,6 +23,8 @@ export interface Projectile {
 export class ProjectileManager {
     /** 构造后由 Bootstrap 接线（类型引用，避免循环 import） */
     enemies: EnemyManager | null = null;
+    /** BOSS 是可选命中目标（CR-014）：为 null 时行为与原来完全一致 */
+    boss: BossController | null = null;
 
     private _items: Projectile[] = [];
     private _pool = new Pool<Projectile>(() => ({
@@ -76,6 +79,12 @@ export class ProjectileManager {
                 continue;
             }
             if (p.fromPet) {
+                // BOSS 优先判定：否则子弹会"穿过"BOSS 打到它身后的杂兵
+                if (this.boss && this.boss.alive && this.boss.tryHit(p.x, p.y, p.r)) {
+                    this.boss.takeDamage(p.dmg, p.vx, p.vy);
+                    p.active = false;
+                    continue;
+                }
                 const e = this.enemies ? this.enemies.hitTest(p.x, p.y, p.r) : null;
                 if (e && this.enemies) {
                     this.enemies.takeDamage(e, p.dmg, p.vx, p.vy);

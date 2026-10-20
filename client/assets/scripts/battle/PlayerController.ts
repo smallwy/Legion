@@ -17,6 +17,9 @@ export class PlayerController {
     readonly node: Node;
     x = 0;
     y = 0;
+    /** 当前速度（世界单位/秒）。CR-014：队形靠它判断朝向，静止时为 0。 */
+    vx = 0;
+    vy = 0;
     hp = PLAYER.hp;
 
     private _cameraNode: Node;
@@ -27,7 +30,9 @@ export class PlayerController {
     private _keys: { [k in MoveDir]: boolean } = { up: false, down: false, left: false, right: false };
 
     /**
-     * @param parent 玩家中心点的父节点（实体树 Field 下）
+     * @param parent 主角节点的父节点 —— 必须是「Actors」实体容器（不是 Field）。
+     *        实体节点会在运行时增删，只有挂进固定容器，才不会插到特效层(EntityRenderer)
+     *        之后把 AOE 圈/白闪盖掉。
      * @param cameraParent 相机的父节点（与实体树分开：3.x Batcher2D 按 children
      *        遍历序决定绘制优先级，相机树必须整体排在实体树之后，HUD 才不会被子机盖住）
      */
@@ -100,8 +105,13 @@ export class PlayerController {
         if (this._keys.right) dx += 1;
         if (dx !== 0 || dy !== 0) {
             const len = Math.sqrt(dx * dx + dy * dy);
-            this.x += (dx / len) * PLAYER.speed * dt;
-            this.y += (dy / len) * PLAYER.speed * dt;
+            this.vx = (dx / len) * PLAYER.speed;
+            this.vy = (dy / len) * PLAYER.speed;
+            this.x += this.vx * dt;
+            this.y += this.vy * dt;
+        } else {
+            this.vx = 0;
+            this.vy = 0;
         }
 
         const hw = FIELD.width / 2 - PLAYER.radius;
@@ -166,6 +176,8 @@ export class PlayerController {
     reset(): void {
         this.x = 0;
         this.y = 0;
+        this.vx = 0;
+        this.vy = 0;
         this.hp = PLAYER.hp;
         this._invT = 0;
         this._keys.up = false;

@@ -19,6 +19,10 @@ export class BackgroundRenderer {
     constructor(parent: Node) {
         const node = new Node('Background');
         parent.addChild(node);
+        // ★ 强制置底：3.x 的 2D 绘制优先级 = children 遍历序（Batcher2D.walk 源码已核实），
+        //   而本渲染器是在 EnemyManager/PetSquad 之后才构造的，不置底的话这块实心草地
+        //   会盖住玩家、敌人和宠物（z 值不参与 2D 排序，别指望 setPosition 的 z 能救）。
+        node.setSiblingIndex(0);
         node.addComponent(UITransform);
         this._g = node.addComponent(Graphics);
     }

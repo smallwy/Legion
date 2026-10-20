@@ -13,7 +13,8 @@ import type { Projectile } from '../battle/ProjectileManager';
 const C_WALKER = hexColor(ENEMIES.walker.color);
 const C_FLYER = hexColor(ENEMIES.flyer.color);
 const C_TANK = hexColor(ENEMIES.tank.color);
-const C_HIT = hexColor(0xffffff);
+const C_FLASH_STRONG = hexColor(0xffffff, 235);
+const C_FLASH_SOFT = hexColor(0xffffff, 110);
 const C_EYE = hexColor(PALETTE.uiDeep);
 const C_RING_DANGER = hexColor(PALETTE.danger, 220);
 const C_RING_CAST = hexColor(PALETTE.excite, 220);
@@ -62,6 +63,7 @@ export class EntityRenderer {
         g.clear();
         this.drawNests(nests);
         this.drawEnemyBodies(enemies);
+        this.drawHitFlash(enemies);
         this.drawTelegraphs(enemies);
         this.drawProjectiles(projectiles);
         this.drawOrbs(orbs);
@@ -166,16 +168,6 @@ export class EntityRenderer {
         }
         if (n > 0) g.fill();
 
-        // 受击白闪：与节点 scale 脉冲同步的反馈
-        n = 0;
-        g.fillColor = C_HIT;
-        for (const e of enemies) {
-            if (!this.needProcBody(e) || e.hitPunch < 0.5) continue;
-            this.bodyPolygon(g, e, e.type === 'flyer' ? 4 : (e.type === 'tank' ? 8 : 6));
-            n++;
-        }
-        if (n > 0) g.fill();
-
         // 眼睛（暗色小方点，一次 fill 画完所有）
         n = 0;
         g.fillColor = C_EYE;
@@ -209,14 +201,17 @@ export class EntityRenderer {
         return k;
     }
 
-    /** 正多边形身体：边数区分剪影（步行虫 6 / 飞虫 4 / 甲虫 8，美术指引 §5.6） */
+    /** 程序化兜底身体的半径基准 = 碰撞半径 × 当前视觉缩放 */
     private bodyPolygon(g: Graphics, e: Enemy, sides: number): void {
-        const r = e.def.radius * this.bodyScale(e);
-        const rot = e.phase;
+        this.polygonAt(g, e.x, e.y, e.def.radius * this.bodyScale(e), sides, e.phase);
+    }
+
+    /** 通用正多边形（世界坐标 + 半径 + 边数 + 起始相位），供程序化身体与白闪复用 */
+    private polygonAt(g: Graphics, x: number, y: number, r: number, sides: number, rot: number): void {
         for (let i = 0; i < sides; i++) {
             const a = rot + (i / sides) * TAU;
-            const px = e.x + Math.cos(a) * r;
-            const py = e.y + Math.sin(a) * r;
+            const px = x + Math.cos(a) * r;
+            const py = y + Math.sin(a) * r;
             if (i === 0) {
                 g.moveTo(px, py);
             } else {
@@ -224,6 +219,41 @@ export class EntityRenderer {
             }
         }
         g.close();
+    }
+
+    // ---------------- 受击白闪 ----------------
+
+    /**
+     * 受击白闪（贴着图也必须闪）。
+     *
+     * 🐞 原实现的判据是 `needProcBody(e)`，而 `needProcBody = active && !hasSprite`——
+     * 精灵一旦加载成功，这段白闪整段被跳过，敌人挨打只剩 30% 缩放脉冲（而缩放在
+     * Point 采样下还会让像素颗粒抖动）。现在独立成层，判据只看 hitPunch，与贴图无关。
+     *
+     * 半径取贴图显示宽度的 0.72（略小于本体），让贴图自带的 1px 墨色描边露在白闪外侧：
+     * 观感是「整只怪闪白但轮廓仍在」，而不是「变成一个白多边形」。
+     */
+    private drawHitFlash(enemies: Enemy[]): void {
+        const g = this._g;
+        // 强闪 / 余晖两档各一次 fill，仍合并进同一 mesh（= 1 DrawCall）
+        for (let pass = 0; pass < 2; pass++) {
+            const strong = pass === 0;
+            let n = 0;
+            g.fillColor = strong ? C_FLASH_STRONG : C_FLASH_SOFT;
+            for (const e of enemies) {
+                if (!e.active || e.dying > 0) continue;
+                if (strong) {
+                    if (e.hitPunch <= 0.55) continue;
+                } else if (e.hitPunch <= 0.15 || e.hitPunch > 0.55) {
+                    continue;
+                }
+                const r = e.def.displaySize * 0.5 * 0.72;
+                const sides = e.type === 'flyer' ? 4 : (e.type === 'tank' ? 8 : 6);
+                this.polygonAt(g, e.x, e.y, r, sides, e.phase);
+                n++;
+            }
+            if (n > 0) g.fill();
+        }
     }
 
     // ---------------- 前摇 / 读条圈 ----------------

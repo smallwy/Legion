@@ -91,8 +91,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   // 12~14. 武器手感：挑三个形状最不一样的，各截一张
   const skills = [
     [0, "grove-11-武器-溜溜球.png", 0.22],
-    [4, "grove-12-武器-回旋镰刀.png", 0.18],
-    [5, "grove-13-武器-影分身.png", 0.10],
+    [4, "grove-12-武器-飞刀.png", 0.13],
+    [5, "grove-13-武器-影分身.png", 0.30],
   ];
   for (const [hero, name, wait] of skills) {
     await page.evaluate((h) => {
@@ -106,7 +106,19 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     await shot(name);
   }
 
-  // 15. 结算
+  // 15. 宝箱：连着几个人一起烧掉才掉，所以直接摆一颗在火坑边上
+  await page.evaluate(() => {
+    const P = window.GROVE, S = P.S;
+    P._start(1, 1);
+    S.p.x = 700; S.p.y = 462;
+    S.drops.push({ kind: "chest", x: 620, y: 440, vx: 0, vy: 0, taken: false, t: 0, spin: 0.4, holds: 3 });
+    S.drops.push({ kind: "gem",   x: 548, y: 452, vx: 0, vy: 0, taken: false, t: 0, spin: 0.2 });
+    S.texts.length = 0;
+  });
+  await sleep(520);
+  await shot("grove-15-宝箱.png");
+
+  // 16. 结算
   await page.evaluate(() => {
     const { S } = window.GROVE;
     window.GROVE._start(0, 4);
@@ -119,7 +131,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     S.best[4] = "S";
   });
   await sleep(280);
-  await shot("grove-14-结算.png");
+  await shot("grove-16-结算.png");
 
   await browser.close();
   console.log("\n完成");

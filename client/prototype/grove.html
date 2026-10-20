@@ -50,14 +50,24 @@
       因为一回到列表，人就会开始挑着打，推关的手感就断了。
       进度存 localStorage，关掉再打开从上次那关继续。
 
-   ⑤ 六把武器，形状全不一样（这一版加的）。
-      溜溜球（去回）/ 音波喇叭（原地一圈）/ 滚坚果（贴地滚）/
-      萝卜炮（抛物线）/ 回旋镰刀（绕身一圈）/ 影分身（三线平推）。
+   ⑤ 六把武器，作用方式全不一样（这一版重做）。
+      溜溜球（去回）/ 音波喇叭（原地扇形）/ 滚坚果（贴地滚）/
+      萝卜炮（抛物线）/ 飞刀（丢出去，自旋穿透）/ 影分身（召唤两个分身替你打）。
       命中效果完全相同，差异化只在怎么打到 —— 这是推球游戏，不是弹幕游戏。
+      上一版六把全是"飞出去一颗东西"，只有形状差别；现在至少四把连"东西"都不是：
+      音波是范围、坚果是地面滚动物、飞刀是一次性投掷、分身是召唤物。
 
    ⑥ Q 版战斗场景（这一版改的）。
       原来画的是暗色森林剪影，读起来像横版探险。现在每关一套主题色，
       天空要亮、云山树全用圆弧、所有东西都有深色粗描边 —— 像贴纸，不像写实。
+
+   ⑦ 球是"一次性"的（这一版改的）。
+      被玩家推出去的球有 3.2 秒寿命，撞两次墙就散。以前地面无摩擦 + 撞墙只衰减，
+      底层会永远有几颗球在溜达，玩家分不清"哪颗还能用、哪颗是上一波的残骸"。
+
+   ⑧ 宝箱只从"球送走的人"身上掉（这一版加的）。
+      火坑/营地结算时按这一球**连带送走几只**判概率：单杀 14%、两只 38%、三只 62%。
+      武器糊不死人（只糊层），所以"只有雪人式击杀才有宝箱"是机制自带的，不用额外判。
    ========================================================================== */
 
 /* ---------- 画布 ---------- */
@@ -121,8 +131,11 @@ function hash(i) {
      短尾犬  音波喇叭  原地吼一圈。射程最短、覆盖最宽，专治贴身围殴
      胖仓鼠  滚坚果    贴地滚，穿透，撞墙弹一次。地上有人的时候最好用
      长耳兔  萝卜炮    抛物线，落点炸一片。唯一能打"高台背面"的
-     老实牛  回旋镰刀  绕自己转一大圈。伤害不高，但一圈扫平身边所有人
-     影狐    影分身    三道残影平推。射程最长、最直，一条线全穿
+     老实牛  飞刀      丢出去，高速自转，穿两个人。丢完就没了，不回收
+     影狐    影分身    召两个分身站你左右，替你吐影弹。分身不走，得自己找角度
+
+   后两把是用户点名要改的：飞刀"是丢出去的，不是环绕的"；
+   分身上一版是三道平推的残影，读起来只是"三个白药丸"，现在改成真正的召唤物。
 
    注意：这些弹丸打中的效果**都一样**（+1 层包裹）。不做元素克制、
    不做伤害数字 —— 这是推球游戏，不是弹幕游戏。差异化只在"怎么打到"。
@@ -194,18 +207,19 @@ const HEROES = [
     },
   },
   {
-    id: "ox", name: "老实牛", tag: "回旋镰刀",
+    id: "ox", name: "老实牛", tag: "飞刀",
     c1: "#8FA3B8", c2: "#E6EEF6", c3: "#63788C",
     w: 56, h: 52, spd: 250, jump: 700,
-    atkCd: 0.70, dashCd: 0.80, dashPow: 700,
+    atkCd: 0.62, dashCd: 0.80, dashPow: 700,
     ears: "ox",
-    desc: "镰刀绕自己转一大圈，身边所有敌人一起糊。慢慢转，但一圈不漏。",
+    desc: "一把刀丢出去，转着飞，能穿透两个人。丢出去就没了，得等它飞完。",
     fire(u) {
       spawnShot({
-        x: u.x, y: u.y - 26,
-        vx: 0, vy: 0, r: 20, life: 0.62,
-        kind: "sickle", u: u, ang: -1.5, rad: 84,
-        ox: u.x, oy: u.y - 26, color: "#DDE8F2", pierce: true,
+        x: u.x + u.face * 18, y: u.y - 26,
+        vx: u.face * 900, vy: -70,
+        r: 13, life: 0.58, kind: "knife", dir: u.face,
+        spin: 0, grav: 700, pierce: true, hitMax: 2,
+        color: "#DDE8F2",
       });
     },
   },
@@ -213,16 +227,18 @@ const HEROES = [
     id: "fox", name: "影狐", tag: "影分身",
     c1: "#E08A5E", c2: "#FFE4D2", c3: "#B45F38",
     w: 42, h: 44, spd: 360, jump: 820,
-    atkCd: 0.40, dashCd: 0.50, dashPow: 700,
+    atkCd: 0.78, dashCd: 0.50, dashPow: 700,
     ears: "fox",
-    desc: "三道残影平推出去，射程最长。一条直线上的三个人一起糊。",
+    desc: "召出两个分身站在左右，替你往那边丢影弹。分身不走，你自己去找角度。",
     fire(u) {
-      for (let i = 0; i < 3; i++) {
+      // 召唤：不是子弹，是两个"站位"。分身自己不伤害，靠它定时吐出的影弹。
+      for (const sd of [-1, 1]) {
         spawnShot({
-          x: u.x + u.face * 16, y: u.y - 18 - i * 18,
-          vx: u.face * 860, vy: 0,
-          r: 13, life: 0.40, kind: "shadow", i: i,
-          color: "#B49CFF", pierce: true,
+          x: u.x + sd * 68, y: u.y - 10,
+          vx: 0, vy: 0, r: 20, life: 3.4,
+          kind: "summon", dir: sd, face: u.face,
+          fireT: 0.12, interval: 0.42, shots: 0,
+          color: "#B49CFF",
         });
       }
     },
@@ -353,77 +369,87 @@ const THEME_ORDER = ["tundra", "swamp", "cliff", "slope", "bouncy", "well", "sta
 
 const LEVELS = [
   {
-    id: "entry", name: "苔原入口", sub: "直井 · 两段台面",
-    note: "一道竖井直通地面。先把「糊三下 → 推 → 烧」摸熟",
+    id: "entry", name: "苔原入口", sub: "直井 · 中央顶台",
+    note: "一道竖井直通火坑，右上角还留了个落营地的口子。先把「糊三下 → 推 → 烧」摸熟",
     theme: "tundra",
     goal: "clear", par: { time: 45, made: 7 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
       { x: WALL_L, y: 462, w: 474, h: 20, kind: "ledge" },   // 26..500
-      { x: 600,    y: 462, w: 260, h: 20, kind: "ledge" },   // 600..860
-      { x: WALL_L, y: 350, w: 474, h: 20, kind: "ledge" },
-      { x: 600,    y: 350, w: 260, h: 20, kind: "ledge" },
-      // 500..600 是竖井（正对火坑），860..934 是落营地的口子。
+      { x: 620,    y: 462, w: 160, h: 20, kind: "ledge" },   // 620..780（780 之后是落营地的口子）
+      { x: WALL_L, y: 350, w: 274, h: 20, kind: "ledge" },   // 26..300
+      { x: 420,    y: 350, w: 80,  h: 20, kind: "ledge" },   // 420..500 小台阶
+      { x: 640,    y: 350, w: 220, h: 20, kind: "ledge" },   // 640..860
+      { x: 380,    y: 248, w: 300, h: 20, kind: "ledge" },   // 顶台在正中间
     ],
     pits: [
       { x: 180, y: GROUND_Y, w: 100, kind: "mud"  },
-      { x: 500, y: GROUND_Y, w: 100, kind: "fire" },
+      { x: 500, y: GROUND_Y, w: 100, kind: "fire" },   // 正对 500..620 的竖井
     ],
     stumps: [],   // 教学关不放木桩：出生点就在旁边，所有弹丸出门第一帧就被它吃掉
     camp: { x: 852, y: GROUND_Y, w: 82 },
     spawns: [
       { foe: "bug",  x: 180, y: 462 },
       { foe: "bug",  x: 700, y: 462 },
-      { foe: "bug",  x: 820, y: 462 },
-      { foe: "bug",  x: 200, y: 350 },
+      { foe: "bug",  x: 150, y: 350 },
+      { foe: "bug",  x: 460, y: 350 },
       { foe: "bug",  x: 760, y: 350 },
+      { foe: "bug",  x: 450, y: 248 },
+      { foe: "bug",  x: 620, y: 248 },
     ],
     spawn: { x: 90, y: GROUND_Y },
   },
 
   {
-    id: "marsh", name: "泥沼", sub: "三池 · 三种落点",
-    note: "左泥、中水、右火。球掉哪口坑，决定这一下赚不赚",
+    id: "marsh", name: "泥沼", sub: "三池 · 三层错台",
+    note: "左泥、中水、右火，三段台面层层错开。球掉哪口坑，决定这一下赚不赚",
     theme: "swamp",
     goal: "collect", collect: 14, par: { time: 32, made: 7 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
       { x: WALL_L, y: 462, w: 254, h: 20, kind: "ledge" },   // 26..280
-      { x: 380,    y: 462, w: 480, h: 20, kind: "ledge" },   // 380..860
-      { x: WALL_L, y: 350, w: 254, h: 20, kind: "ledge" },
-      { x: 380,    y: 350, w: 480, h: 20, kind: "ledge" },
-      { x: 320,    y: 248, w: 320, h: 20, kind: "ledge" },   // 顶层
+      { x: 380,    y: 462, w: 300, h: 20, kind: "ledge" },   // 380..680
+      { x: 800,    y: 462, w: 60,  h: 20, kind: "ledge" },   // 800..860 窄台
+      { x: WALL_L, y: 350, w: 234, h: 20, kind: "ledge" },   // 26..260
+      { x: 380,    y: 350, w: 240, h: 20, kind: "ledge" },   // 380..620
+      { x: 720,    y: 350, w: 140, h: 20, kind: "ledge" },   // 720..860
+      { x: 300,    y: 248, w: 260, h: 20, kind: "ledge" },   // 中央顶台
     ],
     pits: [
       { x: 110, y: GROUND_Y, w: 110, kind: "mud"   },
-      { x: 280, y: GROUND_Y, w: 100, kind: "water" },   // 左竖井正下方
+      { x: 280, y: GROUND_Y, w: 100, kind: "water" },   // 正对左侧竖井
       { x: 560, y: GROUND_Y, w: 120, kind: "fire"  },
     ],
-    stumps: [{ x: 730, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    stumps: [{ x: 740, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
     camp: { x: 852, y: GROUND_Y, w: 82 },
     spawns: [
       { foe: "bug",  x: 150, y: 462 },
-      { foe: "bug",  x: 520, y: 462 },
-      { foe: "bug",  x: 800, y: 462 },
-      { foe: "bug",  x: 180, y: 350 },
-      { foe: "boar", x: 700, y: 350 },
+      { foe: "bug",  x: 500, y: 462 },
+      { foe: "bug",  x: 120, y: 350 },
+      { foe: "bug",  x: 560, y: 350 },
+      { foe: "boar", x: 780, y: 350 },
+      { foe: "bug",  x: 350, y: 248 },
+      { foe: "bug",  x: 500, y: 248 },
       { foe: "crow", x: 460, y: 300, fly: true },
     ],
     spawn: { x: 230, y: GROUND_Y },
   },
 
   {
-    id: "cliff", name: "断崖", sub: "长球道 · 三层",
-    note: "中场拉成一条长台。球在上面能连撞一串，别让它中途掉下去",
+    id: "cliff", name: "断崖", sub: "长球道 · 五层塔",
+    note: "一条长台横在半空，上面又压了两层。球在长台上能连撞一串，别让它从右边漏下去",
     theme: "cliff",
     goal: "limit", ballLimit: 6, par: { time: 70, made: 8 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-      { x: WALL_L, y: 462, w: 394, h: 20, kind: "ledge" },   // 26..420
-      { x: 520,    y: 462, w: 340, h: 20, kind: "ledge" },   // 520..860
-      { x: WALL_L, y: 350, w: 394, h: 20, kind: "ledge" },
-      { x: 520,    y: 350, w: 340, h: 20, kind: "ledge" },
-      { x: 300,    y: 248, w: 400, h: 20, kind: "ledge" },
+      { x: WALL_L, y: 462, w: 574, h: 20, kind: "ledge" },   // 26..600 长球道
+      { x: 760,    y: 462, w: 100, h: 20, kind: "ledge" },   // 760..860
+      { x: WALL_L, y: 350, w: 174, h: 20, kind: "ledge" },   // 26..200
+      { x: 260,    y: 350, w: 400, h: 20, kind: "ledge" },   // 260..660
+      { x: 760,    y: 350, w: 100, h: 20, kind: "ledge" },   // 760..860
+      { x: 60,     y: 248, w: 280, h: 20, kind: "ledge" },   // 60..340
+      { x: 420,    y: 248, w: 280, h: 20, kind: "ledge" },   // 420..700
+      { x: 500,    y: 156, w: 260, h: 20, kind: "ledge" },   // 第五层，只有这一关有
     ],
     pits: [
       { x: 300, y: GROUND_Y, w: 100, kind: "mud"  },
@@ -433,74 +459,81 @@ const LEVELS = [
     camp: { x: 848, y: GROUND_Y, w: 86 },
     spawns: [
       { foe: "bug",  x: 150, y: 462 },
-      { foe: "bug",  x: 650, y: 462 },
+      { foe: "bug",  x: 700, y: 462 },
       { foe: "bug",  x: 830, y: 462 },
-      { foe: "bug",  x: 150, y: 350 },
+      { foe: "bug",  x: 120, y: 350 },
       { foe: "bug",  x: 400, y: 350 },
-      { foe: "boar", x: 700, y: 350 },
-      { foe: "bug",  x: 420, y: 248 },
-      { foe: "crow", x: 560, y: 300, fly: true },
+      { foe: "boar", x: 600, y: 350 },
+      { foe: "bug",  x: 200, y: 248 },
+      { foe: "bug",  x: 600, y: 248 },
+      { foe: "bug",  x: 580, y: 156 },
     ],
     spawn: { x: 90, y: GROUND_Y },
   },
 
   {
-    id: "slope", name: "缓坡", sub: "斜坡 · 球会自己爬回来",
-    note: "竖井底下有条坡。掉下去的球顺着坡又回到上层，一颗球能来回扫",
+    id: "slope", name: "缓坡", sub: "长坡 · 坡顶接台",
+    note: "一条 180 长的坡，坡顶正好搭上右侧台面。掉下去的球顺着坡又爬回来",
     theme: "slope",
     goal: "chain", chain: 3, par: { time: 70, made: 8 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-      { x: WALL_L, y: 462, w: 354, h: 20, kind: "ledge" },   // 26..380
-      { x: 550,    y: 462, w: 310, h: 20, kind: "ledge" },   // 550..860（坡顶正好接这一段的左端）
-      { x: WALL_L, y: 350, w: 354, h: 20, kind: "ledge" },
-      { x: 480,    y: 350, w: 380, h: 20, kind: "ledge" },
-      { x: 340,    y: 248, w: 380, h: 20, kind: "ledge" },
+      { x: WALL_L, y: 462, w: 334, h: 20, kind: "ledge" },   // 26..360
+      { x: 560,    y: 462, w: 160, h: 20, kind: "ledge" },   // 560..720（坡顶正好接这一段）
+      { x: 800,    y: 462, w: 60,  h: 20, kind: "ledge" },   // 800..860
+      { x: WALL_L, y: 350, w: 354, h: 20, kind: "ledge" },   // 26..380
+      { x: 480,    y: 350, w: 180, h: 20, kind: "ledge" },   // 480..660
+      { x: 720,    y: 350, w: 140, h: 20, kind: "ledge" },   // 720..860
+      { x: 300,    y: 248, w: 320, h: 20, kind: "ledge" },   // 中央顶台
     ],
     ramps: [
-      // 坡底 400、坡顶 550：球爬到顶正好被 480..860 那段台面接住。
-      { x: 400, w: 150, yBot: GROUND_Y, yTop: 462 },
+      // 坡底 380、坡顶 560：球爬到顶正好被 560..720 那段台面接住。
+      { x: 380, w: 180, yBot: GROUND_Y, yTop: 462 },
     ],
     pits: [
-      { x: 160, y: GROUND_Y, w: 100, kind: "mud"  },
+      { x: 150, y: GROUND_Y, w: 100, kind: "mud"  },
       { x: 640, y: GROUND_Y, w: 120, kind: "fire" },
     ],
     stumps: [{ x: 300, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
     camp: { x: 852, y: GROUND_Y, w: 82 },
     spawns: [
       { foe: "bug",  x: 150, y: 462 },
-      { foe: "bug",  x: 700, y: 462 },
-      { foe: "bug",  x: 840, y: 462 },
+      { foe: "bug",  x: 650, y: 462 },
       // 350 层长球道上放三只：连锁的素材必须在同一条线上
-      { foe: "bug",  x: 530, y: 350 },
-      { foe: "bug",  x: 650, y: 350 },
+      { foe: "bug",  x: 500, y: 350 },
+      { foe: "bug",  x: 570, y: 350 },
+      { foe: "bug",  x: 640, y: 350 },
       { foe: "boar", x: 800, y: 350 },
-      { foe: "bug",  x: 360, y: 248 },
+      { foe: "bug",  x: 400, y: 248 },
+      { foe: "bug",  x: 550, y: 248 },
     ],
     spawn: { x: 90, y: GROUND_Y },
   },
 
   {
-    id: "trampoline", name: "弹跳林", sub: "弹簧菇 · 球会飞",
-    note: "地上两朵菇。推过去球直接弹上楼，省得你搬",
+    id: "trampoline", name: "弹跳林", sub: "两级弹菇 · 塔式上升",
+    note: "地面一朵菇把球弹上二楼，二楼还有一朵。想让球上顶层，得连弹两次",
     theme: "bouncy",
     goal: "bank", bank: 5, par: { time: 65, made: 8 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-      { x: WALL_L, y: 462, w: 534, h: 20, kind: "ledge" },   // 26..560
-      { x: 640,    y: 462, w: 220, h: 20, kind: "ledge" },   // 640..860
-      { x: WALL_L, y: 350, w: 534, h: 20, kind: "ledge" },
-      { x: 640,    y: 350, w: 220, h: 20, kind: "ledge" },
-      { x: 150,    y: 248, w: 610, h: 20, kind: "ledge" },   // 顶层
+      { x: WALL_L, y: 462, w: 374, h: 20, kind: "ledge" },   // 26..400
+      { x: 520,    y: 462, w: 180, h: 20, kind: "ledge" },   // 520..700
+      { x: 780,    y: 462, w: 80,  h: 20, kind: "ledge" },   // 780..860
+      { x: WALL_L, y: 350, w: 374, h: 20, kind: "ledge" },   // 26..400
+      { x: 480,    y: 350, w: 160, h: 20, kind: "ledge" },   // 480..640 二楼的菇站这儿
+      { x: 720,    y: 350, w: 140, h: 20, kind: "ledge" },   // 720..860
+      { x: 150,    y: 248, w: 250, h: 20, kind: "ledge" },   // 150..400
+      { x: 520,    y: 248, w: 240, h: 20, kind: "ledge" },   // 520..760
     ],
     bouncers: [
-      // 弹起 228px：556 → 328，正好越过 350 层。
-      // 不能摆在"落点 → 营地"那条路上，球会被弹起来飞过营地（落袋关会变死关）。
-      { x: 480, y: GROUND_Y },
-      { x: 210, y: GROUND_Y },
+      // 弹起 229px：556 → 327 越过 350 层；350 层那朵再弹到 121，越过 248 层。
+      // 不摆在"落点 → 营地"那条路上，否则球会被弹起来飞过营地（落袋关变死关）。
+      { x: 180, y: GROUND_Y },
+      { x: 540, y: 350 },
     ],
     pits: [
-      { x: 90,  y: GROUND_Y, w: 100, kind: "mud"  },
+      { x: 60,  y: GROUND_Y, w: 90,  kind: "mud"  },
       { x: 300, y: GROUND_Y, w: 120, kind: "fire" },
     ],
     stumps: [{ x: 700, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
@@ -508,117 +541,124 @@ const LEVELS = [
     spawns: [
       { foe: "bug",  x: 250, y: 248 },
       { foe: "bug",  x: 620, y: 248 },
-      { foe: "bug",  x: 180, y: 350 },
+      { foe: "bug",  x: 200, y: 350 },
       { foe: "boar", x: 760, y: 350 },
       { foe: "bug",  x: 300, y: 462 },
-      { foe: "bug",  x: 780, y: 462 },
+      { foe: "bug",  x: 800, y: 462 },
     ],
     spawn: { x: 60, y: GROUND_Y },
   },
 
   {
-    id: "deepwell", name: "深井", sub: "传送洞 · 两段接成一链",
-    note: "两个洞通着。球从左进、从右出，一条球道当成两条用",
+    id: "deepwell", name: "深井", sub: "中央深井 · 传送接两端",
+    note: "中间整块是空的。462 层两个洞通着，球从左段末进、从右段头出，一条道当两条用",
     theme: "well",
     goal: "chain", chain: 3, par: { time: 45, made: 7 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-      { x: WALL_L, y: 462, w: 314, h: 20, kind: "ledge" },   // 26..340
-      { x: 450,    y: 462, w: 410, h: 20, kind: "ledge" },   // 450..860
-      { x: WALL_L, y: 350, w: 314, h: 20, kind: "ledge" },
-      { x: 450,    y: 350, w: 410, h: 20, kind: "ledge" },
-      { x: 280,    y: 248, w: 380, h: 20, kind: "ledge" },
+      { x: WALL_L, y: 462, w: 254, h: 20, kind: "ledge" },   // 26..280
+      { x: 640,    y: 462, w: 140, h: 20, kind: "ledge" },   // 640..780
+      { x: WALL_L, y: 350, w: 254, h: 20, kind: "ledge" },   // 26..280
+      { x: 640,    y: 350, w: 140, h: 20, kind: "ledge" },   // 640..780
+      { x: WALL_L, y: 248, w: 214, h: 20, kind: "ledge" },   // 26..240
+      { x: 680,    y: 248, w: 180, h: 20, kind: "ledge" },   // 680..860
     ],
     portals: [
       // 洞开在 462 球道层，不开地面 —— 地面上一个人都没有，洞只是装饰。
-      { id: "a", x: 320, y: 462, link: "b" },
-      { id: "b", x: 470, y: 462, link: "a" },
+      // A 在左段末尾、B 在右段开头：球穿过去之后继续往右滚，正好滚进营地。
+      { id: "a", x: 262, y: 462, link: "b" },
+      { id: "b", x: 656, y: 462, link: "a" },
     ],
     pits: [
-      { x: 50,  y: GROUND_Y, w: 110, kind: "water" },
-      { x: 230, y: GROUND_Y, w: 100, kind: "mud"   },
-      { x: 540, y: GROUND_Y, w: 120, kind: "fire"  },
+      { x: 200, y: GROUND_Y, w: 80,  kind: "mud"   },
+      { x: 300, y: GROUND_Y, w: 100, kind: "water" },   // 深井正下方
+      { x: 520, y: GROUND_Y, w: 100, kind: "fire"  },
     ],
-    stumps: [{ x: 720, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    stumps: [{ x: 730, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
     camp: { x: 852, y: GROUND_Y, w: 82 },
     spawns: [
       { foe: "bug",  x: 120, y: 462 },
-      { foe: "bug",  x: 250, y: 462 },
-      { foe: "bug",  x: 520, y: 462 },
-      { foe: "bug",  x: 700, y: 462 },
-      { foe: "bug",  x: 200, y: 350 },
-      { foe: "boar", x: 780, y: 350 },
-      { foe: "crow", x: 480, y: 300, fly: true },
+      { foe: "bug",  x: 668, y: 462 },
+      { foe: "bug",  x: 706, y: 462 },
+      { foe: "bug",  x: 744, y: 462 },
+      { foe: "bug",  x: 120, y: 350 },
+      { foe: "bug",  x: 700, y: 350 },
+      { foe: "bug",  x: 120, y: 248 },
+      { foe: "bug",  x: 760, y: 248 },
+      { foe: "bug",  x: 700, y: 248 },
     ],
     spawn: { x: 60, y: GROUND_Y },
   },
 
   {
-    id: "stairs", name: "阶梯塔", sub: "错层双井 · 像楼梯",
-    note: "两道竖井错开一层。想上顶层，得从右边那道井爬",
+    id: "stairs", name: "阶梯塔", sub: "真阶梯 · 四层错位",
+    note: "四层台阶一路往右错，像爬楼梯。每层的缺口都在前一层的右边，掉下去只能往上爬",
     theme: "stairs",
     goal: "limit", ballLimit: 7, par: { time: 50, made: 8 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-      { x: WALL_L, y: 462, w: 194, h: 20, kind: "ledge" },   // 26..220
-      { x: 320,    y: 462, w: 200, h: 20, kind: "ledge" },   // 320..520
-      { x: 620,    y: 462, w: 240, h: 20, kind: "ledge" },   // 620..860
-      { x: WALL_L, y: 350, w: 194, h: 20, kind: "ledge" },
-      { x: 320,    y: 350, w: 380, h: 20, kind: "ledge" },   // 长球道
-      { x: 800,    y: 350, w: 60,  h: 20, kind: "ledge" },
-      { x: WALL_L, y: 248, w: 674, h: 20, kind: "ledge" },   // 顶层 26..700
-      { x: 800,    y: 248, w: 60,  h: 20, kind: "ledge" },
+      { x: WALL_L, y: 462, w: 204, h: 20, kind: "ledge" },   // 26..230
+      { x: 360,    y: 462, w: 200, h: 20, kind: "ledge" },   // 360..560
+      { x: 670,    y: 462, w: 120, h: 20, kind: "ledge" },   // 670..790
+      { x: 130,    y: 350, w: 160, h: 20, kind: "ledge" },   // 130..290
+      { x: 400,    y: 350, w: 280, h: 20, kind: "ledge" },   // 400..680
+      { x: 790,    y: 350, w: 70,  h: 20, kind: "ledge" },   // 790..860
+      { x: 240,    y: 248, w: 220, h: 20, kind: "ledge" },   // 240..460
+      { x: 570,    y: 248, w: 220, h: 20, kind: "ledge" },   // 570..790
+      { x: 350,    y: 156, w: 220, h: 20, kind: "ledge" },   // 顶层
     ],
     pits: [
-      { x: 230, y: GROUND_Y, w: 110, kind: "fire" },
-      { x: 650, y: GROUND_Y, w: 100, kind: "mud"  },
+      { x: 250, y: GROUND_Y, w: 100, kind: "fire" },
+      { x: 570, y: GROUND_Y, w: 100, kind: "mud"  },
     ],
-    stumps: [{ x: 560, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    stumps: [{ x: 540, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
     camp: { x: 848, y: GROUND_Y, w: 86 },
     spawns: [
       { foe: "bug",  x: 120, y: 462 },
-      { foe: "bug",  x: 420, y: 462 },
-      { foe: "bug",  x: 760, y: 462 },
-      { foe: "bug",  x: 420, y: 350 },
-      { foe: "bug",  x: 560, y: 350 },
-      { foe: "bug",  x: 660, y: 350 },
-      { foe: "bug",  x: 300, y: 248 },
-      { foe: "boar", x: 620, y: 248 },
+      { foe: "bug",  x: 450, y: 462 },
+      { foe: "bug",  x: 730, y: 462 },
+      { foe: "bug",  x: 200, y: 350 },
+      { foe: "bug",  x: 550, y: 350 },
+      { foe: "bug",  x: 320, y: 248 },
+      { foe: "boar", x: 650, y: 248 },
+      { foe: "bug",  x: 450, y: 156 },
     ],
     spawn: { x: 70, y: GROUND_Y },
   },
 
   {
-    id: "twin", name: "双塔", sub: "中空 · 两座塔",
-    note: "中间整片空。上塔容易，把球从塔顶送下来才是题",
+    id: "twin", name: "双塔", sub: "双塔 · 塔尖两层",
+    note: "中间整块中空，两座塔各有两层塔尖。上塔容易，把球从塔尖送下来才是题",
     theme: "tower",
     goal: "clear", par: { time: 50, made: 9 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-      { x: WALL_L, y: 462, w: 294, h: 20, kind: "ledge" },   // 26..320
-      { x: 640,    y: 462, w: 220, h: 20, kind: "ledge" },   // 640..860
-      { x: WALL_L, y: 350, w: 294, h: 20, kind: "ledge" },
-      { x: 640,    y: 350, w: 220, h: 20, kind: "ledge" },
-      { x: WALL_L, y: 248, w: 254, h: 20, kind: "ledge" },   // 左塔顶
-      { x: 680,    y: 248, w: 180, h: 20, kind: "ledge" },   // 右塔顶
+      { x: WALL_L, y: 462, w: 274, h: 20, kind: "ledge" },   // 26..300
+      { x: 620,    y: 462, w: 140, h: 20, kind: "ledge" },   // 620..760
+      { x: WALL_L, y: 350, w: 274, h: 20, kind: "ledge" },   // 26..300
+      { x: 620,    y: 350, w: 140, h: 20, kind: "ledge" },   // 620..760
+      { x: WALL_L, y: 248, w: 254, h: 20, kind: "ledge" },   // 26..280 左塔顶
+      { x: 640,    y: 248, w: 220, h: 20, kind: "ledge" },   // 640..860 右塔顶
+      { x: 100,    y: 156, w: 180, h: 20, kind: "ledge" },   // 左塔尖
+      { x: 660,    y: 156, w: 180, h: 20, kind: "ledge" },   // 右塔尖
     ],
     pits: [
-      { x: 120, y: GROUND_Y, w: 100, kind: "mud"   },
+      { x: 120, y: GROUND_Y, w: 80,  kind: "mud"   },
       { x: 380, y: GROUND_Y, w: 120, kind: "fire"  },
-      { x: 620, y: GROUND_Y, w: 100, kind: "water" },
+      { x: 560, y: GROUND_Y, w: 80,  kind: "water" },
     ],
-    stumps: [{ x: 300, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    stumps: [{ x: 700, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
     camp: { x: 852, y: GROUND_Y, w: 82 },
     spawns: [
       { foe: "bug",  x: 150, y: 462 },
-      { foe: "bug",  x: 720, y: 462 },
-      { foe: "bug",  x: 830, y: 462 },
-      { foe: "bug",  x: 160, y: 350 },
-      { foe: "boar", x: 760, y: 350 },
-      { foe: "bug",  x: 130, y: 248 },
-      { foe: "bug",  x: 750, y: 248 },
+      { foe: "bug",  x: 700, y: 462 },
+      { foe: "bug",  x: 150, y: 350 },
+      { foe: "boar", x: 700, y: 350 },
+      { foe: "bug",  x: 120, y: 248 },
+      { foe: "bug",  x: 780, y: 248 },
+      { foe: "bug",  x: 180, y: 156 },
+      { foe: "bug",  x: 760, y: 156 },
       { foe: "crow", x: 480, y: 360, fly: true },
-      { foe: "crow", x: 560, y: 300, fly: true },
     ],
     spawn: { x: 70, y: GROUND_Y },
   },
@@ -927,7 +967,7 @@ function setupLevel() {
   S.food = 0;
   S.killed = 0;
   S.failWhy = "";
-  S.stat = { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0 };
+  S.stat = { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0, chests: 0 };
   S.t = 0;
   S.shake = 0;
   S.flash = 0;
@@ -1095,6 +1135,10 @@ function updatePlayer(dt) {
       if (Math.abs(b.vx) < 140) {
         b.vx = pushDir * 620;
         b.vy = Math.min(b.vy, -40);
+        // 推出去 = 一次性。见 updateBalls 里 "推出后必消失" 那条。
+        b.pushed = true;
+        b.relT = 0;
+        b.wallHits = 0;
         S.shake = Math.max(S.shake, 5);
         addText(b.x, b.y - b.r * 2 - 12, "推!", "#CFE9FF", 18);
       }
@@ -1148,6 +1192,32 @@ function updatePlayer(dt) {
     if (Math.abs(d.x - p.x) > 28 || Math.abs(d.y - (p.y - 14)) > 44) continue;
     d.taken = true;
     const K = DROP_KINDS[d.kind] || DROP_KINDS.fruit;
+
+    // 宝箱：开出来的是"这一趟最缺的那一样"，不是随机装饰
+    if (K.chest) {
+      const hold = d.holds || 1;
+      const roll = S.rng();
+      if (roll < 0.52) {
+        const f = 4 + hold * 2;
+        S.food += f;
+        addText(d.x, d.y - 36, "宝箱 +" + f + " 收成", "#FFD65C", 22, 1.2);
+      } else if (roll < 0.80) {
+        for (const bb of S.balls) bb.air = Math.min(1, bb.air + 0.5);
+        addText(d.x, d.y - 36, "宝箱 · 全队回气", "#8FE4FF", 21, 1.2);
+      } else if (p.hp < p.maxHp) {
+        p.hp = Math.min(p.maxHp, p.hp + 2);
+        addText(d.x, d.y - 36, "宝箱 +2 心", "#FF8FA6", 22, 1.2);
+      } else {
+        S.food += 6;
+        addText(d.x, d.y - 36, "宝箱 +6 收成", "#FFD65C", 22, 1.2);
+      }
+      S.stat.chests++;
+      for (let i = 0; i < 18; i++) addFrag(d.x, d.y, 7, i % 2 ? "#FFD65C" : "#FFF3C0");
+      S.shake = Math.max(S.shake, 7);
+      S.flash = Math.max(S.flash, 0.10);
+      continue;
+    }
+
     if (K.food) {
       S.food += K.food;
       addText(d.x, d.y - 22, "+" + K.food, K.color, 17);
@@ -1363,6 +1433,18 @@ function updateBalls(dt) {
     b.air -= dt * (idle ? 0.11 : 0.055);
     if (b.air <= 0) { b.air = 0; burstBall(b); continue; }
 
+    // ---- 「推出去 = 一次性」
+    // 用户的原话：球在底层的时候，只要推出去之后都要消失。
+    // 不这么做的话，地面无摩擦 + 撞墙只衰减一次，底层会永远有几颗球在溜达，
+    // 玩家分不清"哪颗还能用、哪颗是上一波的残骸"。
+    //
+    // 给 1.6 秒：够它滚 990px（从场中间推到墙、弹回来再撞第二串），
+    // 但彻底堵死"无限滚"。自造但没推过的球不受这条约束 —— 玩家还能走上去推它。
+    if (b.pushed) {
+      b.relT = (b.relT || 0) + dt;
+      if (b.relT > 3.2) { burstBall(b, "滚远了…"); continue; }
+    }
+
     // ---- 不减速。
     // 上一版给球加了摩擦（170/s），推出去滚 1100px 就自己停，玩家得追着推。
     // 现在地面完全无摩擦：球一旦被推起来就一路滚，直到撞墙、掉坑、漏气崩开。
@@ -1373,9 +1455,18 @@ function updateBalls(dt) {
     // 玩家必须提前决定，而不是跟在球屁股后面慢慢修 —— 这正是想要的手感。
     b.x += b.vx * dt;
     b.spin += b.vx * dt * 0.05;
-    // 撞墙反弹
-    if (b.x - b.r < WALL_L) { b.x = WALL_L + b.r; b.vx = -b.vx * 0.62; S.shake = Math.max(S.shake, 4); }
-    if (b.x + b.r > WALL_R) { b.x = WALL_R - b.r; b.vx = -b.vx * 0.62; S.shake = Math.max(S.shake, 4); }
+    // 撞墙反弹。推出去的球最多弹一次 —— 第二次撞墙就地散掉，
+    // 这是"底层不出现来回溜达的球"的最后一道闸。
+    if (b.x - b.r < WALL_L || b.x + b.r > WALL_R) {
+      const left = b.x - b.r < WALL_L;
+      b.x = left ? WALL_L + b.r : WALL_R - b.r;
+      b.vx = -b.vx * 0.62;
+      S.shake = Math.max(S.shake, 4);
+      if (b.pushed) {
+        b.wallHits = (b.wallHits || 0) + 1;
+        if (b.wallHits >= 3) { burstBall(b, "撞散了…"); continue; }
+      }
+    }
 
     // 撞木桩：球是唯一能打碎木桩的东西 —— 所以"想开新路"必须先造球
     for (const s of S.stumps) {
@@ -1528,7 +1619,7 @@ function predictBall(b, dir) {
   let air = b.air;
   let mud = b.mud;
   let onGround = false;
-  let bounce = 0, travel = 0, portalCd = 0, bouncerCd = 0;
+  let bounce = 0, travel = 0, portalCd = 0, bouncerCd = 0, relT = 0;
 
   const pts = [{ x, y: y - r }];
   const marks = [];
@@ -1541,6 +1632,15 @@ function predictBall(b, dir) {
     air -= AIM_DT * 0.055;
     if (air <= 0) { end = "air"; break; }
 
+    // 推出后 1.6 秒必散 —— 和 updateBalls 的寿命同一条。
+    // 不画这一段，玩家就会以为线尾那段还算数，等于骗人。
+    relT += AIM_DT;
+    if (relT > 3.2) {
+      marks.push({ x, y: y - r, kind: "expire" });
+      end = "expire";
+      break;
+    }
+
     // 不减速 —— 和 updateBalls 严格一致。这里如果偷偷加一点阻尼，
     // 线就会画短，玩家按线推出去球多滚一截，"预瞄骗人"是这一版最不能犯的错。
     x += vx * AIM_DT;
@@ -1548,9 +1648,10 @@ function predictBall(b, dir) {
 
     if (x - r < WALL_L) { x = WALL_L + r; vx = -vx * 0.62; bounce++; }
     if (x + r > WALL_R) { x = WALL_R - r; vx = -vx * 0.62; bounce++; }
-    // 允许反弹三次。球不减速之后，只画一次反弹会把线截在场地中间，
-    // 而玩家真正想知道的就是"撞完墙还能到哪"。
-    if (bounce > 2 || travel > 2400) { end = "wall"; break; }
+    // 只能弹一次：第二次撞墙球就散了（和 updateBalls 同一条）。
+    // 以前允许弹三次，是因为球还能无限滚；现在球是"一次性"的，
+    // 线画过第二次撞墙就是在骗人。
+    if (bounce >= 3 || travel > 4000) { end = "wall"; break; }
     if (onGround && Math.abs(vx) < 40) { end = "stop"; break; }
 
     // 木桩：球撞上去就停，这是"想开新路先造球"的那道门
@@ -1675,6 +1776,7 @@ function ballTerrain(b, fallVy) {  // 火坑：烧掉，收成翻倍，但球没
       S.food += gain;
       S.killed += b.holds;
       addText(b.x, pit.y - 70, "烧掉了 +" + gain, "#FFB05C", 22);
+      dropChest(b.x + 26, pit.y - 52, b.holds);
       for (let i = 0; i < 26; i++) addFrag(b.x, pit.y - 12, 8, i % 2 ? "#FF9A3C" : "#FFD86B");
       S.shake = Math.max(S.shake, 10);
       S.flash = 0.18;
@@ -1725,6 +1827,7 @@ function ballTerrain(b, fallVy) {  // 火坑：烧掉，收成翻倍，但球没
     S.food += gain;
     S.killed += b.holds;
     addText(b.x, CAMP.y - 80, "落袋 +" + gain, "#FFD86B", 22);
+    dropChest(b.x - 26, CAMP.y - 56, b.holds);
     for (let i = 0; i < 16; i++) addFrag(b.x, CAMP.y - 40, 7, "#FFD86B");
     S.shake = Math.max(S.shake, 6);
   }
@@ -1756,13 +1859,13 @@ function respawnPacked(b, coat, atX) {
   return out;
 }
 
-function burstBall(b) {
+function burstBall(b, why) {
   b.dead = true;
   S.stat.burst++;
   // 装几只就吐几只 —— 和 absorbIntoBall 严格对称。
   // 少了就白赚，多了敌人会自己增殖，两种都会让局面失控。
   for (const f of respawnPacked(b, 1)) S.foes.push(f);
-  addText(b.x, b.y - b.r * 2 - 20, "崩开了…", "#FF9E8E", 19);
+  addText(b.x, b.y - b.r * 2 - 20, why || "崩开了…", "#FF9E8E", 19);
   for (let i = 0; i < 18; i++) addFrag(b.x, b.y - b.r, 7, "#8FBF5E");
   S.shake = Math.max(S.shake, 7);
 }
@@ -1785,7 +1888,31 @@ const DROP_KINDS = {
   air:   { name: "气罐", air: 0.28, color: "#78D8FF", ring: "#D2F2FF" },
   gem:   { name: "晶核", food: 5,  color: "#7CF2C8", ring: "#D6FFF0" },
   heart: { name: "心",   heal: 1,   color: "#FF5A7A", ring: "#FFD6DE" },
+  chest: { name: "宝箱", chest: true, color: "#FFC53D", ring: "#FFF3C0" },
 };
+
+/**
+ * 宝箱 —— 只有「被球送走」才可能掉。
+ *
+ * 掉落点只有两个：火坑结算、营地结算。武器糊不死人（敌人只会被裹成球），
+ * 所以「只有雪人式击杀才有宝箱」这条不用额外判断，是机制自带的。
+ *
+ * 概率随**这一球连带送走几只**上浮：
+ *   单杀 14% / 两只 38% / 三只 62% / 四只以上封顶 85%
+ * 这就是「卷」的第三层回报 —— 第一层省球，第二层稀有掉落，第三层宝箱。
+ */
+function dropChest(x, y, holds) {
+  const p = Math.min(0.85, 0.14 + (holds - 1) * 0.24);
+  if (S.rng() > p) return false;
+  S.drops.push({
+    kind: "chest", x, y,
+    vx: rand(-110, 110), vy: rand(-430, -280),
+    taken: false, t: 0, spin: rand(0, 6.28), holds: holds || 1,
+  });
+  addText(x, y - 30, "宝箱!", "#FFD65C", 21);
+  S.shake = Math.max(S.shake, 5);
+  return true;
+}
 
 /**
  * 在 (x, y) 爆一件掉落物。
@@ -1835,6 +1962,9 @@ function spawnShot(o) {
  */
 function updateShots(dt) {
   const p = S.p;
+  // 分身吐出来的影弹先攒着，循环结束再并进 S.shots ——
+  // 边遍历边 push 会让新弹丸在同一个 dt 里被更新两次，轨道会跳一格。
+  const spawned = [];
   for (const s of S.shots) {
     if (s.dead) continue;
     s.life -= dt;
@@ -1858,12 +1988,35 @@ function updateShots(dt) {
       s.x = u.x;
       s.y = u.y - 26;
     }
-    /* ---- 镰刀：绕着人转一圈，圆心起飞时定住（否则人一动镰刀跟不上） ---- */
-    else if (s.kind === "sickle") {
-      s.ang += dt * 10.5;
-      s.x = s.ox + Math.cos(s.ang) * s.rad;
-      s.y = s.oy + Math.sin(s.ang) * s.rad * 0.78;
-      s.spin += dt * 22;
+    /* ---- 飞刀：丢出去，直线带一点下坠，高速自旋，能穿两个人 ---- */
+    else if (s.kind === "knife") {
+      s.vy += (s.grav || 700) * dt;
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.spin += dt * 26;
+      if (s.x < WALL_L - 30 || s.x > WALL_R + 30 || s.y > GROUND_Y + 40) s.dead = true;
+    }
+    /* ---- 影分身：站在那儿不动，自己按节拍丢影弹 ---- */
+    else if (s.kind === "summon") {
+      s.fireT -= dt;
+      if (s.fireT <= 0 && s.life > 0.25) {
+        s.fireT = s.interval || 0.42;
+        // 优先打自己这一侧最近的敌人；一个都没有就朝自己那一侧平推
+        let tgt = null, bd = 1e9;
+        for (const f of S.foes) {
+          if (f.dead || f.coat >= 3) continue;
+          const d = Math.abs(f.x - s.x) + Math.abs((f.y - f.h / 2) - s.y);
+          if (d < bd) { bd = d; tgt = f; }
+        }
+        s.dir = tgt ? sign(tgt.x - s.x) : s.dir;
+        s.shots = (s.shots || 0) + 1;
+        spawned.push({
+          x: s.x + s.dir * 16, y: s.y - 14,
+          vx: s.dir * 720, vy: 0, r: 11, life: 0.62, maxLife: 0.62,
+          kind: "shadow", dir: s.dir, pierce: true, color: "#C9B8FF",
+          hit: [], spin: 0, t: 0, born: 1,
+        });
+      }
     }
     /* ---- 坚果：抛物线落地，之后贴地滚。撞墙弹一次 ---- */
     else if (s.kind === "nut") {
@@ -1921,6 +2074,9 @@ function updateShots(dt) {
       if (s.x < WALL_L - 40 || s.x > WALL_R + 40 || s.y < -100) { s.dead = true; continue; }
     }
 
+    /* ---- 分身不碰人：它只是站着，伤害全交给它吐的影弹 ---- */
+    if (s.kind === "summon") continue;
+
     /* ---- 命中判定 ---- */
     for (const f of S.foes) {
       if (f.dead || f.coat >= 3) continue;
@@ -1942,11 +2098,12 @@ function updateShots(dt) {
       coatFoe(f, 1);
       s.hit.push(f);
       if (!s.pierce) { s.dead = true; break; }
+      if (s.hitMax && s.hit.length >= s.hitMax) { s.dead = true; break; }
     }
     if (s.dead) continue;
 
     /* ---- 木桩挡弹丸（坚果和溜溜球不挡：一个是滚过去的，一个是飞过去的） ---- */
-    if (s.kind !== "nut" && s.kind !== "yoyo" && s.kind !== "sickle") {
+    if (s.kind !== "nut" && s.kind !== "yoyo" && s.kind !== "summon") {
       for (const st of S.stumps) {
         if (st.hp <= 0) continue;
         if (Math.abs(s.x - st.x) < st.w / 2 + s.r && s.y > st.y - st.h) {
@@ -1957,6 +2114,8 @@ function updateShots(dt) {
       }
     }
   }
+
+  if (spawned.length) S.shots.push.apply(S.shots, spawned);
 
   let w = 0;
   for (let i = 0; i < S.shots.length; i++) if (!S.shots[i].dead) S.shots[w++] = S.shots[i];
@@ -2036,8 +2195,9 @@ function tickFx(dt) {
     d.vx *= 0.994;
 
     // 掉进火坑 / 水塘：直接没了（不然捡一堆果子站在火里吃，很怪）
+    // 宝箱例外 —— 它就是在火坑/营地边上刷出来的，被自己的火花烧掉太蠢了
     let gone = false;
-    for (const pit of PITS) {
+    if (d.kind !== "chest") for (const pit of PITS) {
       if (pit.kind === "mud") continue;
       if (d.x > pit.x + 6 && d.x < pit.x + pit.w - 6 && d.y > pit.y - 8) {
         d.taken = true; gone = true;
@@ -3182,6 +3342,7 @@ function drawAimLine(g, b, A, dir) {
                 : m.kind === "water" ? "水"
                 : m.kind === "bounce" ? "弹"
                 : m.kind === "portal" ? "洞"
+                : m.kind === "expire" ? "散"
                 : String(m.n);
     g.lineWidth = 3;
     g.strokeStyle = "rgba(16,26,20,.85)";
@@ -3281,49 +3442,151 @@ function drawShot(g, s) {
     return;
   }
 
-  /* ---- 镰刀：绕人一圈。刀刃要画大 —— 太小就只是"脚下一道白光" ---- */
-  if (s.kind === "sickle") {
-    const R = s.r * 2.0;
+  /* ---- 飞刀：一把转着飞的刀。刀尖在前、柄在后，转起来才像"丢出去" ---- */
+  if (s.kind === "knife") {
+    g.globalAlpha = 1;
     g.save();
     g.translate(s.x, s.y);
     g.rotate(s.spin);
 
-    // 挥过的轨迹：一条淡弧，把"刚才扫过哪"留在画面上
-    g.globalAlpha = 0.30;
-    g.strokeStyle = "#8FE4FF";
-    g.lineWidth = 10;
+    // 拖影：高速旋转的东西必须有轨迹，否则看起来只是"一个东西在飘"
+    g.globalAlpha = 0.28;
+    g.strokeStyle = s.color;
+    g.lineWidth = 3;
     g.lineCap = "round";
     g.beginPath();
-    g.arc(0, 0, R, -1.9, -0.3);
+    g.arc(0, 0, 16, -2.2, -0.9);
     g.stroke();
     g.globalAlpha = 1;
 
-    // 刀身：外沿亮、内沿暗，中间一条白高光
-    g.strokeStyle = "#5C6B7C";
-    g.lineWidth = 13;
+    // 刀身
+    g.fillStyle = s.color;
     g.beginPath();
-    g.arc(0, 0, R, -1.5, 0.42);
-    g.stroke();
-    g.strokeStyle = s.color;
-    g.lineWidth = 9;
-    g.beginPath();
-    g.arc(0, 0, R, -1.5, 0.42);
-    g.stroke();
-    g.strokeStyle = "#FFFFFF";
-    g.lineWidth = 3;
-    g.beginPath();
-    g.arc(0, 0, R + 1.5, -1.4, 0.3);
+    g.moveTo(24, 0);
+    g.quadraticCurveTo(8, -7.5, -8, -5);
+    g.lineTo(-12, 0);
+    g.lineTo(-8, 5);
+    g.quadraticCurveTo(8, 7.5, 24, 0);
+    g.fill();
+    g.strokeStyle = COL.outline;
+    g.lineWidth = 2.2;
     g.stroke();
 
-    // 刀柄：从弧尾往圆心方向伸出
-    g.strokeStyle = "#7A5230";
-    g.lineWidth = 7;
-    g.lineCap = "round";
+    // 磨出来的一道白
+    g.strokeStyle = "rgba(255,255,255,.92)";
+    g.lineWidth = 1.7;
     g.beginPath();
-    g.moveTo(Math.cos(0.42) * R, Math.sin(0.42) * R);
-    g.lineTo(Math.cos(0.42) * (R - 24), Math.sin(0.42) * (R - 24));
+    g.moveTo(18, -1.2);
+    g.lineTo(-6, -2.2);
+    g.stroke();
+
+    // 刀柄
+    g.fillStyle = "#7A5230";
+    rr(g, -24, -3.6, 13, 7.2, 3);
+    g.fill();
+    g.strokeStyle = COL.outline;
+    g.lineWidth = 1.8;
     g.stroke();
     g.restore();
+    return;
+  }
+
+  /* ---- 影分身：站在那儿的狐影。要"清晰"，靠的是描边和眼睛，不是透明度 ---- */
+  if (s.kind === "summon") {
+    const kk = clamp(s.life / s.maxLife, 0, 1);
+    const al = 0.62 + 0.34 * kk;
+    const dir = s.dir || 1;
+    const br = 1 + 0.045 * Math.sin((s.t || 0) * 7);
+
+    // 地面投影：没有它就不知道分身站在哪一层
+    g.globalAlpha = 0.26 * kk;
+    g.fillStyle = "#2A1E4A";
+    g.beginPath();
+    g.ellipse(s.x, s.y + 2, 21, 6, 0, 0, 6.283);
+    g.fill();
+
+    // 两层残影往身后错开：一眼能看出"这是个会动的分身"，而不是一个紫球
+    for (let t = 2; t >= 1; t--) {
+      g.save();
+      g.translate(s.x - dir * t * 13, s.y - 27 * br);
+      g.scale(dir * br, br);
+      g.globalAlpha = al * (t === 2 ? 0.10 : 0.20);
+      g.fillStyle = "#8E76D8";
+      g.beginPath(); g.ellipse(0, 0, 21, 18, 0, 0, 6.283); g.fill();
+      g.beginPath(); g.moveTo(12, -7); g.lineTo(34, 2); g.lineTo(11, 9); g.closePath(); g.fill();
+      g.restore();
+    }
+
+    g.save();
+    g.translate(s.x, s.y - 28 * br);
+    g.scale(dir * br, br);
+
+    g.globalAlpha = al;
+    // 尾巴先画（在身体后面），甩起来才有动势
+    g.strokeStyle = "#7B62C8";
+    g.lineWidth = 9;
+    g.lineCap = "round";
+    g.beginPath();
+    g.moveTo(-18, 3);
+    g.quadraticCurveTo(-38, -6, -31, -28);
+    g.stroke();
+
+    // 身体
+    g.fillStyle = "#7B62C8";
+    g.beginPath();
+    g.ellipse(0, 0, 21, 18, 0, 0, 6.283);
+    g.fill();
+    // 尖吻
+    g.beginPath();
+    g.moveTo(12, -7); g.lineTo(35, 2); g.lineTo(11, 9);
+    g.closePath();
+    g.fill();
+    // 两只尖耳
+    for (const sd of [-1, 1]) {
+      g.beginPath();
+      g.moveTo(sd * 10 - 4, -12);
+      g.lineTo(sd * 13 - 1, -35);
+      g.lineTo(sd * 19 + 5, -14);
+      g.closePath();
+      g.fill();
+    }
+    // 胸口一块亮色（正面朝向的提示）
+    g.globalAlpha = al * 0.5;
+    g.fillStyle = "#D9CCFF";
+    g.beginPath();
+    g.ellipse(9, 4, 8, 11, 0, 0, 6.283);
+    g.fill();
+
+    // 白描边 —— 这是"看得清"的全部原因
+    g.globalAlpha = al;
+    g.strokeStyle = "rgba(246,242,255,.95)";
+    g.lineWidth = 2.6;
+    g.beginPath();
+    g.ellipse(0, 0, 21, 18, 0, 0, 6.283);
+    g.stroke();
+    g.beginPath();
+    g.moveTo(12, -7); g.lineTo(35, 2); g.lineTo(11, 9);
+    g.closePath();
+    g.stroke();
+    for (const sd of [-1, 1]) {
+      g.beginPath();
+      g.moveTo(sd * 10 - 4, -12);
+      g.lineTo(sd * 13 - 1, -35);
+      g.lineTo(sd * 19 + 5, -14);
+      g.closePath();
+      g.stroke();
+    }
+
+    // 眼睛：两个亮点，方向感全靠这个
+    g.globalAlpha = 1;
+    g.fillStyle = "#FFF3A8";
+    g.beginPath();
+    g.arc(10, -3, 3.1, 0, 6.283);
+    g.arc(19, -1, 3.1, 0, 6.283);
+    g.fill();
+
+    g.restore();
+    g.globalAlpha = 1;
     return;
   }
 
@@ -3877,6 +4140,57 @@ function render() {
       g.fill();
       g.globalAlpha = 1;
 
+      // 宝箱：金色箱子 + 深色包边 + 中间的锁扣，比其它掉落大一圈。
+      // 大一圈是必要的 —— 它需要"被一眼看见"，而不是"被捡到的时候才发现"。
+      if (d.kind === "chest") {
+        const bw = 26, bh = 20;
+        g.globalAlpha = 0.5 + 0.2 * Math.sin((d.t || 0) * 5);
+        g.fillStyle = "#FFF3C0";
+        g.beginPath();
+        g.arc(d.x, dy + 2, 26, 0, 6.283);
+        g.fill();
+        g.globalAlpha = 1;
+
+        // 箱体
+        g.fillStyle = "#C9882E";
+        rr(g, d.x - bw / 2, dy - 4, bw, bh, 4);
+        g.fill();
+        g.strokeStyle = COL.outline;
+        g.lineWidth = 2.4;
+        g.stroke();
+        // 箱盖（半圆顶）
+        g.fillStyle = K.color;
+        g.beginPath();
+        g.moveTo(d.x - bw / 2, dy - 3);
+        g.quadraticCurveTo(d.x, dy - 20, d.x + bw / 2, dy - 3);
+        g.closePath();
+        g.fill();
+        g.stroke();
+        // 两道包边
+        g.strokeStyle = "#8A5A16";
+        g.lineWidth = 2.2;
+        for (const ox of [-7, 7]) {
+          g.beginPath();
+          g.moveTo(d.x + ox, dy - 12);
+          g.lineTo(d.x + ox, dy + bh - 5);
+          g.stroke();
+        }
+        // 锁扣
+        g.fillStyle = "#FFE98A";
+        rr(g, d.x - 4, dy - 6, 8, 8, 2);
+        g.fill();
+        g.strokeStyle = COL.outline;
+        g.lineWidth = 1.8;
+        g.stroke();
+        // 顶盖高光
+        g.strokeStyle = "rgba(255,255,255,.8)";
+        g.lineWidth = 2;
+        g.beginPath();
+        g.arc(d.x, dy - 3, bw * 0.34, -2.5, -1.2);
+        g.stroke();
+        continue;
+      }
+
       if (d.kind === "gem") {
         g.fillStyle = K.color;
         g.beginPath();
@@ -4164,6 +4478,7 @@ window.GROVE = {
   resetRun, beginRun, tick, render,
   setupLevel, updatePlayer, updateFoe, updateShots, updateBalls,
   coatFoe, makeBallFrom, burstBall, spawnShot,
+  dropChest, dropFrom, DROP_KINDS,
   predictBall, aimFor, ballBudget, checkGoal, rate, goalProgress,
   curStage, curGoal, loadLevel, rampAt, nextLevel, saveProgress,
   hitSelect,

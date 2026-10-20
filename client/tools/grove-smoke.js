@@ -1072,6 +1072,116 @@ console.log("\n=== 18. 六把武器 ===");
   }
 }
 
+console.log("\n=== 19. 第五轮：球的一次性 / 宝箱 / 飞刀 / 分身 ===");
+{
+  /* ---- 球推出后必消失 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 0);
+    const f = S.foes[0];
+    P.coatFoe(f, 3);
+    const b = S.balls[0];
+    b.x = 200; b.y = 462; b.vx = 0; b.vy = 0; b.onGround = true;
+    S.p.x = 170; S.p.y = 462; S.p.face = 1;
+    // 走位推球：贴上去让它推出去
+    for (let k = 0; k < 8; k++) { S.keys.right = true; P.tick(1 / 60); }
+    ok(b.pushed === true, "贴上去会把球推出去（不需要新按键）");
+    let alive = 0;
+    for (let k = 0; k < 60 * 5 && !b.dead; k++) { P.tick(1 / 60); alive = k; }
+    ok(b.dead, "推出去的球一定会消失（不会永远溜达）", "活了 " + (alive / 60).toFixed(2) + "s");
+
+    // 没推过的球不受这条约束 —— 玩家还能走上去推它
+    const f2 = S.foes.find(x => !x.dead);
+    if (f2) {
+      P.coatFoe(f2, 3);
+      const b2 = S.balls.find(x => x !== b && !x.dead);
+      if (b2) {
+        b2.x = 200; b2.y = 462; b2.vx = 0; b2.vy = 0; b2.onGround = true;
+        S.p.x = 700; S.p.y = 462;
+        for (let k = 0; k < 60 * 4; k++) P.tick(1 / 60);
+        ok(!b2.dead, "没被推过的球不会自己消失（玩家还能去推它）");
+      }
+    }
+  }
+
+  /* ---- 宝箱：只有球送走的人身上才掉，连带越多越容易 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 0);
+    const N = 400;
+    let solo = 0, trio = 0;
+    for (let i = 0; i < N; i++) {
+      S.drops.length = 0;
+      if (P.dropChest(300, 500, 1)) solo++;
+      S.drops.length = 0;
+      if (P.dropChest(300, 500, 3)) trio++;
+    }
+    ok(solo > 0 && trio > 0, "宝箱真的会掉");
+    ok(trio > solo * 2, "连带走三只比单杀容易得多（" + solo + "/" + N + " vs " + trio + "/" + N + "）");
+
+    // 武器糊死人不掉箱子：糊满 3 层只变球，不产生掉落 —— 这是"只有雪人击杀才有"的机制保证
+    const f = S.foes[0];
+    S.drops.length = 0;
+    f.coat = 0; f.dead = false;
+    P.coatFoe(f, 3);
+    const chest = S.drops.filter(d => d.kind === "chest").length;
+    eq(chest, 0, "武器糊成球不掉宝箱（只有被球送走才掉）");
+  }
+
+  /* ---- 飞刀是丢出去的，不是绕圈的 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(4, 0);
+    S.foes.forEach(f => { f.x = 2000; });
+    S.p.x = 300; S.p.y = 462; S.p.face = 1;
+    S.shots.length = 0;
+    P.HEROES[4].fire(S.p);
+    const kn = S.shots[0];
+    eq(kn.kind, "knife", "老实牛丢出来的是刀");
+    const x0 = kn.x;
+    let monotonic = true, prev = kn.x, crossedBack = false;
+    for (let k = 0; k < 40; k++) {
+      P.tick(1 / 60);
+      if (!S.shots.length) break;
+      const s2 = S.shots[0];
+      if (s2.x < prev - 1) monotonic = false;
+      if (s2.x < x0 - 4) crossedBack = true;
+      prev = s2.x;
+    }
+    ok(monotonic && !crossedBack, "飞刀是直线丢出去的（不是绕着自己转）");
+  }
+
+  /* ---- 影分身是召唤物，不是子弹 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(5, 0);
+    S.shots.length = 0;
+    S.p.x = 400; S.p.y = 462; S.p.face = 1;
+    P.HEROES[5].fire(S.p);
+    const summons = S.shots.filter(s => s.kind === "summon");
+    eq(summons.length, 2, "召出两个分身");
+    const f = S.foes[0];
+    const c0 = f.coat;
+    // 分身自己站上去不该糊人。把它这一侧的吐弹按住，否则测到的是"影弹打到了"
+    summons[0].fireT = 999;
+    summons[0].x = f.x; summons[0].y = f.y;
+    for (let k = 0; k < 10; k++) P.tick(1 / 60);
+    ok(summons[0].kind === "summon" && f.coat === c0, "分身本体不碰人（它只是站位）");
+    // 但会吐影弹
+    summons[0].fireT = 0.02;
+    for (let k = 0; k < 60; k++) P.tick(1 / 60);
+    ok(f.coat > c0 || f.dead, "分身会自己吐影弹打到人", "coat=" + f.coat);
+  }
+}
+
 console.log("\n" + "=".repeat(56));
 if (fail) {
   console.log("通过 " + pass + " · 失败 " + fail);

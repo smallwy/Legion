@@ -134,6 +134,28 @@ export class BossController {
         return dx * dx + dy * dy <= rr * rr;
     }
 
+    /**
+     * 线段命中（CR-017：贯穿光束）。BOSS 只有一个巨大圆形碰撞体，
+     * 所以"线段到点距离 ≤ 半宽 + 半径"就够，不需要拆成多段。
+     * ⚠️ 不接这条：贯穿技能打不到 BOSS，槽位 0 的英雄在 BOSS 战里等于挂机。
+     */
+    tryHitSegment(x0: number, y0: number, x1: number, y1: number, halfWidth: number): boolean {
+        const b = this._boss;
+        if (!b.active || b.dying > 0) {
+            return false;
+        }
+        const sx = x1 - x0;
+        const sy = y1 - y0;
+        const segLen2 = sx * sx + sy * sy;
+        let t = segLen2 > 0 ? ((b.x - x0) * sx + (b.y - y0) * sy) / segLen2 : 0;
+        if (t < 0) t = 0;
+        else if (t > 1) t = 1;
+        const px = x0 + sx * t - b.x;
+        const py = y0 + sy * t - b.y;
+        const rr = halfWidth + BOSS.radius;
+        return px * px + py * py <= rr * rr;
+    }
+
     takeDamage(dmg: number, dirX: number, dirY: number, crit = false): void {
         const b = this._boss;
         if (!b.active || b.dying > 0) {

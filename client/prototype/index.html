@@ -49,9 +49,24 @@ const HERO_SLOTS = [[-28, -24], [-28, 24], [-52, 0]];
 const HERO = {
   count: 3, followStiffness: 220, followDamping: 24,
   turnRate: 8, turnDeadzone: 12, acquireRange: 340,
-  damage: 10, telegraph: 0.25, cast: 0.1, recovery: 0.3,
+  // 伤害与施法节奏已按槽位分化到 ABILITY（CR-017），这里不再有全队共用值
   displaySize: 64,
 };
+
+// 三个槽位 = 三种技能形态，取消"全队发同一种子弹"
+// 周期 = telegraph + cast + recovery，刻意不同（0.72 / 1.05 / 0.62）→ 施法自然错落
+const ABILITY = {
+  beam: { damage: 12, range: 320, halfWidth: 11, maxTargets: 4,
+          telegraph: 0.22, cast: 0.08, recovery: 0.42, fxLife: 0.14 },
+  bolt: { damage: 16, radius: 54, maxTargets: 5, warn: 0.32,
+          telegraph: 0.30, cast: 0.10, recovery: 0.65, fxLife: 0.22 },
+  nova: { damage: 8, radius: 96, maxTargets: 6, knockback: 70,
+          telegraph: 0.18, cast: 0.08, recovery: 0.36, fxLife: 0.20 },
+};
+const HERO_ABILITIES = ['beam', 'bolt', 'nova'];
+// 群体伤害递减：不加这条技能就是"一键清屏"（实测一局从 166s → 88.7s）
+// 0.6 让一发 AOE 打满上限时的总伤害 ≈ 单体 × 2.3
+const AOE_FALLOFF = 0.6;
 
 const ENEMIES = {
   walker: { hp: 20, speed: 70, radius: 15, displaySize: 64, aggroRange: 300,
@@ -72,10 +87,9 @@ const WAVE = {
 };
 
 const SATIETY = {
-  // ⚠️ 0.7 不是拍的：离线跑完整一局是 133 秒，0.5/秒 只掉 66 点，
-  //    玩家从满饱最多掉到 34 —— 喂食系统整局触发不了，等于不存在。
-  //    0.7 → 掉 93 点，一局需要喂 2~3 次，正好每 3~4 波一次。
-  max: 100, start: 100, decayPerSec: 0.7,
+  // ⚠️ 0.9 随技能化（CR-017）重新标定：一局从 166 秒缩到约 90 秒（瞬发必中，输出翻倍），
+  //    0.7 只掉 63 点，结束时还剩 37 —— 掉不到"该喂"的区间。0.9 收在 19，需要喂 2 次。
+  max: 100, start: 100, decayPerSec: 0.9,
   feedAmount: 35, feedMeatCost: 1,
   feedStun: 0.4, feedStunSpeedMul: 0.35, feedCd: 0.8,
   fullLine: 70, hungryLine: 30,
@@ -208,6 +222,8 @@ const squad = {
 const enemies = [];
 const projectiles = [];
 const orbs = [];
+// 技能表现实例（beam / bolt / nova）—— 判定即时或延迟，渲染只读它
+const abilities = [];
 let boss = null;
 
 /** 原地压缩：保留 keep(x) 为真的元素，不新建数组 */
@@ -249,9 +265,22 @@ function recompute() {
   upg.stats = s;
 }
 
-function castCycle() {
+function castCycle(kind) {
   const k = upg.stats.castMul;
-  return { telegraph: HERO.telegraph*k, cast: HERO.cast*k, recovery: HERO.recovery*k };
+  const a = ABILITY[kind];
+  return { telegraph: a.telegraph*k, cast: a.cast*k, recovery: a.recovery*k };
+}
+
+/**
+ * 索敌半径按技能取，否则会"抬手了但什么都没打到"：
+ *  - 冲击波有效半径 96，沿用 340 会对着远怪放空气
+ *  - 贯穿射程 320 < 340，目标落在 325 处必空，留 10px 余量
+ */
+function acquireRangeOf(h) {
+  const base = HERO.acquireRange * upg.stats.rangeMul;
+  if (h.kind === 'nova') return Math.min(base, ABILITY.nova.radius + 40);
+  if (h.kind === 'beam') return Math.min(base, ABILITY.beam.range * upg.stats.rangeMul - 10);
+  return base;
 }
 
 function starvingLine() {
@@ -293,10 +322,11 @@ function resetGame() {
       x: _slot.x, y: _slot.y, vx: 0, vy: 0,
       state: 'idle', stateT: 0, target: null,
       aimX: 1, aimY: 0, powerMul: 1,
+      slot: i, kind: HERO_ABILITIES[i % HERO_ABILITIES.length],
     });
   }
 
-  enemies.length = 0; projectiles.length = 0; orbs.length = 0; boss = null;
+  enemies.length = 0; projectiles.length = 0; orbs.length = 0; abilities.length = 0; boss = null;
   wave.idx = 0; wave.toSpawn = 0; wave.timer = WAVE.firstDelay; wave.cleared = 0;
 
   upg.level = 1; upg.exp = 0; upg.expNeed = LEVEL.baseExp;
@@ -460,7 +490,6 @@ function updateSquad(dt) {
   // 移速倍率唯一写入点：升级 × 喂食硬直
   player.speedMul = upg.stats.speedMul * (squad.stunT > 0 ? SATIETY.feedStunSpeedMul : 1);
 
-  const cycle = castCycle();
   const pm = powerMul();
 
   updateFormation(dt);
@@ -468,6 +497,7 @@ function updateSquad(dt) {
   for (let i = 0; i < squad.heroes.length; i++) {
     const h = squad.heroes[i];
     h.powerMul = pm;
+    const cycle = castCycle(h.kind);
 
     // 弹簧-阻尼跟随
     slotTarget(i, _slot);
@@ -500,8 +530,7 @@ function updateCast(dt, h, cycle) {
   h.stateT -= dt;
   if (h.state === 'idle') {
     if (h.stateT <= 0) {
-      const range = HERO.acquireRange * upg.stats.rangeMul;
-      const t = acquire(h.x, h.y, range);
+      const t = acquire(h.x, h.y, acquireRangeOf(h));
       if (t) { h.target = t; h.state = 'telegraph'; h.stateT = cycle.telegraph; }
     }
   } else if (h.state === 'telegraph') {
@@ -520,30 +549,131 @@ function updateCast(dt, h, cycle) {
   }
 }
 
+// ============ 10.5 英雄技能（CR-017）：贯穿 / 落雷 / 冲击 ============
+// 我方不再产生任何投射物；敌方施法弹仍走 projectiles。
+
 function fireHero(h) {
   const len = Math.hypot(h.aimX, h.aimY) || 1;
-  const bx = h.aimX / len, by = h.aimY / len;
+  const dx = h.aimX / len, dy = h.aimY / len;
 
   const crit = Math.random() < upg.stats.critChance;
-  let dmg = HERO.damage * h.powerMul * upg.stats.damageMul;
+  let dmg = ABILITY[h.kind].damage * h.powerMul * upg.stats.damageMul;
   if (crit) dmg *= 2;
+  const extra = upg.stats.multishot;
 
-  const shots = 1 + upg.stats.multishot;
-  const spread = 0.21;
-  const start = -((shots - 1) * spread) / 2;
-
-  for (let i = 0; i < shots; i++) {
-    const a = start + i * spread;
-    const c = Math.cos(a), s = Math.sin(a);
-    const dx = bx * c - by * s;
-    const dy = bx * s + by * c;
-    projectiles.push({
-      x: h.x + dx * 14, y: h.y + dy * 14,
-      vx: dx * PROJECTILE.petSpeed, vy: dy * PROJECTILE.petSpeed,
-      r: PROJECTILE.petRadius, dmg, life: PROJECTILE.petLife,
-      fromPet: true, crit,
-    });
+  if (h.kind === 'beam') {
+    castBeam(h.x, h.y, dx, dy, ABILITY.beam.range * upg.stats.rangeMul, dmg, crit, extra);
+  } else if (h.kind === 'bolt') {
+    // 落点取施法瞬间的目标位置，不是抬手时缓存的坐标（0.3s 内怪会走）
+    const t = h.target;
+    castBolt(h.x, h.y, t ? t.x : h.x + dx * 200, t ? t.y : h.y + dy * 200, dmg, crit, extra);
+  } else {
+    castNova(h.x, h.y, dmg, crit, extra);
   }
+}
+
+/** 贯穿：瞬发直线，立即结算。每层「连锁」追加一条平行光束（法线偏移 24px） */
+function castBeam(x, y, dx, dy, range, dmg, crit, extra) {
+  const a = ABILITY.beam;
+  const nx = -dy, ny = dx;
+  for (let i = 0; i <= extra; i++) {
+    const off = extra === 0 ? 0 : (i - extra / 2) * 24;
+    const sx = x + nx * off, sy = y + ny * off;
+    const ex = sx + dx * range, ey = sy + dy * range;
+    damageInSegment(sx, sy, ex, ey, a.halfWidth, dmg, a.maxTargets, crit);
+    abilities.push({ kind: 'beam', x: sx, y: sy, ex, ey,
+                     halfWidth: a.halfWidth, t: 0, life: a.fxLife, crit });
+  }
+}
+
+/** 落雷：目标点预警 0.32s → 半径 54 爆发。伤害存在实例上（可能两发同时在场） */
+function castBolt(x, y, tx, ty, dmg, crit, extra) {
+  const a = ABILITY.bolt;
+  for (let i = 0; i <= extra; i++) {
+    let px = tx, py = ty;
+    if (i > 0) {
+      const ang = Math.random() * TAU, r = 55;
+      px += Math.cos(ang) * r;
+      py += Math.sin(ang) * r;
+    }
+    abilities.push({ kind: 'bolt', x: px, y: py, radius: a.radius,
+                     t: 0, life: a.warn + a.fxLife, warn: a.warn,
+                     fired: false, dmg, crit });
+  }
+}
+
+/** 冲击：脚下炸开（立即结算）+ 击退，扩散环是余波 */
+function castNova(x, y, dmg, crit, extra) {
+  const a = ABILITY.nova;
+  for (let i = 0; i <= extra; i++) {
+    const radius = a.radius * Math.pow(1.4, i);
+    const d = i === 0 ? dmg : dmg * 0.6;
+    damageInRadius(x, y, radius, d, a.maxTargets, crit, a.knockback);
+    abilities.push({ kind: 'nova', x, y, radius, t: 0, life: a.fxLife, crit });
+  }
+}
+
+/** 圆范围伤害：BOSS + 杂兵。maxTargets 是平衡阀（不限上限时一发能清半屏） */
+function damageInRadius(x, y, r, dmg, maxTargets, crit, kb) {
+  let hits = 0;
+  let bossHit = false;
+  if (boss && boss.active && boss.dying <= 0 && dist(x, y, boss.x, boss.y) <= r + BOSS.radius) {
+    damageBoss(dmg, 0, 0, crit);
+    hits++;
+    bossHit = true;
+  }
+  for (const e of enemies) {
+    if (!e.active || e.dying > 0) continue;
+    if (hits >= maxTargets) break;
+    if (dist(x, y, e.x, e.y) > r + e.def.radius) continue;
+    let kx = e.x - x, ky = e.y - y;
+    if (kx === 0 && ky === 0) { kx = 0; ky = 1; }
+    // 第 1 个满伤，之后按 AOE_FALLOFF 递减（BOSS 占了名额杂兵就从第二档起）
+    const scale = Math.pow(AOE_FALLOFF, hits);
+    damageEnemy(e, dmg * scale, kx * kb, ky * kb, crit);
+    hits++;
+  }
+  return hits;
+}
+
+/** 线段扫掠伤害：点到线段距离 ≤ 半宽 + 敌人半径 */
+function damageInSegment(x0, y0, x1, y1, halfWidth, dmg, maxTargets, crit) {
+  const sx = x1 - x0, sy = y1 - y0;
+  const len2 = sx * sx + sy * sy;
+  const invLen = len2 > 0 ? 1 / Math.sqrt(len2) : 0;
+  let hits = 0;
+  if (boss && boss.active && boss.dying <= 0) {
+    let t = len2 > 0 ? ((boss.x - x0) * sx + (boss.y - y0) * sy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const px = x0 + sx * t - boss.x, py = y0 + sy * t - boss.y;
+    const rr = halfWidth + BOSS.radius;
+    if (px * px + py * py <= rr * rr) { damageBoss(dmg, sx, sy, crit); hits++; }
+  }
+  for (const e of enemies) {
+    if (!e.active || e.dying > 0) continue;
+    if (hits >= maxTargets) break;
+    let t = len2 > 0 ? ((e.x - x0) * sx + (e.y - y0) * sy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const px = x0 + sx * t - e.x, py = y0 + sy * t - e.y;
+    const rr = halfWidth + e.def.radius;
+    if (px * px + py * py > rr * rr) continue;
+    const scale = Math.pow(AOE_FALLOFF, hits);
+    damageEnemy(e, dmg * scale, sx * invLen, sy * invLen, crit);
+    hits++;
+  }
+  return hits;
+}
+
+/** 推进技能实例：落雷到点结算，过期剔除 */
+function updateAbilities(dt) {
+  for (const fx of abilities) {
+    fx.t += dt;
+    if (fx.kind === 'bolt' && !fx.fired && fx.t >= fx.warn) {
+      fx.fired = true;
+      damageInRadius(fx.x, fx.y, fx.radius, fx.dmg, ABILITY.bolt.maxTargets, fx.crit, 0);
+    }
+  }
+  compact(abilities, fx => fx.t < fx.life);
 }
 
 function tryFeed() {
@@ -576,12 +706,18 @@ function pickType() {
   return 'walker';
 }
 
-function spawnEnemy(type, hunter) {
+function spawnEnemy(type, hunter, atX, atY) {
   const def = ENEMIES[type];
-  const a = rnd(0, TAU);
-  const r = WAVE.spawnRadius + rnd(-WAVE.spawnJitter, WAVE.spawnJitter);
-  const x = clamp(player.x + Math.cos(a) * r, -FIELD.width/2, FIELD.width/2);
-  const y = clamp(player.y + Math.sin(a) * r, -FIELD.height/2, FIELD.height/2);
+  let x, y;
+  if (atX !== undefined && atY !== undefined) {
+    // 测试/定点生成：不抖动、不钳制（判定测试必须拿到精确坐标）
+    x = atX; y = atY;
+  } else {
+    const a = rnd(0, TAU);
+    const r = WAVE.spawnRadius + rnd(-WAVE.spawnJitter, WAVE.spawnJitter);
+    x = clamp(player.x + Math.cos(a) * r, -FIELD.width/2, FIELD.width/2);
+    y = clamp(player.y + Math.sin(a) * r, -FIELD.height/2, FIELD.height/2);
+  }
   enemies.push({
     type, def, x, y, vx: 0, vy: 0, hp: def.hp,
     state: hunter ? 'chase' : 'roam', stateT: 0, cd: rnd(0.5, 1.3),
@@ -1132,6 +1268,8 @@ function step(dtReal) {
 
   updatePlayer(dt);
   updateSquad(dt);
+  // 技能在英雄之后推进：本帧刚 cast 的落雷立刻进入预警计时
+  updateAbilities(dt);
   updateEnemies(dt);
   updateBoss(dt);
   updateProjectiles(dt);
@@ -1361,8 +1499,9 @@ function drawBoss() {
 }
 
 function drawHeroes() {
-  const cycle = castCycle();
   for (const h of squad.heroes) {
+    // 缩放脉冲按**每只英雄自己的周期**算（三个技能节奏不同）
+    const cycle = castCycle(h.kind);
     let s = 1;
     if (h.state === 'telegraph') s *= 1 + 0.18 * (1 - h.stateT / cycle.telegraph);
     else if (h.state === 'cast') s *= 1.28;
@@ -1402,6 +1541,104 @@ function drawPlayer() {
   ctx.beginPath();
   ctx.arc(SX(player.x), SY(player.y) - 40, 4, 0, TAU);
   ctx.fill();
+}
+
+/**
+ * 技能表现（CR-017）。像素风下"技能感"靠形状，不靠光效：
+ *  - 贯穿 = 一条会消失的锥形线（瞬发才有"斩"的意味）
+ *  - 落雷 = 先圈后爆，预警圈**由大到小收缩**（与敌人前摇"由小涨到大"方向相反，敌我一眼可分）
+ *  - 冲击 = 从脚下向外推的环（环是余波，判定在炸开瞬间）
+ */
+function drawAbilities() {
+  // 落雷预警：地面标记，先画
+  for (const fx of abilities) {
+    if (fx.kind !== 'bolt' || fx.fired) continue;
+    const p = Math.max(0, Math.min(1, fx.t / fx.warn));
+    ctx.globalAlpha = 0.16 * (1 - p * 0.5);
+    ctx.fillStyle = PALETTE.gold;
+    ctx.beginPath();
+    ctx.arc(SX(fx.x), SY(fx.y), fx.radius, 0, TAU);
+    ctx.fill();
+    ctx.globalAlpha = 0.8;
+    ctx.strokeStyle = PALETTE.gold;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(SX(fx.x), SY(fx.y), fx.radius, 0, TAU);
+    ctx.stroke();
+    // 收缩内圈：缩到中心 = 该炸了
+    ctx.globalAlpha = 0.55;
+    ctx.beginPath();
+    ctx.arc(SX(fx.x), SY(fx.y), fx.radius * (1 - p), 0, TAU);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // 冲击波：扩散环
+  for (const fx of abilities) {
+    if (fx.kind !== 'nova') continue;
+    const p = Math.min(1, fx.t / fx.life);
+    const r = fx.radius * (0.25 + 0.75 * p);
+    ctx.globalAlpha = 0.85 * (1 - p * 0.8);
+    ctx.strokeStyle = PALETTE.excite;
+    ctx.lineWidth = Math.max(1, 5 - 4 * p);
+    ctx.beginPath();
+    ctx.arc(SX(fx.x), SY(fx.y), r, 0, TAU);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // 贯穿：锥形收窄的光束（外层 + 白芯）
+  for (const fx of abilities) {
+    if (fx.kind !== 'beam') continue;
+    const p = Math.min(1, fx.t / fx.life);
+    const x0 = SX(fx.x), y0 = SY(fx.y), x1 = SX(fx.ex), y1 = SY(fx.ey);
+    let ux = x1 - x0, uy = y1 - y0;
+    const len = Math.hypot(ux, uy) || 1;
+    ux /= len; uy /= len;
+    const nx = -uy, ny = ux;
+    const hw = fx.halfWidth;
+
+    ctx.globalAlpha = 0.95 * (1 - p);
+    ctx.fillStyle = '#FFF6D0';
+    ctx.beginPath();
+    ctx.moveTo(x0 + nx * hw, y0 + ny * hw);
+    ctx.lineTo(x1 + nx * 2, y1 + ny * 2);
+    ctx.lineTo(x1 - nx * 2, y1 - ny * 2);
+    ctx.lineTo(x0 - nx * hw, y0 - ny * hw);
+    ctx.closePath();
+    ctx.fill();
+
+    const cw = hw * 0.38;
+    ctx.globalAlpha = 1 - p;
+    ctx.fillStyle = fx.crit ? PALETTE.gold : '#FFFFFF';
+    ctx.beginPath();
+    ctx.moveTo(x0 + nx * cw, y0 + ny * cw);
+    ctx.lineTo(x1 + nx * 0.5, y1 + ny * 0.5);
+    ctx.lineTo(x1 - nx * 0.5, y1 - ny * 0.5);
+    ctx.lineTo(x0 - nx * cw, y0 - ny * cw);
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  // 落雷爆发：中心闪光 + 扩散环，最后画（一闪而过）
+  for (const fx of abilities) {
+    if (fx.kind !== 'bolt' || !fx.fired) continue;
+    const p = Math.min(1, (fx.t - fx.warn) / fx.life);
+    const cx = SX(fx.x), cy = SY(fx.y);
+    ctx.globalAlpha = 0.95 * (1 - p);
+    ctx.fillStyle = '#FFF0A8';
+    ctx.beginPath();
+    ctx.arc(cx, cy, fx.radius * 0.55 * (1 - p * 0.6), 0, TAU);
+    ctx.fill();
+    ctx.globalAlpha = 0.85 * (1 - p);
+    ctx.strokeStyle = PALETTE.gold;
+    ctx.lineWidth = Math.max(1, 4 - 3 * p);
+    ctx.beginPath();
+    ctx.arc(cx, cy, fx.radius * (0.55 + 0.65 * p), 0, TAU);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
 }
 
 function drawProjectiles() {
@@ -1714,6 +1951,7 @@ function render() {
   drawTelegraphs();
   drawEnemies();
   drawProjectiles();
+  drawAbilities();
   drawHeroes();
   drawPlayer();
   drawBoss();
@@ -1809,6 +2047,11 @@ window.PAWPACK = {
   _cardRect: cardRect, _isReady: () => assetsReady,
   _spawnExp: (x, y) => orbs.push({ kind: 'exp', x, y, vx: 0, vy: 0, r: 5, active: true, bob: 0 }),
   _aliveEnemies: () => enemies.filter(e => e.active && e.dying <= 0).length,
+  _abilities: () => abilities,
+  _spawnAt: (type, x, y) => spawnEnemy(type, false, x, y),
+  // 技能判定直接暴露：这几条是"编译能过但一跑就错"的重灾区
+  _castBeam: castBeam, _castBolt: castBolt, _castNova: castNova,
+  _render: render,
 };
 </script>
 </body>

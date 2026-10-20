@@ -1,13 +1,14 @@
 import { Node, Sprite, UITransform } from 'cc';
-import { HERO, SATIETY } from '../config/BattleConfig';
+import { ABILITY, HERO, HERO_ABILITIES, SATIETY } from '../config/BattleConfig';
+import type { AbilityKind } from '../config/BattleConfig';
 import { Formation } from './Formation';
 import type { SlotPoint } from './Formation';
 import { castCycle } from './UpgradeSystem';
 import type { UpgradeStats, UpgradeSystem } from './UpgradeSystem';
+import type { AbilitySystem } from './AbilitySystem';
 import type { BossController } from './BossController';
 import type { EnemyManager } from './EnemyManager';
 import type { PlayerController } from './PlayerController';
-import type { ProjectileManager } from './ProjectileManager';
 import type { SpriteEntry } from '../view/SpriteAssets';
 
 export type HeroCastState = 'idle' | 'telegraph' | 'cast' | 'recovery';
@@ -37,19 +38,26 @@ export interface Hero {
     powerMul: number;   // 「半饿最强」倍率（每帧由饱食度档位写入）
     baseScale: number;
     hasSprite: boolean;
+    /** 槽位序号（0=左后 1=右后 2=正后），决定它用哪个技能 */
+    slot: number;
+    /** 该槽位的技能形态（CR-017） */
+    kind: AbilityKind;
 }
 
 /** 饱食度档位（HUD 与渲染都要读，所以导出） */
 export type SatietyTier = 'full' | 'hungry' | 'starving';
 
 /**
- * 英雄小队：**列队跟随** + 自动施法三段状态机 + **饱食度/喂食**（CR-009/014/015）。
+ * 英雄小队：**列队跟随** + 自动施法三段状态机 + **饱食度/喂食**（CR-009/014/015/017）。
  *
  * CR-015 的唯一新增：宠物不再是"永远满血的炮台"，而是**有状态、会饿、要你喂的活物**。
  *  - 饱食度全队**共享一条**（3 条独立条 = 管理焦虑，正是计划书 §9 引用那条"27 只猫"差评的死因）；
- *  - 衰减 0.5/秒 → 200 秒从满到空，一局 8 分钟要喂 2~3 次；
+ *  - 衰减 0.7/秒 → 143 秒从满到空，一局要喂 2~3 次；
  *  - 档位倍率：满饱 ×1.0 / **半饿 ×1.5（最强）** / 全饿 ×0.6；
  *  - 喂食有双重代价：消耗肉块（打怪才有）+ 0.4 秒主角减速（怪群里喂要付学费）。
+ *
+ * CR-017 的改动：**每个槽位一种技能**（贯穿 / 落雷 / 冲击），不再全体发同一种子弹。
+ * 三个技能的周期刻意不同（0.72 / 1.05 / 0.62），施法自然错落。
  *
  * 施法链：idle → telegraph → cast → recovery → idle，周期受升级「急食」缩放。
  */
@@ -62,6 +70,8 @@ export class HeroSquad {
     boss: BossController | null = null;
     /** 升级系统（构造后接线）。不接则按基础值跑，不会崩。 */
     upgrades: UpgradeSystem | null = null;
+    /** 技能系统（构造后接线）。不接则英雄只走状态机、不产生任何伤害。 */
+    abilities: AbilitySystem | null = null;
 
     /** 全队共享饱食度 0~100 */
     satiety: number = SATIETY.start;
@@ -82,7 +92,6 @@ export class HeroSquad {
         parent: Node,
         private _player: PlayerController,
         private _enemies: EnemyManager,
-        private _projectiles: ProjectileManager,
         heroSprite: SpriteEntry | null,
     ) {
         // 先让队形锚在主角初始位（否则开局槽位会算到 (0,0) 原点）
@@ -120,6 +129,8 @@ export class HeroSquad {
                 powerMul: HERO.powerMultiplier,
                 baseScale,
                 hasSprite,
+                slot: i,
+                kind: HERO_ABILITIES[i % HERO_ABILITIES.length],
             });
             node.setPosition(this._slot.x, this._slot.y, 2);
         }
@@ -183,7 +194,6 @@ export class HeroSquad {
         const speedMul = (stats ? stats.speedMul : 1) * (this.stunT > 0 ? SATIETY.feedStunSpeedMul : 1);
         this._player.speedMul = speedMul;
 
-        const cycle = stats ? castCycle(stats) : { telegraph: HERO.telegraph, cast: HERO.cast, recovery: HERO.recovery };
         const mul = this.powerMul;
 
         const p = this._player;
@@ -192,6 +202,10 @@ export class HeroSquad {
         for (let i = 0; i < this._heroes.length; i++) {
             const h = this._heroes[i];
             h.powerMul = mul;   // 「半饿最强」在这里真正生效
+
+            // 周期按技能取（CR-017）：三个槽位的基础节奏不同，
+            // 这是"施法自然错落、不会三发同时出膛"的来源。
+            const cycle = this._cycleOf(h, stats);
 
             // ---- 槽位弹性跟随（弹簧-阻尼：落到目标点后稳定，不来回震荡）----
             this._formation.slotTarget(i, this._slot);
@@ -233,8 +247,7 @@ export class HeroSquad {
         switch (h.state) {
             case 'idle':
                 if (h.stateT <= 0) {
-                    const range = HERO.acquireRange * (stats ? stats.rangeMul : 1);
-                    const t = this.acquire(h.x, h.y, range);
+                    const t = this.acquire(h.x, h.y, this._rangeOf(h, stats));
                     if (t) {
                         h.target = t;
                         h.state = 'telegraph';
@@ -296,31 +309,77 @@ export class HeroSquad {
     }
 
     /**
-     * 发射：伤害 = 基础 × 饱食倍率 × 升级伤害，暴击再 ×2；
-     * 「分身」把一发拆成多角度齐射（散开 12°，避免全打在同一个点上）。
+     * 施法周期按技能取（受「急食」缩放）。
+     * 没接升级系统时退化为原始配置，保证"不接线也能跑"。
+     */
+    private _cycleOf(h: Hero, stats: UpgradeStats | null): { telegraph: number; cast: number; recovery: number } {
+        if (stats) {
+            return castCycle(stats, h.kind);
+        }
+        const a = ABILITY[h.kind];
+        return { telegraph: a.telegraph, cast: a.cast, recovery: a.recovery };
+    }
+
+    /**
+     * 索敌半径按技能取。
+     *
+     * ⚠️ **两种技能都必须收窄**，否则会出现"抬手了但什么都没打到"：
+     *  - `nova` 有效半径 96，而 `acquireRange` 是 340 —— 沿用 340 会让正后那只英雄
+     *    对着 300px 外的怪放一圈空气（玩家读到的是 bug）。收窄后它只在贴身时出手，
+     *    这正好是"守卫"该有的行为：你被围住时才需要它。
+     *  - `beam` 射程 320，比 340 差 20px —— 目标落在 325 处时会抬手打空，留 10px 余量。
+     */
+    private _rangeOf(h: Hero, stats: UpgradeStats | null): number {
+        const base = HERO.acquireRange * (stats ? stats.rangeMul : 1);
+        if (h.kind === 'nova') {
+            return Math.min(base, ABILITY.nova.radius + 40);
+        }
+        if (h.kind === 'beam') {
+            // 光束长度也吃「嗅探」加成，否则升级范围之后打空窗口会变大
+            const reach = ABILITY.beam.range * (stats ? stats.rangeMul : 1) - 10;
+            return Math.min(base, reach);
+        }
+        return base;
+    }
+
+    /**
+     * 出手：按槽位分派到三种技能（CR-017）。
+     *
+     * 伤害口径不变：`技能基础 × 饱食倍率 × 升级伤害`，暴击再 ×2。
+     * 「连锁」层数作为 `extra` 传给技能，由技能自己解释（平行光束 / 多落点 / 双环）。
      */
     private fire(h: Hero, stats: UpgradeStats | null): void {
+        const ab = this.abilities;
+        if (!ab) {
+            return;
+        }
         const len = Math.hypot(h.aimX, h.aimY) || 1;
-        const bx = h.aimX / len;
-        const by = h.aimY / len;
+        const dx = h.aimX / len;
+        const dy = h.aimY / len;
 
         const crit = stats !== null && Math.random() < stats.critChance;
-        let dmg = HERO.damage * h.powerMul * (stats ? stats.damageMul : 1);
+        let dmg = ABILITY[h.kind].damage * h.powerMul * (stats ? stats.damageMul : 1);
         if (crit) {
             dmg *= 2;
         }
+        const extra = stats ? stats.multishot : 0;
 
-        const shots = 1 + (stats ? stats.multishot : 0);
-        const spread = 0.21;                 // ≈12°
-        const start = -((shots - 1) * spread) / 2;
-
-        for (let i = 0; i < shots; i++) {
-            const a = start + i * spread;
-            const c = Math.cos(a);
-            const s = Math.sin(a);
-            const dx = bx * c - by * s;
-            const dy = bx * s + by * c;
-            this._projectiles.spawnPetBullet(h.x + dx * 14, h.y + dy * 14, dx, dy, dmg, crit);
+        switch (h.kind) {
+            case 'beam':
+                ab.castBeam(h.x, h.y, dx, dy, ABILITY.beam.range * (stats ? stats.rangeMul : 1), dmg, crit, extra);
+                break;
+            case 'bolt': {
+                // 落点取**施法瞬间**的目标位置，不是抬手时缓存的坐标：
+                // 0.3s 抬手期间怪会走，用旧坐标会明显砸在怪身后。
+                const t = h.target;
+                const tx = t ? t.x : h.x + dx * 200;
+                const ty = t ? t.y : h.y + dy * 200;
+                ab.castBolt(h.x, h.y, tx, ty, dmg, crit, extra);
+                break;
+            }
+            default:
+                ab.castNova(h.x, h.y, dmg, crit, extra);
+                break;
         }
     }
 

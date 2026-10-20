@@ -1,5 +1,5 @@
 import { Node, Sprite, UITransform } from 'cc';
-import { ENEMIES, ENEMY_AI, FIELD } from '../config/BattleConfig';
+import { AOE_FALLOFF, ENEMIES, ENEMY_AI, FIELD } from '../config/BattleConfig';
 import type { EnemyDef, EnemyType } from '../config/BattleConfig';
 import { clamp, TAU } from '../core/MathUtil';
 import { Pool } from '../core/Pool';
@@ -136,6 +136,78 @@ export class EnemyManager {
             }
         }
         return null;
+    }
+
+    /**
+     * 圆范围伤害（CR-017：落雷 / 冲击波用）。返回实际命中数。
+     *
+     * `maxTargets` 不是性能保护，是**平衡阀**：不限上限的话，一波 26 只怪挤在一起时
+     * 一发 AOE 能清掉半个屏幕，节奏立刻塌。上限让"扎堆"仍然是威胁而不是礼物。
+     *
+     * `firstScale` 用于「BOSS 已占用第一个目标名额」的情况 ——
+     * 由调用方传入 `AOE_FALLOFF`，让杂兵从第二档开始吃伤害。
+     */
+    damageInRadius(
+        x: number, y: number, r: number,
+        dmg: number, maxTargets: number, crit: boolean,
+        kbX: number, kbY: number, kb: number,
+        firstScale = 1,
+    ): number {
+        let hits = 0;
+        for (const e of this._enemies) {
+            if (!e.active || e.dying > 0) continue;
+            if (hits >= maxTargets) break;
+            const rr = r + e.def.radius;
+            const dx = e.x - x;
+            const dy = e.y - y;
+            if (dx * dx + dy * dy > rr * rr) continue;
+            // 从爆心指向敌人的方向击退；爆心与敌人重合时退化为向上，避免除零
+            let kx = dx;
+            let ky = dy;
+            if (kx === 0 && ky === 0) {
+                kx = 0;
+                ky = 1;
+            }
+            const scale = hits === 0 ? firstScale : Math.pow(AOE_FALLOFF, hits);
+            this.takeDamage(e, dmg * scale, kx * kb + kbX, ky * kb + kbY, crit);
+            hits++;
+        }
+        return hits;
+    }
+
+    /**
+     * 线段扫掠伤害（CR-017：贯穿光束用）。返回实际命中数。
+     *
+     * 用"点到线段的距离 ≤ 半宽 + 敌人半径"判定，不做逐帧扫掠 —— 技能是瞬发的，
+     * 一帧内结算完整条线，"穿透"这件事本身就是一次查询，不需要飞行过程。
+     * 穿透同样按 `AOE_FALLOFF` 递减：一条线打穿 8 只不该等于 8 倍伤害。
+     */
+    damageInSegment(
+        x0: number, y0: number, x1: number, y1: number,
+        halfWidth: number, dmg: number, maxTargets: number, crit: boolean,
+        firstScale = 1,
+    ): number {
+        const sx = x1 - x0;
+        const sy = y1 - y0;
+        const segLen2 = sx * sx + sy * sy;
+        const invLen = segLen2 > 0 ? 1 / Math.sqrt(segLen2) : 0;
+        let hits = 0;
+        for (const e of this._enemies) {
+            if (!e.active || e.dying > 0) continue;
+            if (hits >= maxTargets) break;
+            // 投影到线段上并夹到 [0,1]：得到线段上离敌人最近的点
+            let t = segLen2 > 0 ? ((e.x - x0) * sx + (e.y - y0) * sy) / segLen2 : 0;
+            if (t < 0) t = 0;
+            else if (t > 1) t = 1;
+            const px = x0 + sx * t - e.x;
+            const py = y0 + sy * t - e.y;
+            const rr = halfWidth + e.def.radius;
+            if (px * px + py * py > rr * rr) continue;
+            const scale = hits === 0 ? firstScale : Math.pow(AOE_FALLOFF, hits);
+            this.takeDamage(e, dmg * scale, sx * invLen, sy * invLen, crit);
+            hits++;
+        }
+        return hits;
     }
 
     /**

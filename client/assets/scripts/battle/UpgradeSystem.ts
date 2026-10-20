@@ -1,4 +1,5 @@
-import { HERO, LEVEL, PALETTE, SATIETY } from '../config/BattleConfig';
+import { ABILITY, LEVEL, PALETTE, SATIETY } from '../config/BattleConfig';
+import type { AbilityKind } from '../config/BattleConfig';
 
 export type UpgradeId =
     | 'damage' | 'rate' | 'speed' | 'range' | 'feed'
@@ -30,7 +31,7 @@ export const UPGRADES: readonly UpgradeDef[] = [
     { id: 'range', name: '嗅探', desc: '索敌范围 +14%', maxStack: 3, weight: 0.9, color: PALETTE.gold },
     { id: 'feed', name: '狼吞', desc: '喂食回复量 +25%', maxStack: 3, weight: 1.0, color: PALETTE.excite },
     { id: 'resist', name: '慢饿', desc: '饱食度消耗 -16%', maxStack: 3, weight: 1.0, color: PALETTE.safe },
-    { id: 'multishot', name: '分身', desc: '每次多打 1 发（散开）', maxStack: 2, weight: 0.75, color: PALETTE.foxPurple },
+    { id: 'multishot', name: '连锁', desc: '每次施放追加 1 次打击', maxStack: 2, weight: 0.75, color: PALETTE.foxPurple },
     { id: 'crit', name: '暴食', desc: '暴击率 +10%（2 倍伤害）', maxStack: 4, weight: 0.9, color: PALETTE.gold },
     { id: 'grit', name: '皮实', desc: '全饿门槛 -12（更耐饿）', maxStack: 2, weight: 0.8, color: PALETTE.wood },
     { id: 'leech', name: '啃噬', desc: '击杀 9% 概率回 1 点体力', maxStack: 3, weight: 0.85, color: PALETTE.danger },
@@ -196,12 +197,22 @@ export function expProgress(u: UpgradeSystem): number {
     return Math.max(0, Math.min(1, u.exp / u.expNeed));
 }
 
-/** 攻击周期（受「急食」影响）—— HeroSquad 直接读这个 */
-export function castCycle(stats: UpgradeStats): { telegraph: number; cast: number; recovery: number } {
+/**
+ * 攻击周期（受「急食」影响）。
+ *
+ * CR-017：改为**按技能取** —— 三个槽位的基础节奏不同（贯穿 0.72 / 落雷 1.05 / 冲击 0.62），
+ * 共用一套周期会把它们重新拉成"同时出手"。
+ * 「急食」`castMul` 同时缩放三段，所以升级对三种技能都成立，不必分别配。
+ */
+export function castCycle(
+    stats: UpgradeStats,
+    kind: AbilityKind,
+): { telegraph: number; cast: number; recovery: number } {
     const k = stats.castMul;
+    const a = ABILITY[kind];
     return {
-        telegraph: HERO.telegraph * k,
-        cast: HERO.cast * k,
-        recovery: HERO.recovery * k,
+        telegraph: a.telegraph * k,
+        cast: a.cast * k,
+        recovery: a.recovery * k,
     };
 }

@@ -4,6 +4,7 @@ import { hexColor } from '../core/ColorUtil';
 import { TAU } from '../core/MathUtil';
 import { ENEMY_DEATH_TIME } from '../battle/EnemyManager';
 import type { Boss } from '../battle/BossController';
+import type { AbilityFx } from '../battle/AbilitySystem';
 import type { Enemy } from '../battle/EnemyManager';
 import type { Hero } from '../battle/HeroSquad';
 import type { Orb } from '../battle/OrbManager';
@@ -41,6 +42,44 @@ const C_BOSS_AOE_BURST = hexColor(PALETTE.danger, 150);
 const C_BOSS_BODY = hexColor(ENEMIES.tank.color);
 const C_BOSS_FLASH = hexColor(0xffffff, 235);
 
+// ---- 英雄技能（CR-017）----
+// 淡出用「4 档预建色」而不是每帧 hexColor()：Graphics 的 fillColor 是拷贝语义，
+// 但 hexColor 每次都会 new 一个 Color —— 3 个技能 × 60 帧 = 每秒 180 个临时对象。
+const BEAM_FADE = [
+    hexColor(0xfff6d0, 235),
+    hexColor(0xfff6d0, 170),
+    hexColor(0xfff6d0, 105),
+    hexColor(0xfff6d0, 45),
+];
+const BEAM_CORE = [
+    hexColor(0xffffff, 250),
+    hexColor(0xffffff, 200),
+    hexColor(0xffffff, 130),
+    hexColor(0xffffff, 60),
+];
+// 落雷预警：低 alpha 的实心 + 亮边界（与敌人的红/橙前摇区分开，这是"我方技能"）
+const C_BOLT_WARN_FILL = [hexColor(PALETTE.gold, 46), hexColor(PALETTE.gold, 34), hexColor(PALETTE.gold, 22), hexColor(PALETTE.gold, 12)];
+const C_BOLT_WARN_EDGE = hexColor(PALETTE.gold, 210);
+const C_BOLT_BURST = [
+    hexColor(0xfff0a8, 240),
+    hexColor(0xfff0a8, 175),
+    hexColor(0xfff0a8, 110),
+    hexColor(0xfff0a8, 45),
+];
+const C_NOVA = [
+    hexColor(PALETTE.excite, 215),
+    hexColor(PALETTE.excite, 155),
+    hexColor(PALETTE.excite, 95),
+    hexColor(PALETTE.excite, 38),
+];
+const C_BEAM_CRIT = hexColor(PALETTE.gold, 250);
+
+/** 淡出档位：0 = 刚出现，3 = 快消失 */
+function fadeStep(p: number): number {
+    const i = Math.floor(p * 4);
+    return i < 0 ? 0 : (i > 3 ? 3 : i);
+}
+
 /**
  * 全场实体批量渲染器：所有敌人/子弹/经验珠/怪窝/前摇圈/BOSS 特效画在同一个 Graphics 里。
  * 依据 3.8 源码：同组件多次 fill/stroke 合并为同一 mesh → 整个动态场只占 1 个 DrawCall
@@ -72,6 +111,7 @@ export class EntityRenderer {
         projectiles: Projectile[],
         orbs: Orb[],
         boss: Boss | null,
+        abilities: readonly AbilityFx[] = [],
     ): void {
         const g = this._g;
         g.clear();
@@ -79,11 +119,102 @@ export class EntityRenderer {
         this.drawHitFlash(enemies);
         this.drawTelegraphs(enemies);
         this.drawProjectiles(projectiles);
+        this.drawAbilities(abilities);
         this.drawOrbs(orbs);
         this.drawHeroBodies(heroes);
         this.drawHeroRings(heroes);
         // BOSS 最后画：它体积最大，且 AOE 区域必须盖在杂兵之上才不会看漏
         this.drawBoss(boss);
+    }
+
+    // ---------------- 英雄技能（CR-017） ----------------
+
+    /**
+     * 三种技能的表现。全部画在同一个 Graphics 里，**不增加 DrawCall**。
+     *
+     * 表现设计原则（像素风下"技能感"靠形状，不靠光效）：
+     *  - 贯穿 = **一条会消失的线**（锥形收窄），不画飞行物 —— 瞬发才有"斩"的意味；
+     *  - 落雷 = **先圈后爆**（0.32s 预警里半径由大到小收缩，收缩到底就炸），
+     *    与敌人前摇"由小涨到大"方向相反，玩家一眼能分清敌我；
+     *  - 冲击 = **从脚下向外推的环**，环是余波，判定在炸开瞬间。
+     */
+    private drawAbilities(list: readonly AbilityFx[]): void {
+        const g = this._g;
+
+        // ---- 落雷预警（画在最底层：它是地面标记）----
+        for (const fx of list) {
+            if (fx.kind !== 'bolt' || fx.fired) continue;
+            const p = Math.max(0, Math.min(1, fx.t / fx.warn));
+            g.fillColor = C_BOLT_WARN_FILL[fadeStep(p * 0.6)];
+            g.circle(fx.x, fx.y, fx.radius);
+            g.fill();
+        }
+
+        // ---- 冲击波：从英雄脚下扩散的环 ----
+        for (const fx of list) {
+            if (fx.kind !== 'nova') continue;
+            const p = Math.min(1, fx.t / fx.life);
+            const r = fx.radius * (0.25 + 0.75 * p);
+            g.strokeColor = C_NOVA[fadeStep(p)];
+            g.lineWidth = Math.max(1, 5 - 4 * p);
+            g.circle(fx.x, fx.y, r);
+            g.stroke();
+        }
+
+        // ---- 贯穿：锥形收窄的光束（外层 + 内芯两层）----
+        for (const fx of list) {
+            if (fx.kind !== 'beam') continue;
+            const p = Math.min(1, fx.t / fx.life);
+            const step = fadeStep(p);
+            let ux = fx.ex - fx.x;
+            let uy = fx.ey - fx.y;
+            const len = Math.hypot(ux, uy) || 1;
+            ux /= len;
+            uy /= len;
+            const nx = -uy;
+            const ny = ux;
+            const hw = fx.halfWidth;
+            const tipW = 2;
+
+            // 外层：起点宽 hw → 终点宽 tipW
+            g.fillColor = BEAM_FADE[step];
+            g.moveTo(fx.x + nx * hw, fx.y + ny * hw);
+            g.lineTo(fx.ex + nx * tipW, fx.ey + ny * tipW);
+            g.lineTo(fx.ex - nx * tipW, fx.ey - ny * tipW);
+            g.lineTo(fx.x - nx * hw, fx.y - ny * hw);
+            g.close();
+            g.fill();
+
+            // 内芯：白色细线，让光束有"过曝"的中心
+            const cw = hw * 0.38;
+            g.fillColor = fx.crit ? C_BEAM_CRIT : BEAM_CORE[step];
+            g.moveTo(fx.x + nx * cw, fx.y + ny * cw);
+            g.lineTo(fx.ex + nx * 0.5, fx.ey + ny * 0.5);
+            g.lineTo(fx.ex - nx * 0.5, fx.ey - ny * 0.5);
+            g.lineTo(fx.x - nx * cw, fx.y - ny * cw);
+            g.close();
+            g.fill();
+        }
+
+        // ---- 落雷爆发（画在最上层：一闪而过的强反馈）----
+        for (const fx of list) {
+            if (fx.kind !== 'bolt' || !fx.fired) continue;
+            const p = Math.min(1, (fx.t - fx.warn) / fx.life);
+            const step = fadeStep(p);
+            const r = fx.radius * (0.55 + 0.65 * p);
+
+            g.fillColor = C_BOLT_BURST[step];
+            // 中心闪光：四角星（两个扁菱形叠成），比纯圆更有"炸"的感觉
+            this.diamond(g, fx.x, fx.y, fx.radius * 0.5 * (1 - p * 0.6));
+            g.fill();
+            this.diamond(g, fx.x, fx.y, fx.radius * 0.28 * (1 - p * 0.8));
+            g.fill();
+
+            g.strokeColor = C_BOLT_WARN_EDGE;
+            g.lineWidth = Math.max(1, 4 - 3 * p);
+            g.circle(fx.x, fx.y, r);
+            g.stroke();
+        }
     }
 
     // ---------------- 敌人身体（程序化兜底） ----------------

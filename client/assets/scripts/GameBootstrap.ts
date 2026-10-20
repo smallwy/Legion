@@ -1,6 +1,7 @@
 import { _decorator, Component, Node, input, Input, EventKeyboard, KeyCode } from 'cc';
 import { BattleDirector } from './battle/BattleDirector';
 import { BossController } from './battle/BossController';
+import { AbilitySystem } from './battle/AbilitySystem';
 import { EnemyManager } from './battle/EnemyManager';
 import { HeroSquad } from './battle/HeroSquad';
 import { OrbManager } from './battle/OrbManager';
@@ -50,6 +51,7 @@ export class GameBootstrap extends Component {
     private _projectiles: ProjectileManager | null = null;
     private _orbs: OrbManager | null = null;
     private _bg: BackgroundRenderer | null = null;
+    private _abilities: AbilitySystem | null = null;
     private _entityRenderer: EntityRenderer | null = null;
     private _fx: FxSystem | null = null;
     /** BOSS 死亡特效只放一次（血量归零那一帧触发，不等 0.8s 动画播完） */
@@ -96,8 +98,12 @@ export class GameBootstrap extends Component {
         enemies.projectiles = projectiles;
 
         const upgrades = new UpgradeSystem();
-        const heroes = new HeroSquad(root, player, enemies, projectiles, this._sprites.pet);
+        const abilities = new AbilitySystem();
+        abilities.enemies = enemies;
+        // CR-017：英雄不再发子弹，改为按槽位放技能（贯穿 / 落雷 / 冲击）
+        const heroes = new HeroSquad(root, player, enemies, this._sprites.pet);
         heroes.upgrades = upgrades;
+        heroes.abilities = abilities;
 
         const waves = new WaveManager(enemies, player);
         // BOSS 复用甲虫贴图放大 4 倍（128px）；换正式美术时只改 BOSS.displaySize 与贴图
@@ -105,6 +111,8 @@ export class GameBootstrap extends Component {
         projectiles.boss = boss;
         // ★ 必须接：BOSS 不在 EnemyManager 里，英雄靠这条线才会对它开火
         heroes.boss = boss;
+        // ★ 同样必须接：技能判定也要能命中 BOSS，否则贯穿/落雷/冲击在 BOSS 战里全落空
+        abilities.boss = boss;
 
         const orbs = new OrbManager(player);
         const director = new BattleDirector(player);
@@ -236,6 +244,7 @@ export class GameBootstrap extends Component {
 
         this._director = director;
         this._heroes = heroes;
+        this._abilities = abilities;
         this._enemies = enemies;
         this._waves = waves;
         this._upgrades = upgrades;
@@ -283,6 +292,8 @@ export class GameBootstrap extends Component {
         // 顺序有讲究：主角先动 → 队形与敌人 AI 才能拿到本帧位置
         player.update(sdt);
         heroes.update(sdt);
+        // 技能在英雄之后推进：本帧刚 cast 的落雷要立刻进入预警计时
+        (this._abilities as AbilitySystem).update(sdt);
         waves.update(sdt);
         (this._enemies as EnemyManager).update(sdt);
         (this._boss as BossController).update(sdt);
@@ -318,6 +329,7 @@ export class GameBootstrap extends Component {
                 // 用 active 而不是 alive：alive 在死亡瞬间就变 false，
                 // 那样 0.8s 的缩小消失动画会被直接跳过（BOSS 凭空消失）
                 boss.boss.active ? boss.boss : null,
+                (this._abilities as AbilitySystem).list,
             );
             (this._fx as FxSystem).redraw();
 
@@ -479,6 +491,7 @@ export class GameBootstrap extends Component {
         (this._heroes as HeroSquad).reset();
         (this._panel as SettlementPanel).hide();
         (this._fx as FxSystem).clear();
+        (this._abilities as AbilitySystem).clear();
         this._bossDeathFx = false;
     }
 

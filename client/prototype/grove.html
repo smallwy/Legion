@@ -368,233 +368,284 @@ const THEMES = {
 const THEME_ORDER = ["tundra", "swamp", "cliff", "slope", "bouncy", "well", "stairs", "tower"];
 
 const LEVELS = [
+  /* ---------------- 1 ----------------
+     教学关。一条 594 长的球道横在 462，右端接一条 180 长的滑梯直接落到地面 ——
+     玩家第一次看到"球会自己滑下去"，比任何文字说明都省事。 */
   {
-    id: "entry", name: "苔原入口", sub: "直井 · 中央顶台",
-    note: "一道竖井直通火坑，右上角还留了个落营地的口子。先把「糊三下 → 推 → 烧」摸熟",
+    id: "entry", name: "苔原入口", sub: "长球道 · 右侧滑梯",
+    note: "一条 594 长的球道，末端接滑梯直落地面。先把「糊三下 → 推 → 烧」摸熟",
     theme: "tundra",
-    goal: "clear", par: { time: 45, made: 7 },
+    goal: "clear", par: { time: 60, made: 8 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-      { x: WALL_L, y: 462, w: 474, h: 20, kind: "ledge" },   // 26..500
-      { x: 620,    y: 462, w: 160, h: 20, kind: "ledge" },   // 620..780（780 之后是落营地的口子）
+      { x: WALL_L, y: 462, w: 594, h: 20, kind: "ledge" },   // 26..620
       { x: WALL_L, y: 350, w: 274, h: 20, kind: "ledge" },   // 26..300
-      { x: 420,    y: 350, w: 80,  h: 20, kind: "ledge" },   // 420..500 小台阶
-      { x: 640,    y: 350, w: 220, h: 20, kind: "ledge" },   // 640..860
-      { x: 380,    y: 248, w: 300, h: 20, kind: "ledge" },   // 顶台在正中间
+      { x: 440,    y: 350, w: 180, h: 20, kind: "ledge" },   // 440..620
+      { x: 400,    y: 248, w: 300, h: 20, kind: "ledge" },   // 400..700
+    ],
+    ramps: [
+      // 从球道末端 620 滑到地面 800。坡顶接台面、坡底落地，中间不碰任何东西。
+      { x: 620, w: 140, yL: 462, yR: GROUND_Y },
     ],
     pits: [
-      { x: 180, y: GROUND_Y, w: 100, kind: "mud"  },
-      { x: 500, y: GROUND_Y, w: 100, kind: "fire" },   // 正对 500..620 的竖井
+      { x: 120, y: GROUND_Y, w: 100, kind: "mud"  },
+      { x: 500, y: GROUND_Y, w: 100, kind: "fire" },   // 从 350 层左段末端掉下来正好进去
     ],
     stumps: [],   // 教学关不放木桩：出生点就在旁边，所有弹丸出门第一帧就被它吃掉
     camp: { x: 852, y: GROUND_Y, w: 82 },
-    spawns: [
-      { foe: "bug",  x: 180, y: 462 },
-      { foe: "bug",  x: 700, y: 462 },
-      { foe: "bug",  x: 150, y: 350 },
-      { foe: "bug",  x: 460, y: 350 },
-      { foe: "bug",  x: 760, y: 350 },
-      { foe: "bug",  x: 450, y: 248 },
-      { foe: "bug",  x: 620, y: 248 },
+    waves: [
+      [
+        { foe: "bug",  x: 150, y: 462 },
+        { foe: "bug",  x: 300, y: 462 },
+        { foe: "bug",  x: 450, y: 462 },
+        { foe: "bug",  x: 150, y: 350 },
+      ],
+      [
+        { foe: "bug",  x: 500, y: 350 },
+        { foe: "bug",  x: 580, y: 350 },
+        { foe: "bug",  x: 480, y: 248 },
+        { foe: "bug",  x: 600, y: 248 },
+      ],
+      [{ foe: "boss", x: 760, y: GROUND_Y, lv: 1 }],
     ],
     spawn: { x: 90, y: GROUND_Y },
   },
 
+  /* ---------------- 2 ----------------
+     三条坑 + 一条从地面爬到 462 的长坡。坡是这关的"另一条路"：
+     球滚下去能上二层，人也能走上去。 */
   {
-    id: "marsh", name: "泥沼", sub: "三池 · 三层错台",
-    note: "左泥、中水、右火，三段台面层层错开。球掉哪口坑，决定这一下赚不赚",
+    id: "marsh", name: "泥沼", sub: "三池 · 中间一条长坡",
+    note: "左泥、中水、右火。中间那条 140 长的坡能上能下，球滚下去会自己爬回 462",
     theme: "swamp",
-    goal: "collect", collect: 14, par: { time: 32, made: 7 },
+    goal: "collect", collect: 12, par: { time: 60, made: 9 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-      { x: WALL_L, y: 462, w: 254, h: 20, kind: "ledge" },   // 26..280
-      { x: 380,    y: 462, w: 300, h: 20, kind: "ledge" },   // 380..680
-      { x: 800,    y: 462, w: 60,  h: 20, kind: "ledge" },   // 800..860 窄台
-      { x: WALL_L, y: 350, w: 234, h: 20, kind: "ledge" },   // 26..260
-      { x: 380,    y: 350, w: 240, h: 20, kind: "ledge" },   // 380..620
-      { x: 720,    y: 350, w: 140, h: 20, kind: "ledge" },   // 720..860
-      { x: 300,    y: 248, w: 260, h: 20, kind: "ledge" },   // 中央顶台
+      { x: WALL_L, y: 462, w: 424, h: 20, kind: "ledge" },   // 26..450
+      { x: 590,    y: 462, w: 230, h: 20, kind: "ledge" },   // 590..820
+      { x: WALL_L, y: 350, w: 264, h: 20, kind: "ledge" },   // 26..290
+      { x: 520,    y: 350, w: 180, h: 20, kind: "ledge" },   // 520..700
+      { x: 320,    y: 248, w: 320, h: 20, kind: "ledge" },   // 中央顶台
+    ],
+    ramps: [
+      // 坡底 310（地面）→ 坡顶 450（接 462 左段末端）。正好落在 350 层的缺口里。
+      { x: 310, w: 140, yL: GROUND_Y, yR: 462 },
     ],
     pits: [
-      { x: 110, y: GROUND_Y, w: 110, kind: "mud"   },
-      { x: 280, y: GROUND_Y, w: 100, kind: "water" },   // 正对左侧竖井
-      { x: 560, y: GROUND_Y, w: 120, kind: "fire"  },
+      { x: 60,  y: GROUND_Y, w: 100, kind: "mud"   },
+      { x: 450, y: GROUND_Y, w: 80,  kind: "water" },
+      { x: 660, y: GROUND_Y, w: 100, kind: "fire"  },
     ],
-    stumps: [{ x: 740, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    stumps: [{ x: 800, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
     camp: { x: 852, y: GROUND_Y, w: 82 },
-    spawns: [
-      { foe: "bug",  x: 150, y: 462 },
-      { foe: "bug",  x: 500, y: 462 },
-      { foe: "bug",  x: 120, y: 350 },
-      { foe: "bug",  x: 560, y: 350 },
-      { foe: "boar", x: 780, y: 350 },
-      { foe: "bug",  x: 350, y: 248 },
-      { foe: "bug",  x: 500, y: 248 },
-      { foe: "crow", x: 460, y: 300, fly: true },
+    waves: [
+      [
+        { foe: "bug",  x: 150, y: 462 },
+        { foe: "bug",  x: 300, y: 462 },
+        { foe: "bug",  x: 400, y: 462 },
+        { foe: "bug",  x: 150, y: 350 },
+      ],
+      [
+        { foe: "bug",  x: 680, y: 462 },
+        { foe: "bug",  x: 760, y: 462 },
+        { foe: "bug",  x: 620, y: 350 },
+      ],
+      [{ foe: "boss", x: 560, y: GROUND_Y, lv: 1 }],
     ],
     spawn: { x: 230, y: GROUND_Y },
   },
 
+  /* ---------------- 3 ----------------
+     四层，最高 248。球道 594 一条到底，右端接一条从 350 滑到 462 的长滑梯。 */
   {
-    id: "cliff", name: "断崖", sub: "长球道 · 五层塔",
-    note: "一条长台横在半空，上面又压了两层。球在长台上能连撞一串，别让它从右边漏下去",
+    id: "cliff", name: "断崖", sub: "长球道 · 悬空滑梯",
+    note: "350 层右端挂了一条 160 长的滑梯，球从上面滑下来正好越过火坑落进营地",
     theme: "cliff",
-    goal: "limit", ballLimit: 6, par: { time: 70, made: 8 },
+    goal: "limit", ballLimit: 7, par: { time: 70, made: 9 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-      { x: WALL_L, y: 462, w: 574, h: 20, kind: "ledge" },   // 26..600 长球道
-      { x: 760,    y: 462, w: 100, h: 20, kind: "ledge" },   // 760..860
-      { x: WALL_L, y: 350, w: 174, h: 20, kind: "ledge" },   // 26..200
-      { x: 260,    y: 350, w: 400, h: 20, kind: "ledge" },   // 260..660
-      { x: 760,    y: 350, w: 100, h: 20, kind: "ledge" },   // 760..860
-      { x: 60,     y: 248, w: 280, h: 20, kind: "ledge" },   // 60..340
-      { x: 420,    y: 248, w: 280, h: 20, kind: "ledge" },   // 420..700
-      { x: 500,    y: 156, w: 260, h: 20, kind: "ledge" },   // 第五层，只有这一关有
+      { x: WALL_L, y: 462, w: 594, h: 20, kind: "ledge" },   // 26..620 长球道
+      { x: WALL_L, y: 350, w: 194, h: 20, kind: "ledge" },   // 26..220
+      { x: 320,    y: 350, w: 380, h: 20, kind: "ledge" },   // 320..700
+      { x: 60,     y: 248, w: 300, h: 20, kind: "ledge" },   // 60..360
+      { x: 440,    y: 248, w: 320, h: 20, kind: "ledge" },   // 440..760
+    ],
+    ramps: [
+      // 悬空滑梯：起点接 350 台面末端，终点悬在 462 高度，再落地面。
+      { x: 700, w: 160, yL: 350, yR: 462 },
     ],
     pits: [
       { x: 300, y: GROUND_Y, w: 100, kind: "mud"  },
-      { x: 440, y: GROUND_Y, w: 120, kind: "fire" },
+      { x: 480, y: GROUND_Y, w: 100, kind: "fire" },
     ],
     stumps: [{ x: 180, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
     camp: { x: 848, y: GROUND_Y, w: 86 },
-    spawns: [
-      { foe: "bug",  x: 150, y: 462 },
-      { foe: "bug",  x: 700, y: 462 },
-      { foe: "bug",  x: 830, y: 462 },
-      { foe: "bug",  x: 120, y: 350 },
-      { foe: "bug",  x: 400, y: 350 },
-      { foe: "boar", x: 600, y: 350 },
-      { foe: "bug",  x: 200, y: 248 },
-      { foe: "bug",  x: 600, y: 248 },
-      { foe: "bug",  x: 580, y: 156 },
+    waves: [
+      [
+        { foe: "bug",  x: 100, y: 462 },
+        { foe: "bug",  x: 250, y: 462 },
+        { foe: "bug",  x: 400, y: 462 },
+        { foe: "bug",  x: 520, y: 462 },
+      ],
+      [
+        { foe: "bug",  x: 400, y: 350 },
+        { foe: "bug",  x: 550, y: 350 },
+        { foe: "boar", x: 650, y: 350 },
+        { foe: "bug",  x: 500, y: 248 },
+      ],
+      [{ foe: "boss", x: 750, y: GROUND_Y, lv: 2 }],
     ],
     spawn: { x: 90, y: GROUND_Y },
   },
 
+  /* ---------------- 4 ----------------
+     V 谷。一条长下坡接一条长上坡，中间只有 20px 平地。
+     球滚下来会冲过谷底再爬上对面 —— 坡是"动量"，不是装饰。 */
   {
-    id: "slope", name: "缓坡", sub: "长坡 · 坡顶接台",
-    note: "一条 180 长的坡，坡顶正好搭上右侧台面。掉下去的球顺着坡又爬回来",
+    id: "slope", name: "缓坡", sub: "V 谷 · 两条长坡对接",
+    note: "一条 210 的下坡接一条 230 的上坡。球冲下来会自己爬上对面，人也能走",
     theme: "slope",
-    goal: "chain", chain: 3, par: { time: 70, made: 8 },
+    goal: "chain", chain: 3, par: { time: 80, made: 9 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-      { x: WALL_L, y: 462, w: 334, h: 20, kind: "ledge" },   // 26..360
-      { x: 560,    y: 462, w: 160, h: 20, kind: "ledge" },   // 560..720（坡顶正好接这一段）
-      { x: 800,    y: 462, w: 60,  h: 20, kind: "ledge" },   // 800..860
-      { x: WALL_L, y: 350, w: 354, h: 20, kind: "ledge" },   // 26..380
-      { x: 480,    y: 350, w: 180, h: 20, kind: "ledge" },   // 480..660
-      { x: 720,    y: 350, w: 140, h: 20, kind: "ledge" },   // 720..860
-      { x: 300,    y: 248, w: 320, h: 20, kind: "ledge" },   // 中央顶台
+      { x: WALL_L, y: 462, w: 214, h: 20, kind: "ledge" },   // 26..240
+      { x: 340,    y: 462, w: 360, h: 20, kind: "ledge" },   // 340..700
+      { x: 800,    y: 462, w: 134, h: 20, kind: "ledge" },   // 800..934
+      { x: WALL_L, y: 350, w: 214, h: 20, kind: "ledge" },   // 26..240
+      { x: 320,    y: 350, w: 360, h: 20, kind: "ledge" },   // 320..680
+      { x: 380,    y: 248, w: 260, h: 20, kind: "ledge" },   // 380..640
     ],
     ramps: [
-      // 坡底 380、坡顶 560：球爬到顶正好被 560..720 那段台面接住。
-      { x: 380, w: 180, yBot: GROUND_Y, yTop: 462 },
+      { x: 240, w: 210, yL: 462, yR: GROUND_Y },   // 下坡：462 → 地面
+      { x: 470, w: 230, yL: GROUND_Y, yR: 462 },   // 上坡：地面 → 462
     ],
     pits: [
-      { x: 150, y: GROUND_Y, w: 100, kind: "mud"  },
-      { x: 640, y: GROUND_Y, w: 120, kind: "fire" },
+      { x: WALL_L, y: GROUND_Y, w: 84,  kind: "mud"  },
+      { x: 700,    y: GROUND_Y, w: 90,  kind: "fire" },   // 上坡尽头掉下去就是火
     ],
-    stumps: [{ x: 300, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    stumps: [{ x: 150, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
     camp: { x: 852, y: GROUND_Y, w: 82 },
-    spawns: [
-      { foe: "bug",  x: 150, y: 462 },
-      { foe: "bug",  x: 650, y: 462 },
-      // 350 层长球道上放三只：连锁的素材必须在同一条线上
-      { foe: "bug",  x: 500, y: 350 },
-      { foe: "bug",  x: 570, y: 350 },
-      { foe: "bug",  x: 640, y: 350 },
-      { foe: "boar", x: 800, y: 350 },
-      { foe: "bug",  x: 400, y: 248 },
-      { foe: "bug",  x: 550, y: 248 },
+    waves: [
+      [
+        { foe: "bug",  x: 100, y: 462 },
+        { foe: "bug",  x: 200, y: 462 },
+        { foe: "bug",  x: 400, y: 462 },
+        { foe: "bug",  x: 550, y: 462 },
+      ],
+      [
+        { foe: "bug",  x: 650, y: 462 },
+        { foe: "bug",  x: 450, y: 350 },
+        { foe: "bug",  x: 600, y: 350 },
+        { foe: "bug",  x: 550, y: 248 },
+      ],
+      [{ foe: "boss", x: 300, y: GROUND_Y, lv: 2 }],
     ],
     spawn: { x: 90, y: GROUND_Y },
   },
 
+  /* ---------------- 5 ----------------
+     两级弹菇塔。球从地面弹上 350，再从 350 弹上 248。 */
   {
     id: "trampoline", name: "弹跳林", sub: "两级弹菇 · 塔式上升",
-    note: "地面一朵菇把球弹上二楼，二楼还有一朵。想让球上顶层，得连弹两次",
+    note: "地面一朵菇把球弹上 350，350 那朵再弹上 248。想让球上顶层，得连弹两次",
     theme: "bouncy",
-    goal: "bank", bank: 5, par: { time: 65, made: 8 },
+    goal: "bank", bank: 5, par: { time: 80, made: 9 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-      { x: WALL_L, y: 462, w: 374, h: 20, kind: "ledge" },   // 26..400
-      { x: 520,    y: 462, w: 180, h: 20, kind: "ledge" },   // 520..700
-      { x: 780,    y: 462, w: 80,  h: 20, kind: "ledge" },   // 780..860
-      { x: WALL_L, y: 350, w: 374, h: 20, kind: "ledge" },   // 26..400
-      { x: 480,    y: 350, w: 160, h: 20, kind: "ledge" },   // 480..640 二楼的菇站这儿
-      { x: 720,    y: 350, w: 140, h: 20, kind: "ledge" },   // 720..860
-      { x: 150,    y: 248, w: 250, h: 20, kind: "ledge" },   // 150..400
-      { x: 520,    y: 248, w: 240, h: 20, kind: "ledge" },   // 520..760
+      { x: WALL_L, y: 462, w: 494, h: 20, kind: "ledge" },   // 26..520
+      { x: WALL_L, y: 350, w: 274, h: 20, kind: "ledge" },   // 26..300
+      { x: 420,    y: 350, w: 340, h: 20, kind: "ledge" },   // 420..760
+      { x: 480,    y: 248, w: 420, h: 20, kind: "ledge" },   // 480..900
     ],
     bouncers: [
       // 弹起 229px：556 → 327 越过 350 层；350 层那朵再弹到 121，越过 248 层。
       // 不摆在"落点 → 营地"那条路上，否则球会被弹起来飞过营地（落袋关变死关）。
-      { x: 180, y: GROUND_Y },
-      { x: 540, y: 350 },
+      { x: 200, y: GROUND_Y },
+      { x: 560, y: 350 },
     ],
     pits: [
       { x: 60,  y: GROUND_Y, w: 90,  kind: "mud"  },
-      { x: 300, y: GROUND_Y, w: 120, kind: "fire" },
+      // 火坑必须在 350 层缺口的正下方（300..420）。原来放在 640..740，
+      // 正好横在"地面 → 营地"的路上，球在地面滚永远进不了营地 ——
+      // 机器人跑出来落袋 0/5，全部烧掉。
+      { x: 300, y: GROUND_Y, w: 100, kind: "fire" },
     ],
-    stumps: [{ x: 700, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    stumps: [{ x: 470, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
     camp: { x: 830, y: GROUND_Y, w: 90 },
-    spawns: [
-      { foe: "bug",  x: 250, y: 248 },
-      { foe: "bug",  x: 620, y: 248 },
-      { foe: "bug",  x: 200, y: 350 },
-      { foe: "boar", x: 760, y: 350 },
-      { foe: "bug",  x: 300, y: 462 },
-      { foe: "bug",  x: 800, y: 462 },
+    waves: [
+      [
+        { foe: "bug",  x: 100, y: 462 },
+        { foe: "bug",  x: 250, y: 462 },
+        { foe: "bug",  x: 400, y: 462 },
+        { foe: "bug",  x: 150, y: 350 },
+      ],
+      [
+        { foe: "bug",  x: 500, y: 350 },
+        { foe: "boar", x: 650, y: 350 },
+        { foe: "bug",  x: 560, y: 248 },
+        { foe: "bug",  x: 700, y: 248 },
+      ],
+      [{ foe: "boss", x: 560, y: GROUND_Y, lv: 3 }],
     ],
     spawn: { x: 60, y: GROUND_Y },
   },
 
+  /* ---------------- 6 ----------------
+     中央 340 宽的真空。球掉下去要 0.6 秒才落地 —— 这是全八关最大的一个空。 */
   {
-    id: "deepwell", name: "深井", sub: "中央深井 · 传送接两端",
-    note: "中间整块是空的。462 层两个洞通着，球从左段末进、从右段头出，一条道当两条用",
+    id: "deepwell", name: "深井", sub: "中央真空 · 传送接两端",
+    note: "中间 340px 整块是空的。462 层两个洞通着，球从左段末进、右段头出",
     theme: "well",
-    goal: "chain", chain: 3, par: { time: 45, made: 7 },
+    goal: "chain", chain: 3, par: { time: 60, made: 8 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-      { x: WALL_L, y: 462, w: 254, h: 20, kind: "ledge" },   // 26..280
-      { x: 640,    y: 462, w: 140, h: 20, kind: "ledge" },   // 640..780
-      { x: WALL_L, y: 350, w: 254, h: 20, kind: "ledge" },   // 26..280
-      { x: 640,    y: 350, w: 140, h: 20, kind: "ledge" },   // 640..780
-      { x: WALL_L, y: 248, w: 214, h: 20, kind: "ledge" },   // 26..240
+      { x: WALL_L, y: 462, w: 274, h: 20, kind: "ledge" },   // 26..300
+      { x: 640,    y: 462, w: 160, h: 20, kind: "ledge" },   // 640..800
+      { x: WALL_L, y: 350, w: 274, h: 20, kind: "ledge" },
+      { x: 640,    y: 350, w: 160, h: 20, kind: "ledge" },
+      { x: WALL_L, y: 248, w: 234, h: 20, kind: "ledge" },   // 26..260
       { x: 680,    y: 248, w: 180, h: 20, kind: "ledge" },   // 680..860
     ],
+    ramps: [
+      // 中央是 340 宽的大真空，右边三层台面只能一级一级跳上去。
+      // 补一条从地面直上 462 的坡，让"上高层"这件事有一条不用连跳的路。
+      { x: 800, w: 100, yL: 462, yR: GROUND_Y },
+    ],
     portals: [
-      // 洞开在 462 球道层，不开地面 —— 地面上一个人都没有，洞只是装饰。
-      // A 在左段末尾、B 在右段开头：球穿过去之后继续往右滚，正好滚进营地。
       { id: "a", x: 262, y: 462, link: "b" },
       { id: "b", x: 656, y: 462, link: "a" },
     ],
     pits: [
-      { x: 200, y: GROUND_Y, w: 80,  kind: "mud"   },
-      { x: 300, y: GROUND_Y, w: 100, kind: "water" },   // 深井正下方
+      { x: 160, y: GROUND_Y, w: 80,  kind: "mud"   },
+      { x: 340, y: GROUND_Y, w: 100, kind: "water" },
       { x: 520, y: GROUND_Y, w: 100, kind: "fire"  },
     ],
     stumps: [{ x: 730, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
     camp: { x: 852, y: GROUND_Y, w: 82 },
-    spawns: [
-      { foe: "bug",  x: 120, y: 462 },
-      { foe: "bug",  x: 668, y: 462 },
-      { foe: "bug",  x: 706, y: 462 },
-      { foe: "bug",  x: 744, y: 462 },
-      { foe: "bug",  x: 120, y: 350 },
-      { foe: "bug",  x: 700, y: 350 },
-      { foe: "bug",  x: 120, y: 248 },
-      { foe: "bug",  x: 760, y: 248 },
-      { foe: "bug",  x: 700, y: 248 },
+    waves: [
+      [
+        { foe: "bug",  x: 100, y: 462 },
+        { foe: "bug",  x: 200, y: 462 },
+        { foe: "bug",  x: 680, y: 462 },
+        { foe: "bug",  x: 760, y: 462 },
+      ],
+      [
+        { foe: "bug",  x: 120, y: 350 },
+        { foe: "bug",  x: 700, y: 350 },
+        { foe: "bug",  x: 740, y: 248 },
+      ],
+      [{ foe: "boss", x: 460, y: GROUND_Y, lv: 3 }],
     ],
     spawn: { x: 60, y: GROUND_Y },
   },
 
+  /* ---------------- 7 ----------------
+     四层真阶梯，每层往右错 110。右侧挂一条 110 的短滑梯落向营地。 */
   {
-    id: "stairs", name: "阶梯塔", sub: "真阶梯 · 四层错位",
-    note: "四层台阶一路往右错，像爬楼梯。每层的缺口都在前一层的右边，掉下去只能往上爬",
+    id: "stairs", name: "阶梯塔", sub: "四层真阶梯 · 右端滑梯",
+    note: "四层台阶一路往右错，像爬楼梯。顶层 156，只有这一关有第五层高",
     theme: "stairs",
-    goal: "limit", ballLimit: 7, par: { time: 50, made: 8 },
+    goal: "limit", ballLimit: 7, par: { time: 70, made: 9 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
       { x: WALL_L, y: 462, w: 204, h: 20, kind: "ledge" },   // 26..230
@@ -607,30 +658,39 @@ const LEVELS = [
       { x: 570,    y: 248, w: 220, h: 20, kind: "ledge" },   // 570..790
       { x: 350,    y: 156, w: 220, h: 20, kind: "ledge" },   // 顶层
     ],
+    // 这一关**不放坡**：350 右段末端 860 离右墙只有 74px，球一推出去就撞墙，
+    // 有了坡反而会被弹回坡上、往左滚回 462 层，永远进不了营地。
+    // "阶梯"这个形状本身就是这关的差异，不需要再加一个坡。
     pits: [
-      { x: 250, y: GROUND_Y, w: 100, kind: "fire" },
-      { x: 570, y: GROUND_Y, w: 100, kind: "mud"  },
+      { x: 100, y: GROUND_Y, w: 100, kind: "mud"  },
+      { x: 620, y: GROUND_Y, w: 100, kind: "fire" },
     ],
     stumps: [{ x: 540, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
     camp: { x: 848, y: GROUND_Y, w: 86 },
-    spawns: [
-      { foe: "bug",  x: 120, y: 462 },
-      { foe: "bug",  x: 450, y: 462 },
-      { foe: "bug",  x: 730, y: 462 },
-      { foe: "bug",  x: 200, y: 350 },
-      { foe: "bug",  x: 550, y: 350 },
-      { foe: "bug",  x: 320, y: 248 },
-      { foe: "boar", x: 650, y: 248 },
-      { foe: "bug",  x: 450, y: 156 },
+    waves: [
+      [
+        { foe: "bug",  x: 120, y: 462 },
+        { foe: "bug",  x: 450, y: 462 },
+        { foe: "bug",  x: 730, y: 462 },
+        { foe: "bug",  x: 200, y: 350 },
+      ],
+      [
+        { foe: "bug",  x: 500, y: 350 },
+        { foe: "bug",  x: 600, y: 350 },
+        { foe: "bug",  x: 450, y: 156 },
+      ],
+      [{ foe: "boss", x: 300, y: GROUND_Y, lv: 4 }],
     ],
     spawn: { x: 70, y: GROUND_Y },
   },
 
+  /* ---------------- 8 ----------------
+     最后一关。两座塔各两层塔尖，中间 320 宽的真空，右塔底下挂一条长滑梯。 */
   {
-    id: "twin", name: "双塔", sub: "双塔 · 塔尖两层",
-    note: "中间整块中空，两座塔各有两层塔尖。上塔容易，把球从塔尖送下来才是题",
+    id: "twin", name: "双塔", sub: "双塔 · 塔尖四层",
+    note: "中间 320px 中空，两座塔各有两层塔尖。最后一关，BOSS 在这儿",
     theme: "tower",
-    goal: "clear", par: { time: 50, made: 9 },
+    goal: "clear", par: { time: 75, made: 10 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
       { x: WALL_L, y: 462, w: 274, h: 20, kind: "ledge" },   // 26..300
@@ -642,23 +702,33 @@ const LEVELS = [
       { x: 100,    y: 156, w: 180, h: 20, kind: "ledge" },   // 左塔尖
       { x: 660,    y: 156, w: 180, h: 20, kind: "ledge" },   // 右塔尖
     ],
+    ramps: [
+      // 右塔底下挂一条滑梯：球从 462 右段落下来，滑到 900 的地面再滚进营地。
+      { x: 760, w: 140, yL: 462, yR: GROUND_Y },
+    ],
     pits: [
       { x: 120, y: GROUND_Y, w: 80,  kind: "mud"   },
       { x: 380, y: GROUND_Y, w: 120, kind: "fire"  },
-      { x: 560, y: GROUND_Y, w: 80,  kind: "water" },
+      { x: 540, y: GROUND_Y, w: 60,  kind: "water" },
     ],
     stumps: [{ x: 700, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
     camp: { x: 852, y: GROUND_Y, w: 82 },
-    spawns: [
-      { foe: "bug",  x: 150, y: 462 },
-      { foe: "bug",  x: 700, y: 462 },
-      { foe: "bug",  x: 150, y: 350 },
-      { foe: "boar", x: 700, y: 350 },
-      { foe: "bug",  x: 120, y: 248 },
-      { foe: "bug",  x: 780, y: 248 },
-      { foe: "bug",  x: 180, y: 156 },
-      { foe: "bug",  x: 760, y: 156 },
-      { foe: "crow", x: 480, y: 360, fly: true },
+    waves: [
+      [
+        { foe: "bug",  x: 100, y: 462 },
+        { foe: "bug",  x: 200, y: 462 },
+        { foe: "bug",  x: 660, y: 462 },
+        { foe: "bug",  x: 730, y: 462 },
+      ],
+      [
+        { foe: "bug",  x: 120, y: 350 },
+        { foe: "bug",  x: 240, y: 350 },
+        { foe: "boar", x: 680, y: 350 },
+        { foe: "bug",  x: 720, y: 248 },
+        { foe: "bug",  x: 820, y: 248 },
+        { foe: "bug",  x: 760, y: 156 },
+      ],
+      [{ foe: "boss", x: 340, y: GROUND_Y, lv: 5 }],
     ],
     spawn: { x: 70, y: GROUND_Y },
   },
@@ -716,7 +786,7 @@ let PLATS = LEVELS[0].plats;
 let PITS = LEVELS[0].pits;
 let STUMPS = LEVELS[0].stumps || [];
 let CAMP = LEVELS[0].camp;
-let SPAWNS = LEVELS[0].spawns;
+let WAVES = LEVELS[0].waves;
 let PLAYER_SPAWN = LEVELS[0].spawn;
 let RAMPS = [];
 let BOUNCERS = [];
@@ -736,7 +806,7 @@ function loadLevel(i) {
   RAMPS = L.ramps || [];
   BOUNCERS = L.bouncers || [];
   PORTALS = L.portals || [];
-  SPAWNS = L.spawns;
+  WAVES = L.waves;
   PLAYER_SPAWN = L.spawn;
 }
 
@@ -745,7 +815,8 @@ function rampAt(x) {
   for (const r of RAMPS) {
     if (x < r.x || x > r.x + r.w) continue;
     const t = (x - r.x) / r.w;
-    return { y: r.yBot + (r.yTop - r.yBot) * t, slope: (r.yBot - r.yTop) / r.w };
+    return { y: r.yL + (r.yR - r.yL) * t, slope: (r.yL - r.yR) / r.w,
+             x0: r.x, w: r.w };
   }
   return null;
 }
@@ -785,6 +856,12 @@ const S = {
   shake: 0,
   flash: 0,
   hitStop: 0,
+  // 波次：一关分 2~3 波，最后一波是 BOSS。波次不是"清完再刷"，
+  // 是"剩 1 只就刷"—— 见 tick 里那段理由。
+  wave: 0,              // 当前第几波（0 起）
+  waveT: 0,             // 这一波已经打了多久
+  waveGap: 0,           // >0 = 下一波正在预告（倒计时）
+  shocks: [],           // BOSS 砸地产生的贴地冲击波
   failWhy: "",          // 失败原因，结算面板要说清楚是哪一条没做到
   aim: false,           // 按住 Shift：强制显示所有球的预测线
 
@@ -803,6 +880,7 @@ const KEYMAP = {
   ArrowLeft: "left", KeyA: "left",
   ArrowRight: "right", KeyD: "right",
   ArrowUp: "jump", KeyW: "jump", Space: "jump",
+  ArrowDown: "down", KeyS: "down",
   KeyJ: "atk",
   KeyK: "dash",
   ShiftLeft: "aim", ShiftRight: "aim",
@@ -899,7 +977,12 @@ function stepBody(b, dt) {
   b.ground = null;
   if (b.vy >= 0) {
     let best = null;
+    // 下穿窗口：按住 ↓ 的那 0.26 秒里，所有"台面"都不算落脚点，只留地面。
+    // 没有这一条，站在 300px 宽的台面中间就下不去 —— 整关被平台切成孤岛，
+    // 玩家只能走到台面边缘才行，而有些台面一直顶到墙，等于没有边。
+    const dropping = b.dropT > 0;
     for (const p of PLATS) {
+      if (dropping && p.kind !== "ground") continue;
       if (b.x + b.w / 2 < p.x || b.x - b.w / 2 > p.x + p.w) continue;
       // 单向平台：只有"上一帧还在顶面之上"的那一块算数，
       // 这样从下面跳上去能穿过去，不会一头撞死在板底
@@ -916,6 +999,16 @@ function stepBody(b, dt) {
       if (prevY <= top + 2 && b.y >= top) {
         if (!best || top < best.y) {
           best = { x: s.x - s.w / 2, y: top, w: s.w, kind: "stump" };
+        }
+      }
+    }
+    // 斜坡：坡面也是落脚面。上一版只有球认坡、人不认，
+    // 结果玩家走上去直接穿到地面 —— 看得见坡、踩不上去，地图就成了假的。
+    if (!dropping) {
+      const rp = rampAt(b.x);
+      if (rp && b.y >= rp.y - 10 && b.vy >= -40) {
+        if (!best || rp.y < best.y) {
+          best = { x: rp.x0, y: rp.y, w: rp.w, kind: "ramp" };
         }
       }
     }
@@ -941,23 +1034,72 @@ function ballBudget() {
   return Math.max(0, st.ballLimit - S.stat.made);
 }
 
+/**
+ * 造一只敌人。BOSS 也走这一条 —— 它只是"cm 更大的敌人"，
+ * 不是第二套规则。玩家因此不用学新东西：糊满 → 变球 → 推进坑。
+ *
+ * `fromSky` 只对 BOSS 用：从高处砸下来，给自己一个登场。
+ */
+function foeFromSpec(sp, fromSky) {
+  const def = FOES[sp.foe] || FOES.bug;
+  const isBoss = sp.foe === "boss";
+  const lv = sp.lv || 1;
+  const w = isBoss ? 78 + lv * 6 : def.w;
+  const h = isBoss ? 84 + lv * 6 : def.h;
+  return {
+    def, kind: isBoss ? "charge" : def.kind,
+    isBoss: !!isBoss, lv,
+    x: sp.x, y: fromSky ? -140 : sp.y,
+    w, h,
+    vx: 0, vy: fromSky ? 300 : 0, face: -1,
+    coat: 0,
+    // cm = 包裹上限。普通怪 3 层（也就是一次"糊满"），
+    // BOSS 4 + lv：第 1 关 5 层，第 8 关 10 层（封顶）。
+    // 原来写 3+lv，实测第 2 关 BOSS **2 秒就被糊成球**（玩家站在 100px 外
+    // 一直喷，抗性 0.28s 根本拦不住），比小怪还短命 —— BOSS 至少得让玩家
+    // 躲过一次砸地才算数。
+    cm: isBoss ? Math.min(4 + lv, 10) : 3,
+    dead: false,
+    onGround: !sp.fly && !fromSky, ground: null,
+    fly: !!sp.fly, homeY: sp.y,
+    stun: 0, hitT: 0, bob: rand(0, 6.28),
+    dir: S.rng() < 0.5 ? -1 : 1,
+    chargeT: rand(1.2, 3.2), charging: 0,
+    // 落地 1.2 秒就砸第一次（不是 2.6）：2.6 秒的空窗里玩家已经把它糊成球了，
+    // "举起来"这一下全程没机会播。
+    slamT: isBoss ? 1.2 : 2.6, slamming: 0,
+    // 空中登场：一路穿平台直落地面。不设这个的话，BOSS 会被 156 层的塔尖
+    // 接住 —— 每关的塔尖位置都不一样，它就会"卡在半空"，玩家够不着。
+    dropT: fromSky ? 99 : 0,
+  };
+}
+
+/** 铺第 i 波。i=0 是开场，不打标题 —— 开场就弹字会盖住选人界面的余韵 */
+function spawnWave(i) {
+  const wv = WAVES[i] || [];
+  const bossWave = wv.some(sp => sp.foe === "boss");
+  for (const sp of wv) S.foes.push(foeFromSpec(sp, bossWave && sp.foe === "boss"));
+  S.wave = i;
+  S.waveT = 0;
+  S.waveGap = 0;
+
+  if (i > 0) {
+    addText(W / 2, 176, bossWave ? "BOSS 来了" : "第 " + (i + 1) + " 波",
+            bossWave ? "#FF8A6B" : "#FFE066", bossWave ? 38 : 28, bossWave ? 1.9 : 1.5);
+    S.shake = Math.max(S.shake, bossWave ? 9 : 3);
+    if (bossWave) S.flash = 0.14;
+  }
+}
+
 function setupLevel() {
   S.foes = [];
-  for (const sp of SPAWNS) {
-    const def = FOES[sp.foe];
-    S.foes.push({
-      def, kind: def.kind,
-      x: sp.x, y: sp.y, w: def.w, h: def.h,
-      vx: 0, vy: 0, face: -1,
-      coat: 0, dead: false,
-      onGround: !sp.fly, ground: null,
-      fly: !!sp.fly, homeY: sp.y,
-      stun: 0, hitT: 0, bob: rand(0, 6.28),
-      dir: S.rng() < 0.5 ? -1 : 1,
-      chargeT: rand(1.2, 3.2), charging: 0,
-    });
-  }
-  S.total = S.foes.length;
+  S.wave = 0;
+  S.waveT = 0;
+  S.waveGap = 0;
+  S.shocks = [];
+  S.total = 0;
+  for (const wv of WAVES) S.total += wv.length;
+  spawnWave(0);
   S.stumps = STUMPS.map(s => ({ x: s.x, y: s.y, w: s.w, h: s.h, hp: s.hp, shake: 0 }));
   S.drops = [];
   S.shots = [];
@@ -1074,6 +1216,20 @@ function updatePlayer(dt) {
     }
   }
 
+  // ---- 从台上下来（↓）
+  // 平台是单向的：能跳上去、能站在上面，但**走不到边就下不来**。
+  // 有些台面一直顶到墙，等于连边都没有 —— 玩家会被困在上层。
+  // 按住 ↓ 直接穿下去，是平台跳跃里最省事的一条解法（不用教）。
+  p.dropT = Math.max(0, (p.dropT || 0) - dt);
+  if (S.keys.down && p.onGround && p.ground && p.ground.kind !== "ground" && p.dropT <= 0) {
+    p.dropT = 0.26;
+    p.y += 8;
+    p.vy = 120;
+    p.onGround = false;
+    p.ground = null;
+    for (let i = 0; i < 5; i++) addFrag(p.x + rand(-10, 10), p.y - 6, 4, "#DCEFC8");
+  }
+
   stepBody(p, dt);
 
   // ---- 跳（带土狼时间 + 输入缓冲，手感全靠这两个）
@@ -1107,9 +1263,9 @@ function updatePlayer(dt) {
   // ---- 冲刺撞敌人：两段式造球的关键
   if (p.dashT > 0) {
     for (const f of S.foes) {
-      if (f.dead || f.coat >= 3) continue;
+      if (f.dead || f.coat >= (f.cm || 3)) continue;
       if (!overlap(p, f)) continue;
-      if (f.coat >= 2) {
+      if (f.coat >= (f.cm || 3) - 1) {
         // 已经裹了两层 —— 一撞直接成球，朝面朝方向飞出去
         makeBallFrom(f, p.face * 660, -120);
         S.shake = Math.max(S.shake, 8);
@@ -1148,7 +1304,7 @@ function updatePlayer(dt) {
   // ---- 碰敌人受伤
   if (p.invT <= 0 && p.dashT <= 0) {
     for (const f of S.foes) {
-      if (f.dead || f.coat >= 3) continue;
+      if (f.dead || f.coat >= (f.cm || 3)) continue;
       if (!overlap(p, f)) continue;
       p.hp -= 1;
       S.stat.hits++;   // 无伤关就靠这一个数
@@ -1243,12 +1399,13 @@ function updatePlayer(dt) {
 
 function updateFoe(f, dt) {
   if (f.dead) return;
+  if (f.isBoss) { updateBoss(f, dt); return; }
   f.hitT = Math.max(0, f.hitT - dt);
   f.stun = Math.max(0, f.stun - dt);
   f.bob += dt * 3.2;
 
   // 被裹到 3 层就该变球了，这里是保险（正常流程在 coatFoe 里处理）
-  if (f.coat >= 3) return;
+  if (f.coat >= (f.cm || 3)) return;
 
   if (f.stun > 0) { f.vx = 0; }
 
@@ -1297,6 +1454,106 @@ function updateFoe(f, dt) {
   if (f.y > H + 100) f.dead = true;
 }
 
+/* ----------------------------------------------------------------------------
+   BOSS
+   ----------------------------------------------------------------------------
+   它走的是**同一套规则**：糊满 cm 层 → 变球 → 推进坑。
+   没有第二套血量、没有免疫、没有阶段 —— 玩家不用学新东西。
+
+   让它和普通怪不一样的只有两件事：
+     1. 慢速追击。压迫感来自"它一直在过来"，不是来自速度。
+     2. 每 6.5 秒砸一次地，放出两道贴地冲击波。这一条是**逼玩家离开地面** ——
+        不然最舒服的打法就是站在它脚边一路糊，BOSS 战会变成木桩战。
+   BOSS 被球撞不消失那一条在 updateBalls 里（球会弹回去，可以连撞）。
+   -------------------------------------------------------------------------- */
+
+function updateBoss(f, dt) {
+  f.hitT = Math.max(0, f.hitT - dt);
+  f.stun = Math.max(0, f.stun - dt);
+  f.bob += dt * 1.7;
+
+  // 从天上掉下来的登场：穿平台直落地面，落地之前什么都不做
+  if (f.dropT > 0) {
+    f.dropT -= dt;
+    stepBody(f, dt);
+    if (f.onGround) {
+      f.dropT = 0;
+      S.shake = Math.max(S.shake, 12);
+      for (let i = 0; i < 22; i++) addFrag(f.x + rand(-50, 50), f.y - 4, 8, "#D8C8A8");
+    }
+    return;
+  }
+
+  if (f.coat >= (f.cm || 3)) return;
+  const p = S.p;
+
+  // ---- 砸地：抬手 0.8 秒（给玩家反应），落地生波
+  f.slamT -= dt;
+  if (f.slamT <= 0 && f.onGround && f.slamming <= 0) {
+    f.slamT = 6.5;
+    f.slamming = 1.15;
+    addText(f.x, f.y - f.h - 30, "举起来了", "#FFB08A", 20);
+    S.shake = Math.max(S.shake, 4);
+  }
+  if (f.slamming > 0) {
+    f.slamming -= dt;
+    f.vx = 0;
+    if (f.slamming <= 0.35 && !f._slammed) {
+      f._slammed = true;
+      S.shake = Math.max(S.shake, 15);
+      S.flash = 0.18;
+      for (let i = 0; i < 12; i++) {
+        addFrag(f.x + rand(-62, 62), f.y - 4 - rand(0, 16), 9, i % 3 ? "#B99B6A" : "#E8C88A");
+      }
+      S.shocks.push({ x: f.x, y: f.y, t: 0, life: 0.62, dir: 1 });
+      S.shocks.push({ x: f.x, y: f.y, t: 0, life: 0.62, dir: -1 });
+      addText(f.x, f.y - f.h - 26, "轰!", "#FF9A6B", 26);
+    }
+    if (f.slamming <= 0) f._slammed = false;
+    stepBody(f, dt);
+    return;
+  }
+
+  if (p && !p.dead) f.face = sign(p.x - f.x);
+  f.vx = f.face * (f.stun > 0 ? 0 : 40 + (f.lv || 1) * 7);
+  stepBody(f, dt);
+  if (f.hitWall) f.face = -f.face;
+
+  // 掉进坑里（不该发生，但兜一下）
+  if (f.y > H + 120) f.dead = true;
+}
+
+/** 玩家受伤只有这一条路 —— 碰敌人、踩火、被冲击波打，都走这里 */
+function hurtPlayer(srcX, txt) {
+  const p = S.p;
+  if (!p || p.dead || p.invT > 0) return;
+  p.hp -= 1;
+  S.stat.hits++;
+  p.invT = 1.2;
+  p.vx = -sign(srcX - p.x) * 300;
+  p.vy = -300;
+  S.shake = Math.max(S.shake, 12);
+  S.flash = 0.25;
+  addText(p.x, p.y - p.h - 20, txt || "唔!", "#FF9E8E", 20);
+  if (p.hp <= 0) { p.hp = 0; p.dead = true; S.phase = "fail"; }
+}
+
+/** 冲击波：贴地跑，跳起来就能躲 */
+function updateShocks(dt) {
+  const p = S.p;
+  for (const s of S.shocks) {
+    s.t += dt;
+    s.x += s.dir * 560 * dt;
+    if (s.x < WALL_L || s.x > WALL_R) s.t = s.life;
+    // 用"脚底离地高度"判，不用碰撞盒：玩家明明跳过去了还被判定，
+    // 那种"我躲开了却没躲掉"是手感里最伤的一种。
+    if (p && !p.dead && Math.abs(p.x - s.x) < 32 && p.y > s.y - 66) {
+      hurtPlayer(s.x, "被震到了");
+    }
+  }
+  if (S.shocks.length) S.shocks = S.shocks.filter(s => s.t < s.life);
+}
+
 /* ============================================================================
    9. 包裹 / 造球
    ========================================================================== */
@@ -1313,11 +1570,19 @@ function updateFoe(f, dt) {
  * 否则"限 4 颗球"和"4 只敌人各造一颗"没区别，目标就不成立了。
  */
 function coatFoe(f, n, intoBall) {
-  if (f.dead || f.coat >= 3) return;
+  if (f.dead || f.coat >= (f.cm || 3)) return;
+  // BOSS 有抗性：0.5 秒内最多吃一层。
+  // 0.28 秒是照着"音波喇叭 0.30 秒一发"配的，但除了音波还有溜溜球、飞刀、
+  // 影分身的连发 —— 0.28 秒等于没拦，一梭子就是三四层。
+  if (f.isBoss) {
+    if (S.t - (f._coatAt || -9) < 0.5) return;
+    f._coatAt = S.t;
+  }
 
   // 额度用完：允许糊到 2 层（还能被路过的球卷走），但糊不成第三层
-  if (!intoBall && f.coat + n >= 3 && ballBudget() <= 0) {
-    f.coat = 2;
+  const max = f.cm || 3;
+  if (!intoBall && f.coat + n >= max && ballBudget() <= 0) {
+    f.coat = max - 1;
     f.hitT = 0.20;
     warnNoBall();
     return;
@@ -1327,19 +1592,19 @@ function coatFoe(f, n, intoBall) {
   // 场上有 4 颗球的时候，玩家不是在决策，是在救火（实测就是这么崩的）。
   // 这条同时是"攒球不免费"最直接的答案 —— 你根本攒不了 3 颗，
   // 只能往一颗球里攒 3 只，而那才是有意思的那件事。
-  if (!intoBall && f.coat + n >= 3 && S.balls.length >= MAX_BALLS) {
-    f.coat = 2;
+  if (!intoBall && f.coat + n >= max && S.balls.length >= MAX_BALLS) {
+    f.coat = max - 1;
     f.hitT = 0.20;
     warnBallFull();
     return;
   }
 
-  f.coat = Math.min(3, f.coat + n);
+  f.coat = Math.min(max, f.coat + n);
   f.hitT = 0.20;
   addText(f.x, f.y - f.h - 12, "+" + n, "#E4FFA8", 16);
   for (let i = 0; i < 5; i++) addFrag(f.x, f.y - f.h * 0.5, 5, "#BFE86E");
 
-  if (f.coat >= 3) {
+  if (f.coat >= max) {
     if (intoBall) {
       absorbIntoBall(f, intoBall);
     } else {
@@ -1386,7 +1651,9 @@ function makeBallFrom(f, vx, vy) {
   f.dead = true;
   S.stat.made++;
   S.stat.maxHolds = Math.max(S.stat.maxHolds, 1);
-  const r = 22;
+  // BOSS 球更大更重：滚得慢，但推一次值 14 倍收成。
+  const isBoss = !!f.isBoss;
+  const r = isBoss ? 44 : 22;
   S.balls.push({
     x: f.x, y: f.y, w: r * 2, h: r * 2, r,
     vx: vx || 0, vy: vy || 0,
@@ -1396,6 +1663,7 @@ function makeBallFrom(f, vx, vy) {
     air: 1,
     onGround: false, ground: null,
     t: 0, spin: 0, dead: false,
+    boss: isBoss, bossLv: f.lv || 1,
     packed: [f.def],
     hitWall: 0, bounceCd: 0, portalCd: 0,
   });
@@ -1571,9 +1839,27 @@ function updateBalls(dt) {
     // 撞敌人：不满 3 层的糊一层（泥球糊两层），已经 2 层的被一撞就卷进球里
     if (Math.abs(b.vx) > 60 || Math.abs(b.vy) > 60) {
       for (const f of S.foes) {
-        if (f.dead || f.coat >= 3) continue;
+        if (f.dead || f.coat >= (f.cm || 3)) continue;
         const dx = Math.abs(b.x - f.x), dy = Math.abs((b.y - b.r) - (f.y - f.h / 2));
         if (dx > b.r + f.w / 2 || dy > b.r + f.h / 2) continue;
+
+        // BOSS：球撞上去糊一层，然后**弹回来**。
+        // 这一条是 BOSS 战和普通战最大的区别：普通怪被撞就滚过去，
+        // BOSS 把球弹回来 —— 玩家可以站在旁边连续推同一颗球砸它，
+        // 不用每次重新糊一颗。限球关才打得动。
+        if (f.isBoss) {
+          coatFoe(f, b.mud ? 2 : 1, null);
+          const dr = b.x < f.x ? -1 : 1;
+          b.x = f.x + dr * (f.w / 2 + b.r + 2);
+          b.vx = dr * Math.max(380, Math.abs(b.vx) * 0.85);
+          b.vy = -140;
+          b.relT = Math.max(0, (b.relT || 0) - 0.7);
+          hitStop(0.05);
+          S.shake = Math.max(S.shake, 9);
+          S.flash = Math.max(S.flash, 0.06);
+          continue;
+        }
+
         coatFoe(f, b.mud ? 2 : 1, b);
         // 撞人不减速（阻尼那一节已经删了），只把球轻轻顶偏一点点，
         // 否则球会"穿过"一排敌人而不产生任何节奏变化。
@@ -1714,7 +2000,7 @@ function predictBall(b, dir) {
 
     // 会撞到几只（不扣速，只数数）
     for (const f of S.foes) {
-      if (f.dead || f.coat >= 3) continue;
+      if (f.dead || f.coat >= (f.cm || 3)) continue;
       if (hitFoes.indexOf(f) >= 0) continue;
       if (Math.abs(x - f.x) < r + f.w / 2 && Math.abs((y - r) - (f.y - f.h / 2)) < r + f.h / 2) {
         hitFoes.push(f);
@@ -1757,7 +2043,7 @@ function predictBall(b, dir) {
 function aimFor(b, dir) {
   b._aim = b._aim || {};
   const key = [Math.round(b.x / 6), Math.round(b.y / 6), Math.round(b.air * 24),
-               S.foes.map(f => (f.dead || f.coat >= 3) ? 0 : 1).join(""),
+               S.foes.map(f => (f.dead || f.coat >= (f.cm || 3)) ? 0 : 1).join(""),
                S.stumps.map(s => s.hp).join("")].join("|");
   const slot = b._aim[dir];
   if (slot && slot.key === key) return slot.val;
@@ -1772,7 +2058,7 @@ function ballTerrain(b, fallVy) {  // 火坑：烧掉，收成翻倍，但球没
     if (b.x > pit.x + 8 && b.x < pit.x + pit.w - 8 && b.y >= pit.y - 8) {
       b.dead = true;
       S.stat.burned++;
-      const gain = b.holds * 2;
+      const gain = b.holds * (b.boss ? 14 : 2);
       S.food += gain;
       S.killed += b.holds;
       addText(b.x, pit.y - 70, "烧掉了 +" + gain, "#FFB05C", 22);
@@ -1823,7 +2109,7 @@ function ballTerrain(b, fallVy) {  // 火坑：烧掉，收成翻倍，但球没
     S.stat.banked++;
     // 落袋关考的是"只数"，不是"球数"：一球装三只走营地算三只
     S.stat.bankHolds += b.holds;
-    const gain = b.holds + 1;
+    const gain = b.holds + 1 + (b.boss ? 12 : 0);
     S.food += gain;
     S.killed += b.holds;
     addText(b.x, CAMP.y - 80, "落袋 +" + gain, "#FFD86B", 22);
@@ -1838,6 +2124,12 @@ function ballTerrain(b, fallVy) {  // 火坑：烧掉，收成翻倍，但球没
  * coat 给 1：重新裹一层，玩家还得再糊两下，不能白赚。
  */
 function respawnPacked(b, coat, atX) {
+  // BOSS 崩开吐回来的还得是 BOSS。吐成普通怪的话，玩家会觉得"打错了"，
+  // 而且下一轮再糊满会造出一颗普通球 —— 一个 BOSS 能漏成两条命。
+  if (b.boss) {
+    return [foeFromSpec({ foe: "boss", x: atX === undefined ? b.x : atX,
+                          y: b.y - b.r * 2, lv: b.bossLv || 1 }, false)];
+  }
   const n = b.packed.length;
   const out = [];
   const cx = atX === undefined ? b.x : atX;
@@ -2004,7 +2296,7 @@ function updateShots(dt) {
         // 优先打自己这一侧最近的敌人；一个都没有就朝自己那一侧平推
         let tgt = null, bd = 1e9;
         for (const f of S.foes) {
-          if (f.dead || f.coat >= 3) continue;
+          if (f.dead || f.coat >= (f.cm || 3)) continue;
           const d = Math.abs(f.x - s.x) + Math.abs((f.y - f.h / 2) - s.y);
           if (d < bd) { bd = d; tgt = f; }
         }
@@ -2079,7 +2371,7 @@ function updateShots(dt) {
 
     /* ---- 命中判定 ---- */
     for (const f of S.foes) {
-      if (f.dead || f.coat >= 3) continue;
+      if (f.dead || f.coat >= (f.cm || 3)) continue;
       if (s.hit.indexOf(f) >= 0) continue;
 
       let got = false;
@@ -2124,7 +2416,7 @@ function updateShots(dt) {
 
 function explodeShot(s) {
   for (const f of S.foes) {
-    if (f.dead || f.coat >= 3) continue;
+    if (f.dead || f.coat >= (f.cm || 3)) continue;
     const d = Math.hypot(f.x - s.x, (f.y - f.h / 2) - s.y);
     if (d < s.aoe) coatFoe(f, 1);
   }
@@ -2665,7 +2957,10 @@ function drawPit(g, pit) {
 /* ---------- 斜坡 ---------- */
 function drawRamp(g, r) {
   const x1 = r.x, x2 = r.x + r.w;
-  const y1 = r.yBot + 6, y2 = r.yTop + 4;
+  // 坡身是 26px 粗的描边，中心线离地至少 13px 才不会被草皮切一半。
+  // 不夹这一下，落到地面的坡看起来像"插进土里"，读不出这是一条能走的斜道。
+  const capY = GROUND_Y - 14;
+  const y1 = Math.min(r.yL + 6, capY), y2 = Math.min(r.yR + 4, capY);
 
   g.save();
   g.lineCap = "butt";
@@ -2696,9 +2991,11 @@ function drawRamp(g, r) {
     g.beginPath(); g.moveTo(px - 7, py - 9); g.lineTo(px + 7, py + 9); g.stroke();
   }
 
-  // 顶端一枚上行箭头：不画的话玩家会以为那是个装饰
+  // 上行箭头：指向高的那一端。坡也可能是往下走的，写死指右端会反。
+
   g.fillStyle = "rgba(255,238,170,.75)";
-  const ax = x2 - 16, ay = y2 - 6;
+  const upRight = y2 < y1;
+  const ax = upRight ? x2 - 16 : x1 + 16, ay = (upRight ? y2 : y1) - 6;
   g.beginPath();
   g.moveTo(ax, ay - 12); g.lineTo(ax - 9, ay + 2); g.lineTo(ax + 9, ay + 2);
   g.closePath(); g.fill();
@@ -3061,7 +3358,120 @@ function drawPet(g, x, footY, w, h, H, face, o) {
   }
 }
 
+/* ----------------------------------------------------------------------------
+   BOSS 的外形：紫身体 + 两只角 + 白描边。要一眼看出"这是这关最大的东西"，
+   靠的是尺寸和角，不是颜色 —— 颜色在八套主题里都会变。
+   -------------------------------------------------------------------------- */
+function drawBoss(g, f) {
+  const cx = f.x, cy = f.y - f.h / 2;
+  const bw = f.w, bh = f.h;
+  const squash = f.hitT > 0 ? f.hitT / 0.20 : 0;
+  const br = 1 + Math.sin(f.bob * 1.6) * 0.018;
+  // 砸地抬手：整个身体先往上抬一点，再砸下来
+  const lift = f.slamming > 0.35 ? -20 * Math.sin((1.15 - f.slamming) * 2.0) : 0;
+
+  g.globalAlpha = 0.22;
+  g.fillStyle = "#1A1224";
+  g.beginPath(); g.ellipse(cx, f.y + 3, bw * 0.44, 8, 0, 0, 6.283); g.fill();
+  g.globalAlpha = 1;
+
+  g.save();
+  g.translate(cx, cy + lift);
+  g.scale((1 + squash * 0.14) * br, (1 - squash * 0.12) * br);
+
+  // 脚
+  g.fillStyle = "#6E2E22";
+  for (const s of [-1, 1]) {
+    rr(g, s * bw * 0.26 - 13, bh * 0.30, 26, 20, 8);
+    g.fill();
+  }
+
+  // 角（先画在身体后面）
+  g.fillStyle = "#F2DFA8";
+  for (const s of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(s * bw * 0.26, -bh * 0.32);
+    g.quadraticCurveTo(s * bw * 0.48, -bh * 0.70, s * bw * 0.30, -bh * 0.88);
+    g.quadraticCurveTo(s * bw * 0.32, -bh * 0.58, s * bw * 0.14, -bh * 0.40);
+    g.closePath();
+    g.fill();
+    g.strokeStyle = COL.outline; g.lineWidth = 2.4; g.stroke();
+  }
+
+  // 身体
+  const body = g.createLinearGradient(0, -bh * 0.5, 0, bh * 0.5);
+  body.addColorStop(0, "#D4664A");
+  body.addColorStop(1, "#8E3A2A");
+  g.fillStyle = body;
+  g.beginPath(); g.ellipse(0, 0, bw * 0.5, bh * 0.5, 0, 0, 6.283); g.fill();
+  g.strokeStyle = COL.outline; g.lineWidth = 3.4; g.stroke();
+
+  // 肚子
+  g.fillStyle = "rgba(232,214,255,.26)";
+  g.beginPath(); g.ellipse(0, bh * 0.15, bw * 0.29, bh * 0.24, 0, 0, 6.283); g.fill();
+
+  // 眼睛
+  for (const s of [-1, 1]) {
+    g.fillStyle = "#FFF8E8";
+    g.beginPath(); g.ellipse(s * bw * 0.16, -bh * 0.10, 12, 13, 0, 0, 6.283); g.fill();
+    g.strokeStyle = COL.outline; g.lineWidth = 2; g.stroke();
+    g.fillStyle = "#2A1210";
+    g.beginPath(); g.arc(s * bw * 0.16 + f.face * 3, -bh * 0.08, 6, 0, 6.283); g.fill();
+  }
+
+  // 嘴：被砸地时张开
+  const roar = f.slamming > 0 ? 0.6 : 0;
+  g.fillStyle = "#3A1410";
+  g.beginPath();
+  g.ellipse(0, bh * 0.15, bw * 0.15, 5 + roar * 8, 0, 0, 6.283);
+  g.fill();
+  g.strokeStyle = COL.outline; g.lineWidth = 2; g.stroke();
+
+  // 苔藓层：糊了几层就贴几块，颜色递进 —— 这是唯一的"进度"反馈。
+  // 只贴下半个身子：绕一圈贴会把眼睛和嘴糊住，玩家就读不出"它举起来了"，
+  // 砸地那一下的抬手是他唯一需要读的动作。
+  const cm = f.cm || 3;
+  for (let i = 0; i < f.coat; i++) {
+    const t = f.coat === 1 ? 0.5 : i / (f.coat - 1);
+    const a = Math.PI * (0.18 + 0.64 * t);
+    const ring = 0.30 + (i % 2) * 0.11;          // 交替贴两圈，贴满时裹住整个下半身
+    const rx = Math.cos(a) * bw * ring, ry = Math.sin(a) * bh * ring;
+    g.globalAlpha = 0.8;
+    g.fillStyle = i % 2 ? "#8FD35A" : "#6FBF46";
+    g.beginPath(); g.ellipse(rx, ry, 14, 11, a, 0, 6.283); g.fill();
+    g.strokeStyle = COL.outline; g.lineWidth = 1.4; g.stroke();
+    g.globalAlpha = 1;
+  }
+
+  g.restore();
+}
+
+function drawShocks(g) {
+  for (const s of S.shocks) {
+    const k = clamp(s.t / s.life, 0, 1);
+    const h = 44 * (1 - k * 0.2);
+    g.globalAlpha = 0.72 * (1 - k);
+    g.strokeStyle = "#FFC46A";
+    g.lineWidth = 8;
+    g.lineCap = "round";
+    g.beginPath();
+    g.moveTo(s.x - 20, s.y - 3);
+    g.quadraticCurveTo(s.x, s.y - h, s.x + 20, s.y - 3);
+    g.stroke();
+
+    g.globalAlpha = 0.92 * (1 - k);
+    g.strokeStyle = "#FFF6DC";
+    g.lineWidth = 2.4;
+    g.beginPath();
+    g.moveTo(s.x - 11, s.y - 3);
+    g.quadraticCurveTo(s.x, s.y - h * 0.72, s.x + 11, s.y - 3);
+    g.stroke();
+  }
+  g.globalAlpha = 1;
+}
+
 function drawFoe(g, f) {
+  if (f.isBoss) { drawBoss(g, f); return; }
   const d = f.def;
   const cx = f.x, cy = f.y - f.h / 2;
   const bw = f.w, bh = f.h;
@@ -3372,6 +3782,23 @@ function drawAimLine(g, b, A, dir) {
 }
 
 function drawAim(g) {
+  // 站在台面上时提醒"↓ 能下去"。只在能穿的时候画 —— 一直画就成了噪音
+  const p = S.p;
+  if (p && !p.dead && p.onGround && p.ground && p.ground.kind !== "ground") {
+    const bob = Math.sin(S.t * 5) * 3;
+    g.save();
+    g.globalAlpha = 0.55;
+    g.strokeStyle = "#FFFFFF";
+    g.lineWidth = 2.6;
+    g.lineCap = "round";
+    g.beginPath();
+    g.moveTo(p.x - 7, p.y + 5 + bob);
+    g.lineTo(p.x, p.y + 13 + bob);
+    g.lineTo(p.x + 7, p.y + 5 + bob);
+    g.stroke();
+    g.restore();
+  }
+
   for (const b of S.balls) {
     if (b.dead) continue;
     // 球停下来 = 玩家正在做决定。这一刻给信息，比让人试错便宜得多。
@@ -3790,14 +4217,27 @@ function drawTrail(g) {
   g.fillStyle = "rgba(255,255,255,.94)";
   g.fillText(label, cx, 22);
 
+  // 波次：一关 2~3 波，最后一波是 BOSS。没有这一行，玩家不知道"还剩多久"。
+  const wtxt = "第 " + Math.min(S.wave + 1, WAVES.length) + " / " + WAVES.length + " 波";
+  g.textAlign = "left";
+  g.strokeText(wtxt, cx + 132, 22);
+  g.fillStyle = (S.wave >= WAVES.length - 1) ? "#FF9E82" : "rgba(255,255,255,.82)";
+  g.fillText(wtxt, cx + 132, 22);
+  g.textAlign = "center";
+
   for (let i = 0; i < n; i++) {
     const x = cx - total / 2 + i * gap;
     const y = 45;
     const done = i < S.stage;
     const cur = i === S.stage;
+    // 深色底圈：亮天空主题里，浅灰点在白云上根本看不见
+    g.beginPath();
+    g.arc(x, y, (cur ? 6 : 4.2) + 2, 0, 6.283);
+    g.fillStyle = "rgba(20,34,26,.38)";
+    g.fill();
     g.beginPath();
     g.arc(x, y, cur ? 6 : 4.2, 0, 6.283);
-    g.fillStyle = cur ? "#FFE066" : done ? "#B9F06A" : "rgba(255,255,255,.26)";
+    g.fillStyle = cur ? "#FFE066" : done ? "#B9F06A" : "rgba(255,255,255,.58)";
     g.fill();
     if (cur) {
       g.strokeStyle = "rgba(255,224,102,.55)";
@@ -3809,12 +4249,79 @@ function drawTrail(g) {
   }
 }
 
+/** 下一波预告：地上画三圈扩散的标记 + 一行倒计时。看不见的刷新最气人 */
+function drawWaveGap(g) {
+  if (S.waveGap <= 0) return;
+  const nx = WAVES[S.wave + 1] || [];
+  const boss = nx.some(sp => sp.foe === "boss");
+  const k = 1 - S.waveGap / (boss ? 1.6 : 1.1);
+
+  g.save();
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.font = "bold 22px 'Microsoft YaHei','PingFang SC',system-ui,sans-serif";
+  const txt = boss ? "地面在震…" : "下一波";
+  g.strokeStyle = "rgba(8,16,12,.72)";
+  g.lineWidth = 4;
+  g.strokeText(txt, W / 2, 128);
+  g.fillStyle = boss ? "#FFB08A" : "#FFE9A8";
+  g.fillText(txt, W / 2, 128);
+
+  // 在每一只即将出现的敌人脚下画一个收缩的圈
+  for (const sp of nx) {
+    const r = 34 * (1 - k) + 10;
+    g.globalAlpha = 0.35 + 0.45 * k;
+    g.strokeStyle = boss ? "#FF9A6B" : "#FFE066";
+    g.lineWidth = 3;
+    g.beginPath();
+    g.arc(sp.x, (sp.y || GROUND_Y) - 6, r, 0, 6.283);
+    g.stroke();
+  }
+  g.globalAlpha = 1;
+  g.restore();
+}
+
 function drawHUD(g) {
   const p = S.p;
   if (!p) return;
   const H = HEROES[p.hero];
 
   drawTrail(g);
+  drawWaveGap(g);
+
+  // BOSS 层数条：贴在最上面，和关卡名分开一层 ——
+  // BOSS 战中玩家最需要知道的是"还差几层"，不是自己还有几颗心。
+  const boss = S.foes.find(f => f.isBoss && !f.dead);
+  if (boss) {
+    const cm = boss.cm || 3;
+    const bw2 = 300, bx = W / 2 - bw2 / 2, by = 66;
+    g.fillStyle = "rgba(12,8,22,.62)";
+    rr(g, bx - 8, by - 7, bw2 + 16, 22, 11);
+    g.fill();
+    g.fillStyle = "rgba(255,255,255,.12)";
+    rr(g, bx, by, bw2, 8, 4);
+    g.fill();
+    const k = clamp(boss.coat / cm, 0, 1);
+    g.fillStyle = "#9BE86E";
+    rr(g, bx, by, Math.max(5, bw2 * k), 8, 4);
+    g.fill();
+    // 每 3 层一道刻度：告诉玩家"再糊 3 层就变球"
+    g.strokeStyle = "rgba(10,20,12,.55)";
+    g.lineWidth = 2;
+    for (let i = 3; i < cm; i += 3) {
+      const px = bx + bw2 * (i / cm);
+      g.beginPath(); g.moveTo(px, by - 1); g.lineTo(px, by + 9); g.stroke();
+    }
+    g.font = "bold 12px 'Microsoft YaHei','PingFang SC',system-ui,sans-serif";
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.strokeStyle = "rgba(6,10,20,.7)";
+    g.lineWidth = 3;
+    const bt = "苔原巨兽 · 壳 " + boss.coat + " / " + cm;
+    g.strokeText(bt, W / 2, by + 24);
+    g.fillStyle = "#FFE6C8";
+    g.fillText(bt, W / 2, by + 24);
+  }
 
   // 左上：角色 + 心
   g.fillStyle = "rgba(12,26,20,.72)";
@@ -4024,14 +4531,39 @@ function tick(dt) {
     for (const f of S.foes) updateFoe(f, dt);
     updateShots(dt);
     updateBalls(dt);
+    updateShocks(dt);
 
     // 清掉死亡的敌人
     let w = 0;
     for (let i = 0; i < S.foes.length; i++) if (!S.foes[i].dead) S.foes[w++] = S.foes[i];
     S.foes.length = w;
 
-    // 收工判定：场上没人，且没有还在滚的球（球里装着人）
-    if (S.foes.length === 0 && S.balls.length === 0 && S.phase === "play") {
+    /* ---- 波次推进 ----
+       不是"清完才刷"，是"剩 1 只就刷"。理由：最后一只常常站在高台上，
+       玩家得爬两层、糊三下、再推一趟 —— 那 20 秒里没有任何决策，
+       只有赶路。推球游戏最不该有的就是赶路。
+
+       BOSS 波是例外，必须**清干净**才开场：BOSS 和残兵一起上是夹击，
+       玩家两边都要防，那时候他想的就不是"这球怎么推"了。 */
+    S.waveT += dt;
+    const lastWave = S.wave >= WAVES.length - 1;
+    if (!lastWave && S.waveGap <= 0) {
+      const nextWv = WAVES[S.wave + 1] || [];
+      const nextBoss = nextWv.some(sp => sp.foe === "boss");
+      const alive = S.foes.length;
+      const trigger = nextBoss ? alive === 0 : alive <= 1;
+      // 3.5 秒的呼吸：一球卷三只会瞬间清场，不缓一下的话玩家还没看清
+      // 数字就进下一波了，节奏上是"被推着走"，不是"自己在推"。
+      if (trigger && S.waveT > 3.5) S.waveGap = nextBoss ? 1.6 : 1.1;
+    }
+    if (S.waveGap > 0) {
+      S.waveGap -= dt;
+      if (S.waveGap <= 0) spawnWave(S.wave + 1);
+    }
+
+    // 收工判定：最后一波也刷完了、场上没人、也没有还在滚的球（球里装着人）
+    const allSpawned = S.wave >= WAVES.length - 1 && S.waveGap <= 0;
+    if (allSpawned && S.foes.length === 0 && S.balls.length === 0 && S.phase === "play") {
       if (checkGoal()) {
         S.phase = "clear";
         S.food += 3;   // 清场奖励
@@ -4087,6 +4619,7 @@ function render() {
 
   if (S.phase === "play" || S.phase === "clear" || S.phase === "fail") {
     // 预测线画在关卡之上、单位之下：它属于"地形信息"，不属于"角色"
+    drawShocks(g);
     if (S.phase === "play") drawAim(g);
 
     // 按 y 排序：后面的先画，前面的盖住后面的
@@ -4478,6 +5011,7 @@ window.GROVE = {
   resetRun, beginRun, tick, render,
   setupLevel, updatePlayer, updateFoe, updateShots, updateBalls,
   coatFoe, makeBallFrom, burstBall, spawnShot,
+  spawnWave, foeFromSpec, updateShocks, hurtPlayer,
   dropChest, dropFrom, DROP_KINDS,
   predictBall, aimFor, ballBudget, checkGoal, rate, goalProgress,
   curStage, curGoal, loadLevel, rampAt, nextLevel, saveProgress,
@@ -4503,11 +5037,12 @@ Object.defineProperty(window.GROVE, "PLATS", { get: () => PLATS });
 Object.defineProperty(window.GROVE, "PITS",  { get: () => PITS });
 Object.defineProperty(window.GROVE, "STUMPS", { get: () => STUMPS });
 Object.defineProperty(window.GROVE, "CAMP",  { get: () => CAMP });
-Object.defineProperty(window.GROVE, "SPAWNS", { get: () => SPAWNS });
+Object.defineProperty(window.GROVE, "WAVES", { get: () => WAVES });
 Object.defineProperty(window.GROVE, "PLAYER_SPAWN", { get: () => PLAYER_SPAWN });
 Object.defineProperty(window.GROVE, "RAMPS", { get: () => RAMPS });
 Object.defineProperty(window.GROVE, "BOUNCERS", { get: () => BOUNCERS });
 Object.defineProperty(window.GROVE, "PORTALS", { get: () => PORTALS });
+window.GROVE.GROUND_Y = GROUND_Y;
 window.GROVE.WALL_L = WALL_L;
 window.GROVE.WALL_R = WALL_R;
 </script>

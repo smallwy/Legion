@@ -125,8 +125,11 @@ console.log("\n=== 1. 开局与选人 ===");
   const sb = boot();
   const P = sb.GROVE, S = P.S;
   eq(S.phase, "select", "刚打开应在选人界面");
-  const want = P.curStage().spawns.length;
-  eq(S.foes.length, want, want + " 只敌人全部在场（和关卡配置一致）");
+  const want = P.curStage().waves[0].length;
+  eq(S.foes.length, want, want + " 只敌人全部在场（第一波 = 关卡配置）");
+  eq(S.wave, 0, "从第 1 波开始");
+  eq(S.total, P.curStage().waves.reduce((a, w) => a + w.length, 0),
+     "总人数 = 所有波次之和");
   eq(S.p, null, "还没选人，没有玩家");
   eq(P.HEROES.length, 6, "6 只可选角色");
 
@@ -471,10 +474,15 @@ function gapsAt(P, y) {
   const segs = P.PLATS.filter(q => q.kind !== "ground" && Math.abs(q.y - y) < 8)
     .sort((a, b) => a.x - b.x);
   const out = [];
-  for (let i = 1; i < segs.length; i++) {
-    const l = segs[i - 1].x + segs[i - 1].w, r = segs[i].x;
-    if (r > l) out.push({ l, r, w: r - l, x: (l + r) / 2 });
-  }
+  const push = (l, r) => { if (r > l) out.push({ l, r, w: r - l, x: (l + r) / 2 }); };
+
+  // 平台两端到墙也算缺口。原来的版本只算"两段平台之间"的缝，
+  // 于是"一条长台 + 右边一大片空"会被判成"没有竖井"——
+  // 而那种地形恰恰是球最容易掉下去的一种。
+  if (!segs.length) { push(P.WALL_L, P.WALL_R); return out; }
+  push(P.WALL_L, segs[0].x);
+  for (let i = 1; i < segs.length; i++) push(segs[i - 1].x + segs[i - 1].w, segs[i].x);
+  push(segs[segs.length - 1].x + segs[segs.length - 1].w, P.WALL_R);
   return out;
 }
 
@@ -790,7 +798,8 @@ console.log("\n=== 15. 球不减速 / 四种场景件 / 撞击掉落 ===");
   const b = S.balls[0];
   const wt = P.PITS.find(q => q.kind === "water");
   // 速度和时间都要收着点：滚过头会掉进右边的火坑，那就和"沉不沉"没关系了
-  b.x = wt.x - 34; b.y = 556; b.vx = 250; b.vy = 0; b.onGround = true;
+  // 从右边往左滚：左边是坡，球滚上坡会被抬高，砸进水面 —— 那测的就不是"平滚"了
+  b.x = wt.x + wt.w + 34; b.y = 556; b.vx = -250; b.vy = 0; b.onGround = true;
   for (let i = 0; i < 50; i++) P.tick(1 / 60);
   ok(S.balls.indexOf(b) >= 0, "球从水面上滚过去不会沉（只有砸进去才沉）", "x=" + b.x.toFixed(0));
 }
@@ -918,7 +927,10 @@ if (process.env.ALL9) {
   console.log("\n=== 八关巡回：机器人怎么打 ===");
   console.log("  关                 目标  结果   用时   造 崩 烧 袋 沉 装 落袋  收成  清场");
 
+  // STAGE=2 只跑第 2 关（调试用）
+  const ONLY = process.env.STAGE ? parseInt(process.env.STAGE, 10) - 1 : -1;
   for (let i = 0; i < N; i++) {
+    if (ONLY >= 0 && i !== ONLY) continue;
     const sb = boot();
     const P = sb.GROVE, S = P.S;
     seed(S);
@@ -974,8 +986,9 @@ if (process.env.ALL9) {
   const sig = (r) => [r.made, r.burned, r.banked, r.maxHolds, Math.round(r.t / 10)].join("/");
   const seen = {};
   for (const r of runs) (seen[sig(r)] = seen[sig(r)] || []).push(r.name);
-  for (const g of Object.values(seen)) {
-    console.log("    " + g.join("  =  ") + (g.length > 1 ? "   ← 打法重复" : ""));
+  // 签名本身要打出来 —— 只打名字的话，这一整段等于没输出（之前就是这样）。
+  for (const [k, g] of Object.entries(seen)) {
+    console.log("    " + k.padEnd(16) + g.join("  =  ") + (g.length > 1 ? "   ← 打法重复" : ""));
   }
 }
 
@@ -1020,10 +1033,13 @@ console.log("\n=== 17. 八关布局互不相同 ===");
   for (let i = 0; i < P.LEVELS.length; i++) {
     P._start(0, i);
     const st = P.curStage();
-    // 指纹 = 平台布局 + 坑位 + 敌人数。三样全一样才算"同一块地"
+    // 指纹 = 平台 + 坑位 + 波次人数 + 斜坡。四样全一样才算"同一块地"。
+    // 斜坡必须进指纹：第 1、3、4、7、8 关的差别一半在坡上，
+    // 不把它算进去，两关"平台一样、坡不一样"会被判成重复。
     const sig = P.PLATS.map(q => q.y + ":" + q.x + ":" + q.w).join("|") +
                 "#" + P.PITS.map(q => q.kind + q.x + q.w).join("|") +
-                "#" + st.spawns.length;
+                "#" + st.waves.map(w => w.length).join(",") +
+                "#" + P.RAMPS.map(q => q.x + ":" + q.w + ":" + q.yL + ":" + q.yR).join("|");
     ok(!sigs.has(sig), "第 " + (i + 1) + " 关（" + st.name + "）的场地和前面都不一样");
     sigs.add(sig);
 
@@ -1179,6 +1195,232 @@ console.log("\n=== 19. 第五轮：球的一次性 / 宝箱 / 飞刀 / 分身 ==
     summons[0].fireT = 0.02;
     for (let k = 0; k < 60; k++) P.tick(1 / 60);
     ok(f.coat > c0 || f.dead, "分身会自己吐影弹打到人", "coat=" + f.coat);
+  }
+}
+
+console.log("\n=== 20. 第六轮：坡、下穿、波次、BOSS ===");
+{
+  /* ---- 坡对人也生效（上一版只有球认坡，人走上去直接穿到地面） ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 3);                       // 缓坡：V 谷两条坡
+    const R = P.RAMPS[0];
+    ok(!!R, "缓坡有坡");
+    S.foes.forEach(f => { f.x = 2000; });
+    // 站在坡的半腰，不掉到地面
+    const mid = R.x + R.w * 0.5;
+    const midY = R.yL + (R.yR - R.yL) * 0.5;
+    S.p.x = mid; S.p.y = midY - 2; S.p.vy = 0; S.p.onGround = false;
+    for (let k = 0; k < 30; k++) P.tick(1 / 60);
+    ok(S.p.onGround && Math.abs(S.p.y - midY) < 12,
+       "人站在坡上会被坡托住（不会穿到地面）",
+       "y=" + S.p.y.toFixed(0) + " 期望 " + midY.toFixed(0));
+
+    // 顺着坡走上去能到坡顶那层
+    S.p.x = mid; S.p.y = midY; S.p.vy = 0; S.p.onGround = true;
+    for (let k = 0; k < 90; k++) { S.keys.left = true; P.tick(1 / 60); }
+    S.keys.left = false;
+    ok(S.p.y < midY - 30, "往坡上走会一路变高", "y=" + S.p.y.toFixed(0));
+  }
+
+  /* ---- ↓ 能从上层的台面穿下去 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 0);
+    S.foes.forEach(f => { f.x = 2000; });
+    // 站在 350 层中间（离两端都远）
+    S.p.x = 500; S.p.y = 350; S.p.vy = 0; S.p.onGround = true;
+    S.p.ground = P.PLATS.find(q => q.y === 350 && 500 > q.x && 500 < q.x + q.w) || null;
+    const y0 = S.p.y;
+    for (let k = 0; k < 6; k++) { S.keys.down = true; P.tick(1 / 60); }
+    ok(S.p.y > y0 + 30 || !S.p.onGround, "按 ↓ 会从台面穿下去",
+       "y " + y0.toFixed(0) + " -> " + S.p.y.toFixed(0));
+    for (let k = 0; k < 90; k++) { S.keys.down = true; P.tick(1 / 60); }
+    S.keys.down = false;
+    ok(S.p.y >= 455, "一直按着 ↓ 会一直掉到下一层", "y=" + S.p.y.toFixed(0));
+
+    // 地面是 ground，按 ↓ 不该穿到世界外
+    S.p.x = 700; S.p.y = 556; S.p.onGround = true;
+    for (let k = 0; k < 30; k++) { S.keys.down = true; P.tick(1 / 60); }
+    S.keys.down = false;
+    ok(S.p.y <= 560, "站在地面上按 ↓ 不会掉出去", "y=" + S.p.y.toFixed(0));
+  }
+
+  /* ---- 波次：剩 1 只就刷下一波，BOSS 波要清空 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 0);
+    const W = P.WAVES;
+    ok(W.length >= 2, "一关至少两波", W.length + " 波");
+    ok(W[W.length - 1].some(sp => sp.foe === "boss"), "最后一波是 BOSS");
+
+    // 手动清掉第一波，只留 1 只
+    const first = W[0].length;
+    while (S.foes.length > 1) S.foes.pop();
+    let t = 0;
+    while (S.wave === 0 && t < 12) { P.tick(1 / 60); t += 1 / 60; }
+    eq(S.wave, 1, "剩 1 只就推进到第 2 波（不等清空）");
+    ok(S.foes.length >= 1, "第 2 波的人已经在场上");
+
+    // BOSS 波之前：必须清空才刷
+    S.foes.length = 0;
+    S.wave = W.length - 2;
+    S.waveT = 0; S.waveGap = 0;
+    S.foes.push(P.foeFromSpec({ foe: "bug", x: 200, y: 462 }, false));
+    t = 0;
+    while (S.wave === W.length - 2 && t < 6) { P.tick(1 / 60); t += 1 / 60; }
+    eq(S.wave, W.length - 2, "BOSS 波之前剩 1 只不会刷（不能夹击）");
+    S.foes.length = 0;
+    t = 0;
+    while (S.wave === W.length - 2 && t < 8) { P.tick(1 / 60); t += 1 / 60; }
+    eq(S.wave, W.length - 1, "清空之后 BOSS 才登场");
+  }
+
+  /* ---- BOSS：层数、变球、弹球、砸地 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 0);
+    S.foes.length = 0;
+    S.balls.length = 0;
+    const boss = P.foeFromSpec({ foe: "boss", x: 700, y: -140, lv: 1 }, true);
+    S.foes.push(boss);
+    ok(boss.cm > 3, "BOSS 的包裹上限比普通怪高", "cm=" + boss.cm);
+    ok(boss.y < 0, "BOSS 是从天上掉下来的");
+
+    // 落地
+    for (let k = 0; k < 120; k++) P.tick(1 / 60);
+    ok(boss.onGround, "BOSS 会落到地面");
+
+    // 糊满 cm 层才变球（普通怪 3 层就变）
+    const cmv = boss.cm;
+    for (let i = 0; i < 3; i++) P.tick(1 / 60);
+    // 每层之间留 36 帧（0.6s）—— BOSS 的抗性是 0.5s/层，20 帧会被直接吃掉，
+    // 测试就变成"怎么糊都糊不满"，看起来像 bug 其实是抗性在正常工作。
+    for (let i = 0; i < cmv - 1; i++) { P.coatFoe(boss, 1); for (let k = 0; k < 36; k++) P.tick(1 / 60); }
+    ok(!boss.dead, "糊 " + (cmv - 1) + " 层还不成球（还差一层）", "coat=" + boss.coat);
+    P.coatFoe(boss, 1);
+    for (let k = 0; k < 4; k++) P.tick(1 / 60);
+    const bb = S.balls.find(x => x.boss);
+    ok(!!bb, "糊满最后一层变成 BOSS 球");
+    ok(bb && bb.r > 30, "BOSS 球比普通球大得多", bb ? "r=" + bb.r : "没有球");
+
+    // 推进火坑：收成远高于普通球
+    const food0 = S.food;
+    const fire = P.PITS.find(q => q.kind === "fire");
+    bb.x = fire.x + fire.w / 2; bb.y = fire.y; bb.vx = 0; bb.vy = 0; bb.onGround = true;
+    for (let k = 0; k < 3; k++) P.tick(1 / 60);
+    ok(S.food - food0 >= 10, "BOSS 球烧掉给大笔收成", "food +" + (S.food - food0));
+  }
+
+  /* ---- BOSS 不会被一梭子糊穿 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 0);
+    S.foes.length = 0;
+    S.balls.length = 0;
+    const boss = P.foeFromSpec({ foe: "boss", x: 700, y: 556 }, false);
+    S.foes.push(boss);
+    // 2 秒内连糊 10 次（每 0.2 秒一次）—— 相当于玩家贴脸按了十下攻击。
+    // 抗性 0.5s/层 => 2 秒最多吃 4 层，而 cm=5，糊不满。
+    for (let i = 0; i < 10; i++) {
+      P.coatFoe(boss, 1);
+      for (let k = 0; k < 12; k++) P.tick(1 / 60);
+    }
+    ok(boss.coat <= 4, "BOSS 有抗性：2 秒连糊 10 次也糊不满", "coat=" + boss.coat + "/" + boss.cm);
+    ok(!boss.dead && !S.balls.some(b => b.boss), "BOSS 不会被一梭子直接糊成球");
+  }
+
+  /* ---- 球撞 BOSS 会弹回来（可以连推同一颗） ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 0);
+    S.foes.length = 0;
+    S.balls.length = 0;
+    const boss = P.foeFromSpec({ foe: "boss", x: 500, y: 556 }, false);
+    S.foes.push(boss);
+    const f0 = S.foes.find(x => !x.isBoss);
+    if (f0) S.foes.splice(S.foes.indexOf(f0), 1);
+    // 造一颗球从左边撞过去
+    const mk = P.foeFromSpec({ foe: "bug", x: 100, y: 462 }, false);
+    S.foes.push(mk);
+    P.coatFoe(mk, 3);
+    const b = S.balls.find(x => !x.boss);
+    b.x = 380; b.y = 556; b.vx = 620; b.vy = 0; b.onGround = true;
+    const c0 = boss.coat;
+    for (let k = 0; k < 30; k++) P.tick(1 / 60);
+    ok(boss.coat > c0, "球撞 BOSS 会给它糊一层", "coat " + c0 + " -> " + boss.coat);
+    ok(S.balls.indexOf(b) >= 0 && b.vx < 0, "球被 BOSS 弹回来（不会消失）",
+       "vx=" + (b.vx || 0).toFixed(0));
+  }
+
+  /* ---- BOSS 砸地：会生冲击波，跳起来能躲 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 0);
+    S.foes.length = 0;
+    const boss = P.foeFromSpec({ foe: "boss", x: 500, y: 556 }, false);
+    S.foes.push(boss);
+    boss.slamT = 0;                       // 立刻抬手
+    let seen = 0;
+    for (let k = 0; k < 180; k++) {
+      P.tick(1 / 60);
+      seen = Math.max(seen, S.shocks.length);
+    }
+    ok(seen >= 2, "BOSS 砸地会放出两道冲击波", "最多同时 " + seen + " 道");
+
+    // 站在地上会被打到；跳起来不会
+    S.p.invT = 0; S.p.hp = 4;
+    S.p.x = 500; S.p.y = 556; S.p.vy = 0; S.p.onGround = true;
+    S.shocks.length = 0;
+    S.shocks.push({ x: 440, y: 556, t: 0, life: 0.62, dir: 1 });
+    for (let k = 0; k < 20; k++) P.tick(1 / 60);
+    ok(S.p.hp < 4, "贴地站着会被冲击波打到", "hp=" + S.p.hp);
+
+    S.p.invT = 0; S.p.hp = 4;
+    S.p.x = 500; S.p.y = 480; S.p.vy = -400; S.p.onGround = false;
+    S.shocks.length = 0;
+    S.shocks.push({ x: 440, y: 556, t: 0, life: 0.62, dir: 1 });
+    for (let k = 0; k < 12; k++) P.tick(1 / 60);
+    ok(S.p.hp === 4, "跳起来就能躲过冲击波", "hp=" + S.p.hp);
+  }
+
+  /* ---- 八关的坡：位置合法（不穿台面、不盖营地） ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    for (let i = 0; i < P.LEVELS.length; i++) {
+      P._start(0, i);
+      const st = P.curStage();
+      for (const r of P.RAMPS) {
+        const hi = Math.min(r.yL, r.yR), lo = Math.max(r.yL, r.yR);
+        ok(hi >= 300 && lo <= P.GROUND_Y + 2, st.name + "：坡在场地内",
+           "y " + hi + ".." + lo);
+
+        // 坡盖住营地的时候有个坑：球在坡上时 y < GROUND_Y，营地判定不触发，
+        // 球会滑过营地一直滚到墙。唯一的例外是**坡的低端正好落在营地范围内** ——
+        // 球在那里落地，下一帧就算落袋。这条在双塔那关是故意这么做的。
+        const hitCamp = r.x < P.CAMP.x + P.CAMP.w && r.x + r.w > P.CAMP.x;
+        if (hitCamp && lo >= P.GROUND_Y - 2) {
+          const lowX = r.yL > r.yR ? r.x : r.x + r.w;
+          ok(lowX > P.CAMP.x && lowX < P.CAMP.x + P.CAMP.w,
+             st.name + "：坡落到地面时，落点得在营地范围内");
+        }
+      }
+    }
   }
 }
 

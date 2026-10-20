@@ -106,7 +106,53 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     await shot(name);
   }
 
-  // 15. 宝箱：连着几个人一起烧掉才掉，所以直接摆一颗在火坑边上
+  // 14. BOSS：第 8 关的最后一波，lv5
+  await page.evaluate(() => {
+    const P = window.GROVE, S = P.S;
+    P._start(0, 7);
+    S.foes.length = 0;
+    S.balls.length = 0;
+    S.texts.length = 0;
+    S.wave = P.WAVES.length - 1;
+    S.foes.push(P.foeFromSpec({ foe: "boss", x: 340, y: -140, lv: 3 }, true));
+  });
+  await sleep(1050);
+  await page.evaluate(() => {
+    const { S } = window.GROVE;
+    const b = S.foes.find(f => f.isBoss);
+    if (b) { b.coat = 4; b.slamT = 999; }      // 糊了 4 层，先别砸
+    S.texts.length = 0;
+  });
+  await sleep(220);
+  await shot("grove-14-BOSS.png");
+
+  // 15. BOSS 砸地：抬手的最高点 + 贴地冲击波
+  await page.evaluate(() => {
+    const { S } = window.GROVE;
+    const b = S.foes.find(f => f.isBoss);
+    if (b) { b.slamT = 999; b.slamming = 0.42; }
+    S.shocks.length = 0;
+    S.shocks.push({ x: 560, y: 556, t: 0.06, life: 0.62, dir: 1 });
+    S.shocks.push({ x: 840, y: 556, t: 0.20, life: 0.62, dir: -1 });
+    S.texts.length = 0;
+  });
+  await sleep(120);
+  await shot("grove-15-BOSS砸地.png");
+
+  // 16. 波次预告：下一波刷新前 1 秒，地上会先画圈
+  await page.evaluate(() => {
+    const P = window.GROVE, S = P.S;
+    P._start(0, 1);
+    S.foes.length = 0;
+    S.wave = 0;
+    S.waveT = 9;
+    S.waveGap = 0.9;
+    S.texts.length = 0;
+  });
+  await sleep(240);
+  await shot("grove-16-波次预告.png");
+
+  // 17. 宝箱：连着几个人一起烧掉才掉，所以直接摆一颗在火坑边上
   await page.evaluate(() => {
     const P = window.GROVE, S = P.S;
     P._start(1, 1);
@@ -116,22 +162,22 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     S.texts.length = 0;
   });
   await sleep(520);
-  await shot("grove-15-宝箱.png");
+  await shot("grove-17-宝箱.png");
 
-  // 16. 结算
+  // 18. 结算
   await page.evaluate(() => {
     const { S } = window.GROVE;
     window.GROVE._start(0, 4);
     S.killed = S.total;
-    S.stat.made = 4;
-    S.playT = 41.2;
-    S.food = 14;
+    S.stat.made = 6;
+    S.playT = 47.2;
+    S.food = 22;
     S.clearT = 0.8;
     S.phase = "clear";
     S.best[4] = "S";
   });
   await sleep(280);
-  await shot("grove-16-结算.png");
+  await shot("grove-18-结算.png");
 
   await browser.close();
   console.log("\n完成");

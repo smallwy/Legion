@@ -48,14 +48,19 @@ function nearest(x, arr) {
  *
  * 所以先看水平距离 —— 「脚下就有的那块」永远比「更近但要走过去的那块」优先。
  */
-function layerAbove(P, y, x) {
+function layerAbove(P, y, x, tgtX) {
   let best = null, bestScore = 1e9;
   for (const q of P.PLATS) {
     if (q.kind === "ground") continue;
     const up = y - q.y;
     if (up < 24 || up > 150) continue;
-    const dx = x < q.x ? q.x - x : x > q.x + q.w ? x - (q.x + q.w) : 0;
-    const score = dx * 12 + up;
+    // 打分看"站上这块台面能不能更接近目标"，不是"这块台面离我有多近"。
+    // 按离我近打分时，深井那关机器人会去爬右边那座塔（它离得近），
+    // 而目标在左边的 350 层 —— 爬到顶发现过不去，掉回地面，再从右边爬一遍。
+    // 实测就这么循环了 240 秒。
+    const cx = Math.max(q.x + 30, Math.min(q.x + q.w - 30, tgtX === undefined ? x : tgtX));
+    const gap = tgtX === undefined ? 0 : Math.abs(cx - tgtX);
+    const score = gap + up * 0.4;
     if (score < bestScore) { bestScore = score; best = q; }
   }
   return best;
@@ -110,10 +115,29 @@ function botStep(P, S, mem) {
   const p = S.p;
   if (!p || p.dead) return;
 
-  const wantX = p.x;
   S.keys.left = false; S.keys.right = false;
 
   _decide(P, S, mem);
+
+  // ---- 方向抖就按住 -----------------------------------------------------
+  // 站在平台边上时，机器人会**一帧向左一帧向右**：这一帧判定"走到缺口掉下去"，
+  // 下一帧人已经悬空，判定换成"朝目标走"，于是又踩回平台上。原来只在空中记
+  // fallDir，管不住这种落地/离地的来回切换 —— 泥沼实测在 462 层右端以 6px 的
+  // 幅度原地抖了 200 秒，350 层上那三只从头到尾没碰到。
+  // 按"方向"本身记账：翻向之后至少按住 9 帧（9 × 6px ≈ 54px，够走下台面）。
+  const dirNow = S.keys.left ? -1 : S.keys.right ? 1 : 0;
+  if (dirNow) {
+    if (mem.dir && dirNow !== mem.dir && mem.dirT < 9) {
+      S.keys.left = mem.dir < 0; S.keys.right = mem.dir > 0;
+      mem.dirT++;
+    } else {
+      if (dirNow !== mem.dir) mem.dirT = 0;
+      mem.dir = dirNow;
+      mem.dirT++;
+    }
+  } else {
+    mem.dir = 0; mem.dirT = 0;
+  }
 
   // ---- 卡住就跳 ---------------------------------------------------------
   // 人是会自己跳过去的，机器人原来不会：断崖地面在 x≈238 被木桩挡住，
@@ -130,6 +154,12 @@ function botStep(P, S, mem) {
 
 function _decide(P, S, mem) {
   const p = S.p;
+
+  // 落地就清掉"下落方向"。
+  // 不清的话，只要有一次判定成"该往右掉下去"，之后再怎么重新决策都还带着那个
+  // 右 —— 泥沼那关机器人贴着右墙按了 200 秒"右"，而目标在它左边的地面上
+  // （实测 240 秒超时，剩 1 只打不掉）。fallDir 只在"走到边缘踩空"那几帧有意义。
+  if (p.onGround && p.ground) mem.fallDir = 0;
 
   // 1) 场上有球就先管球。球是唯一的收益出口，而且会漏气。
   //    选球按"谁快漏光"排，不是按离得近 —— 人也是先救快炸的那颗。
@@ -255,10 +285,24 @@ function _decide(P, S, mem) {
     // 不补这条的话机器人永远站在低层朝高层跳，落回原地，
     // 高台顶部那两只从头到尾打不到（实测 240 秒清 5/7）。
     if (dy < -30 && tgt.y < p.y - 150) {
-      const layer = layerAbove(P, p.y, p.x);
-      if (layer) {
-        const lo = layer.x + 40, hi = layer.x + layer.w - 40;
-        const want = Math.max(lo, Math.min(hi, tgt.x));
+      // 爬层目标必须锁住。
+      // 不锁的话：人在两层之间时 layerAbove 会在"左边那层"和"右边那层"之间
+      // 逐帧翻，want 一帧 100 一帧 700，机器人就在中间那段地面上左右横走 ——
+      // 深井实测卡了 200 秒，350 层那只从头到尾没碰到。
+      mem.climbT = (mem.climbT || 0) - 1;
+      if (mem.climbT <= 0 || mem.climbY === undefined || Math.abs(mem.climbY - p.y) > 130) {
+        const layer = layerAbove(P, p.y, p.x, tgt.x);
+        if (layer) {
+          const lo = layer.x + 40, hi = layer.x + layer.w - 40;
+          mem.climbX = Math.max(lo, Math.min(hi, tgt.x));
+          mem.climbY = p.y;
+          mem.climbT = 110;
+        } else {
+          mem.climbX = undefined;
+        }
+      }
+      if (mem.climbX !== undefined && Math.abs(mem.climbY - p.y) <= 130) {
+        const want = mem.climbX;
         if (p.x < want - 14) S.keys.right = true;
         else if (p.x > want + 14) S.keys.left = true;
         else if (p.onGround) S.press.jump = true;

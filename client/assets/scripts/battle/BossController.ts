@@ -37,6 +37,12 @@ export interface Boss {
  */
 export class BossController {
     onDefeated: (() => void) | null = null;
+    /**
+     * BOSS 挨打回调（CR-016）：`(x, y, dmg, dirX, dirY, crit)`。
+     * BOSS 是唯一"值得报数"的目标（620 HP 打半天，玩家需要看见每一下的进度），
+     * 所以飘字的默认策略是对 BOSS 每次都显示，对杂兵只在击杀/暴击时显示。
+     */
+    onHit: ((x: number, y: number, dmg: number, dirX: number, dirY: number, crit: boolean) => void) | null = null;
 
     private _boss: Boss;
 
@@ -128,7 +134,7 @@ export class BossController {
         return dx * dx + dy * dy <= rr * rr;
     }
 
-    takeDamage(dmg: number, dirX: number, dirY: number): void {
+    takeDamage(dmg: number, dirX: number, dirY: number, crit = false): void {
         const b = this._boss;
         if (!b.active || b.dying > 0) {
             return;
@@ -139,6 +145,9 @@ export class BossController {
         const len = Math.hypot(dirX, dirY) || 1;
         b.vx += (dirX / len) * 12;
         b.vy += (dirY / len) * 12;
+        if (this.onHit) {
+            this.onHit(b.x, b.y, dmg, dirX, dirY, crit);
+        }
         if (b.hp <= 0) {
             b.hp = 0;
             b.dying = BOSS.deathTime;

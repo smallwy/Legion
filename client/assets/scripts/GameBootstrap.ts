@@ -8,11 +8,12 @@ import { PlayerController } from './battle/PlayerController';
 import { ProjectileManager } from './battle/ProjectileManager';
 import { UpgradeSystem, expProgress } from './battle/UpgradeSystem';
 import { WaveManager } from './battle/WaveManager';
-import { BOSS, FIELD, PLAYER, SATIETY } from './config/BattleConfig';
+import { BOSS, FIELD, FX, PLAYER, SATIETY } from './config/BattleConfig';
 import { clamp } from './core/MathUtil';
 import { SpriteAssets } from './view/SpriteAssets';
 import { BackgroundRenderer } from './view/BackgroundRenderer';
 import { EntityRenderer } from './view/EntityRenderer';
+import { FxSystem } from './view/FxSystem';
 import { BattleHud } from './ui/BattleHud';
 import { SettlementPanel } from './ui/SettlementPanel';
 import { UpgradePanel } from './ui/UpgradePanel';
@@ -50,6 +51,9 @@ export class GameBootstrap extends Component {
     private _orbs: OrbManager | null = null;
     private _bg: BackgroundRenderer | null = null;
     private _entityRenderer: EntityRenderer | null = null;
+    private _fx: FxSystem | null = null;
+    /** BOSS 死亡特效只放一次（血量归零那一帧触发，不等 0.8s 动画播完） */
+    private _bossDeathFx = false;
     private _hud: BattleHud | null = null;
     private _panel: SettlementPanel | null = null;
     private _upgradePanel: UpgradePanel | null = null;
@@ -117,6 +121,56 @@ export class GameBootstrap extends Component {
                 player.hp++;
             }
         };
+        // ---- 表现层接线（CR-016）：全部只调 fx，不碰任何战斗逻辑 ----
+        // 1) 杂兵命中：火花 →（击杀时）爆散 + 顿帧 + 飘字
+        enemies.onHit = (e, dmg, dirX, dirY, crit, killed) => {
+            const col = e.type;
+            fx.hit(e.x, e.y, dirX, dirY, col);
+            if (killed) {
+                fx.burst(e.x, e.y, col, e.type === 'tank' ? 14 : 10);
+                director.hitStop(FX.hitStop.kill);
+                if (crit) {
+                    fx.hit(e.x, e.y, dirX, dirY, 'gold');
+                }
+            }
+            if (FX.damageText === 'all' || (FX.damageText === 'kill' && killed) || crit) {
+                fx.text(e.x, e.y + 14, String(Math.round(dmg)), crit ? 'gold' : 'white', crit ? 4 : 3);
+            }
+        };
+
+        // 2) BOSS 命中：BOSS 是唯一"值得报数"的目标 —— 620 HP 要打很久，
+        //    玩家需要看见每一下的进度，所以不受 damageText 的 'kill' 档限制。
+        boss.onHit = (x, y, dmg, dirX, dirY, crit) => {
+            fx.hit(x, y, dirX, dirY, crit ? 'gold' : 'white');
+            if (FX.damageText !== 'off') {
+                fx.text(x + (Math.random() - 0.5) * 40, y + 40, String(Math.round(dmg)),
+                    crit ? 'gold' : 'white', crit ? 4 : 3);
+            }
+            if (boss.hp <= 0 && !this._bossDeathFx) {
+                // 击杀的那一击：最重的一次反馈（0.42s 顿帧 + 爆散 + 震屏 + 双圈）
+                this._bossDeathFx = true;
+                fx.burst(x, y, 'tank', 30, 1.6);
+                fx.ring(x, y, 'gold', 260, 0.9, 5);
+                fx.ring(x, y, 'danger', 180, 0.6, 3);
+                director.hitStop(FX.hitStop.bossDie);
+                player.addShake(FX.shake.bossDie);
+            } else if (crit && director.timeScale === 1) {
+                // ⚠️ 只在**暴击**时顿帧，不能每次命中都顿：
+                //    3 英雄齐射时 BOSS 每秒挨 3~5 下，每下冻 1 帧 = 全程发涩，
+                //    玩家会读成"掉帧"而不是"打得重"。这是 hitStop 最典型的误用。
+                director.hitStop(FX.hitStop.bossHit);
+                player.addShake(FX.shake.bossHit);
+            }
+        };
+
+        // 3) 玩家受伤：震屏 + 红圈 + 顿帧（无敌帧内的重复命中不会触发，takeDamage 已过滤）
+        player.onHurt = (x, y) => {
+            fx.ring(x, y, 'danger', 70, 0.35, 3);
+            fx.burst(x, y, 'danger', 6, 0.7);
+            player.addShake(FX.shake.playerHit);
+            director.hitStop(FX.hitStop.playerHit);
+        };
+
         orbs.onCollect = (exp, meat) => {
             if (exp > 0) {
                 director.addOrbs(exp);
@@ -150,6 +204,9 @@ export class GameBootstrap extends Component {
         const bg = new BackgroundRenderer(field);
         bg.render();
         const entityRenderer = new EntityRenderer(field);
+        // 特效层排在 EntityRenderer 之后：碎屑要盖在实体与 telegraph 之上，
+        // 但不能盖住 HUD（HUD 在相机树下，天然更后）
+        const fx = new FxSystem(field);
 
         // 6) UI（挂相机节点下 = 屏幕固定；相机树已在实体树之后，无需再调 sibling）
         const hud = new BattleHud(player.cameraNode);
@@ -187,6 +244,7 @@ export class GameBootstrap extends Component {
         this._orbs = orbs;
         this._bg = bg;
         this._entityRenderer = entityRenderer;
+        this._fx = fx;
         this._hud = hud;
         this._panel = panel;
         this._upgradePanel = upgradePanel;
@@ -202,7 +260,16 @@ export class GameBootstrap extends Component {
             return;
         }
         const director = this._director as BattleDirector;
-        director.update(dt);
+        // 顿帧计时必须吃**真实** dt；逻辑世界吃缩放后的 dt。
+        // 顺序不能反：先用真实 dt 递减，再读 timeScale。
+        director.tickHitStop(dt);
+        const sdt = dt * director.timeScale;
+        director.update(sdt);
+
+        // 特效永远用真实 dt 推进：顿帧时世界几乎静止、碎屑还在飞，
+        // 这个"错位"正是打击感的来源（两者一起冻住就只是掉帧）
+        (this._fx as FxSystem).tick(dt);
+
         // 结算 or 升级选卡：冻结世界（选卡时怪不该继续打你）
         if (director.phase === 'settlement' || director.paused) {
             return;
@@ -214,13 +281,13 @@ export class GameBootstrap extends Component {
         const upgrades = this._upgrades as UpgradeSystem;
 
         // 顺序有讲究：主角先动 → 队形与敌人 AI 才能拿到本帧位置
-        player.update(dt);
-        heroes.update(dt);
-        waves.update(dt);
-        (this._enemies as EnemyManager).update(dt);
-        (this._boss as BossController).update(dt);
-        (this._projectiles as ProjectileManager).update(dt);
-        (this._orbs as OrbManager).update(dt);
+        player.update(sdt);
+        heroes.update(sdt);
+        waves.update(sdt);
+        (this._enemies as EnemyManager).update(sdt);
+        (this._boss as BossController).update(sdt);
+        (this._projectiles as ProjectileManager).update(sdt);
+        (this._orbs as OrbManager).update(sdt);
 
         director.syncProgress(waves.wave, waves.total);
         director.syncMeta(upgrades.level, heroes.feeds);
@@ -252,6 +319,7 @@ export class GameBootstrap extends Component {
                 // 那样 0.8s 的缩小消失动画会被直接跳过（BOSS 凭空消失）
                 boss.boss.active ? boss.boss : null,
             );
+            (this._fx as FxSystem).redraw();
 
             const hunt = waves.spawning;
             const hint = director.phase === 'boss'
@@ -355,11 +423,23 @@ export class GameBootstrap extends Component {
             return;
         }
         const heroes = this._heroes as HeroSquad;
+        const before = heroes.satiety;
         // 先问能不能喂（内部会检查冷却/满饱/肉块），成功了才扣
         if (!heroes.feed(director.stats.meat)) {
             return;
         }
         director.spendMeat(SATIETY.feedMeatCost);
+
+        // 喂食的表现：地面金圈（"这一下喂到了"）+ 实际回复量飘字 + 轻微震屏
+        const player = this._player as PlayerController;
+        const fx = this._fx as FxSystem;
+        const gain = Math.max(0, Math.round(heroes.satiety - before));
+        fx.ring(player.x, player.y, 'gold', 110, 0.45, 3);
+        fx.text(player.x, player.y + 30, '+' + gain, 'safe', 3);
+        for (const h of heroes.list) {
+            fx.burst(h.x, h.y, 'gold', 3, 0.6);
+        }
+        player.addShake(FX.shake.feed);
     }
 
     private openUpgrade(): void {
@@ -374,6 +454,13 @@ export class GameBootstrap extends Component {
             upgrades.pendingLevelUps = 0;
             return;
         }
+        // 升级的表现：金圈扩到全屏级 + LV 飘字。刻意不给震屏 ——
+        // 升级是"好事"，震屏会被读成挨打（本作唯一的震屏来源就是受伤与 BOSS）
+        const player = this._player as PlayerController;
+        const fx = this._fx as FxSystem;
+        fx.ring(player.x, player.y, 'gold', 200, 0.7, 4);
+        fx.text(player.x, player.y + 44, 'LV' + upgrades.level, 'gold', 4);
+
         director.paused = true;
         upPanel.show(choices, upgrades);
     }
@@ -391,6 +478,8 @@ export class GameBootstrap extends Component {
         // 放在 player.reset() 之后：队形锚点要用重置后的主角位置
         (this._heroes as HeroSquad).reset();
         (this._panel as SettlementPanel).hide();
+        (this._fx as FxSystem).clear();
+        this._bossDeathFx = false;
     }
 
     onDestroy(): void {

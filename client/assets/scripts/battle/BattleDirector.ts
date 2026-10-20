@@ -1,3 +1,4 @@
+import { FX } from '../config/BattleConfig';
 import type { PlayerController } from './PlayerController';
 
 export type BattlePhase = 'battle' | 'boss' | 'settlement';
@@ -53,9 +54,43 @@ export class BattleDirector {
     onBossPhase: (() => void) | null = null;
 
     private _player: PlayerController;
+    /** 顿帧剩余秒数（用**真实** dt 递减，不受自身缩放影响） */
+    private _stop = 0;
 
     constructor(player: PlayerController) {
         this._player = player;
+    }
+
+    /**
+     * 触发顿帧（CR-016）。取 max 而不是累加：连杀 5 只不该冻 5 次，
+     * 否则割草时画面会变成"一顿一顿"。多次触发只延长时间，不叠加。
+     */
+    hitStop(sec: number): void {
+        if (sec > this._stop) {
+            this._stop = sec;
+        }
+    }
+
+    /**
+     * 本帧**逻辑时间倍率**。顿帧期间压到 0.06 而不清零 ——
+     * 清零会让画面彻底静止，看起来像掉帧卡死；留一点位移才像"时间变慢"。
+     */
+    get timeScale(): number {
+        return this._stop > 0 ? FX.hitStop.timeScale : 1;
+    }
+
+    /**
+     * 用真实 dt 递减顿帧计时。
+     * ★ 必须在 `update(dt * timeScale)` **之前**、且传入未缩放的 dt 调用，
+     *   否则缩放后的 dt 会让 0.045 秒的顿帧变成 0.75 秒。
+     */
+    tickHitStop(realDt: number): void {
+        if (this._stop > 0) {
+            this._stop -= realDt;
+            if (this._stop < 0) {
+                this._stop = 0;
+            }
+        }
     }
 
     update(dt: number): void {
@@ -133,6 +168,7 @@ export class BattleDirector {
     restart(): void {
         this.phase = 'battle';
         this.paused = false;
+        this._stop = 0;
         this.stats.kills = 0;
         this.stats.orbs = 0;
         this.stats.meat = 0;

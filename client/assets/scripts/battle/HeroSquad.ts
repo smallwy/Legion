@@ -304,8 +304,9 @@ export class HeroSquad {
         const bx = h.aimX / len;
         const by = h.aimY / len;
 
+        const crit = stats !== null && Math.random() < stats.critChance;
         let dmg = HERO.damage * h.powerMul * (stats ? stats.damageMul : 1);
-        if (stats && Math.random() < stats.critChance) {
+        if (crit) {
             dmg *= 2;
         }
 
@@ -319,7 +320,7 @@ export class HeroSquad {
             const s = Math.sin(a);
             const dx = bx * c - by * s;
             const dy = bx * s + by * c;
-            this._projectiles.spawnPetBullet(h.x + dx * 14, h.y + dy * 14, dx, dy, dmg);
+            this._projectiles.spawnPetBullet(h.x + dx * 14, h.y + dy * 14, dx, dy, dmg, crit);
         }
     }
 

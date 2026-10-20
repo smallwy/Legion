@@ -57,6 +57,11 @@ export interface Enemy {
  */
 export class EnemyManager {
     onKill: ((e: Enemy) => void) | null = null;
+    /**
+     * 命中回调（CR-016）：每次**有效**伤害都触发，`killed` 表示这一击是不是最后一击。
+     * 表现层靠它出火花/飘字/顿帧 —— 战斗逻辑不要在这里做，它会被每秒调用几十次。
+     */
+    onHit: ((e: Enemy, dmg: number, dirX: number, dirY: number, crit: boolean, killed: boolean) => void) | null = null;
     /** 构造后由 Bootstrap 接线（类型引用，避免循环 import） */
     projectiles: ProjectileManager | null = null;
 
@@ -167,7 +172,7 @@ export class EnemyManager {
         this._enemies.push(e);
     }
 
-    takeDamage(e: Enemy, dmg: number, dirX: number, dirY: number): void {
+    takeDamage(e: Enemy, dmg: number, dirX: number, dirY: number, crit = false): void {
         if (!e.active || e.dying > 0) {
             return;
         }
@@ -178,7 +183,13 @@ export class EnemyManager {
         const kb = e.type === 'tank' ? 20 : 90;
         e.vx += (dirX / len) * kb;
         e.vy += (dirY / len) * kb;
-        if (e.hp <= 0) {
+        const killed = e.hp <= 0;
+        // 命中回调先于击杀回调：先出火花，再判断是不是"最后一击"，
+        // 这样表现层可以给击杀一个更重的反馈（顿帧/爆散）
+        if (this.onHit) {
+            this.onHit(e, dmg, dirX, dirY, crit, killed);
+        }
+        if (killed) {
             e.dying = ENEMY_DEATH_TIME;
             if (this.onKill) {
                 this.onKill(e);

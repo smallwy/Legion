@@ -1,5 +1,5 @@
 import { Camera, Graphics, KeyCode, Node, UITransform } from 'cc';
-import { CAMERA, FIELD, PALETTE, PLAYER } from '../config/BattleConfig';
+import { CAMERA, FIELD, FX, PALETTE, PLAYER } from '../config/BattleConfig';
 import { hexColor } from '../core/ColorUtil';
 import { clamp } from '../core/MathUtil';
 import { currentAspect } from '../core/ViewUtil';
@@ -28,10 +28,17 @@ export class PlayerController {
      * 由 `HeroSquad.update` 每帧统一写入，其他处不要直接改。
      */
     speedMul = 1;
+    /**
+     * 受伤回调（CR-016）：`(x, y) => void`。玩家真的掉血时才触发
+     * （无敌帧内被再次命中的不计），Bootstrap 用它接震屏 + 红闪。
+     */
+    onHurt: ((x: number, y: number) => void) | null = null;
 
     private _cameraNode: Node;
     private _camX = 0;
     private _camY = 0;
+    /** 震屏振幅（像素）；指数衰减到 FX.shake.min 以下直接归零 */
+    private _shake = 0;
     private _invT = 0;
     private _blinkT = 0;
     private _keys: { [k in MoveDir]: boolean } = { up: false, down: false, left: false, right: false };
@@ -149,7 +156,20 @@ export class PlayerController {
         this.hp -= n;
         this._invT = PLAYER.invincibleAfterHit;
         this._blinkT = 0;
+        if (this.onHurt) {
+            this.onHurt(this.x, this.y);
+        }
         return true;
+    }
+
+    /**
+     * 触发震屏（CR-016）。取 max 而非叠加：BOSS 连打两下不该抖成筛子。
+     * @param amp 振幅（世界单位 ≈ 像素）
+     */
+    addShake(amp: number): void {
+        if (amp > this._shake) {
+            this._shake = amp;
+        }
     }
 
     /** 相机跟随放在 lateUpdate：实体全部移动完再算，画面不与逻辑错位 */
@@ -173,7 +193,21 @@ export class PlayerController {
         } else {
             cy = 0;
         }
-        this._cameraNode.setPosition(cx, cy, CAMERA.camZ);
+
+        // 震屏在钳制**之后**加：否则贴到场地边缘时钳制会把抖动吃掉，边缘受伤就没有反馈。
+        // HUD 是相机节点的子节点 → 屏幕坐标恒定，震屏不会带着 UI 一起抖。
+        let sx = 0;
+        let sy = 0;
+        if (this._shake > FX.shake.min) {
+            sx = (Math.random() * 2 - 1) * this._shake;
+            sy = (Math.random() * 2 - 1) * this._shake;
+            this._shake *= Math.exp(-FX.shake.decay * dt);
+            if (this._shake <= FX.shake.min) {
+                this._shake = 0;
+            }
+        }
+
+        this._cameraNode.setPosition(cx + sx, cy + sy, CAMERA.camZ);
     }
 
     snapCamera(): void {
@@ -189,6 +223,7 @@ export class PlayerController {
         this.hp = PLAYER.hp;
         this.speedMul = 1;
         this._invT = 0;
+        this._shake = 0;
         this._keys.up = false;
         this._keys.down = false;
         this._keys.left = false;

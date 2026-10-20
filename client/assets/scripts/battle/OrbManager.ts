@@ -1,6 +1,8 @@
-import { ORB } from '../config/BattleConfig';
+import { MEAT, ORB } from '../config/BattleConfig';
 import { Pool } from '../core/Pool';
 import type { PlayerController } from './PlayerController';
+
+export type OrbKind = 'exp' | 'meat';
 
 export interface Orb {
     active: boolean;
@@ -8,14 +10,24 @@ export interface Orb {
     y: number;
     vx: number;
     vy: number;
+    /** exp = 经验珠（升级）；meat = 肉块（喂食资源） */
+    kind: OrbKind;
 }
 
-/** 经验珠：死亡弹出 → 进入磁吸范围加速吸向玩家 → 收集（Day 3 起映射为食物资源） */
+/**
+ * 掉落物：经验珠 + 肉块（CR-015）。
+ *
+ * 两种掉落共用同一套磁吸/收集逻辑，只在收集时分流 —— 因为它们在**玩法上是两条线**：
+ *  - 经验珠 → 局内升级（变强）
+ *  - 肉块   → 喂食（维持"半饿最强"这个状态）
+ * 玩家在捡的时候不需要区分，但收集后的去向完全不同。
+ */
 export class OrbManager {
-    onCollect: ((count: number) => void) | null = null;
+    /** 一次 update 里收集到的数量（两种分开报，交给调用方分账） */
+    onCollect: ((exp: number, meat: number) => void) | null = null;
 
     private _items: Orb[] = [];
-    private _pool = new Pool<Orb>(() => ({ active: false, x: 0, y: 0, vx: 0, vy: 0 }));
+    private _pool = new Pool<Orb>(() => ({ active: false, x: 0, y: 0, vx: 0, vy: 0, kind: 'exp' }));
 
     constructor(private _player: PlayerController) {}
 
@@ -23,24 +35,34 @@ export class OrbManager {
         return this._items;
     }
 
-    spawn(x: number, y: number, count: number): void {
+    spawn(x: number, y: number, count: number, kind: OrbKind = 'exp'): void {
         for (let i = 0; i < count; i++) {
             const o = this._pool.get();
             const ang = Math.random() * Math.PI * 2;
-            const sp = 50 + Math.random() * 70;
+            // 肉块更沉：初速打六折，不会弹出屏幕外
+            const sp = (50 + Math.random() * 70) * (kind === 'meat' ? MEAT.orbSpeed : 1);
             o.active = true;
             o.x = x;
             o.y = y;
             o.vx = Math.cos(ang) * sp;
             o.vy = Math.sin(ang) * sp;
+            o.kind = kind;
             this._items.push(o);
+        }
+    }
+
+    /** 掷一次肉块掉落（击杀时调用，内部管概率） */
+    rollMeat(x: number, y: number): void {
+        if (Math.random() < MEAT.dropChance) {
+            this.spawn(x, y, 1, 'meat');
         }
     }
 
     update(dt: number): void {
         const px = this._player.x;
         const py = this._player.y;
-        let collected = 0;
+        let exp = 0;
+        let meat = 0;
 
         for (const o of this._items) {
             if (!o.active) continue;
@@ -50,7 +72,11 @@ export class OrbManager {
 
             if (d < ORB.collectRange) {
                 o.active = false;
-                collected++;
+                if (o.kind === 'meat') {
+                    meat++;
+                } else {
+                    exp++;
+                }
                 continue;
             }
 
@@ -73,8 +99,8 @@ export class OrbManager {
             o.y += o.vy * dt;
         }
 
-        if (collected > 0 && this.onCollect) {
-            this.onCollect(collected);
+        if ((exp > 0 || meat > 0) && this.onCollect) {
+            this.onCollect(exp, meat);
         }
 
         for (let i = this._items.length - 1; i >= 0; i--) {

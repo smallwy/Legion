@@ -62,7 +62,12 @@ export const HERO = {
     cast: 0.1,             // ★ 施法
     recovery: 0.3,         // ★ 后摇
     displaySize: 64,       // 显示宽度 = 贴图 32px × 2（★ 像素风必须整数倍）
-    powerMultiplier: 1,    // 「半饿最强」挂钩点（半饿 1.5 / 满饱 1.0 / 全饿 0.6）
+    /**
+     * 「半饿最强」倍率（CR-015：已真正接线）。
+     * 这里是**初始值**，运行时由 `HeroSquad` 按饱食度档位逐帧赋给每只英雄的 `powerMul`；
+     * 升级项「暴食体质」会在此基础上再乘一次。
+     */
+    powerMultiplier: 1,
 } as const;
 
 export type EnemyType = 'walker' | 'flyer' | 'tank';
@@ -93,17 +98,75 @@ export const ENEMIES: { [k in EnemyType]: EnemyDef } = {
     tank: { hp: 60, speed: 38, radius: 21, displaySize: 64, aggroRange: 260, attackRange: 60, castRange: 0, windup: 0.45, attackCd: 1.4, damage: 1, projectileSpeed: 0, color: 0x34495E, weight: 0.15 },
 };
 
-/** 怪窝（CR-008：玩家抵达地点后成批生成，非追踪刷新）★ 10 只/窝
- *  CR-014：**清完即永久 cleared，不再冷却重刷** —— 一局目标是「把窝清完 → 打 BOSS」，
- *  不是「在刷怪场里活满 N 分钟」。原来那句 `respawnDelay: 18` 已删除。 */
-export const NEST = {
-    count: 4,
-    positions: [[620, 340], [-700, 300], [220, -520], [-760, -360]] as number[][],
-    triggerRange: 240,   // 玩家进圈才激活
-    batch: 10,           // ★ 每窝一批
-    spawnInterval: 0.12, // 一批内的生成间隔 △
-    settleDelay: 0.6,    // 最后一只死亡到判定"清空"的缓冲（等死亡动画播完）△
-    roamRadius: 220,     // 怪物活动范围（不必然追玩家）
+/** 波次怪潮（CR-015：主干回到「割草 + 宠物状态」，替换 CR-008/CR-014 的清窝推进）
+ *
+ *  ⚠️ **这是甲方案的心脏**。清窝（CR-008/014）把一局压到 57 秒、每窝 5.2 秒，
+ *  慢热型系统（饱食度衰减、升级、喂食决策）在其中没有任何展开空间。
+ *  波次怪潮给出 8 分钟的连续压力，这些系统才活得下来。
+ *
+ *  节奏：波次间隔 3s 喘息 → 本波敌人从玩家周围 spawnRadius 外环生成 → 清空后进入下一波。
+ *  第 20 波为 BOSS 波（BOSS + 一波护卫）。
+ */
+export const WAVE = {
+    total: 20,
+    firstDelay: 1.6,      // 开局给玩家认路的时间 △
+    interval: 3.0,        // 波间喘息（捡珠/喂食的窗口）△
+    spawnRadius: 600,     // 生成半径：略大于视野半对角（540/2×√2≈382），保证在屏幕外 △
+    spawnJitter: 90,      // 半径抖动，避免"一圈同心圆"的机械感 △
+    baseCount: 6,         // 第 1 波数量
+    countPerWave: 1.1,    // 每波递增（第 19 波 ≈ 26 只）
+    maxAlive: 32,         // 同屏上限（性能预算；超出则本波排队，敌人死了再补）△
+    bossWave: 20,         // 第 20 波 = BOSS 波
+} as const;
+
+/**
+ * 饱食度与喂食（CR-015 / 原 CR-010 数值口径，进战斗后重新标定）
+ *
+ * ★ 本作的**唯一创新点**：宠物不是子弹，是有状态的活物。
+ *   档位倍率让「饿着打」成为一种主动的战术选择，而不是被系统惩罚。
+ *
+ * ⚠️ 衰减速度比计划书 §2.7 的 0.12/秒 快 4 倍 —— 那个值是按「家园挂机 20 分钟」定的，
+ *   在一局 8 分钟的战斗里，0.12 只能掉 58 点，永远掉不到半饿区，整个系统等于不存在。
+ *   现在 0.5/秒：满饱 → 全饿 200 秒，一局需要喂 2~3 次，正好是"每 2~3 波喂一次"。
+ */
+export const SATIETY = {
+    max: 100,
+    start: 100,
+    decayPerSec: 0.5,      // △ 200s 从满到空
+    feedAmount: 35,        // 一次喂食回复量（100→需 3 次喂满）
+    feedMeatCost: 1,       // 消耗肉块数（食物是打出来的，不是白给的）
+    feedStun: 0.4,         // 喂食硬直：主角减速而非定身（定身会粘手）△
+    feedStunSpeedMul: 0.35,
+    feedCd: 0.8,           // 连喂保护，防手滑连按把肉块烧光 △
+
+    // ---- 档位（CR-010：半饿最强）----
+    fullLine: 70,          // ≥70 = 满饱
+    hungryLine: 30,        // 30~70 = 半饿；<30 = 全饿
+    mulFull: 1.0,
+    mulHungry: 1.5,        // ★ 最强的状态是"有点饿"
+    mulStarving: 0.6,
+} as const;
+
+/** 肉块掉落（食物唯一来源）
+ *  ⚠️ 掉落率刻意偏高（一局 302 杀 ≈ 36 块，实际只需 ~5 块）：喂食的代价是
+ *  **时机 + 0.4 秒减速**，不是资源稀缺。把资源做成硬约束会重演计划书 §9 引用的
+ *  "27 只猫"差评 —— 资源不可控 → 焦虑 → cozy 崩掉。 */
+export const MEAT = {
+    dropChance: 0.12,      // 每只杂兵掉落概率 △
+    bossDrop: 6,           // BOSS 必掉（结算好看）△
+    orbSpeed: 0.6,         // 肉块初速 = 经验珠的 0.6 倍（更沉，不会飞太远）△
+} as const;
+
+/** 敌人通用 AI 参数（原挂在 NEST 上；清窝系统已被 CR-015 移除，留下这一条给游荡用） */
+export const ENEMY_AI = {
+    roamRadius: 220,       // 非猎手怪的游荡半径（相对生成锚点）
+} as const;
+
+/** 局内等级曲线（甲方案的"变强"节奏，20 波约升到 9~11 级） */
+export const LEVEL = {
+    baseExp: 12,           // 升到 2 级所需经验 △
+    expGrowth: 1.32,       // 每级所需经验倍率 △
+    maxLevel: 15,
 } as const;
 
 /** 最终 BOSS（CR-014 新增）：全部怪窝清空后，在**最后清空的那一窝**召唤。
@@ -142,12 +205,13 @@ export const ORB = {
     maxSpeed: 620,
 } as const;
 
-/** 战斗节奏 ★ 远征参考时长 3 分钟
- *  CR-014：**不再是硬结束条件**。结束条件改为：清完所有窝 + 击杀 BOSS（通关）、
- *  HP 归零（撤退）、或玩家主动撤离（红线②：无失败惩罚）。此值只用于 HUD 显示。 */
+/** 战斗全局
+ *  CR-015：一局 = 20 波怪潮（第 20 波 BOSS），约 8~10 分钟。
+ *  结束条件：打完第 20 波（通关）、HP 归零（体力不支撤退）、或玩家主动撤离（红线②：无失败惩罚）。
+ *  `durationMs` 只用于 HUD 参考，不是硬倒计时。 */
 export const BATTLE = {
-    durationMs: 180000,
-    maxAlive: 28,        // 同屏敌人上限（性能预算）△
+    durationMs: 480000,  // 8 分钟（20 波 × ~24s）△
+    maxAlive: 32,        // 同屏敌人上限（性能预算，与 WAVE.maxAlive 必须一致）△
 } as const;
 
 /** 美术指引 §2 锁定色（原型期程序化兜底与特效用） */

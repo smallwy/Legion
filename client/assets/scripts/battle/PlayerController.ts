@@ -21,6 +21,13 @@ export class PlayerController {
     vx = 0;
     vy = 0;
     hp = PLAYER.hp;
+    /**
+     * 移速倍率（CR-015）。两个来源相乘：
+     *  - 升级「轻步」：`UpgradeSystem.stats.speedMul`（永久）
+     *  - 喂食硬直：`SATIETY.feedStunSpeedMul`（0.4 秒，把"喂它"变成有代价的动作）
+     * 由 `HeroSquad.update` 每帧统一写入，其他处不要直接改。
+     */
+    speedMul = 1;
 
     private _cameraNode: Node;
     private _camX = 0;
@@ -105,8 +112,9 @@ export class PlayerController {
         if (this._keys.right) dx += 1;
         if (dx !== 0 || dy !== 0) {
             const len = Math.sqrt(dx * dx + dy * dy);
-            this.vx = (dx / len) * PLAYER.speed;
-            this.vy = (dy / len) * PLAYER.speed;
+            const sp = PLAYER.speed * this.speedMul;
+            this.vx = (dx / len) * sp;
+            this.vy = (dy / len) * sp;
             this.x += this.vx * dt;
             this.y += this.vy * dt;
         } else {
@@ -179,6 +187,7 @@ export class PlayerController {
         this.vx = 0;
         this.vy = 0;
         this.hp = PLAYER.hp;
+        this.speedMul = 1;
         this._invT = 0;
         this._keys.up = false;
         this._keys.down = false;

@@ -1,19 +1,21 @@
 import { _decorator, Component, Node, input, Input, EventKeyboard, KeyCode } from 'cc';
 import { BattleDirector } from './battle/BattleDirector';
 import { BossController } from './battle/BossController';
-import { EncounterManager } from './battle/EncounterManager';
 import { EnemyManager } from './battle/EnemyManager';
 import { HeroSquad } from './battle/HeroSquad';
 import { OrbManager } from './battle/OrbManager';
 import { PlayerController } from './battle/PlayerController';
 import { ProjectileManager } from './battle/ProjectileManager';
-import { BOSS, FIELD } from './config/BattleConfig';
+import { UpgradeSystem, expProgress } from './battle/UpgradeSystem';
+import { WaveManager } from './battle/WaveManager';
+import { BOSS, FIELD, PLAYER, SATIETY } from './config/BattleConfig';
 import { clamp } from './core/MathUtil';
 import { SpriteAssets } from './view/SpriteAssets';
 import { BackgroundRenderer } from './view/BackgroundRenderer';
 import { EntityRenderer } from './view/EntityRenderer';
 import { BattleHud } from './ui/BattleHud';
 import { SettlementPanel } from './ui/SettlementPanel';
+import { UpgradePanel } from './ui/UpgradePanel';
 
 const { ccclass } = _decorator;
 
@@ -26,11 +28,12 @@ const BOSS_MIN_SPAWN_DIST = 300;
  * 世界全部由代码搭建（相机/主角/英雄小队/敌人/BOSS/渲染器/HUD），不依赖任何编辑器内
  * 手动摆放，方便整包迁移与参数复现。
  *
- * 一局流程（CR-014）：
- *   走过去踩怪窝 → 清空全部 4 窝 → BOSS 在最后一窝登场 → 击杀通关
- *   任何时刻：E 主动撤离 / HP 归零撤退 —— 都不算失败（红线②）。
+ * 一局流程（CR-015：甲方案「割草 + 宠物状态」）：
+ *   20 波怪潮（第 19 波清完 BOSS 登场，即第 20 波）→ 击杀通关
+ *   途中：捡经验升级三选一 / 按 F 喂食（半饿时火力最强）/ E 主动撤离
+ *   HP 归零 = 体力不支撤退，照样结算（红线②：无失败惩罚）
  *
- * 挂载顺序即绘制顺序：实体树（背景 → 实体场 → 英雄 → 主角）→ 相机树（HUD/结算在最上）。
+ * 挂载顺序即绘制顺序：实体树（背景 → 实体场 → 英雄 → 主角）→ 相机树（HUD/面板在最上）。
  */
 @ccclass('GameBootstrap')
 export class GameBootstrap extends Component {
@@ -40,7 +43,8 @@ export class GameBootstrap extends Component {
     private _director: BattleDirector | null = null;
     private _heroes: HeroSquad | null = null;
     private _enemies: EnemyManager | null = null;
-    private _encounters: EncounterManager | null = null;
+    private _waves: WaveManager | null = null;
+    private _upgrades: UpgradeSystem | null = null;
     private _boss: BossController | null = null;
     private _projectiles: ProjectileManager | null = null;
     private _orbs: OrbManager | null = null;
@@ -48,6 +52,7 @@ export class GameBootstrap extends Component {
     private _entityRenderer: EntityRenderer | null = null;
     private _hud: BattleHud | null = null;
     private _panel: SettlementPanel | null = null;
+    private _upgradePanel: UpgradePanel | null = null;
     private _ready = false;
 
     onLoad(): void {
@@ -86,8 +91,11 @@ export class GameBootstrap extends Component {
         projectiles.enemies = enemies;
         enemies.projectiles = projectiles;
 
+        const upgrades = new UpgradeSystem();
         const heroes = new HeroSquad(root, player, enemies, projectiles, this._sprites.pet);
-        const encounters = new EncounterManager(enemies, player);
+        heroes.upgrades = upgrades;
+
+        const waves = new WaveManager(enemies, player);
         // BOSS 复用甲虫贴图放大 4 倍（128px）；换正式美术时只改 BOSS.displaySize 与贴图
         const boss = new BossController(root, player, this._sprites.tank);
         projectiles.boss = boss;
@@ -100,30 +108,34 @@ export class GameBootstrap extends Component {
         // 4) 事件接线
         enemies.onKill = (e) => {
             director.addKill();
-            // 击杀弹经验珠：30% 概率双珠（战利品，不是局内升级）
+            // 击杀弹经验珠：30% 概率双珠
             orbs.spawn(e.x, e.y, Math.random() < 0.3 ? 2 : 1);
+            // 肉块 = 喂食资源，是本作唯一的"资源约束"
+            orbs.rollMeat(e.x, e.y);
+            // 「啃噬」：击杀回体力（唯一回血手段，红线②下不给主动治疗）
+            if (upgrades.stats.leech > 0 && Math.random() < upgrades.stats.leech && player.hp < PLAYER.hp) {
+                player.hp++;
+            }
         };
-        orbs.onCollect = (n) => director.addOrbs(n);
-
-        // 清完所有窝 → 进入 BOSS 阶段
-        encounters.onAllCleared = () => director.notifyAllCleared();
-        director.onBossPhase = () => {
-            const spot = encounters.lastCleared || { x: 0, y: 0 };
-            let bx = spot.x;
-            let by = spot.y;
-            const dx = bx - player.x;
-            const dy = by - player.y;
-            const d = Math.hypot(dx, dy);
-            // 最后一窝往往就在玩家脚下 —— 往外推一段再登场，给玩家拉开距离的机会
-            if (d < BOSS_MIN_SPAWN_DIST) {
-                if (d < 1) {
-                    bx = player.x + BOSS_MIN_SPAWN_DIST;
-                    by = player.y;
-                } else {
-                    bx = player.x + (dx / d) * BOSS_MIN_SPAWN_DIST;
-                    by = player.y + (dy / d) * BOSS_MIN_SPAWN_DIST;
+        orbs.onCollect = (exp, meat) => {
+            if (exp > 0) {
+                director.addOrbs(exp);
+                if (upgrades.addExp(exp)) {
+                    this.openUpgrade();
                 }
             }
+            if (meat > 0) {
+                director.addMeat(meat);
+            }
+        };
+
+        // 第 19 波清完 → 进入 BOSS 阶段（BOSS 即第 20 波）
+        waves.onPreBossWave = () => director.notifyPreBossWave();
+        director.onBossPhase = () => {
+            // 从离玩家最近的场地边缘方向登场，保证 BOSS_MIN_SPAWN_DIST
+            const ang = Math.random() * Math.PI * 2;
+            let bx = player.x + Math.cos(ang) * BOSS_MIN_SPAWN_DIST;
+            let by = player.y + Math.sin(ang) * BOSS_MIN_SPAWN_DIST;
             bx = clamp(bx, -FIELD.width / 2 + BOSS.radius, FIELD.width / 2 - BOSS.radius);
             by = clamp(by, -FIELD.height / 2 + BOSS.radius, FIELD.height / 2 - BOSS.radius);
             boss.spawn(bx, by);
@@ -142,6 +154,23 @@ export class GameBootstrap extends Component {
         // 6) UI（挂相机节点下 = 屏幕固定；相机树已在实体树之后，无需再调 sibling）
         const hud = new BattleHud(player.cameraNode);
         const panel = new SettlementPanel(player.cameraNode);
+        const upgradePanel = new UpgradePanel(player.cameraNode);
+        upgradePanel.onPick = (id) => {
+            upgrades.choose(id);
+            upgradePanel.hide();
+            // 连升两级：继续弹下一张（不恢复世界）
+            if (upgrades.pendingLevelUps > 0) {
+                const next = upgrades.rollChoices();
+                if (next.length > 0) {
+                    upgradePanel.show(next, upgrades);
+                    return;
+                }
+                upgrades.pendingLevelUps = 0;
+            }
+            if (director.phase !== 'settlement') {
+                director.paused = false;
+            }
+        };
 
         // 7) 输入
         input.on(Input.EventType.KEY_DOWN, this.onKeyDown, this);
@@ -151,7 +180,8 @@ export class GameBootstrap extends Component {
         this._director = director;
         this._heroes = heroes;
         this._enemies = enemies;
-        this._encounters = encounters;
+        this._waves = waves;
+        this._upgrades = upgrades;
         this._boss = boss;
         this._projectiles = projectiles;
         this._orbs = orbs;
@@ -159,11 +189,12 @@ export class GameBootstrap extends Component {
         this._entityRenderer = entityRenderer;
         this._hud = hud;
         this._panel = panel;
+        this._upgradePanel = upgradePanel;
         this._ready = true;
 
         console.log('[GameBootstrap] 世界构建完成 · 占位精灵 ' +
             (this._sprites.allMissing ? '全部缺失（程序化兜底层）' : '已加载') +
-            ' · 3 英雄列队 · 目标：清完 4 窝 + 击杀 BOSS · 操作：WASD/方向键移动 · E 撤离');
+            ' · 3 英雄列队 · 20 波怪潮 + BOSS · 操作：WASD 移动 / F 喂食 / E 撤离');
     }
 
     update(dt: number): void {
@@ -172,23 +203,27 @@ export class GameBootstrap extends Component {
         }
         const director = this._director as BattleDirector;
         director.update(dt);
-        if (director.phase === 'settlement') {
+        // 结算 or 升级选卡：冻结世界（选卡时怪不该继续打你）
+        if (director.phase === 'settlement' || director.paused) {
             return;
         }
 
         const player = this._player as PlayerController;
-        const encounters = this._encounters as EncounterManager;
+        const waves = this._waves as WaveManager;
+        const heroes = this._heroes as HeroSquad;
+        const upgrades = this._upgrades as UpgradeSystem;
 
         // 顺序有讲究：主角先动 → 队形与敌人 AI 才能拿到本帧位置
         player.update(dt);
-        (this._heroes as HeroSquad).update(dt);
-        encounters.update(dt);
+        heroes.update(dt);
+        waves.update(dt);
         (this._enemies as EnemyManager).update(dt);
         (this._boss as BossController).update(dt);
         (this._projectiles as ProjectileManager).update(dt);
         (this._orbs as OrbManager).update(dt);
 
-        director.syncProgress(encounters.clearedCount, encounters.total);
+        director.syncProgress(waves.wave, waves.total);
+        director.syncMeta(upgrades.level, heroes.feeds);
     }
 
     lateUpdate(dt: number): void {
@@ -197,7 +232,9 @@ export class GameBootstrap extends Component {
         }
         const player = this._player as PlayerController;
         const director = this._director as BattleDirector;
-        const encounters = this._encounters as EncounterManager;
+        const waves = this._waves as WaveManager;
+        const heroes = this._heroes as HeroSquad;
+        const upgrades = this._upgrades as UpgradeSystem;
         const boss = this._boss as BossController;
 
         // 相机跟随放在实体移动之后
@@ -207,26 +244,44 @@ export class GameBootstrap extends Component {
             const renderer = this._entityRenderer as EntityRenderer;
             renderer.tick(dt);
             renderer.redraw(
-                (this._heroes as HeroSquad).list,
+                heroes.list,
                 (this._enemies as EnemyManager).list,
-                encounters.list,
                 (this._projectiles as ProjectileManager).list,
                 (this._orbs as OrbManager).list,
                 // 用 active 而不是 alive：alive 在死亡瞬间就变 false，
                 // 那样 0.8s 的缩小消失动画会被直接跳过（BOSS 凭空消失）
                 boss.boss.active ? boss.boss : null,
             );
+
+            const hunt = waves.spawning;
             const hint = director.phase === 'boss'
                 ? 'BOSS 出现！躲开红圈 · E 撤离'
-                : 'WASD 移动 · 走进怪窝清剿 · E 撤离';
-            (this._hud as BattleHud).update(
-                dt, director, player.hp,
-                encounters.clearedCount, encounters.total,
-                boss.alive ? boss : null,
+                : (hunt ? '这一波正在涌来 · 拉开距离' : 'F 喂食（半饿火力 ×1.5）· E 撤离');
+
+            (this._hud as BattleHud).update(dt, director, {
+                hp: player.hp,
+                level: upgrades.level,
+                exp: expProgress(upgrades),
+                satiety: heroes.satiety,
+                tier: heroes.tier,
+                meat: director.stats.meat,
+                canFeed: heroes.canFeed(director.stats.meat),
+                boss: boss.alive ? boss : null,
                 hint,
-            );
+            });
+            (this._upgradePanel as UpgradePanel).layout();
         } else {
-            (this._hud as BattleHud).update(dt, director, player.hp, encounters.clearedCount, encounters.total, null, '');
+            (this._hud as BattleHud).update(dt, director, {
+                hp: player.hp,
+                level: upgrades.level,
+                exp: expProgress(upgrades),
+                satiety: heroes.satiety,
+                tier: heroes.tier,
+                meat: director.stats.meat,
+                canFeed: false,
+                boss: null,
+                hint: '',
+            });
             (this._panel as SettlementPanel).layout();
         }
     }
@@ -239,6 +294,18 @@ export class GameBootstrap extends Component {
         }
         const player = this._player as PlayerController;
         const director = this._director as BattleDirector;
+        const upPanel = this._upgradePanel as UpgradePanel;
+
+        // 选卡期间只认数字键，其他输入一律吞掉（防止一边选卡一边跑位）
+        if (upPanel.shown) {
+            switch (e.keyCode) {
+                case KeyCode.DIGIT_1: upPanel.pickByIndex(0); break;
+                case KeyCode.DIGIT_2: upPanel.pickByIndex(1); break;
+                case KeyCode.DIGIT_3: upPanel.pickByIndex(2); break;
+                default: break;
+            }
+            return;
+        }
 
         if (player.applyKey(e.keyCode, true)) {
             return;
@@ -248,6 +315,9 @@ export class GameBootstrap extends Component {
             case KeyCode.KEY_E:
             case KeyCode.ESC:
                 director.withdraw();
+                break;
+            case KeyCode.KEY_F:
+                this.tryFeed();
                 break;
             case KeyCode.SPACE:
                 if (director.phase === 'settlement') {
@@ -276,14 +346,48 @@ export class GameBootstrap extends Component {
         }
     }
 
+    // ---------------- 玩法动作 ----------------
+
+    /** F：喂食（消耗 1 肉块 + 0.4 秒减速，把"喂它"变成有代价的动作） */
+    private tryFeed(): void {
+        const director = this._director as BattleDirector;
+        if (director.phase === 'settlement') {
+            return;
+        }
+        const heroes = this._heroes as HeroSquad;
+        // 先问能不能喂（内部会检查冷却/满饱/肉块），成功了才扣
+        if (!heroes.feed(director.stats.meat)) {
+            return;
+        }
+        director.spendMeat(SATIETY.feedMeatCost);
+    }
+
+    private openUpgrade(): void {
+        const director = this._director as BattleDirector;
+        const upgrades = this._upgrades as UpgradeSystem;
+        const upPanel = this._upgradePanel as UpgradePanel;
+        if (director.phase === 'settlement' || upPanel.shown) {
+            return;
+        }
+        const choices = upgrades.rollChoices();
+        if (choices.length === 0) {
+            upgrades.pendingLevelUps = 0;
+            return;
+        }
+        director.paused = true;
+        upPanel.show(choices, upgrades);
+    }
+
     private restartBattle(): void {
         (this._director as BattleDirector).restart();
         (this._player as PlayerController).reset();
         (this._enemies as EnemyManager).clear();
         (this._projectiles as ProjectileManager).clear();
         (this._orbs as OrbManager).clear();
-        (this._encounters as EncounterManager).reset();
+        (this._waves as WaveManager).reset();
+        (this._upgrades as UpgradeSystem).reset();
         (this._boss as BossController).hide();
+        (this._upgradePanel as UpgradePanel).hide();
         // 放在 player.reset() 之后：队形锚点要用重置后的主角位置
         (this._heroes as HeroSquad).reset();
         (this._panel as SettlementPanel).hide();

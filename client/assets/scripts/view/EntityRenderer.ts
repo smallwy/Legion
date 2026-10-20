@@ -1,10 +1,9 @@
 import { Graphics, Node, UITransform } from 'cc';
-import { BOSS, ENEMIES, NEST, PALETTE } from '../config/BattleConfig';
+import { BOSS, ENEMIES, PALETTE } from '../config/BattleConfig';
 import { hexColor } from '../core/ColorUtil';
 import { TAU } from '../core/MathUtil';
 import { ENEMY_DEATH_TIME } from '../battle/EnemyManager';
 import type { Boss } from '../battle/BossController';
-import type { Nest } from '../battle/EncounterManager';
 import type { Enemy } from '../battle/EnemyManager';
 import type { Hero } from '../battle/HeroSquad';
 import type { Orb } from '../battle/OrbManager';
@@ -22,17 +21,15 @@ const C_RING_DANGER = hexColor(PALETTE.danger, 220);
 // alpha 刻意低（42）：混战时同屏十几只怪同时读条，深填充会把草地和怪全糊掉。
 const C_RING_DANGER_FILL = hexColor(PALETTE.danger, 42);
 const C_RING_CAST = hexColor(PALETTE.excite, 220);
-const C_RING_GOLD = hexColor(PALETTE.gold, 220);
 const C_BULLET = hexColor(0xffe9a8);
 const C_SPELL = hexColor(PALETTE.foxPurple);
 const C_SPELL_CORE = hexColor(PALETTE.uiText);
 const C_ORB = hexColor(PALETTE.safe);
-const C_NEST_DORMANT = hexColor(PALETTE.wood, 90);
-const C_NEST_ACTIVE = hexColor(PALETTE.excite, 150);
-const C_NEST_CLEARED = hexColor(0x9a9a9a, 60);
-const C_NEST_DOT_DORMANT = hexColor(PALETTE.wood);
-const C_NEST_DOT_ACTIVE = hexColor(PALETTE.excite);
-const C_NEST_DOT_CLEARED = hexColor(0x9a9a9a);
+const C_MEAT = hexColor(0xD9534F);
+// 英雄前摇环：按饱食档位上色 —— 红环 = 全饿在打（伤害 ×0.6），玩家一眼看得见"该喂了"
+const C_RING_HUNGRY = hexColor(PALETTE.gold, 230);
+const C_RING_FULL = hexColor(PALETTE.gold, 110);
+const C_RING_STARVING = hexColor(PALETTE.danger, 210);
 const C_HERO_BODY = hexColor(0xffb6c1);
 const C_HERO_SNOUT = hexColor(0xf291a8);
 const C_HERO_EYE_W = hexColor(0xffffff);
@@ -72,14 +69,12 @@ export class EntityRenderer {
     redraw(
         heroes: Hero[],
         enemies: Enemy[],
-        nests: Nest[],
         projectiles: Projectile[],
         orbs: Orb[],
         boss: Boss | null,
     ): void {
         const g = this._g;
         g.clear();
-        this.drawNests(nests);
         this.drawEnemyBodies(enemies);
         this.drawHitFlash(enemies);
         this.drawTelegraphs(enemies);
@@ -89,70 +84,6 @@ export class EntityRenderer {
         this.drawHeroRings(heroes);
         // BOSS 最后画：它体积最大，且 AOE 区域必须盖在杂兵之上才不会看漏
         this.drawBoss(boss);
-    }
-
-    // ---------------- 怪窝标记 ----------------
-
-    private drawNests(nests: Nest[]): void {
-        const g = this._g;
-        g.lineWidth = 2;
-
-        // 触发圈：三种状态各一次 stroke
-        let n = 0;
-        g.strokeColor = C_NEST_DORMANT;
-        for (const nest of nests) {
-            if (nest.state !== 'dormant') continue;
-            g.circle(nest.x, nest.y, NEST.triggerRange);
-            n++;
-        }
-        if (n > 0) g.stroke();
-
-        n = 0;
-        g.strokeColor = C_NEST_ACTIVE;
-        for (const nest of nests) {
-            if (nest.state !== 'active') continue;
-            // 活跃圈脉冲（提示玩家"这窝活了"）
-            g.circle(nest.x, nest.y, NEST.triggerRange + Math.sin(nest.pulse * 3) * 8);
-            n++;
-        }
-        if (n > 0) g.stroke();
-
-        n = 0;
-        g.strokeColor = C_NEST_CLEARED;
-        for (const nest of nests) {
-            if (nest.state !== 'cleared') continue;
-            g.circle(nest.x, nest.y, NEST.triggerRange);
-            n++;
-        }
-        if (n > 0) g.stroke();
-
-        // 窝心点：三种状态各一次 fill
-        n = 0;
-        g.fillColor = C_NEST_DOT_DORMANT;
-        for (const nest of nests) {
-            if (nest.state !== 'dormant') continue;
-            this.diamond(g, nest.x, nest.y, 6);
-            n++;
-        }
-        if (n > 0) g.fill();
-
-        n = 0;
-        g.fillColor = C_NEST_DOT_ACTIVE;
-        for (const nest of nests) {
-            if (nest.state !== 'active') continue;
-            this.diamond(g, nest.x, nest.y, 8);
-            n++;
-        }
-        if (n > 0) g.fill();
-
-        n = 0;
-        g.fillColor = C_NEST_DOT_CLEARED;
-        for (const nest of nests) {
-            if (nest.state !== 'cleared') continue;
-            this.diamond(g, nest.x, nest.y, 6);
-            n++;
-        }
-        if (n > 0) g.fill();
     }
 
     // ---------------- 敌人身体（程序化兜底） ----------------
@@ -352,12 +283,25 @@ export class EntityRenderer {
 
     private drawOrbs(orbs: Orb[]): void {
         const g = this._g;
+
+        // 经验珠：菱形 + 绿色
         let n = 0;
         g.fillColor = C_ORB;
         for (const o of orbs) {
-            if (!o.active) continue;
+            if (!o.active || o.kind !== 'exp') continue;
             const bob = Math.sin(this._t * 6 + o.x * 0.1) * 1.5;
             this.diamond(g, o.x, o.y + bob, 4);
+            n++;
+        }
+        if (n > 0) g.fill();
+
+        // 肉块：方块 + 红色 —— 形状与颜色同时区分（色弱玩家靠形状也读得出）
+        n = 0;
+        g.fillColor = C_MEAT;
+        for (const o of orbs) {
+            if (!o.active || o.kind !== 'meat') continue;
+            const bob = Math.sin(this._t * 5 + o.x * 0.13) * 1.2;
+            g.rect(o.x - 3.5, o.y + bob - 3.5, 7, 7);
             n++;
         }
         if (n > 0) g.fill();
@@ -414,13 +358,39 @@ export class EntityRenderer {
         if (n > 0) g.fill();
     }
 
+    /**
+     * 英雄前摇环，颜色 = 饱食档位：
+     *   金实（powerMul ≥1.4）= 半饿，火力 ×1.5（最强状态）
+     *   金淡（1.0~1.4）      = 满饱，×1.0
+     *   红  （<1.0）          = 全饿，×0.6 —— 红环一出现就是"该喂了"的信号
+     * 三段各一次 stroke，仍在同一个 Graphics 内 → DrawCall 不涨。
+     */
     private drawHeroRings(heroes: Hero[]): void {
         const g = this._g;
-        let n = 0;
-        g.strokeColor = C_RING_GOLD;
         g.lineWidth = 2;
+
+        let n = 0;
+        g.strokeColor = C_RING_HUNGRY;
         for (const h of heroes) {
-            if (h.state !== 'telegraph') continue;
+            if (h.state !== 'telegraph' || h.powerMul < 1.4) continue;
+            g.circle(h.x, h.y, 26);
+            n++;
+        }
+        if (n > 0) g.stroke();
+
+        n = 0;
+        g.strokeColor = C_RING_FULL;
+        for (const h of heroes) {
+            if (h.state !== 'telegraph' || h.powerMul >= 1.4 || h.powerMul < 1.0) continue;
+            g.circle(h.x, h.y, 26);
+            n++;
+        }
+        if (n > 0) g.stroke();
+
+        n = 0;
+        g.strokeColor = C_RING_STARVING;
+        for (const h of heroes) {
+            if (h.state !== 'telegraph' || h.powerMul >= 1.0) continue;
             g.circle(h.x, h.y, 26);
             n++;
         }

@@ -6,9 +6,12 @@ export type EndReason = '' | 'withdraw' | 'hp0' | 'victory';
 export interface BattleStats {
     kills: number;
     orbs: number;
+    meat: number;
     timeMs: number;
-    nestsCleared: number;
-    nestTotal: number;
+    wave: number;
+    waveTotal: number;
+    level: number;
+    feeds: number;
     bossKilled: boolean;
     endReason: EndReason;
 }
@@ -16,25 +19,30 @@ export interface BattleStats {
 /**
  * 战斗主控：阶段流转 + 统计。
  *
- * CR-014 阶段模型（原「存活 3 分钟自动撤离」已废弃）：
+ * CR-015 阶段模型（甲方案：割草 + 宠物状态）：
  *
- *   battle（清怪窝）──全部清空──▶ boss（BOSS 战）──击杀──▶ victory 结算
- *        │                            │
- *        └──── HP 归零 / 主动撤离 ────┘
+ *   battle（第 1~19 波怪潮）──第 19 波清完──▶ boss（第 20 波）──击杀──▶ victory 结算
+ *        │                                        │
+ *        └──────── HP 归零 / 主动撤离 ────────────┘
  *
  * 红线②（无失败惩罚）：HP 归零 = "体力不支撤退"，照样结算带走战利品，没有"游戏结束"。
  *
- * ⚠️ `BATTLE.durationMs` 现在**只用于 HUD 显示参考时长**，不再是结束条件。
- * 之前它是硬倒计时，配合无限重刷的怪窝，整局就退化成了幸存者式刷怪场。
+ * `paused`：三选一升级面板打开时置 true，冻结世界（否则怪会在你选卡时把血打光）。
  */
 export class BattleDirector {
     phase: BattlePhase = 'battle';
+    /** 升级三选一期间暂停世界 */
+    paused = false;
+
     stats: BattleStats = {
         kills: 0,
         orbs: 0,
+        meat: 0,
         timeMs: 0,
-        nestsCleared: 0,
-        nestTotal: 0,
+        wave: 0,
+        waveTotal: 0,
+        level: 1,
+        feeds: 0,
         bossKilled: false,
         endReason: '',
     };
@@ -51,7 +59,7 @@ export class BattleDirector {
     }
 
     update(dt: number): void {
-        if (this.phase === 'settlement') {
+        if (this.phase === 'settlement' || this.paused) {
             return;
         }
         this.stats.timeMs += dt * 1000;
@@ -60,18 +68,26 @@ export class BattleDirector {
         }
     }
 
-    /** Bootstrap 每帧同步清窝进度（HUD 与结算面板都要用） */
-    syncProgress(cleared: number, total: number): void {
-        this.stats.nestsCleared = cleared;
-        this.stats.nestTotal = total;
+    /** 每帧同步波次进度（HUD 用） */
+    syncProgress(wave: number, waveTotal: number): void {
+        this.stats.wave = wave;
+        this.stats.waveTotal = waveTotal;
     }
 
-    /** EncounterManager 判定全部清空后调用 → 进入 BOSS 阶段 */
-    notifyAllCleared(): void {
+    /** 每帧同步成长状态（HUD 用） */
+    syncMeta(level: number, feeds: number): void {
+        this.stats.level = level;
+        this.stats.feeds = feeds;
+    }
+
+    /** 第 19 波清完：WaveManager 调用 → 进入 BOSS 阶段 */
+    notifyPreBossWave(): void {
         if (this.phase !== 'battle') {
             return;
         }
         this.phase = 'boss';
+        // BOSS 即第 20 波，HUD 直接显示满波
+        this.stats.wave = this.stats.waveTotal;
         if (this.onBossPhase) {
             this.onBossPhase();
         }
@@ -101,13 +117,30 @@ export class BattleDirector {
         this.stats.orbs += n;
     }
 
+    addMeat(n: number): void {
+        this.stats.meat += n;
+    }
+
+    /** 喂食成功时扣肉块（返回 false 表示不够，不该走到这） */
+    spendMeat(n: number): boolean {
+        if (this.stats.meat < n) {
+            return false;
+        }
+        this.stats.meat -= n;
+        return true;
+    }
+
     restart(): void {
         this.phase = 'battle';
+        this.paused = false;
         this.stats.kills = 0;
         this.stats.orbs = 0;
+        this.stats.meat = 0;
         this.stats.timeMs = 0;
-        this.stats.nestsCleared = 0;
-        this.stats.nestTotal = 0;
+        this.stats.wave = 0;
+        this.stats.waveTotal = 0;
+        this.stats.level = 1;
+        this.stats.feeds = 0;
         this.stats.bossKilled = false;
         this.stats.endReason = '';
     }
@@ -117,6 +150,7 @@ export class BattleDirector {
             return;
         }
         this.phase = 'settlement';
+        this.paused = false;
         this.stats.endReason = reason;
         if (this.onSettle) {
             this.onSettle(this.stats);

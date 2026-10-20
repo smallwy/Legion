@@ -35,7 +35,11 @@ declare module 'cc' {
     getComponent<T extends Component>(cls: new (...args: any[]) => T): T | null;
   }
 
-  export class UITransform extends Component {}
+  export class UITransform extends Component {
+    setContentSize(width: number, height: number): void;
+    width: number;
+    height: number;
+  }
   export class UIOpacity extends Component {}
 
   export class Color {
@@ -133,6 +137,10 @@ declare module 'cc' {
     static KEY_S: number;
     static KEY_D: number;
     static KEY_E: number;
+    static KEY_F: number;
+    static DIGIT_1: number;
+    static DIGIT_2: number;
+    static DIGIT_3: number;
     static SPACE: number;
     static ESC: number;
     static ARROW_UP: number;

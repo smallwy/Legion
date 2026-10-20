@@ -1,5 +1,5 @@
 import { Node, Sprite, UITransform } from 'cc';
-import { ENEMIES, FIELD, NEST } from '../config/BattleConfig';
+import { ENEMIES, ENEMY_AI, FIELD } from '../config/BattleConfig';
 import type { EnemyDef, EnemyType } from '../config/BattleConfig';
 import { clamp, TAU } from '../core/MathUtil';
 import { Pool } from '../core/Pool';
@@ -30,7 +30,15 @@ export interface Enemy {
     wanderT: number;
     t: number;       // 存活时间（蛇形相位用）
     phase: number;   // 随机相位
-    nest: number;
+    nest: number;    // 生成组编号（CR-015 起 = 波号；原为怪窝序号）
+    /**
+     * 猎手标记（CR-015）：波次生成的敌人**主动追玩家**，无视 aggroRange。
+     *
+     * ⚠️ 这条是波次系统能成立的前提。CR-008 的敌人是"守在窝边，你走进 aggroRange
+     * 才追"，而波次怪是从 600px 外生成的 —— 没有这个标记，它们会在原地游荡，
+     * 永远走不过来，整局变成"玩家满地图找怪"。
+     */
+    hunter: boolean;
     state: EnemyAIState;
     stateT: number;
     cd: number;
@@ -85,10 +93,11 @@ export class EnemyManager {
         return n;
     }
 
-    aliveCountOfNest(nest: number): number {
+    /** 某一生成组还活着的数量（CR-015 起 group = 波号，波次推进用它判定本波是否打完） */
+    aliveCountOfGroup(group: number): number {
         let n = 0;
         for (const e of this._enemies) {
-            if (e.active && e.dying <= 0 && e.nest === nest) n++;
+            if (e.active && e.dying <= 0 && e.nest === group) n++;
         }
         return n;
     }
@@ -124,7 +133,11 @@ export class EnemyManager {
         return null;
     }
 
-    spawn(type: EnemyType, x: number, y: number, anchorX: number, anchorY: number, nest: number): void {
+    /**
+     * @param nest   生成组编号（CR-015 起 = 波号）
+     * @param hunter true = 猎手（无视 aggroRange 主动追玩家），波次怪一律传 true
+     */
+    spawn(type: EnemyType, x: number, y: number, anchorX: number, anchorY: number, nest: number, hunter = false): void {
         const e = this._pools[type].get();
         e.active = true;
         e.dying = 0;
@@ -137,9 +150,11 @@ export class EnemyManager {
         e.anchorX = anchorX;
         e.anchorY = anchorY;
         e.nest = nest;
+        e.hunter = hunter;
         e.t = 0;
         e.phase = Math.random() * TAU;
-        e.state = 'roam';
+        // 猎手直接进 chase，省掉"先游荡再发现你"的一两秒延迟
+        e.state = hunter ? 'chase' : 'roam';
         e.stateT = 0;
         e.cd = 0.5 + Math.random() * 0.8;
         e.wanderT = 0;
@@ -273,7 +288,7 @@ export class EnemyManager {
             hp: def.hp,
             anchorX: 0, anchorY: 0,
             wanderX: 0, wanderY: 0, wanderT: 0,
-            t: 0, phase: 0, nest: 0,
+            t: 0, phase: 0, nest: 0, hunter: false,
             state: 'roam', stateT: 0, cd: 0, hitPunch: 0, dying: 0,
             baseScale,
         };
@@ -285,14 +300,15 @@ export class EnemyManager {
 
         switch (e.state) {
             case 'roam': {
-                if (distP < def.aggroRange) {
+                // 猎手不等你走进 aggroRange —— 它就是冲你来的
+                if (e.hunter || distP < def.aggroRange) {
                     e.state = 'chase';
                     break;
                 }
                 this.moveToward(e, e.wanderX, e.wanderY, def.speed * 0.55, dt, false);
                 // 软拉回活动范围
                 const da = Math.hypot(e.x - e.anchorX, e.y - e.anchorY);
-                if (da > NEST.roamRadius) {
+                if (da > ENEMY_AI.roamRadius) {
                     e.wanderT = 0;
                     e.wanderX = e.anchorX;
                     e.wanderY = e.anchorY;
@@ -303,7 +319,8 @@ export class EnemyManager {
                 break;
             }
             case 'chase': {
-                if (distP > def.aggroRange * 1.2) {
+                // 猎手永不放弃（否则玩家跑远一步就整波脱战，波次压力会漏光）
+                if (!e.hunter && distP > def.aggroRange * 1.2) {
                     e.state = 'roam';
                     this.retargetWander(e);
                     break;
@@ -365,7 +382,7 @@ export class EnemyManager {
                 break;
             case 'recover':
                 if (e.stateT <= 0) {
-                    e.state = distP < def.aggroRange ? 'chase' : 'roam';
+                    e.state = (e.hunter || distP < def.aggroRange) ? 'chase' : 'roam';
                 }
                 break;
         }
@@ -399,7 +416,7 @@ export class EnemyManager {
 
     private retargetWander(e: Enemy): void {
         const ang = Math.random() * TAU;
-        const r = Math.random() * NEST.roamRadius;
+        const r = Math.random() * ENEMY_AI.roamRadius;
         e.wanderX = e.anchorX + Math.cos(ang) * r;
         e.wanderY = e.anchorY + Math.sin(ang) * r;
         e.wanderT = 1.5 + Math.random() * 1.5;

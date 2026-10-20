@@ -14,12 +14,12 @@ const C_TEXT = hexColor(PALETTE.uiText);
  * 结算面板：一局结束（通关 / 主动撤离 / HP 归零）时弹出。
  *
  * 三种结局都不扣东西（红线②无失败惩罚）：
- *  - victory：清完所有窝 + 击杀 BOSS
+ *  - victory：打完 20 波 + 击杀 BOSS
  *  - withdraw：按 E 主动撤离
  *  - hp0：体力不支撤退 —— 同样带走战利品，没有"游戏结束"
  *
- * 资源映射为暂定值（Day 3 接入家园资源池后回写）：
- *   食物 = 拾取数，材料 = floor(击杀/2)。
+ * 资源映射为暂定值（M2 接入家园资源池后回写）：
+ *   食物 = 经验珠数，材料 = floor(击杀/2)。
  */
 export class SettlementPanel {
     private _root: Node;
@@ -104,11 +104,12 @@ export class SettlementPanel {
 
         this._label.string =
             title + '\n' +
-            '清窝 ' + stats.nestsCleared + '/' + stats.nestTotal + ' · ' + bossLine + '\n' +
-            '击杀 ' + stats.kills + ' · 拾取 ' + stats.orbs + ' · 用时 ' + clock + '\n' +
+            '第 ' + stats.wave + '/' + stats.waveTotal + ' 波 · ' + bossLine + '\n' +
+            '击杀 ' + stats.kills + ' · 经验 ' + stats.orbs + ' · 用时 ' + clock + '\n' +
+            'Lv ' + stats.level + ' · 喂食 ' + stats.feeds + ' 次\n' +
             '预估带回：食物 ' + food + ' · 材料 ' + material + '\n' +
-            '（资源入池在家园场景接线，Day 3）\n' +
-            '空格 / 点击鼠标 · 再次远征';
+            '（资源入池在家园场景接线，M2）\n' +
+            '空格 / 点击鼠标 · 再次出征';
 
         this._win = stats.endReason === 'victory';
         this._shown = true;

@@ -69,7 +69,7 @@ Cocos Dashboard → **新建项目** → 选 **Empty (2D)** 模板，命名如 `
 ```
 client/
 ├── assets/
-│   ├── resources/art/          # 占位精灵（透明 PNG，由 tools/preprocess_sprites.py 生成）
+│   ├── resources/art/          # 占位精灵（真像素：24/24/24/28px、≤14 色、1px 描边）
 │   │   ├── pet.png             #   宠物（圆滚猪）
 │   │   ├── enemy-walker.png    #   步行虫（绿）
 │   │   ├── enemy-flyer.png     #   飞虫（红，远程施法）
@@ -97,8 +97,11 @@ client/
 │       └── ui/
 │           ├── BattleHud.ts         #   血量心 + 统计文字（10Hz 节流）
 │           └── SettlementPanel.ts   #   结算面板
+├── art-source/256px/           # 原始 AI 厚涂稿归档（不入包；回滚用）
+├── docs/pixel-preview.png      # 像素化前后对比图
 ├── tools/                      # 仅沙箱侧使用，不要拷进游戏工程
-│   ├── preprocess_sprites.py   #   占位图抠透明 + 生成敌人配色变体
+│   ├── preprocess_sprites.py   #   原始占位图抠透明 + 生成敌人配色变体
+│   ├── pixelize_sprites.py     #   ★ 降成真像素：量化色板 + 硬边 + 1px 描边
 │   ├── cc-stub.d.ts            #   cc 模块类型桩（离线类型检查用）
 │   └── tsconfig.check.json     #   静态检查配置
 ├── package.json                # 工程描述（供参考；新项目由 Dashboard 生成）
@@ -139,6 +142,37 @@ client/
 > 属性检查器改导入为 `sprite-frame` → 建 Auto Atlas 资源把 4 张拖进去）即可再降。
 > 这属于 **Day 2 优化项**，Day 1 不阻塞。
 
+### 4.1 像素风的两个硬性设置（不做就必糊）
+
+占位精灵已按 **工作分辨率 24/24/24/28px、≤14 色、1px 描边** 重做（`tools/pixelize_sprites.py`），
+显示尺寸 = 工作分辨率 **×2**（48/48/48/56），保证整数倍放大。但引擎侧还有两件事必须做：
+
+| # | 设置 | 位置 | 不做的后果 |
+|---|---|---|---|
+| 1 | **Filter Mode = Point** | 选中 `resources/art/` 里 4 张图 → 属性检查器 → `Filter Mode` 改 **Point** | 默认 Bilinear 会把像素插值成糊块，24px 变成"毛玻璃" |
+| 2 | **关闭 Mipmap**（如开启） | 同上，`Generate Mip Maps` 取消勾选 | 远景自动降采样，像素颗粒随机跳变 |
+
+> 为什么不用代码调：Cocos 3.8 的 `Filter` 枚举公共导出路径在不同小版本上不一致
+> （3.8.0 源码里 `asset-enum.ts` 未被 `cc` 重导出，但 `Texture2D.setFilters()` 本身存在），
+> 编辑器设置最稳、不挑版本。若你确认本版本有 `Texture2D.Filter`，也可在 `SpriteAssets` 里补：
+> `tex.setFilters(Texture2D.Filter.NEAREST, Texture2D.Filter.NEAREST)`。
+
+**美术轻量化的实测数据**（本次转换前后）：
+
+| 维度 | 转换前 | 转换后 | 降幅 |
+|---|---|---|---|
+| 单张分辨率 | 224×189 / 256×256 | 24×20 / 24×24 / 28×28 | — |
+| 单张颜色数 | 15,915 ~ 24,817 | 14 ~ 16 | **-99.9%** |
+| 4 张文件总体积 | 290.3 KB | **3.4 KB** | **-98.8%** |
+| 纹理显存（未压缩 RGBA） | 933 KB | **9 KB** | **-99%** |
+
+> 原始 256px 厚涂稿已归档到 `client/art-source/256px/`（**归档≠删除**，随时可回滚）。
+> 重跑转换：`python client/tools/pixelize_sprites.py`；对比图输出到 `client/docs/pixel-preview.png`。
+
+⚠️ **必须说清的局限**：这是**自动降采样的占位**，不是手工像素画。24px 已低于原设计的
+细节下限，飞虫/甲虫在放大 8 倍看时面部仍是糊的。**屏幕上按 ×2 显示时能读成"Q 萌小怪"，
+够验证玩法与手感；正式美术仍需人工按美术指引 §7/§8 重画（30–60 分钟/只）或外包。**
+
 ---
 
 ## 五、调参入口（只改 `config/BattleConfig.ts`）
@@ -177,8 +211,11 @@ Day 2 只需接饱食度系统去改这个值 + 触发金环特效，战斗公�
 3. **资源映射是暂定值**：结算面板「食物 = 经验珠数、材料 = floor(击杀/2)」是临时约定，
    等 Day 3 家园资源池接线后回写。
 
-4. **占位美术**：`resources/art/` 的 4 张精灵是 AI 占位图（`assets/placeholder/sprite-*-v2.png`）
-   经 `tools/preprocess_sprites.py` 抠透明 + 配色生成的，**仅内部试玩**，发布前替换（美术指引已声明）。
+4. **占位美术是"轻量化占位"，不是成品**：`resources/art/` 的 4 张精灵由 AI 占位图
+   （`assets/placeholder/sprite-*-v2.png`）经 `preprocess_sprites.py` 抠透明 →
+   `pixelize_sprites.py` 降成真像素（24/24/24/28px、≤14 色）。**仅内部试玩**，发布前
+   必须人工重画或外包替换（美术指引 §11 已声明）。自动降采样能压体积、能统一风格，
+   但**压不出好的像素画**——24px 下飞虫/甲虫的面部细节已损失，别拿它当验收美术。
 
 5. **坐标系说明**：所有玩法节点在 `z = 0~100`，相机的 `z = camZ(1000)`、`near/far = 1/3000`，
    即「相机架高处朝 -z 看」。这是为了避开 3.x 里 `Canvas` 适配体系的耦合——本 demo **不用

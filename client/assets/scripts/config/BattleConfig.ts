@@ -31,10 +31,9 @@ export const PLAYER = {
     invincibleAfterHit: 0.8,   // △ 受击无敌帧，防止 6 点 HP 被瞬间融化
 } as const;
 
-/** 宠物自动施法（CR-009 三段链路）★ 前摇 0.25 + 施法 0.1 + 后摇 0.3
- *  ⚠️ 已知矛盾：§2.7 同时声称"总攻速 2.2 次/秒（≈0.65s/轮）"，
- *  但 0.65s/轮实际只有 1.54 次/秒。此处按 CR-009 的三段时长实现；
- *  若要精确 2.2 次/秒，把 recovery 改为 0.1（总 0.45s/轮）。待拍板后回写计划书。 */
+/** 宠物自动施法（CR-009 三段链路）★ 前摇 0.25 + 施法 0.1 + 后摇 0.3 = 0.65s/轮
+ *  ✅ 口径已定案（CR-011，2026-10-18）：采 CR-009 三段时长，§2.7 改为 **1.54 次/秒**，
+ *  原「2.2 次/秒」作废。若要回到 2.2 次/秒需把 recovery 压到 0.1（会失去火力空窗期可读性）。 */
 export const PET = {
     count: 1,            // Day 1 排期 = 1 只；Day 2 改 3（系统已支持 N 只，不用改代码）
     orbitDist: 48,       // 环绕半径（Day1 验收：稳定在 45-50px）
@@ -46,7 +45,7 @@ export const PET = {
     telegraph: 0.25,     // ★ 前摇
     cast: 0.1,           // ★ 施法
     recovery: 0.3,       // ★ 后摇
-    displaySize: 48,     // 显示宽度 △
+    displaySize: 48,     // 显示宽度 = 贴图 24px × 2（★ 像素风必须整数倍）
     powerMultiplier: 1,  // Day 2「半饿最强」挂钩点（半饿 1.5 / 满饱 1.0 / 全饿 0.6）
 } as const;
 
@@ -68,10 +67,13 @@ export interface EnemyDef {
     weight: number;         // 生成权重
 }
 
-/** 首版 3 种敌人（美术指引 §5.6：步行虫/飞虫/甲虫，换色复用） */
+/** 首版 3 种敌人（美术指引 §5.6：步行虫/飞虫/甲虫，换色复用）
+ *  ⚠️ 像素风铁律（美术指引 §1）：displaySize 必须是工作分辨率的整数倍，否则
+ *  非整数缩放 + 线性采样会糊掉颗粒感。当前占位贴图 24/24/24/28px，全部 ×2 → 48/48/48/56。
+ *  换正式美术时同步遵守「workRes × 整数 = displaySize」。 */
 export const ENEMIES: { [k in EnemyType]: EnemyDef } = {
-    walker: { hp: 20, speed: 70, radius: 15, displaySize: 46, aggroRange: 300, attackRange: 60, castRange: 0, windup: 0.3, attackCd: 1.0, damage: 1, projectileSpeed: 0, color: 0x6B8E23, weight: 0.6 },
-    flyer: { hp: 12, speed: 120, radius: 12, displaySize: 40, aggroRange: 320, attackRange: 0, castRange: 140, windup: 0.8, attackCd: 2.2, damage: 1, projectileSpeed: 260, color: 0xC0392B, weight: 0.25 },
+    walker: { hp: 20, speed: 70, radius: 15, displaySize: 48, aggroRange: 300, attackRange: 60, castRange: 0, windup: 0.3, attackCd: 1.0, damage: 1, projectileSpeed: 0, color: 0x6B8E23, weight: 0.6 },
+    flyer: { hp: 12, speed: 120, radius: 12, displaySize: 48, aggroRange: 320, attackRange: 0, castRange: 140, windup: 0.8, attackCd: 2.2, damage: 1, projectileSpeed: 260, color: 0xC0392B, weight: 0.25 },
     tank: { hp: 60, speed: 38, radius: 21, displaySize: 56, aggroRange: 260, attackRange: 60, castRange: 0, windup: 0.45, attackCd: 1.4, damage: 1, projectileSpeed: 0, color: 0x34495E, weight: 0.15 },
 };
 

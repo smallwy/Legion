@@ -1,0 +1,1524 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>吧唧军团 · 宠物排班（回合制原型 v0.4）</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:#2A2136;
+    font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;user-select:none}
+  #wrap{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:10px}
+  #cv{display:block;max-width:100%;max-height:100%;border-radius:16px;
+      box-shadow:0 24px 70px rgba(0,0,0,.5);touch-action:none}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="cv" width="960" height="600"></canvas></div>
+<script>
+'use strict';
+
+/* ==========================================================================
+   吧唧军团 · 宠物排班 v0.4
+   --------------------------------------------------------------------------
+   这是 CR-019：把「实时割草」整个换掉，改成**回合制指令 + 领地守卫 + 觅食调度**。
+   三层用的是同一套语言 —— 玩家只在做一件事：**排指令**。
+
+     觅食      = 排「派谁去、去哪、承担什么风险」
+     外敌入侵  = 排「谁守哪个门」
+     战斗内    = 排「冲/守/叼/护/叫/装死」
+
+   参考系是 Into the Breach 的「无限时间规划 + 一次性执行」，
+   但把它的**确定性**换成萌宠独有的一样东西：**宠物不服从**。
+
+   抗命不是惩罚，是"宠物自己的主意"—— 每只猫狗抗命时做的事，
+   都是另一件有用的事，只是不是你要的那件。这是整个游戏的情绪来源。
+   ========================================================================== */
+
+/* ============ 1. 常量 ============ */
+
+const W = 960, H = 600;
+
+/** 房间范围（墙内可行走区） */
+const ROOM = { x: 70, y: 78, w: 820, h: 434 };
+
+/** 窝：要守住的东西。粮食 = 血量 */
+const NEST = { x: 480, y: 300, r: 46 };
+
+/** 三个入口。怪从这里进来 —— 领地守卫的「领地」就是这三个口 */
+const GATES = [
+  { id: 'front',  name: '前门', x: 480, y: 512, ax: 0,  ay: -1 },
+  { id: 'window', name: '后窗', x: 70,  y: 176, ax: 1,  ay: 0  },
+  { id: 'hole',   name: '狗洞', x: 890, y: 408, ax: -1, ay: 0  },
+];
+
+const COL = {
+  floor: '#F7E8C8', floorLine: '#EBD6AD',
+  wall: '#C9A972', wallDark: '#A88752', wallTop: '#E0C693',
+  outline: '#3B2A46',
+  cream: '#FFF8E7', gold: '#FFC53D', goldDeep: '#E8A317',
+  danger: '#FF5C5C', dangerDeep: '#C93B3B',
+  safe: '#5FCB71', teal: '#46C2B4', sky: '#79C8EE',
+  purple: '#B47CE0', pink: '#FF9EC4',
+  ink: '#3B2A46', inkSoft: '#6B5A7A',
+  panel: '#3E3450', panelHi: '#4E4266',
+};
+
+/** 每回合固定 1.5s 执行 —— 短到不烦，长到看得清因果 */
+const SIM_DUR = 1.5;
+const MAX_ROUND = 15;
+const START_FOOD = 12;
+
+/**
+ * 宠物三只。**服从率是这套玩法的心脏**：
+ * 你排的每一条指令都可能在执行时被替换成"它自己想干的事"。
+ * 所以「喂饱它们」第一次有了战术意义 —— 饱食 +10% 服从。
+ */
+const PET_DEFS = [
+  { id: 'cat', name: '橘子', species: '猫', tint: '#FFB454',
+    hp: 4, spd: 205, size: 54, obey: 0.70,
+    trait: '守 +50% · 抗命时自己找怪跳' },
+  { id: 'dog', name: '豆豆', species: '狗', tint: '#8FD3FF',
+    hp: 5, spd: 240, size: 58, obey: 0.95,
+    trait: '冲 +50% 距离 · 抗命时冲过头撞第二只' },
+  { id: 'ham', name: '团子', species: '仓鼠', tint: '#FFA8D5',
+    hp: 3, spd: 185, size: 44, obey: 0.80,
+    trait: '叼 ×2 · 抗命时躲回窝顺便搬粮' },
+];
+
+/**
+ * 六条指令 + 一条元指令。
+ * `need` 决定下指令后要不要再点一个目标。
+ */
+const ORDERS = [
+  { id: 'rush',  key: '1', name: '冲', need: 'enemy',
+    desc: '冲向目标撞击，撞飞并造成伤害。狗的距离 ×1.5' },
+  { id: 'guard', key: '2', name: '守', need: 'point',
+    desc: '跑到点位蹲防，靠近的敌人被反击。猫守 +50%' },
+  { id: 'fetch', key: '3', name: '叼', need: 'enemy',
+    desc: '冲向目标叼起，把它拖回窝边。仓鼠效率 ×2' },
+  { id: 'cover', key: '4', name: '护窝', need: 'none',
+    desc: '跑回窝边趴着，本回合把靠近的怪一头撞开' },
+  { id: 'bark',  key: '5', name: '叫', need: 'none',
+    desc: '原地大叫，把周围敌人全拉向自己' },
+  { id: 'play',  key: '6', name: '装死', need: 'none',
+    desc: '趴下一动不动，本回合完全免疫' },
+];
+
+const ENEMY_DEFS = {
+  walker: { sprite: 'enemy-walker', hp: 2, spd: 80, r: 15, size: 40, steal: 1, bite: 1 },
+  flyer:  { sprite: 'enemy-flyer',  hp: 1, spd: 120, r: 13, size: 38, steal: 1, bite: 1 },
+  tank:   { sprite: 'enemy-tank',   hp: 5, spd: 56, r: 18, size: 46, steal: 2, bite: 2 },
+};
+
+/** 觅食地点：风险越高的选项，回报越大 —— 这就是「觅食也是指令」的含义 */
+const FORAGE_SPOTS = [
+  { id: 'kitchen', name: '厨房', gain: 2, risk: 0, riskTxt: '稳', desc: '自己家的柜子，翻不出什么但不会出事' },
+  { id: 'yard',    name: '后院', gain: 3, risk: 1, riskTxt: '小', desc: '可能撞见野猫，会挨一爪子' },
+  { id: 'neighbor',name: '邻居家', gain: 5, risk: 2, riskTxt: '大', desc: '翻墙进去偷，被抓住就是一顿打' },
+];
+
+/* ============ 2. 贴图 ============ */
+
+const SPRITE_SRC = {
+  'pet': 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABhUlEQVR42mNgGAWjYIABIz5JKTG5/8j8Z68eMRJjKCn6GPEZ8mj7FhQxOU8fgo4gVR8TsYYwMDAwPNq+BcN3lOpjGug0wEKOJnyhQHMHYAtiSgDToM2GUmJy/891dKGIiehrEWXom4vXUPhGFWWk5QJiDSZXDcEQwOZ7BgYGBvHEcAZlWWUGBgYGhlsbN2DIMxvpwuWPNbURFQosuPIyNp/ADMflUyv/ALyJV87T5z+6IwZfIsQV/NQA2KKBEVfwC8lIwcXfPXmGatKlO9ht0FNB4aKbIaKvhVEvYA2BB0uWYJgNdwQuy9EcgWw5DCjExDAQlQaObNuDwb926RqG5X27tmCyL91huHbpGlYzSCqKcWkgBRBjBs5yYElUAlYNWgxseA28xvALq3jMsgVYywGsUfDs1SPGmGULSLKAHMuJapLhCgliAT7LCRZE+EKCGpYT3R74wwZRxvLrDwMp6qneIIEZnLBgDlb5BQkp9GmSYWtqk9tMYxrUHRNSOxrkdmQGFAAAtGvMozZ4G9gAAAAASUVORK5CYII=',
+  'enemy-walker': 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAcCAYAAAAAwr0iAAABpklEQVR42uVXsU7DMBQ8RwaxFDF16BC1E1LVoQKGfgJTBVJ3fgG2Dt3akYGBkU/ogJj4ApQBEENVCQkpKEIZvBClS9UlDMWQOnZiJ6EduK11/O7evTz7BfiPqFXtqFa1IwCgmyCvd8LlD8eOrI2Rf8PKG6iomHdnFz7zCM1DNhq3MOgh8b/PPKKTPScHAJJFPhq3tLMa9CY/gUXhMnKlAL7ZhDwuQtx7c/mQsF4pwDRrU3Fimax1kXNXxNLkOgeeHl9xeLSf+QzH9cUbPt3h0gVMVp4jsuzjm8vA8OQMB8dXeL4/x+2Hs1IKKlPuTmdGBI1mxcg9pQOn/S0A+FMB7nSGl7sduQPudIZGs2IUUJeUI04uLQEXUSZpGojYhu3uvJC9aRCz12pD0/dBRay6K6QnoehCEdKsS4qk3Vx71W1j4oAtpGe+ClbatcmD5cm63gm15gaaNTTI0O7OEbBFYt1nHoHzm0C9EwKOHaU5QXWGBnE9YOohRBShXQLZvKYzUsnWfOYR7k5WKahMue4LlAYeL6sLqGxTUXKd9lN2QVnka/mqKQNfSkAEv8mTRVUAAAAASUVORK5CYII=',
+  'enemy-flyer': 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAeCAYAAABNChwpAAAB1ElEQVR42tVWv0vDQBT+EkKLQysOiZBAF7EkW5FCN7HQQnB0LP0j3Nwc3Nw6+gdIR2fBgsVNkdKtpeBSsGCqg+1UKY2LF/LjWu+1odq3JJe8e99337137wAB07WMe7y95epaxo3TFwBkECw3GWJRYF3LuLnJkBJSjMDA6UvtpLqQhB+8nVQxcPqSSGyJwjYMElaHCg4ACojWTqpoVYrcfwf1e2o4cQV0LeOmZ1Nv3KyWA/+Pru+895GsrLYFvD1Oz6boDF9hqUaEhB+c+YxkhZtLC7eAAb92byOTrWwpAD7PmA8vhmHabpiI4gfnTYrTWHzDtF1GQl4XeJgIU3tuFXQeboLjXgNWtsRNwma1HMyDXgMrl6F1eBL51qyW0X18BgDvyexqfwcAYBbyJDVI50AYdJ7PLkfBeYsSJvB2cQmKr3V+Jt4LBk5fMkx7bUlomDYCVeAnwSNCWf2iOSy+/xwQOglblaLQ/vvNLOQjvYF3EkoiPaC+l1pK6srL+NeeIOOPTYjAk/MReMblSyrDZUjEosDA6Uu1cYIsbW2cELoTbEYOUFUQXf3mKOB1w/fPWHzIl1Ledfw09RWRfZnruUQFZ0Gp3/9tDigiFYCf5iQiKdX/G43V/rVflKS8AAAAAElFTkSuQmCC',
+  'enemy-tank': 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABmElEQVR42tWWzUrDQBSFT4ZBpARxlUWoBUHwZyPotrv6EF13VRCE0odw5RtIF658CR9BISsRXGlwkVWxIRQJxIUNzkyb68wkaWNWIfPznXvn3JsB/vPje53M9zpZmT1YGXi3P0S3P0QZEWzTWeQ2kVPfP6I3x2Q/xxTeG4zJOQ+TGyMRrEo4APQGYyNPsCrhNiKMPHB3fYVZMAIAXN7vk+NHkxqqYBaMcHJxaz3eyDJ06vCASTUw27ov0zO0MpAvFiN/Dh6lOeHLEwCgfXgmfT8+PZcyQTUoRzflKpwSoIqgjoRVcd5legNbB5wS0ZwyVKNfdeYmHqA8IfphqRXrgG2efF/VnGwdcIqxcQ9IAqL319qBKoMXTfD2DgoXqmM6c4qCc9Q+wL22djRfyScAYKu1o70mjUKpIzbLAwAwj6e1webxFGnLlbohE9OfttzaRKRR+PsuiOAqHAB4EiNN4p93A0/8BTa6lOZG8YHMRkieRS7upQS69C9Q4WqF5Iu33V2tNIsZFUWIDE5Bqej44ohWZo24iqmcb/vc1rslJwrMAAAAAElFTkSuQmCC'
+};
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+
+const IMG = {};      // 原图
+const SKIN = {};     // 染色 + 描边后的成品（每只宠物一份）
+let assetsReady = false, assetsLeft = 0;
+
+/**
+ * 离线合成一张「染色 + 描边」的贴图。
+ *
+ * 为什么不在运行时用 shadowBlur：会糊边，而且低端机上极贵。
+ * 这里每张图只做一次，运行时依旧是一次 drawImage。
+ */
+function bake(img, tint, outline, r) {
+  const pad = r + 1;
+  const c = document.createElement('canvas');
+  c.width = img.width + pad * 2;
+  c.height = img.height + pad * 2;
+  const g = c.getContext('2d');
+
+  // 染色版：先画原图，再用 source-atop 灌色（只覆盖已有像素）
+  const dyed = document.createElement('canvas');
+  dyed.width = img.width; dyed.height = img.height;
+  const dg = dyed.getContext('2d');
+  dg.drawImage(img, 0, 0);
+  if (tint) {
+    dg.globalCompositeOperation = 'source-atop';
+    dg.globalAlpha = 0.55;
+    dg.fillStyle = tint;
+    dg.fillRect(0, 0, dyed.width, dyed.height);
+    dg.globalAlpha = 1;
+  }
+
+  // 剪影：保留 alpha、丢掉颜色
+  const sil = document.createElement('canvas');
+  sil.width = img.width; sil.height = img.height;
+  const sg = sil.getContext('2d');
+  sg.drawImage(dyed, 0, 0);
+  sg.globalCompositeOperation = 'source-in';
+  sg.fillStyle = outline;
+  sg.fillRect(0, 0, sil.width, sil.height);
+
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    g.drawImage(sil, pad + Math.cos(a) * r, pad + Math.sin(a) * r);
+  }
+  g.drawImage(dyed, pad, pad);
+
+  c.pad = pad;
+  return c;
+}
+
+for (const k in SPRITE_SRC) {
+  assetsLeft++;
+  const im = new Image();
+  im.onload = im.onerror = () => {
+    if (im.width > 0) {
+      try { IMG[k] = im; } catch (e) { /* 贴图失败不阻塞游戏 */ }
+    }
+    if (--assetsLeft === 0) {
+      // 图解码完才能合成，否则 drawImage 取到空画布
+      for (const kk in IMG) {
+        SKIN['img:' + kk] = bake(IMG[kk], null, COL.outline, 2);
+      }
+      for (const p of PET_DEFS) {
+        SKIN[p.id] = bake(IMG['pet'], p.tint, COL.outline, 2);
+      }
+      assetsReady = true;
+    }
+  };
+  im.src = SPRITE_SRC[k];
+}
+
+/* ============ 3. 状态 ============ */
+
+const S = {
+  phase: 'plan',        // plan | act | resolve | forage | over
+  round: 1,
+  food: START_FOOD,
+  pets: [],
+  enemies: [],
+  fx: [],
+  orders: [],           // 每只宠物本回合排的指令
+  selected: 0,
+  pending: null,        // 正在等玩家点目标的指令
+  simT: 0,
+  result: '',
+  log: [],
+  hoverGate: null,
+  hoverEnemy: null,
+  // 觅食阶段临时状态
+  forage: { spot: null, picked: -1 },
+  nextEnemyId: 1,
+  rng: Math.random,
+  mutinyList: [],
+  banner: null,
+};
+
+function reset() {
+  S.phase = 'plan';
+  S.round = 1;
+  S.food = START_FOOD;
+  S.enemies.length = 0;
+  S.fx.length = 0;
+  S.result = '';
+  S.log.length = 0;
+  S.selected = 0;
+  S.pending = null;
+  S.forage = { spot: null, picked: -1 };
+  S.nextEnemyId = 1;
+  S.mutinyList = [];
+  S.banner = null;
+
+  const spots = [[408, 368], [480, 392], [556, 368]];
+  S.pets = PET_DEFS.map((d, i) => ({
+    def: d,
+    idx: i,
+    x: spots[i][0], y: spots[i][1],
+    hp: d.hp, maxHp: d.hp,
+    obeyBonus: 0,        // 喂食 +0.1，饿肚子 -0.3
+    fedT: 0,
+    forageT: 0,          // >0 表示出去觅食中，不可用
+    carrying: 0,
+    // 执行期
+    ax: spots[i][0], ay: spots[i][1],
+    actKind: '',
+    actDone: false,
+    guardT: 0,
+    invuln: false,
+    obeyer: false,       // 这一回合有没有听话 —— 用于结算播报
+    mutiny: '',
+    hitT: 0,
+    down: false,
+  }));
+  S.orders = S.pets.map(() => null);
+  spawnWave(1);
+}
+
+/** 每回合的怪从入口来。波次是**预告**的：玩家在 plan 阶段就能看到这回合会来几只 */
+function spawnWave(round) {
+  const n = Math.min(5, 2 + Math.floor(round / 5));
+  for (let i = 0; i < n; i++) {
+    const gate = GATES[(round + i) % GATES.length];
+    const roll = S.rng();
+    const type = roll < 0.25 ? 'flyer' : (roll < 0.85 ? 'walker' : 'tank');
+    const d = ENEMY_DEFS[type];
+    const off = (S.rng() - 0.5) * 70;
+    const ex = gate.x - gate.ax * (26 + i * 10) + (gate.ax === 0 ? off : 0);
+    const ey = gate.y - gate.ay * (26 + i * 10) + (gate.ay === 0 ? off : 0);
+    S.enemies.push({
+      id: S.nextEnemyId++,
+      type, def: d,
+      x: ex, y: ey, ax: ex, ay: ey,
+      hp: d.hp, maxHp: d.hp,
+      intent: null,
+      stolen: 0,
+      hitT: 0,
+      dead: false,
+      stuckT: 0,
+    });
+  }
+  // 意图在 plan 阶段就定死，玩家才能"预判"
+  for (const e of S.enemies) e.intent = decideIntent(e);
+}
+
+/** 敌人的意图：冲着粮食去，或者咬离它最近的宠物 */
+function decideIntent(e) {
+  let best = null, bd = 1e9;
+  for (const p of S.pets) {
+    if (p.down || p.forageT > 0) continue;
+    const d = Math.hypot(p.x - e.x, p.y - e.y);
+    if (d < bd) { bd = d; best = p; }
+  }
+  // 八成往窝里去（抢粮才是主线），两成顺手咬旁边的宠物
+  if (best && bd < 190 && S.rng() < 0.35) {
+    return { kind: 'bite', target: best, tx: best.x, ty: best.y };
+  }
+  return { kind: 'steal', target: null, tx: NEST.x, ty: NEST.y };
+}
+
+/* ============ 4. 指令 ============ */
+
+function orderOf(petId) {
+  return ORDERS.find(o => o.id === petId) || null;
+}
+
+function setOrder(petIdx, kind, tx, ty, target) {
+  S.orders[petIdx] = { kind, tx, ty, target: target || null };
+}
+
+function clearOrder(petIdx) {
+  S.orders[petIdx] = null;
+}
+
+function hasAnyOrder() {
+  return S.orders.some(o => o);
+}
+
+/**
+ * 执行阶段开始：先把"排好的指令"翻译成"这回合实际要做的动作"。
+ *
+ * 关键点：**服从判定在这里做，一回合一次**。
+ * 判定失败就换成该宠物的"抗命动作" —— 不是摆烂，是它自己拿了个主意。
+ */
+function resolveOrders() {
+  S.mutinyList = [];
+  for (const p of S.pets) {
+    p.obeyer = true;
+    p.mutiny = '';
+    p.actDone = false;
+    p.guardT = 0;
+    p.invuln = false;
+    p.carrying = 0;
+    p.covering = false;
+    p.guardCd = 0;
+    p.actKind = '';
+    p.ax = p.x; p.ay = p.y;
+
+    if (p.down || p.forageT > 0) continue;
+
+    const o = S.orders[p.idx];
+    if (!o) { p.actKind = 'idle'; continue; }
+
+    const obeyChance = clamp01(p.def.obey + p.obeyBonus);
+    const obeyed = S.rng() < obeyChance;
+    p.obeyer = obeyed;
+
+    if (obeyed) {
+      p.actKind = o.kind;
+      p.actTarget = o.target;
+      p.actX = o.tx; p.actY = o.ty;
+    } else {
+      // 抗命是这个游戏的情绪来源。它必须**看得见** ——
+      // 悄悄换掉动作、玩家没注意到，整套设计的趣味就全丢了
+      p.actKind = mutinyAction(p, o);
+      p.mutinyNote = p.mutiny;
+      S.mutinyList.push(p.def.name + ' ' + p.mutiny);
+      addFx('text', p.x, p.y - 44, '不听话!', COL.danger);
+    }
+  }
+
+  // 敌人意图落地
+  for (const e of S.enemies) {
+    if (e.dead) continue;
+    e.ax = e.x; e.ay = e.y;
+    if (!e.intent || e.intent.target) {
+      e.intent = decideIntent(e);
+      // 咬的目标死了/跑了就改去抢粮
+      if (e.intent.target && (e.intent.target.down || e.intent.target.forageT > 0)) {
+        e.intent = { kind: 'steal', target: null, tx: NEST.x, ty: NEST.y };
+      }
+    }
+    e.intent.tx = e.intent.kind === 'steal' ? NEST.x : e.intent.target.x;
+    e.intent.ty = e.intent.kind === 'steal' ? NEST.y : e.intent.target.y;
+  }
+}
+
+/**
+ * 抗命动作 —— 设计原则：**每一条抗命都是另一件有用的事**。
+ * 玩家会骂一句"这猫又不听话"，然后发现它顺手把旁边的怪踩死了。
+ * 如果抗命只是"什么都不做"，那它就是个纯惩罚，玩两次就烦了。
+ */
+function mutinyAction(p, o) {
+  if (p.def.id === 'cat') {
+    // 猫：无视指令，跳到离它最近的怪脸上
+    const e = nearestEnemy(p.x, p.y, 260);
+    if (e) { p.mutiny = '跳到了怪身上'; p.actTarget = e; p.actX = e.x; p.actY = e.y; return 'rush'; }
+    p.mutiny = '找了个纸箱躲起来';
+    return 'play';
+  }
+  if (p.def.id === 'dog') {
+    // 狗：冲的方向对，但冲过头 —— 位移 ×1.8，撞到谁算谁
+    p.mutiny = '冲过头了';
+    p.actTarget = null;
+    const len = Math.hypot(o.tx - p.x, o.ty - p.y) || 1;
+    p.actX = p.x + (o.tx - p.x) / len * 320;
+    p.actY = p.y + (o.ty - p.y) / len * 320;
+    return 'overshoot';
+  }
+  // 仓鼠：吓得钻回窝，顺手把散落的粮食搬回去
+  p.mutiny = '吓得钻回窝，顺路捡了粮';
+  p.foodBonus = 1;
+  p.actX = NEST.x; p.actY = NEST.y + 30;
+  return 'hide';
+}
+
+function coveringPet() {
+  return S.pets.some(p => p.covering && !p.down);
+}
+
+function nearestEnemy(x, y, maxD) {
+  let best = null, bd = maxD === undefined ? 1e9 : maxD;
+  for (const e of S.enemies) {
+    if (e.dead) continue;
+    const d = Math.hypot(e.x - x, e.y - y);
+    if (d < bd) { bd = d; best = e; }
+  }
+  return best;
+}
+
+function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+
+/* ============ 5. 执行模拟 ============ */
+
+/**
+ * 1.5 秒的执行期。**固定步长**推进，和渲染帧率解耦 ——
+ * 变步长会让"狗冲过头"的距离随帧率变化，这是不可接受的。
+ */
+const SIM_STEP = 1 / 120;
+
+function stepAct(dt) {
+  let left = dt;
+  while (left > 0 && S.phase === 'act') {
+    const s = Math.min(SIM_STEP, left);
+    left -= s;
+    simTick(s);
+    S.simT += s;
+    if (S.simT >= SIM_DUR) { S.phase = 'resolve'; S.simT = 0; }
+  }
+}
+
+function moveToward(o, tx, ty, spd, dt) {
+  const dx = tx - o.x, dy = ty - o.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 1.5) { o.x = tx; o.y = ty; return true; }
+  const step = Math.min(d, spd * dt);
+  o.x += dx / d * step;
+  o.y += dy / d * step;
+  return false;
+}
+
+function simTick(dt) {
+  // ---- 宠物 ----
+  for (const p of S.pets) {
+    if (p.down || p.forageT > 0 || p.actDone) continue;
+    switch (p.actKind) {
+      case 'rush': {
+        const t = p.actTarget;
+        const tx = t && !t.dead ? t.x : p.actX;
+        const ty = t && !t.dead ? t.y : p.actY;
+        // 狗「冲」的距离 ×1.5：腿长，刹不住
+        const boost = p.def.id === 'dog' ? 1.5 : 1;
+        if (moveToward(p, tx, ty, p.def.spd * 1.9 * boost, dt)) {
+          if (t && !t.dead) hitEnemy(t, 2 + (p.def.id === 'dog' ? 1 : 0), p);
+          p.actDone = true;
+          addFx('ring', p.x, p.y, COL.gold, 0.3);
+        }
+        break;
+      }
+      case 'overshoot': {
+        if (moveToward(p, p.actX, p.actY, p.def.spd * 2.2, dt)) {
+          const t = nearestEnemy(p.x, p.y, 48);
+          if (t) hitEnemy(t, 3, p);
+          p.actDone = true;
+        }
+        break;
+      }
+      case 'guard': {
+        if (moveToward(p, p.actX, p.actY, p.def.spd * 1.2, dt)) {
+          p.guardT = 1;
+        }
+        // 蹲防 = 主动拦截。之前只在"被咬"时反击，而怪八成是冲窝去的、
+        // 根本不咬它 —— 结果这条指令约等于站着不动，白占一个键位。
+        if (p.guardT > 0) {
+          p.guardCd = Math.max(0, (p.guardCd || 0) - dt);
+          if (!p.guardCd) {
+            const t = nearestEnemy(p.x, p.y, 54);
+            if (t) {
+              hitEnemy(t, p.def.id === 'cat' ? 2 : 1, p);
+              p.guardCd = 0.55;
+              addFx('ring', p.x, p.y, COL.safe, 0.2);
+            }
+          }
+        }
+        break;
+      }
+      case 'fetch': {
+        const t = p.actTarget;
+        if (!t || t.dead) { p.actDone = true; break; }
+        if (!p.carrying) {
+          if (moveToward(p, t.x, t.y, p.def.spd * 1.8, dt)) {
+            t.grabbed = p;
+            p.carrying = t;
+            addFx('text', t.x, t.y - 20, '叼住!', COL.teal);
+          }
+        } else {
+          // 拖回窝边 —— 拖拽速度是移动速度的一半，重
+          const spd = p.def.spd * 0.5 * (p.def.id === 'ham' ? 2 : 1);
+          if (moveToward(p, NEST.x, NEST.y + 54, spd, dt)) {
+            hitEnemy(t, 2, p);
+            p.actDone = true;
+            p.carrying = 0;
+          } else {
+            t.x = p.x; t.y = p.y;
+            t.grabbed = p;
+          }
+        }
+        break;
+      }
+      case 'cover': {
+        if (moveToward(p, NEST.x + 26 * (p.idx - 1), NEST.y + 8, p.def.spd * 1.6, dt)) {
+          p.actDone = true;
+          p.covering = true;   // 本回合趴窝边，抢粮的怪会被撞开
+          addFx('ring', p.x, p.y, COL.teal, 0.4);
+        }
+        break;
+      }
+      case 'bark': {
+        // 原地一嗓子，把半径 190 内的怪全拉过来
+        if (!p.actDone) {
+          p.actDone = true;
+          addFx('ring', p.x, p.y, COL.purple, 0.5);
+          for (const e of S.enemies) {
+            if (e.dead) continue;
+            if (Math.hypot(e.x - p.x, e.y - p.y) < 190) {
+              e.taunt = p;
+              e.tauntT = 2;
+              e.intent = { kind: 'bite', target: p, tx: p.x, ty: p.y };
+            }
+          }
+          addFx('text', p.x, p.y - 34, '汪!', COL.purple);
+        }
+        break;
+      }
+      case 'play': {
+        p.invuln = true;
+        p.actDone = true;
+        break;
+      }
+      case 'hide': {
+        if (moveToward(p, p.actX, p.actY, p.def.spd * 1.7, dt)) {
+          p.invuln = true;
+          p.actDone = true;
+          if (p.foodBonus) { S.food += p.foodBonus; p.foodBonus = 0; }
+        }
+        break;
+      }
+      default:
+        p.actDone = true;
+    }
+  }
+
+  // ---- 敌人 ----
+  for (const e of S.enemies) {
+    if (e.dead) continue;
+    e.hitT = Math.max(0, e.hitT - dt);
+    // 攻击冷却。没有它，怪一旦贴到身上就每帧咬一次 ——
+    // 1.5s 执行期 = 180 帧，等于一刀 180 倍伤害，玩家会觉得"莫名其妙就死了"
+    e.atkCd = Math.max(0, (e.atkCd || 0) - dt);
+    e.blocked = Math.max(0, (e.blocked || 0) - dt);
+
+    // 被叼着的怪跟着宠物走（位置在上面同步过），不自己动
+    if (e.grabbed && !e.grabbed.down) continue;
+
+    const it = e.intent;
+    if (!it) continue;
+
+    if (it.kind === 'steal') {
+      // 撤离中：抢到粮之后愣 0.5s 再消失（给玩家一个"它得手了"的反馈窗口）
+      if (e.leaving > 0) {
+        e.leaving -= dt;
+        if (e.leaving <= 0) e.dead = true;
+        continue;
+      }
+
+      // 抢粮判定用**接触**，不是"到达圆心"。
+      // 之前用 moveToward(NEST) 判 d<1.5，结果怪互相推挤，永远差那 1.5px，
+      // 80 只怪堆在窝边一只都抢不到 —— 场面看着要崩，粮食却一动不动。
+      const touch = Math.hypot(e.x - NEST.x, e.y - NEST.y) < NEST.r + e.def.r;
+      if (touch) {
+        // 护窝：窝边趴着宠物，这一口被撞开
+        if (coveringPet()) {
+          const cp = S.pets.find(p => p.covering && !p.down &&
+            Math.hypot(p.x - NEST.x, p.y - NEST.y) < NEST.r + 62);
+          if (cp && !e.blocked) {
+            const a = Math.atan2(e.y - NEST.y, e.x - NEST.x) || 0;
+            e.x += Math.cos(a) * 34;
+            e.y += Math.sin(a) * 34;
+            e.blocked = 0.6;         // 这次白跑，但下回合还能再来
+            addFx('text', e.x, e.y - 26, '撞开!', COL.teal);
+            addFx('ring', cp.x, cp.y, COL.teal, 0.3);
+          }
+          continue;
+        }
+        if (!e.stolen) {
+          S.food = Math.max(0, S.food - e.def.steal);
+          e.stolen = e.def.steal;
+          e.leaving = 0.5;
+          addFx('text', NEST.x, NEST.y - 50, '-' + e.def.steal, COL.danger);
+          addFx('ring', NEST.x, NEST.y, COL.danger, 0.35);
+        }
+        continue;
+      }
+      moveToward(e, NEST.x, NEST.y, e.def.spd, dt);
+    } else if (it.kind === 'bite') {
+      const t = it.target;
+      if (!t || t.down || t.forageT > 0) {
+        it.kind = 'steal'; it.target = null;
+        continue;
+      }
+      if (moveToward(e, t.x, t.y, e.def.spd, dt) && !e.atkCd) {
+        if (t.invuln) {
+          addFx('text', t.x, t.y - 30, '免疫', COL.safe);
+          e.atkCd = 0.5;
+        } else if (t.guardT > 0) {
+          // 蹲防的宠物咬不动，反而把怪顶开。实际伤害由宠物那边的主动拦截打，
+          // 两边都算会变成双倍伤害
+          const a = Math.atan2(e.y - t.y, e.x - t.x) || 0;
+          e.x += Math.cos(a) * 26;
+          e.y += Math.sin(a) * 26;
+          addFx('text', t.x, t.y - 30, '挡住!', COL.safe);
+          e.atkCd = 0.5;
+        } else {
+          hurtPet(t, e.def.bite);
+          e.atkCd = 0.5;
+        }
+      }
+    }
+
+    // 物理分离：不让怪叠成一坨（纯视觉，不影响判定）
+    for (const o of S.enemies) {
+      if (o === e || o.dead) continue;
+      const dx = o.x - e.x, dy = o.y - e.y;
+      const d = Math.hypot(dx, dy);
+      const min = e.def.r + o.def.r;
+      if (d > 0.01 && d < min) {
+        const push = (min - d) * 0.5;
+        e.x -= dx / d * push; e.y -= dy / d * push;
+      }
+    }
+  }
+}
+
+function hitEnemy(e, dmg, by) {
+  if (e.dead) return;
+  e.hp -= dmg;
+  e.hitT = 0.25;
+  addFx('ring', e.x, e.y, COL.danger, 0.2);
+  if (e.hp <= 0) {
+    e.dead = true;
+    addFx('text', e.x, e.y - 16, ['啪!', '啵!', '咚!'][(S.rng() * 3) | 0], COL.gold);
+    if (by && by.def && by.def.id === 'ham') by.carrying = 0;
+  }
+}
+
+function hurtPet(p, dmg) {
+  if (p.down || p.invuln) return;
+  p.hp -= dmg;
+  p.hitT = 0.3;
+  p.obeyBonus -= 0.08;       // 挨打会慌，服从率临时下降
+  addFx('text', p.x, p.y - 28, '-' + dmg, COL.danger);
+  if (p.hp <= 0) {
+    p.hp = 0;
+    p.down = true;
+    addFx('text', p.x, p.y - 20, '倒下了…', COL.dangerDeep);
+    S.log.push(p.def.name + ' 倒下了');
+  }
+}
+
+/* ============ 6. 回合推进 ============ */
+
+function endRound() {
+  // 清除死亡敌人
+  S.enemies = S.enemies.filter(e => !e.dead);
+
+  // 场上软上限。回合制里怪不会自己消失，玩家处理不完就会越堆越多，
+  // 最后屏幕上全是怪但谁也动不了（分离力把它们锁死）。超过 12 只让最老的先撤。
+  if (S.enemies.length > 12) {
+    const sorted = S.enemies.slice().sort((a, b) => a.id - b.id);
+    for (let i = 0; i < S.enemies.length - 12; i++) {
+      sorted[i].dead = true;
+      addFx('text', sorted[i].x, sorted[i].y - 18, '走了', COL.inkSoft);
+    }
+    S.enemies = S.enemies.filter(e => !e.dead);
+  }
+
+  // 觅食倒计时
+  for (const p of S.pets) {
+    if (p.forageT > 0) {
+      p.forageT--;
+      if (p.forageT === 0) {
+        const spot = FORAGE_SPOTS.find(s => s.id === p.forageSpot);
+        if (spot) {
+          S.food += spot.gain;
+          if (spot.risk > 0 && S.rng() < 0.5) hurtPet(p, spot.risk);
+          S.log.push(p.def.name + ' 从' + spot.name + '带回了 ' + spot.gain + ' 份粮');
+          addFx('text', NEST.x, NEST.y - 20, '+' + spot.gain, COL.safe);
+        }
+      }
+    }
+    // 饥饿：每回合掉一点服从
+    if (p.obeyBonus > 0.05) p.obeyBonus -= 0.02;
+  }
+
+  // 胜负
+  if (S.food <= 0) { S.phase = 'over'; S.result = 'lose-food'; return; }
+  if (S.pets.every(p => p.down)) { S.phase = 'over'; S.result = 'lose-team'; return; }
+  if (S.round >= MAX_ROUND) { S.phase = 'over'; S.result = 'win'; return; }
+
+  S.round++;
+  S.orders = S.pets.map(() => null);
+  S.pending = null;
+  spawnWave(S.round);
+
+  // 每 3 回合来一次觅食机会
+  if (S.round % 3 === 1 && S.round > 1) {
+    S.phase = 'forage';
+    S.forage = { spot: null, picked: -1 };
+  } else {
+    S.phase = 'plan';
+  }
+}
+
+function startTurn() {
+  resolveOrders();
+  // 把这一轮的抗命汇总成一条横幅
+  S.banner = (S.mutinyList && S.mutinyList.length)
+    ? { text: S.mutinyList.join('　'), t: 1.7 }
+    : null;
+  S.phase = 'act';
+  S.simT = 0;
+}
+
+function finishResolve() {
+  endRound();
+}
+
+/* ============ 7. 特效（极简） ============ */
+
+/**
+ * 特效。两种参数形态，别搞混：
+ *   ring: addFx('ring', x, y, 颜色, 时长)
+ *   text: addFx('text', x, y, **文字**, 颜色)
+ *
+ * 之前几个参数的签名是 (kind,x,y,color,life)，而所有飘字调用传的是
+ * (kind,x,y,'啪!',颜色) —— 文字被当成颜色吞掉，屏幕上什么都没飘出来。
+ * 这种错误不会报错，只会静默不显示，所以在这里按 kind 分流。
+ */
+function addFx(kind, x, y, a, b) {
+  if (kind === 'text') {
+    S.fx.push({ kind, x, y, text: a, color: b, life: 0.95, t: 0, vy: 0 });
+  } else {
+    S.fx.push({ kind, x, y, color: a, life: b || 0.4, t: 0, vy: 0 });
+  }
+  if (S.fx.length > 60) S.fx.splice(0, S.fx.length - 60);
+}
+
+function tickFx(dt) {
+  for (let i = S.fx.length - 1; i >= 0; i--) {
+    const f = S.fx[i];
+    f.t += dt;
+    if (f.kind === 'text') { f.y -= 24 * dt; f.vy += 10 * dt; }
+    if (f.t >= f.life) S.fx.splice(i, 1);
+  }
+}
+
+/* ============ 8. 渲染 ============ */
+
+function roundRect(g, x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}
+
+function drawFloor() {
+  ctx.fillStyle = COL.wallTop;
+  roundRect(ctx, ROOM.x - 26, ROOM.y - 26, ROOM.w + 52, ROOM.h + 52, 26);
+  ctx.fill();
+
+  ctx.fillStyle = COL.floor;
+  roundRect(ctx, ROOM.x, ROOM.y, ROOM.w, ROOM.h, 18);
+  ctx.fill();
+
+  // 地板格：几乎透明的暖色，只为让移动看得出来
+  ctx.strokeStyle = 'rgba(200,170,120,0.28)';
+  ctx.lineWidth = 1;
+  for (let x = ROOM.x + 40; x < ROOM.x + ROOM.w; x += 62) {
+    ctx.beginPath(); ctx.moveTo(x, ROOM.y); ctx.lineTo(x, ROOM.y + ROOM.h); ctx.stroke();
+  }
+  for (let y = ROOM.y + 40; y < ROOM.y + ROOM.h; y += 62) {
+    ctx.beginPath(); ctx.moveTo(ROOM.x, y); ctx.lineTo(ROOM.x + ROOM.w, y); ctx.stroke();
+  }
+}
+
+function drawGates() {
+  for (const g of GATES) {
+    const isH = g.ax === 0;   // 上下开口
+    const w = isH ? 84 : 30, h = isH ? 30 : 84;
+    ctx.fillStyle = COL.wallDark;
+    roundRect(ctx, g.x - w / 2, g.y - h / 2, w, h, 10);
+    ctx.fill();
+    ctx.fillStyle = '#6B5A7A';
+    roundRect(ctx, g.x - w / 2 + 5, g.y - h / 2 + 5, w - 10, h - 10, 7);
+    ctx.fill();
+    ctx.fillStyle = COL.cream;
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(g.name, g.x, g.y);
+  }
+}
+
+function drawNest() {
+  const pulse = S.phase === 'plan' ? 1 : 1;
+  ctx.fillStyle = 'rgba(255,197,61,0.18)';
+  ctx.beginPath(); ctx.arc(NEST.x, NEST.y, NEST.r + 18, 0, Math.PI * 2); ctx.fill();
+
+  ctx.fillStyle = COL.goldDeep;
+  ctx.beginPath(); ctx.arc(NEST.x, NEST.y, NEST.r, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = COL.gold;
+  ctx.beginPath(); ctx.arc(NEST.x, NEST.y, NEST.r - 5, 0, Math.PI * 2); ctx.fill();
+
+  // 粮食：几颗小圆点，数量 = 剩余粮食
+  ctx.fillStyle = '#B07C1E';
+  const n = Math.min(12, S.food);
+  for (let i = 0; i < n; i++) {
+    const a = (i / Math.max(1, n)) * Math.PI * 2 + 0.4;
+    const r = NEST.r * 0.58;
+    ctx.beginPath();
+    ctx.arc(NEST.x + Math.cos(a) * r, NEST.y + Math.sin(a) * r, 4.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.fillStyle = COL.ink;
+  ctx.font = '500 15px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('窝', NEST.x, NEST.y + NEST.r + 22);
+}
+
+function drawSprite(key, x, y, size, alpha, rot, squash) {
+  const im = SKIN[key];
+  if (!im || !im.width) {
+    // 图还没解码：画个占位圆，至少能玩
+    ctx.fillStyle = COL.cream;
+    ctx.beginPath(); ctx.arc(x, y, size * 0.35, 0, Math.PI * 2); ctx.fill();
+    return;
+  }
+  const pad = im.pad || 0;
+  const k = size / (im.width - pad * 2);
+  let w = im.width * k, h = im.height * k;
+  if (squash) { w *= 1 + squash; h *= 1 - squash * 0.85; }
+  if (alpha !== undefined) ctx.globalAlpha = alpha;
+  if (rot) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rot);
+    ctx.drawImage(im, -w / 2, -h / 2, w, h);
+    ctx.restore();
+  } else {
+    ctx.drawImage(im, x - w / 2, y - h / 2, w, h);
+  }
+  if (alpha !== undefined) ctx.globalAlpha = 1;
+}
+
+/** 敌人意图箭头：这是回合制的命根子，玩家靠它做决策 */
+function drawIntent(e) {
+  const it = e.intent;
+  if (!it || e.dead) return;
+  const tx = it.kind === 'steal' ? NEST.x : (it.target ? it.target.x : NEST.x);
+  const ty = it.kind === 'steal' ? NEST.y : (it.target ? it.target.y : NEST.y);
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,92,92,0.55)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 6]);
+  ctx.beginPath();
+  ctx.moveTo(e.x, e.y);
+  ctx.lineTo(tx, ty);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 箭头头部
+  const a = Math.atan2(ty - e.y, tx - e.x);
+  const d = Math.hypot(tx - e.x, ty - e.y) - 26;
+  if (d > 24) {
+    const hx = e.x + Math.cos(a) * d, hy = e.y + Math.sin(a) * d;
+    ctx.fillStyle = 'rgba(255,92,92,0.7)';
+    ctx.beginPath();
+    ctx.moveTo(hx, hy);
+    ctx.lineTo(hx - Math.cos(a - 0.4) * 9, hy - Math.sin(a - 0.4) * 9);
+    ctx.lineTo(hx - Math.cos(a + 0.4) * 9, hy - Math.sin(a + 0.4) * 9);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawPets() {
+  for (const p of S.pets) {
+    if (p.forageT > 0) continue;
+
+    const selected = S.selected === p.idx && S.phase === 'plan';
+    const o = S.orders[p.idx];
+    const targetX = S.phase === 'act' ? p.x : p.x;
+    const targetY = S.phase === 'act' ? p.y : p.y;
+
+    // 指令目标连线
+    if (o && S.phase === 'plan') {
+      const tx = o.target ? o.target.x : o.tx;
+      const ty = o.target ? o.target.y : o.ty;
+      ctx.save();
+      ctx.strokeStyle = p.obeyer === false ? 'rgba(255,92,92,.4)' : 'rgba(70,194,180,.65)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(tx, ty);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // 目标点标记
+      ctx.strokeStyle = 'rgba(70,194,180,.9)';
+      ctx.beginPath();
+      ctx.arc(tx, ty, 12, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // 选中环
+    if (selected) {
+      ctx.strokeStyle = COL.gold;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.def.size * 0.55, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // 蹲防姿态
+    if (p.guardT > 0) {
+      ctx.fillStyle = 'rgba(95,203,113,.22)';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.def.size * 0.7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    let squash = 0;
+    if (p.actKind === 'play') squash = 0.34;
+    else if (p.actKind === 'rush' && !p.actDone) squash = -0.14;
+    else if (p.actKind === 'bark') squash = -0.1;
+
+    const alpha = p.down ? 0.35 : (p.invuln && S.phase === 'act' ? 0.55 : 1);
+    drawSprite(p.def.id, p.x, p.y, p.def.size, alpha, 0, squash);
+
+    // 血条
+    const bw = p.def.size * 0.8;
+    const bx = p.x - bw / 2, by = p.y - p.def.size * 0.62;
+    ctx.fillStyle = 'rgba(59,42,70,.25)';
+    roundRect(ctx, bx, by, bw, 5, 2.5); ctx.fill();
+    ctx.fillStyle = p.hp / p.maxHp > 0.5 ? COL.safe : COL.danger;
+    roundRect(ctx, bx, by, bw * (p.hp / p.maxHp), 5, 2.5); ctx.fill();
+
+    // 已排指令的小徽章
+    if (o && S.phase === 'plan') {
+      const def = ORDERS.find(d => d.id === o.kind);
+      ctx.fillStyle = def ? COL.teal : COL.inkSoft;
+      ctx.beginPath();
+      ctx.arc(p.x + p.def.size * 0.42, p.y - p.def.size * 0.42, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.font = '500 12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(def ? def.name : '?', p.x + p.def.size * 0.42, p.y - p.def.size * 0.42);
+    }
+
+    // 名字
+    ctx.fillStyle = COL.inkSoft;
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(p.def.name, p.x, p.y + p.def.size * 0.52);
+  }
+}
+
+function drawEnemies() {
+  for (const e of S.enemies) {
+    if (e.dead) continue;
+    drawIntent(e);
+  }
+  for (const e of S.enemies) {
+    if (e.dead) continue;
+    const squash = e.hitT > 0 ? 0.3 * (e.hitT / 0.25) : 0;
+    drawSprite('img:' + e.def.sprite, e.x, e.y, e.def.size, 1, 0, squash);
+
+    if (e.hp < e.maxHp) {
+      const bw = e.def.size * 0.7;
+      ctx.fillStyle = 'rgba(59,42,70,.3)';
+      roundRect(ctx, e.x - bw / 2, e.y - e.def.size * 0.6, bw, 4, 2); ctx.fill();
+      ctx.fillStyle = COL.danger;
+      roundRect(ctx, e.x - bw / 2, e.y - e.def.size * 0.6, bw * (e.hp / e.maxHp), 4, 2); ctx.fill();
+    }
+  }
+}
+
+function drawFx() {
+  for (const f of S.fx) {
+    const k = 1 - f.t / f.life;
+    if (f.kind === 'ring') {
+      ctx.strokeStyle = f.color;
+      ctx.globalAlpha = k * 0.8;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(f.x, f.y, 14 + (1 - k) * 34, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.fillStyle = f.color;
+      ctx.globalAlpha = Math.min(1, k * 1.6);
+      ctx.font = '500 17px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(f.text !== undefined ? f.text : f.label || '', f.x, f.y);
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+
+function drawHud() {
+  // 顶栏
+  ctx.fillStyle = COL.panel;
+  roundRect(ctx, 20, 14, 920, 48, 14);
+  ctx.fill();
+
+  ctx.fillStyle = COL.cream;
+  ctx.font = '500 17px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('回合 ' + S.round + ' / ' + MAX_ROUND, 40, 38);
+
+  // 粮食
+  ctx.fillStyle = COL.gold;
+  ctx.beginPath(); ctx.arc(268, 38, 9, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = COL.cream;
+  ctx.fillText('× ' + S.food, 286, 38);
+
+  // 阶段
+  const phaseTxt = { plan: '规划阶段 · 排指令', act: '执行中…', resolve: '结算', forage: '觅食', over: '结束' }[S.phase] || '';
+  ctx.fillStyle = S.phase === 'plan' ? COL.teal : COL.gold;
+  ctx.textAlign = 'center';
+  ctx.fillText(phaseTxt, 560, 38);
+
+  ctx.fillStyle = COL.inkSoft;
+  ctx.font = '13px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(S.phase === 'plan' ? '空格 = 执行本回合' : '', 920, 38);
+}
+
+function drawOrderBar() {
+  if (S.phase !== 'plan') return;
+  const p = S.pets[S.selected];
+  const y = 536, h = 50;
+  const total = ORDERS.length * 116;
+  let x = (W - total) / 2;
+
+  for (const o of ORDERS) {
+    const active = S.orders[S.selected] && S.orders[S.selected].kind === o.id;
+    const pending = S.pending && S.pending.kind === o.id;
+    ctx.fillStyle = pending ? COL.gold : (active ? COL.teal : COL.panelHi);
+    roundRect(ctx, x, y, 108, h, 12);
+    ctx.fill();
+
+    ctx.fillStyle = active || pending ? COL.ink : COL.cream;
+    ctx.font = '500 16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(o.key + ' ' + o.name, x + 54, y + h / 2);
+
+    x += 116;
+  }
+
+  // 当前选中的宠物
+  if (p) {
+    ctx.fillStyle = COL.inkSoft;
+    ctx.font = '13px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('正在指挥：' + p.def.name + '（' + p.def.species + '·服从 ' + Math.round((p.def.obey + p.obeyBonus) * 100) + '%）', 24, y + h / 2);
+  }
+}
+
+function drawBanner() {
+  if (!S.banner || S.banner.t <= 0) return;
+  const a = Math.min(1, S.banner.t / 0.4);
+  ctx.globalAlpha = a;
+  const w = Math.min(760, ctx.measureText(S.banner.text).width + 60);
+  ctx.fillStyle = 'rgba(59,42,70,.9)';
+  roundRect(ctx, W / 2 - w / 2, 74, w, 38, 12);
+  ctx.fill();
+  ctx.fillStyle = COL.danger;
+  ctx.font = '500 15px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(S.banner.text, W / 2, 93);
+  ctx.globalAlpha = 1;
+}
+
+function drawTutorial() {
+  if (S.round !== 1 || S.phase !== 'plan') return;
+  ctx.fillStyle = 'rgba(59,42,70,.72)';
+  roundRect(ctx, W / 2 - 300, 462, 600, 56, 12);
+  ctx.fill();
+  ctx.fillStyle = COL.cream;
+  ctx.font = '13px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('点宠物 → 按 1~6 选指令 → 点目标。三只都排好后按 空格 执行。', W / 2, 482);
+  ctx.fillStyle = COL.gold;
+  ctx.font = '12px sans-serif';
+  ctx.fillText('红色虚线 = 怪下回合要做什么。它不会变，你来得及拦。', W / 2, 502);
+}
+
+function drawOverlayPlanHint() {
+  if (S.phase !== 'plan' || !S.pending) return;
+  ctx.fillStyle = 'rgba(59,42,70,.75)';
+  roundRect(ctx, W / 2 - 150, 80, 300, 34, 10);
+  ctx.fill();
+  ctx.fillStyle = COL.gold;
+  ctx.font = '500 14px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('点一个目标（右键/ESC 取消）', W / 2, 97);
+}
+
+function drawForagePanel() {
+  if (S.phase !== 'forage') return;
+  ctx.fillStyle = 'rgba(42,33,54,.86)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = COL.cream;
+  ctx.font = '500 24px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('觅食时间 · 派谁出去？', W / 2, 110);
+
+  ctx.font = '14px sans-serif';
+  ctx.fillStyle = COL.inkSoft;
+  ctx.fillText('派出去的宠物接下来 2 回合不能参战。风险越大，带回来的越多。', W / 2, 148);
+
+  const cw = 240, gap = 32;
+  const total = FORAGE_SPOTS.length * cw + (FORAGE_SPOTS.length - 1) * gap;
+  let x = (W - total) / 2;
+  for (const s of FORAGE_SPOTS) {
+    const picked = S.forage.spot === s.id;
+    ctx.fillStyle = picked ? COL.teal : COL.panel;
+    roundRect(ctx, x, 190, cw, 170, 16);
+    ctx.fill();
+
+    ctx.fillStyle = picked ? COL.ink : COL.cream;
+    ctx.font = '500 22px sans-serif';
+    ctx.fillText(s.name, x + cw / 2, 232);
+
+    ctx.font = '500 30px sans-serif';
+    ctx.fillText('+' + s.gain, x + cw / 2, 276);
+
+    ctx.font = '13px sans-serif';
+    ctx.fillText('风险 ' + s.riskTxt, x + cw / 2, 310);
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = picked ? 'rgba(59,42,70,.75)' : COL.inkSoft;
+    ctx.fillText(s.desc, x + cw / 2, 334);
+
+    x += cw + gap;
+  }
+
+  // 选宠物
+  ctx.fillStyle = COL.cream;
+  ctx.font = '500 16px sans-serif';
+  ctx.fillText('点一只宠物派出去', W / 2, 402);
+
+  let px = W / 2 - (S.pets.length * 120) / 2;
+  for (const p of S.pets) {
+    const usable = !p.down && p.forageT === 0;
+    const sel = S.forage.picked === p.idx;
+    ctx.fillStyle = sel ? COL.gold : (usable ? COL.panelHi : 'rgba(78,66,102,.4)');
+    roundRect(ctx, px, 424, 108, 72, 12);
+    ctx.fill();
+    ctx.fillStyle = usable ? COL.cream : COL.inkSoft;
+    ctx.font = '500 15px sans-serif';
+    ctx.fillText(p.def.name, px + 54, 452);
+    ctx.font = '12px sans-serif';
+    ctx.fillText(usable ? '可用' : (p.down ? '倒下' : '觅食中'), px + 54, 476);
+    px += 120;
+  }
+
+  ctx.fillStyle = COL.inkSoft;
+  ctx.font = '13px sans-serif';
+  ctx.fillText('ESC 跳过这次觅食', W / 2, 536);
+}
+
+function drawOverPanel() {
+  if (S.phase !== 'over') return;
+  ctx.fillStyle = 'rgba(42,33,54,.88)';
+  ctx.fillRect(0, 0, W, H);
+
+  const win = S.result === 'win';
+  ctx.fillStyle = win ? COL.gold : COL.danger;
+  ctx.font = '500 40px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(win ? '守住了！' : '没守住…', W / 2, 240);
+
+  ctx.fillStyle = COL.cream;
+  ctx.font = '17px sans-serif';
+  const sub = S.result === 'win' ? '撑过 ' + MAX_ROUND + ' 回合，窝还在'
+    : (S.result === 'lose-food' ? '粮食被抢光了' : '全家都倒下了');
+  ctx.fillText(sub, W / 2, 292);
+
+  ctx.font = '14px sans-serif';
+  ctx.fillStyle = COL.inkSoft;
+  ctx.fillText('按 空格 / R 重开', W / 2, 340);
+}
+
+function render() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#2A2136';
+  ctx.fillRect(0, 0, W, H);
+
+  drawFloor();
+  drawGates();
+  drawNest();
+  drawEnemies();
+  drawPets();
+  drawFx();
+  drawHud();
+  drawOrderBar();
+  drawTutorial();
+  drawBanner();
+  drawOverlayPlanHint();
+  drawForagePanel();
+  drawOverPanel();
+}
+
+/* ============ 9. 输入 ============ */
+
+const keys = new Set();
+const mouse = { x: 0, y: 0, down: false };
+
+function toGame(ev) {
+  const r = cv.getBoundingClientRect();
+  return {
+    x: (ev.clientX - r.left) * (W / r.width),
+    y: (ev.clientY - r.top) * (H / r.height),
+  };
+}
+
+function pickPet(x, y) {
+  let best = -1, bd = 46;
+  for (const p of S.pets) {
+    if (p.forageT > 0 || p.down) continue;
+    const d = Math.hypot(p.x - x, p.y - y);
+    if (d < bd) { bd = d; best = p.idx; }
+  }
+  return best;
+}
+
+function pickEnemy(x, y) {
+  let best = null, bd = 34;
+  for (const e of S.enemies) {
+    if (e.dead) continue;
+    const d = Math.hypot(e.x - x, e.y - y);
+    if (d < bd) { bd = d; best = e; }
+  }
+  return best;
+}
+
+function pickGate(x, y) {
+  for (const g of GATES) {
+    if (Math.hypot(g.x - x, g.y - y) < 44) return g;
+  }
+  return null;
+}
+
+function pickOrderButton(x, y) {
+  if (S.phase !== 'plan') return null;
+  const total = ORDERS.length * 116;
+  let bx = (W - total) / 2;
+  const by = 536, bh = 50;
+  for (const o of ORDERS) {
+    if (x >= bx && x <= bx + 108 && y >= by && y <= by + bh) return o;
+    bx += 116;
+  }
+  return null;
+}
+
+function issueOrder(o) {
+  const p = S.pets[S.selected];
+  if (!p || p.down || p.forageT > 0) return;
+
+  if (o.need === 'none') {
+    setOrder(S.selected, o.id, p.x, p.y, null);
+    S.pending = null;
+    nextPetNeedingOrder();
+    return;
+  }
+  // 需要目标：进入等待点击状态
+  S.pending = { kind: o.id, need: o.need };
+}
+
+function nextPetNeedingOrder() {
+  for (let k = 1; k <= S.pets.length; k++) {
+    const i = (S.selected + k) % S.pets.length;
+    const p = S.pets[i];
+    if (!p.down && p.forageT === 0 && !S.orders[i]) { S.selected = i; return; }
+  }
+}
+
+cv.addEventListener('mousemove', (ev) => {
+  const p = toGame(ev);
+  mouse.x = p.x; mouse.y = p.y;
+  S.hoverGate = pickGate(p.x, p.y);
+  S.hoverEnemy = pickEnemy(p.x, p.y);
+});
+
+cv.addEventListener('mousedown', (ev) => {
+  const p = toGame(ev);
+  mouse.x = p.x; mouse.y = p.y;
+
+  if (ev.button === 2) { S.pending = null; return; }
+
+  if (S.phase === 'over') { reset(); return; }
+
+  if (S.phase === 'forage') {
+    // 先点地点，再点宠物
+    const cw = 240, gap = 32;
+    const total = FORAGE_SPOTS.length * cw + (FORAGE_SPOTS.length - 1) * gap;
+    let x = (W - total) / 2;
+    for (const s of FORAGE_SPOTS) {
+      if (p.x >= x && p.x <= x + cw && p.y >= 190 && p.y <= 360) {
+        S.forage.spot = s.id;
+        return;
+      }
+      x += cw + gap;
+    }
+    // 点宠物
+    let px = W / 2 - (S.pets.length * 120) / 2;
+    for (const pt of S.pets) {
+      if (p.x >= px && p.x <= px + 108 && p.y >= 424 && p.y <= 496) {
+        if (pt.down || pt.forageT > 0) return;
+        if (!S.forage.spot) { S.log.push('先选地点'); return; }
+        pt.forageT = 2;
+        pt.forageSpot = S.forage.spot;
+        S.phase = 'plan';
+        S.orders = S.pets.map(() => null);
+        return;
+      }
+      px += 120;
+    }
+    return;
+  }
+
+  if (S.phase !== 'plan') return;
+
+  // 指令栏
+  const btn = pickOrderButton(p.x, p.y);
+  if (btn) { issueOrder(btn); return; }
+
+  // 正在等目标
+  if (S.pending) {
+    const isEnemyOrder = S.pending.need === 'enemy';
+    const e = pickEnemy(p.x, p.y);
+    if (isEnemyOrder && e) {
+      setOrder(S.selected, S.pending.kind, e.x, e.y, e);
+      S.pending = null;
+      nextPetNeedingOrder();
+      return;
+    }
+    if (!isEnemyOrder) {
+      // 守：点任何地方都行，钳制在房间内
+      const tx = Math.max(ROOM.x + 20, Math.min(ROOM.x + ROOM.w - 20, p.x));
+      const ty = Math.max(ROOM.y + 20, Math.min(ROOM.y + ROOM.h - 20, p.y));
+      setOrder(S.selected, S.pending.kind, tx, ty, null);
+      S.pending = null;
+      nextPetNeedingOrder();
+      return;
+    }
+    return;
+  }
+
+  // 选宠物
+  const idx = pickPet(p.x, p.y);
+  if (idx >= 0) { S.selected = idx; return; }
+});
+
+cv.addEventListener('contextmenu', (ev) => ev.preventDefault());
+
+addEventListener('keydown', (ev) => {
+  keys.add(ev.code);
+
+  if (ev.code === 'Space') {
+    ev.preventDefault();
+    if (S.phase === 'plan' && hasAnyOrder()) { startTurn(); return; }
+    if (S.phase === 'over') { reset(); return; }
+  }
+  if (ev.code === 'KeyR' && S.phase === 'over') { reset(); return; }
+  if (ev.code === 'Escape') {
+    if (S.pending) { S.pending = null; return; }
+    if (S.phase === 'forage') {
+      S.phase = 'plan';
+      S.orders = S.pets.map(() => null);
+      return;
+    }
+  }
+  if (ev.code === 'Tab') {
+    ev.preventDefault();
+    S.selected = (S.selected + 1) % S.pets.length;
+    return;
+  }
+
+  if (S.phase === 'plan' && !S.pending) {
+    const num = { Digit1: '1', Digit2: '2', Digit3: '3', Digit4: '4', Digit5: '5', Digit6: '6' }[ev.code];
+    if (num) {
+      const o = ORDERS.find(x => x.key === num);
+      if (o) issueOrder(o);
+    }
+  }
+});
+addEventListener('keyup', (ev) => keys.delete(ev.code));
+
+/* ============ 10. 主循环 ============ */
+
+resize();
+addEventListener('resize', resize);
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  const k = Math.min((w - 20) / W, (h - 20) / H);
+  cv.style.width = Math.round(W * k) + 'px';
+  cv.style.height = Math.round(H * k) + 'px';
+}
+
+let lastT = 0;
+function frame(t) {
+  const dt = Math.min(0.05, (t - lastT) / 1000 || 0.016);
+  lastT = t;
+
+  if (S.phase === 'act') stepAct(dt);
+  else if (S.phase === 'resolve') {
+    S.simT += dt;
+    if (S.simT > 0.45) finishResolve();
+  }
+
+  tickFx(dt);
+  if (S.banner) S.banner.t -= dt;
+  render();
+  requestAnimationFrame(frame);
+}
+
+reset();
+requestAnimationFrame(frame);
+
+/* ============ 11. 调试 / 测试接口 ============ */
+
+window.PAWPACK = {
+  _S: S,
+  _reset: reset,
+  _setOrder: setOrder,
+  _startTurn: startTurn,
+  _resolveOrders: resolveOrders,
+  _simTick: simTick,
+  _endRound: endRound,
+  _spawnWave: spawnWave,
+  _hurtPet: hurtPet,
+  _hitEnemy: hitEnemy,
+  _ORDERS: ORDERS,
+  _PET_DEFS: PET_DEFS,
+  _NEST: NEST,
+  _GATES: GATES,
+  _FORAGE_SPOTS: FORAGE_SPOTS,
+  _SIM_DUR: SIM_DUR,
+  _runTurns(n) {
+    for (let i = 0; i < n && S.phase !== 'over'; i++) {
+      if (!hasAnyOrder()) {
+        // 自动玩家：每只宠物默认「守」在窝边
+        for (const p of S.pets) {
+          if (!p.down && p.forageT === 0) setOrder(p.idx, 'guard', NEST.x, NEST.y + 60, null);
+        }
+      }
+      startTurn();
+      // 跑满执行期
+      let t = 0;
+      while (t < SIM_DUR + 0.1) { simTick(SIM_STEP); t += SIM_STEP; }
+      S.phase = 'resolve';
+      S.simT = 1;
+      finishResolve();
+      if (S.phase === 'forage') S.phase = 'plan';
+    }
+    return { round: S.round, food: S.food, phase: S.phase, result: S.result };
+  },
+};
+</script>
+</body>
+</html>

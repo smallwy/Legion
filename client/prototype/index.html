@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>吧唧军团 · 可玩原型 v0.1</title>
+<title>吧唧军团 · 可玩原型 v0.3（CR-018 卡通化）</title>
 <style>
   html,body{margin:0;height:100%;background:#14121a;overflow:hidden;
     font:13px/1.5 "Segoe UI",system-ui,-apple-system,sans-serif;color:#e8e2d6;
@@ -53,17 +53,44 @@ const HERO = {
   displaySize: 64,
 };
 
-// 三个槽位 = 三种技能形态，取消"全队发同一种子弹"
-// 周期 = telegraph + cast + recovery，刻意不同（0.72 / 1.05 / 0.62）→ 施法自然错落
-const ABILITY = {
-  beam: { damage: 12, range: 320, halfWidth: 11, maxTargets: 4,
-          telegraph: 0.22, cast: 0.08, recovery: 0.42, fxLife: 0.14 },
-  bolt: { damage: 16, radius: 54, maxTargets: 5, warn: 0.32,
-          telegraph: 0.30, cast: 0.10, recovery: 0.65, fxLife: 0.22 },
-  nova: { damage: 8, radius: 96, maxTargets: 6, knockback: 70,
-          telegraph: 0.18, cast: 0.08, recovery: 0.36, fxLife: 0.20 },
+/* ---------------------------------------------------------------
+   三招 = 三种**宠物身体动作**（CR-018），不是三种魔法。
+   分水岭不在"有没有弹道"，而在"怪是怎么死的"：
+     被拽回来 / 被甩飞撞倒别的怪 / 被一屁股压扁。
+   三招都不发射任何东西，全部由身体做一件夸张的事来解释伤害。
+   周期 = telegraph + cast + recovery，刻意不同 → 施法自然错落。
+   --------------------------------------------------------------- */
+
+// 悠悠球：毛线球甩出去 → 顿一下 → 自己滚回来。
+// 唯一有"轨迹"的一招，但它会回来、回程还能把怪往猫这边拽 ——
+// 玩家读到的是"猫在玩球"，不是"猫在开枪"。去回各结算一次。
+const YARN = {
+  damage: 13, range: 340, halfWidth: 17, maxTargets: 4,
+  outSpeed: 1150, backSpeed: 1450, hold: 0.07,
+  backMul: 0.70,      // 回程伤害系数（去程是 1.0）
+  pull: 130,          // 回程拽向猫的力度
+  telegraph: 0.20, cast: 0.08, recovery: 0.48, fxLife: 0.10,
 };
-const HERO_ABILITIES = ['beam', 'bolt', 'nova'];
+
+// 甩尾陀螺：原地高速转，尾巴扫一圈，把命中的怪**向外甩飞**；
+// 被甩飞的怪沿途撞到别的怪会一起倒（保龄球）—— 这是它的价值，不是纯伤害。
+const SPIN = {
+  damage: 9, radius: 106, maxTargets: 6,
+  fling: 210,         // 甩飞距离（不是速度：直接算落点做沿途扫掠）
+  bowlMul: 0.55,      // 被撞倒的怪吃到的伤害系数
+  telegraph: 0.16, cast: 0.26, recovery: 0.24, fxLife: 0.36,
+};
+
+// 踩奶扑击：跃起 → 一屁股坐在最近的怪头上 → 压扁 + 落地小圈。
+// 有位移，所以它能跟上跑散的怪；落地那一下是"压"不是"炸"，视觉靠 squash。
+const POUNCE = {
+  damage: 15, radius: 74, maxTargets: 4,
+  leapRange: 270, airTime: 0.40,
+  telegraph: 0.14, cast: 0.44, recovery: 0.32, fxLife: 0.26,
+};
+
+const ABILITY = { yarn: YARN, spin: SPIN, pounce: POUNCE };
+const HERO_ABILITIES = ['yarn', 'spin', 'pounce'];
 // 群体伤害递减：不加这条技能就是"一键清屏"（实测一局从 166s → 88.7s）
 // 0.6 让一发 AOE 打满上限时的总伤害 ≈ 单体 × 2.3
 const AOE_FALLOFF = 0.6;
@@ -117,11 +144,25 @@ const FX = {
   shake: { playerHit: 7, feed: 2.5, bossHit: 2.2, bossDie: 12, decay: 11, min: 0.15 },
 };
 
+/* 卡通糖果色板（CR-018）。
+   卡通感的第一杠杆不是"更鲜艳"，是**硬明暗对比 + 统一描边**，
+   所以底色全部提亮提饱和，同时保留一支深紫描边色（纯黑会显脏）。
+   改这里就能换整体气质，不用动任何一张图。 */
 const PALETTE = {
-  cream:'#F4E4C1', wood:'#8B5A2B', grass:'#3FA34D', gold:'#FFD700',
-  danger:'#FF5252', safe:'#6BCB77', excite:'#FFB454',
-  foxPurple:'#B47CE0', uiDeep:'#2D2438', uiPanel:'#3E3450', uiText:'#F5F0E6',
+  cream:'#FFF3D6', wood:'#C4834A', grass:'#6FD074', gold:'#FFC53D',
+  danger:'#FF5D5D', safe:'#5FD07A', excite:'#FFA63D',
+  foxPurple:'#C48CF0', uiDeep:'#3A2B4A', uiPanel:'#5A4470', uiText:'#FFF8EC',
+  // --- 卡通化专用 ---
+  outline:'#3B2A46',   // 所有单位统一描边色
+  yarn:'#FF8FBE',      // 毛线球主色
+  yarnCore:'#FFE2F0',  // 毛线球高光
+  dust:'#F7E8CD',      // 烟尘（暖白，比灰更可爱）
+  star:'#FFE066',      // 星星粒子
+  blush:'#FF97AD',     // 受击腮红
 };
+
+/** 拟声词。击杀时随机飘一个 —— 这是"卡通"最便宜也最有效的一招。 */
+const SFX_WORDS = ['啪!', '啵!', '咚!', '嘭!', '喵!', '吧唧!', '噗!', '嗷!'];
 
 const UPGRADES = [
   { id:'damage',   name:'尖牙', desc:'英雄伤害 +18%',        max:5, weight:1.2,  color:PALETTE.danger },
@@ -156,14 +197,56 @@ function resize() {
 addEventListener('resize', resize);
 resize();
 
-// ============ 4. 精灵加载 ============
-const IMG = {};
+// ============ 4. 精灵加载 + 卡通描边（CR-018） ============
+const IMG = {};   // 原图
+const OTL = {};   // 描边版（离线生成一次，运行时直接 drawImage）
 let assetsReady = false;
 let assetsLeft = 0;
+
+/**
+ * 给精灵离线加一圈粗描边 —— **卡通感的第一杠杆**。
+ *
+ * 做法：把原图染成纯色做剪影，沿 12 个方向偏移铺一圈，再把原图盖回去。
+ * 一次性成本（每张图只做一次），运行时依旧只是一次 drawImage。
+ * 刻意不用 shadowBlur：那会糊边，而且在低端机上很贵。
+ */
+function makeOutline(img, r, color) {
+  const pad = r + 1;
+  const c = document.createElement('canvas');
+  c.width = img.width + pad * 2;
+  c.height = img.height + pad * 2;
+  const g = c.getContext('2d');
+
+  // 剪影：先画原图，再用 source-in 灌色 → 保留 alpha、丢掉颜色
+  const sil = document.createElement('canvas');
+  sil.width = img.width;
+  sil.height = img.height;
+  const sg = sil.getContext('2d');
+  sg.drawImage(img, 0, 0);
+  sg.globalCompositeOperation = 'source-in';
+  sg.fillStyle = color;
+  sg.fillRect(0, 0, img.width, img.height);
+
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    g.drawImage(sil, pad + Math.cos(a) * r, pad + Math.sin(a) * r);
+  }
+  g.drawImage(img, pad, pad);
+
+  c.pad = pad;
+  return c;
+}
+
 for (const k in SPRITE_SRC) {
   assetsLeft++;
   const im = new Image();
-  im.onload = im.onerror = () => { if (--assetsLeft === 0) assetsReady = true; };
+  im.onload = im.onerror = () => {
+    // 描边必须在这里做：图还没解码时 getImageData / drawImage 取不到像素
+    if (im.width > 0) {
+      try { OTL[k] = makeOutline(im, 2, '#3B2A46'); } catch (err) { OTL[k] = null; }
+    }
+    if (--assetsLeft === 0) assetsReady = true;
+  };
   im.src = SPRITE_SRC[k];
   IMG[k] = im;
 }
@@ -222,7 +305,7 @@ const squad = {
 const enemies = [];
 const projectiles = [];
 const orbs = [];
-// 技能表现实例（beam / bolt / nova）—— 判定即时或延迟，渲染只读它
+// 技能表现实例（yarn / spin / pounce）—— 判定即时、跨帧或延迟，渲染只读它
 const abilities = [];
 let boss = null;
 
@@ -273,14 +356,15 @@ function castCycle(kind) {
 
 /**
  * 索敌半径按技能取，否则会"抬手了但什么都没打到"：
- *  - 冲击波有效半径 96，沿用 340 会对着远怪放空气
- *  - 贯穿射程 320 < 340，目标落在 325 处必空，留 10px 余量
+ *  - 甩尾半径 106，沿用 340 会让正后那只对着 300px 外的怪转圈打空气
+ *  - 悠悠球射程 340，目标落在 350 处必空，留 12px 余量
+ *  - 踩奶跳跃距离 270，够不着的就不该起跳
  */
 function acquireRangeOf(h) {
   const base = HERO.acquireRange * upg.stats.rangeMul;
-  if (h.kind === 'nova') return Math.min(base, ABILITY.nova.radius + 40);
-  if (h.kind === 'beam') return Math.min(base, ABILITY.beam.range * upg.stats.rangeMul - 10);
-  return base;
+  if (h.kind === 'spin') return Math.min(base, SPIN.radius + 30);
+  if (h.kind === 'yarn') return Math.min(base, YARN.range * upg.stats.rangeMul - 12);
+  return Math.min(base, POUNCE.leapRange);
 }
 
 function starvingLine() {
@@ -322,6 +406,7 @@ function resetGame() {
       x: _slot.x, y: _slot.y, vx: 0, vy: 0,
       state: 'idle', stateT: 0, target: null,
       aimX: 1, aimY: 0, powerMul: 1,
+      leap: null, arcY: 0,        // 踩奶扑击的滞空状态 / 离地高度
       slot: i, kind: HERO_ABILITIES[i % HERO_ABILITIES.length],
     });
   }
@@ -499,14 +584,29 @@ function updateSquad(dt) {
     h.powerMul = pm;
     const cycle = castCycle(h.kind);
 
-    // 弹簧-阻尼跟随
-    slotTarget(i, _slot);
-    h.vx += (_slot.x - h.x) * HERO.followStiffness * dt;
-    h.vy += (_slot.y - h.y) * HERO.followStiffness * dt;
-    const damp = Math.max(0, 1 - HERO.followDamping * dt);
-    h.vx *= damp; h.vy *= damp;
-    h.x += h.vx * dt;
-    h.y += h.vy * dt;
+    if (h.leap) {
+      // 踩奶扑击的滞空段：本体脱离阵型走抛物线。
+      // 位移直接写进 h.x / h.y（不做渲染旁路），这样索敌、判定、渲染
+      // 读到的是同一个位置 —— 否则会出现"猫看着在左边、打在右边"。
+      const L = h.leap;
+      L.t += dt;
+      const k = Math.min(1, L.t / L.dur);
+      h.x = L.x0 + (L.x1 - L.x0) * k;
+      h.y = L.y0 + (L.y1 - L.y0) * k;
+      h.arcY = Math.sin(k * Math.PI) * 54;   // 只影响渲染（离地高度）
+      h.vx = 0; h.vy = 0;
+      if (k >= 1) { h.leap = null; h.arcY = 0; }
+    } else {
+      // 弹簧-阻尼跟随
+      slotTarget(i, _slot);
+      h.vx += (_slot.x - h.x) * HERO.followStiffness * dt;
+      h.vy += (_slot.y - h.y) * HERO.followStiffness * dt;
+      const damp = Math.max(0, 1 - HERO.followDamping * dt);
+      h.vx *= damp; h.vy *= damp;
+      h.x += h.vx * dt;
+      h.y += h.vy * dt;
+      h.arcY = 0;
+    }
 
     updateCast(dt, h, cycle);
   }
@@ -549,8 +649,9 @@ function updateCast(dt, h, cycle) {
   }
 }
 
-// ============ 10.5 英雄技能（CR-017）：贯穿 / 落雷 / 冲击 ============
-// 我方不再产生任何投射物；敌方施法弹仍走 projectiles。
+// ============ 10.5 英雄技能（CR-018）：悠悠球 / 甩尾陀螺 / 踩奶扑击 ============
+// 我方不产生任何投射物；敌方施法弹仍走 projectiles。
+// 三招的共同点是"身体做一件夸张的事"，差异点是"怪怎么死"：被拽回 / 被甩飞 / 被压扁。
 
 function fireHero(h) {
   const len = Math.hypot(h.aimX, h.aimY) || 1;
@@ -561,56 +662,135 @@ function fireHero(h) {
   if (crit) dmg *= 2;
   const extra = upg.stats.multishot;
 
-  if (h.kind === 'beam') {
-    castBeam(h.x, h.y, dx, dy, ABILITY.beam.range * upg.stats.rangeMul, dmg, crit, extra);
-  } else if (h.kind === 'bolt') {
-    // 落点取施法瞬间的目标位置，不是抬手时缓存的坐标（0.3s 内怪会走）
-    const t = h.target;
-    castBolt(h.x, h.y, t ? t.x : h.x + dx * 200, t ? t.y : h.y + dy * 200, dmg, crit, extra);
-  } else {
-    castNova(h.x, h.y, dmg, crit, extra);
-  }
+  if (h.kind === 'yarn') castYarn(h, dx, dy, dmg, crit, extra);
+  else if (h.kind === 'spin') castSpin(h, dmg, crit, extra);
+  else castPounce(h, dmg, crit, extra);
 }
 
-/** 贯穿：瞬发直线，立即结算。每层「连锁」追加一条平行光束（法线偏移 24px） */
-function castBeam(x, y, dx, dy, range, dmg, crit, extra) {
-  const a = ABILITY.beam;
-  const nx = -dy, ny = dx;
+/**
+ * 悠悠球：毛线球被甩出去，飞到最远处**顿一下再自己滚回来**。
+ *
+ * 为什么"有轨迹"却不像子弹：
+ *  1. 它会回来 —— 子弹不会；
+ *  2. 回程伤害打折但会把怪**拽向猫**，轨迹因此变成战术工具；
+ *  3. 球在飞的每一帧都做扫掠判定（新位置↔旧位置），擦着边也算命中。
+ *
+ * `extra`（分身升级）= 多甩一个球，方向各偏 0.24rad，视觉上是"猫手忙脚乱"。
+ */
+function castYarn(h, dx, dy, dmg, crit, extra) {
+  const a = YARN;
   for (let i = 0; i <= extra; i++) {
-    const off = extra === 0 ? 0 : (i - extra / 2) * 24;
-    const sx = x + nx * off, sy = y + ny * off;
-    const ex = sx + dx * range, ey = sy + dy * range;
-    damageInSegment(sx, sy, ex, ey, a.halfWidth, dmg, a.maxTargets, crit);
-    abilities.push({ kind: 'beam', x: sx, y: sy, ex, ey,
-                     halfWidth: a.halfWidth, t: 0, life: a.fxLife, crit });
-  }
-}
-
-/** 落雷：目标点预警 0.32s → 半径 54 爆发。伤害存在实例上（可能两发同时在场） */
-function castBolt(x, y, tx, ty, dmg, crit, extra) {
-  const a = ABILITY.bolt;
-  for (let i = 0; i <= extra; i++) {
-    let px = tx, py = ty;
-    if (i > 0) {
-      const ang = Math.random() * TAU, r = 55;
-      px += Math.cos(ang) * r;
-      py += Math.sin(ang) * r;
+    let ax = dx, ay = dy;
+    if (extra > 0) {
+      const off = (i - extra / 2) * 0.24;
+      const c = Math.cos(off), s = Math.sin(off);
+      ax = dx * c - dy * s;
+      ay = dx * s + dy * c;
     }
-    abilities.push({ kind: 'bolt', x: px, y: py, radius: a.radius,
-                     t: 0, life: a.warn + a.fxLife, warn: a.warn,
-                     fired: false, dmg, crit });
+    abilities.push({
+      kind: 'yarn',
+      x: h.x, y: h.y,          // 毛线的固定端（出手瞬间的猫位置）
+      bx: h.x, by: h.y,        // 球当前位置
+      px: h.x, py: h.y,        // 上一帧球位置（扫掠判定的起点）
+      dx: ax, dy: ay,
+      travelled: 0,
+      phase: 'out',
+      holdT: 0,
+      outList: [], backList: [],   // 已命中记录（去程 / 回程各算一次）
+      dmg, crit,
+      halfWidth: a.halfWidth,
+      range: a.range,
+      maxTargets: a.maxTargets,
+      t: 0,
+      life: a.range / a.outSpeed + a.hold + a.range / a.backSpeed + 0.08,
+    });
   }
 }
 
-/** 冲击：脚下炸开（立即结算）+ 击退，扩散环是余波 */
-function castNova(x, y, dmg, crit, extra) {
-  const a = ABILITY.nova;
+/**
+ * 甩尾陀螺：原地转一圈，命中的怪被**向外甩飞**，
+ * 被甩飞的怪沿途撞到别的怪会一起倒（保龄球）。
+ * 这一招的收益在"推开"而不是伤害数字，所以它最贴身，只在被围住时出手。
+ */
+function castSpin(h, dmg, crit, extra) {
+  const a = SPIN;
+  const x = h.x, y = h.y;
   for (let i = 0; i <= extra; i++) {
-    const radius = a.radius * Math.pow(1.4, i);
+    const radius = a.radius * Math.pow(1.25, i);
     const d = i === 0 ? dmg : dmg * 0.6;
-    damageInRadius(x, y, radius, d, a.maxTargets, crit, a.knockback);
-    abilities.push({ kind: 'nova', x, y, radius, t: 0, life: a.fxLife, crit });
+
+    const targets = [];
+    for (const e of enemies) {
+      if (!e.active || e.dying > 0) continue;
+      if (dist(x, y, e.x, e.y) > radius + e.def.radius) continue;
+      targets.push(e);
+      if (targets.length >= a.maxTargets) break;
+    }
+
+    let hits = 0;
+    for (const e of targets) {
+      let kx = e.x - x, ky = e.y - y;
+      const l = Math.hypot(kx, ky) || 1;
+      kx /= l; ky /= l;
+      damageEnemy(e, d * Math.pow(AOE_FALLOFF, hits++), kx, ky, crit);
+
+      if (i === 0 && e.dying <= 0) {
+        // 击退初速：速度按 1-10dt 衰减 → 累积位移 ≈ v/10，所以 v = 距离×9
+        e.vx += kx * a.fling * 9;
+        e.vy += ky * a.fling * 9;
+        // 保龄球：沿飞行方向扫掠，撞倒沿途的怪（排除自己）
+        damageInSegment(e.x, e.y, e.x + kx * a.fling, e.y + ky * a.fling,
+                        e.def.radius + 6, d * a.bowlMul, 3, crit, 1, e);
+      }
+    }
+
+    if (boss && boss.active && boss.dying <= 0 &&
+        dist(x, y, boss.x, boss.y) <= radius + BOSS.radius) {
+      damageBoss(d, boss.x - x, boss.y - y, crit);
+    }
+
+    abilities.push({ kind: 'spin', x, y, radius, t: 0, life: a.fxLife, crit });
   }
+}
+
+/**
+ * 踩奶扑击：跃起 → 一屁股坐在最近的怪头上 → 压扁 + 落地圈。
+ *
+ * 它有**位移**，所以是唯一能跟上"跑散的怪"的一招；落地那一下是"压"不是"炸"，
+ * 视觉重量靠渲染的 squash（猫被压成扁饼）承担，判定只是个小圈。
+ */
+function castPounce(h, dmg, crit, extra) {
+  const a = POUNCE;
+  const t = h.target;
+
+  let tx, ty;
+  if (t && t.active && t.dying <= 0) {
+    tx = t.x; ty = t.y;
+  } else {
+    const l = Math.hypot(h.aimX, h.aimY) || 1;
+    tx = h.x + (h.aimX / l) * a.leapRange * 0.7;
+    ty = h.y + (h.aimY / l) * a.leapRange * 0.7;
+  }
+  const d = dist(h.x, h.y, tx, ty);
+  if (d > a.leapRange) {
+    tx = h.x + (tx - h.x) / d * a.leapRange;
+    ty = h.y + (ty - h.y) / d * a.leapRange;
+  }
+
+  // 英雄本体跳出去；阵型弹簧在落地后才把它拽回来 —— 这就是"扑出去再跑回来"
+  h.leap = { x0: h.x, y0: h.y, x1: tx, y1: ty, t: 0, dur: a.airTime };
+
+  abilities.push({
+    kind: 'pounce',
+    x: tx, y: ty,
+    t: 0,
+    life: a.airTime + a.fxLife,
+    airTime: a.airTime,
+    landed: false,
+    radius: a.radius,
+    dmg, crit, extra,
+    maxTargets: a.maxTargets,
+  });
 }
 
 /** 圆范围伤害：BOSS + 杂兵。maxTargets 是平衡阀（不限上限时一发能清半屏） */
@@ -636,8 +816,21 @@ function damageInRadius(x, y, r, dmg, maxTargets, crit, kb) {
   return hits;
 }
 
-/** 线段扫掠伤害：点到线段距离 ≤ 半宽 + 敌人半径 */
-function damageInSegment(x0, y0, x1, y1, halfWidth, dmg, maxTargets, crit) {
+/**
+ * 线段扫掠伤害：点到线段距离 ≤ 半宽 + 敌人半径。
+ *
+ * @param kbScale 击退强度倍数。悠悠球回程靠它（7 倍）实现"把怪拽向猫"——
+ *                传进来的线段方向天然就是往回，所以放大就成拽，不用另写一套逻辑。
+ * @param exclude 排除的对象（甩尾的保龄球扫掠必须排除被打飞的那只本身）
+ * @param hitsBase AOE 递减的起始档位。悠悠球是跨帧判定的，若每帧都从 0 开始算，
+ *                 第二个怪也会吃满伤（递递减等于没做）；传已命中数才能连成一条递减曲线。
+ * @param skip 可选数组：已在里面的对象跳过命中，新命中的会被 push 进去。
+ *             悠悠球必须用它 —— 球是**逐帧连续判定**的，不记已命中就会在怪身边
+ *             连打四五帧（不是"穿透"，是"贴脸鞭尸"，实测一球能打掉满血 walker）。
+ */
+function damageInSegment(x0, y0, x1, y1, halfWidth, dmg, maxTargets, crit, kbScale, exclude, skip, hitsBase) {
+  const ks = kbScale === undefined ? 1 : kbScale;
+  const base = hitsBase || 0;
   const sx = x1 - x0, sy = y1 - y0;
   const len2 = sx * sx + sy * sy;
   const invLen = len2 > 0 ? 1 / Math.sqrt(len2) : 0;
@@ -647,33 +840,100 @@ function damageInSegment(x0, y0, x1, y1, halfWidth, dmg, maxTargets, crit) {
     t = Math.max(0, Math.min(1, t));
     const px = x0 + sx * t - boss.x, py = y0 + sy * t - boss.y;
     const rr = halfWidth + BOSS.radius;
-    if (px * px + py * py <= rr * rr) { damageBoss(dmg, sx, sy, crit); hits++; }
+    if (px * px + py * py <= rr * rr) { damageBoss(dmg, sx * ks, sy * ks, crit); hits++; }
   }
   for (const e of enemies) {
-    if (!e.active || e.dying > 0) continue;
+    if (!e.active || e.dying > 0 || e === exclude) continue;
+    if (skip && skip.indexOf(e) >= 0) continue;
     if (hits >= maxTargets) break;
     let t = len2 > 0 ? ((e.x - x0) * sx + (e.y - y0) * sy) / len2 : 0;
     t = Math.max(0, Math.min(1, t));
     const px = x0 + sx * t - e.x, py = y0 + sy * t - e.y;
     const rr = halfWidth + e.def.radius;
     if (px * px + py * py > rr * rr) continue;
-    const scale = Math.pow(AOE_FALLOFF, hits);
-    damageEnemy(e, dmg * scale, sx * invLen, sy * invLen, crit);
+    const scale = Math.pow(AOE_FALLOFF, base + hits);
+    damageEnemy(e, dmg * scale, sx * invLen * ks, sy * invLen * ks, crit);
+    if (skip) skip.push(e);
     hits++;
   }
   return hits;
 }
 
-/** 推进技能实例：落雷到点结算，过期剔除 */
+/**
+ * 推进技能实例（CR-018）。
+ *
+ * 悠悠球是唯一有跨帧状态的一招：它在飞的每一帧都用「上一帧位置 → 当前位置」
+ * 做扫掠判定，所以高速球不会穿过怪（这是不做子弹换来的自由度：球可以很快，
+ * 因为判定是连续的）。
+ */
 function updateAbilities(dt) {
   for (const fx of abilities) {
     fx.t += dt;
-    if (fx.kind === 'bolt' && !fx.fired && fx.t >= fx.warn) {
-      fx.fired = true;
-      damageInRadius(fx.x, fx.y, fx.radius, fx.dmg, ABILITY.bolt.maxTargets, fx.crit, 0);
+
+    // ---------------- 悠悠球：去程 → 顿 → 回程 ----------------
+    if (fx.kind === 'yarn') {
+      fx.px = fx.bx; fx.py = fx.by;
+
+      if (fx.phase === 'hold') {
+        fx.holdT -= dt;
+        if (fx.holdT <= 0) fx.phase = 'back';
+        continue;
+      }
+
+      let step = (fx.phase === 'out' ? YARN.outSpeed : YARN.backSpeed) * dt;
+
+      if (fx.phase === 'out') {
+        // 收在射程边界上，否则球会越过射程还继续飞
+        if (fx.travelled + step >= fx.range) {
+          step = fx.range - fx.travelled;
+          fx.travelled = fx.range;
+          fx.phase = 'hold';
+          fx.holdT = YARN.hold;
+        } else {
+          fx.travelled += step;
+        }
+        fx.bx += fx.dx * step;
+        fx.by += fx.dy * step;
+        if (fx.outList.length < fx.maxTargets) {
+          damageInSegment(fx.px, fx.py, fx.bx, fx.by, fx.halfWidth,
+            fx.dmg, fx.maxTargets - fx.outList.length, fx.crit, 1, null, fx.outList,
+            fx.outList.length);
+        }
+      } else {
+        if (fx.travelled - step <= 0) {
+          step = fx.travelled;
+          fx.travelled = 0;
+          fx.phase = 'dead';
+        } else {
+          fx.travelled -= step;
+        }
+        fx.bx -= fx.dx * step;
+        fx.by -= fx.dy * step;
+        if (fx.backList.length < fx.maxTargets) {
+          damageInSegment(fx.px, fx.py, fx.bx, fx.by, fx.halfWidth,
+            fx.dmg * YARN.backMul, fx.maxTargets - fx.backList.length, fx.crit, 7, null, fx.backList,
+            fx.backList.length);
+        }
+      }
+      continue;
+    }
+
+    // ---------------- 踩奶：落地那一瞬结算 ----------------
+    if (fx.kind === 'pounce' && !fx.landed && fx.t >= fx.airTime) {
+      fx.landed = true;
+      damageInRadius(fx.x, fx.y, fx.radius, fx.dmg, fx.maxTargets, fx.crit, 40);
+      if (fx.extra > 0) {
+        damageInRadius(fx.x, fx.y, fx.radius * 1.3, fx.dmg * 0.6, fx.maxTargets, fx.crit, 60);
+      }
+      // 落地表现：暖白尘土圈 + 拟声词。数值结算和表现刻意分开写，
+      // 因为 damageInRadius 只该管数字。
+      fxRing(fx.x, fx.y, PALETTE.dust, fx.radius * 1.7, 0.30, 4);
+      fxBurst(fx.x, fx.y, PALETTE.dust, 7, 0.7);
+      fxText(fx.x, fx.y + 26, '咚!', PALETTE.gold, 15);
+      addShake(2.0);
     }
   }
-  compact(abilities, fx => fx.t < fx.life);
+  compact(abilities, fx => fx.t < fx.life && fx.phase !== 'dead');
 }
 
 function tryFeed() {
@@ -898,6 +1158,12 @@ function damageEnemy(e, dmg, dirX, dirY, crit) {
     fxBurst(e.x, e.y, e.type === 'tank' ? '#5a6b7d' : (e.type === 'flyer' ? '#c0392b' : '#6b8e23'),
       e.type === 'tank' ? 14 : 10);
     hitStop(FX.hitStop.kill);
+    // 拟声词：卡通最便宜也最有效的一招。命中率故意压到 45%，
+    // 每次都飘会糊满屏，偶尔飘一个才像漫画分镜
+    if (Math.random() < 0.45) {
+      fxText(e.x + rnd(-10, 10), e.y + 20,
+             SFX_WORDS[(Math.random() * SFX_WORDS.length) | 0], PALETTE.star, 14);
+    }
   }
   if (FX.damageText === 'all' || (FX.damageText === 'kill' && killed) || crit) {
     fxText(e.x, e.y + 14, String(Math.round(dmg)), crit ? PALETTE.gold : '#ffffff', crit ? 15 : 12);
@@ -1286,7 +1552,7 @@ function makeGrassTile() {
   const c = document.createElement('canvas');
   c.width = c.height = s;
   const g = c.getContext('2d');
-  g.fillStyle = '#3d6440';
+  g.fillStyle = '#7FD07A';
   g.fillRect(0, 0, s, s);
   // 用确定性伪随机铺草，避免每帧变化
   let seed = 20261020;
@@ -1295,13 +1561,13 @@ function makeGrassTile() {
     const x = r() * s, y = r() * s;
     const t = r();
     if (t < 0.55) {
-      g.fillStyle = 'rgba(74,112,72,.75)';
+      g.fillStyle = 'rgba(104,196,108,.85)';
       g.fillRect(x | 0, y | 0, 2, 2);
     } else if (t < 0.85) {
-      g.fillStyle = 'rgba(56,92,58,.8)';
+      g.fillStyle = 'rgba(150,224,138,.55)';
       g.fillRect(x | 0, y | 0, 3, 3);
     } else {
-      g.fillStyle = 'rgba(118,152,96,.5)';
+      g.fillStyle = 'rgba(255,246,190,.55)';
       g.fillRect(x | 0, y | 0, 1, 3);
     }
   }
@@ -1311,13 +1577,41 @@ function makeGrassTile() {
 const SX = (x) => W / 2 + (x - G.cam.x) + G.shakeX;
 const SY = (y) => H / 2 - (y - G.cam.y) + G.shakeY;
 
-function drawSprite(key, x, y, size, scale, alpha) {
-  const im = IMG[key];
+/**
+ * 画一个单位。
+ *
+ * @param sq 卡通变形量：**>0 压扁**（被拍 / 落地），**<0 拉长**（起跳 / 蓄力）。
+ *           同一张图，压扁 30% 立刻从"写实"变"动画片"——这是整套卡通化里
+ *           性价比最高的一招，不需要换任何美术资源。
+ * @param rot 旋转（甩尾陀螺用）
+ */
+function drawSprite(key, x, y, size, scale, alpha, sq, rot) {
+  const im = OTL[key] || IMG[key];
   if (!im || !im.width) return;
-  const w = size * (scale || 1), h = size * (im.height / im.width) * (scale || 1);
+  const pad = im.pad || 0;
+  const baseW = im.width - pad * 2;
+  const k = size * (scale === undefined ? 1 : scale) / baseW;
+  let w = im.width * k;
+  let h = im.height * k;
+
+  if (sq) {
+    w *= 1 + sq;
+    h *= 1 - sq * 0.85;   // 纵向变形收着一点，否则会像弹簧
+  }
+
   if (alpha !== undefined) ctx.globalAlpha = alpha;
-  ctx.drawImage(im, Math.round(SX(x) - w / 2), Math.round(SY(y) - h / 2),
-                Math.round(w), Math.round(h));
+
+  if (rot) {
+    ctx.save();
+    ctx.translate(SX(x), SY(y));
+    ctx.rotate(rot);
+    ctx.drawImage(im, -w / 2, -h / 2, w, h);
+    ctx.restore();
+  } else {
+    ctx.drawImage(im, Math.round(SX(x) - w / 2), Math.round(SY(y) - h / 2),
+                  Math.round(w), Math.round(h));
+  }
+
   if (alpha !== undefined) ctx.globalAlpha = 1;
 }
 
@@ -1358,14 +1652,15 @@ function drawRings() {
 }
 
 function drawParticles() {
+  // 圆点而不是方块：方块在卡通语境里读起来像"像素残留"
   for (const p of fx.parts) {
     if (p.life <= 0) continue;
-    const a = Math.min(1, p.life / (p.max * 0.6));
-    ctx.globalAlpha = a;
+    ctx.globalAlpha = Math.min(1, p.life / (p.max * 0.6));
     ctx.fillStyle = p.color;
-    const s = Math.max(1, p.size);
-    ctx.fillRect(Math.round(SX(p.x) - s / 2), Math.round(SY(p.y) - s / 2),
-                 Math.round(s), Math.round(s));
+    const r = Math.max(0.8, p.size * 0.5);
+    ctx.beginPath();
+    ctx.arc(SX(p.x), SY(p.y), r, 0, TAU);
+    ctx.fill();
   }
   ctx.globalAlpha = 1;
 }
@@ -1445,11 +1740,13 @@ function drawTelegraphs() {
 function drawEnemies() {
   for (const e of enemies) {
     if (!e.active) continue;
+    // 被拍扁 / 蓄力拉长（sq：>0 压扁，<0 拉长）
+    let sq = 0;
+    if (e.hitPunch > 0) sq = 0.32 * e.hitPunch;
+    else if (e.state === 'windup' || e.state === 'castwindup') sq = -0.10;
     let sc = 1;
-    if (e.hitPunch > 0) sc *= 1 + 0.3 * e.hitPunch;
-    if (e.state === 'windup' || e.state === 'castwindup') sc *= 1.12;
     let alpha = 1;
-    let size = e.def.displaySize;
+    const size = e.def.displaySize;
     if (e.dying > 0) {
       const k = Math.max(0, e.dying / 0.28);
       sc *= k;
@@ -1457,20 +1754,19 @@ function drawEnemies() {
       // 死亡时上飘一点
       drawSprite(e.type === 'walker' ? 'enemy-walker'
                : e.type === 'flyer' ? 'enemy-flyer' : 'enemy-tank',
-        e.x, e.y, size, sc, alpha);
+        e.x, e.y, size, sc, alpha, sq);
       continue;
     }
     drawSprite(e.type === 'walker' ? 'enemy-walker'
              : e.type === 'flyer' ? 'enemy-flyer' : 'enemy-tank',
-      e.x, e.y, size, sc, alpha);
+      e.x, e.y, size, sc, alpha, sq);
 
     // 受击白闪（独立一层，不依赖是否有贴图）
     if (e.hitPunch > 0.05) {
       ctx.globalAlpha = e.hitPunch * 0.55;
       ctx.fillStyle = '#ffffff';
-      const w = size * sc * 0.62;
       ctx.beginPath();
-      ctx.arc(SX(e.x), SY(e.y), w / 2, 0, TAU);
+      ctx.arc(SX(e.x), SY(e.y), size * 0.31, 0, TAU);
       ctx.fill();
       ctx.globalAlpha = 1;
     }
@@ -1500,24 +1796,57 @@ function drawBoss() {
 
 function drawHeroes() {
   for (const h of squad.heroes) {
-    // 缩放脉冲按**每只英雄自己的周期**算（三个技能节奏不同）
     const cycle = castCycle(h.kind);
-    let s = 1;
-    if (h.state === 'telegraph') s *= 1 + 0.18 * (1 - h.stateT / cycle.telegraph);
-    else if (h.state === 'cast') s *= 1.28;
-    else if (h.state === 'recovery') s *= 1 + 0.28 * (h.stateT / cycle.recovery);
-    if (squad.exciteT > 0) s *= 1 + 0.12 * (squad.exciteT / 1.2);
+
+    /* 卡通变形量 sq（>0 压扁，<0 拉长）。
+       这一套取代了原来"整体放大 1.28 倍"的脉冲：纯放大读起来是"变近了"，
+       压扁/拉长才读得出"用力"和"落地"。 */
+    let sq = 0;
+    let rot = 0;
+
+    if (h.leap) {
+      // 滞空：上升拉长、下落压扁 —— 弹性动画的基本功
+      const k = Math.min(1, h.leap.t / h.leap.dur);
+      sq = k < 0.45
+        ? -0.24 * (1 - k / 0.45)
+        : 0.30 * ((k - 0.45) / 0.55);
+    } else if (h.state === 'telegraph') {
+      sq = 0.18;                                    // 蓄力：蹲下压扁
+    } else if (h.state === 'cast') {
+      if (h.kind === 'spin') {
+        const k = 1 - Math.max(0, h.stateT) / cycle.cast;
+        rot = k * Math.PI * 2 * 2.5;                // 甩尾：转两圈半
+        sq = -0.10;
+      } else {
+        sq = -0.20;                                 // 出手：弹起来拉长
+      }
+    } else if (h.state === 'recovery') {
+      sq = 0.14 * (h.stateT / cycle.recovery);      // 回弹
+    }
+    if (squad.exciteT > 0) sq -= 0.08;              // 喂过食更精神
 
     // 前摇环：颜色 = 饱食档位（这是"该喂了"的唯一提示）
     if (h.state === 'telegraph') {
-      ctx.strokeStyle = satietyTier() === 'hungry' ? PALETTE.gold
-        : (satietyTier() === 'starving' ? PALETTE.danger : 'rgba(255,215,0,.45)');
+      const tier = satietyTier();
+      ctx.strokeStyle = tier === 'hungry' ? PALETTE.gold
+        : (tier === 'starving' ? PALETTE.danger : 'rgba(255,197,61,.5)');
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(SX(h.x), SY(h.y), 26, 0, TAU);
       ctx.stroke();
     }
-    drawSprite('pet', h.x, h.y, HERO.displaySize, s, 1);
+
+    // 滞空投影：让"离地"读得出来
+    if (h.arcY > 0) {
+      ctx.globalAlpha = 0.22;
+      ctx.fillStyle = PALETTE.outline;
+      ctx.beginPath();
+      ctx.ellipse(SX(h.x), SY(h.y) + 16, 17, 6, 0, 0, TAU);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    drawSprite('pet', h.x, h.y + h.arcY, HERO.displaySize, 1, 1, sq, rot);
   }
 }
 
@@ -1544,100 +1873,129 @@ function drawPlayer() {
 }
 
 /**
- * 技能表现（CR-017）。像素风下"技能感"靠形状，不靠光效：
- *  - 贯穿 = 一条会消失的锥形线（瞬发才有"斩"的意味）
- *  - 落雷 = 先圈后爆，预警圈**由大到小收缩**（与敌人前摇"由小涨到大"方向相反，敌我一眼可分）
- *  - 冲击 = 从脚下向外推的环（环是余波，判定在炸开瞬间）
+ * 技能表现（CR-018）。三招都不发射任何东西，所以"技能感"全靠**身体动作的形状**：
+ *  - 悠悠球 = 一条毛线牵着一个会自己回来的球（去程绷直、回程下垂）
+ *  - 甩尾陀螺 = 几段会转的旋风弧（不是同心圆 —— 圆读起来像"爆炸"，弧才像"旋转"）
+ *  - 踩奶扑击 = 落地前是收缩的虚线靶心，落地后是压出来的扁椭圆 + 冲击环
  */
 function drawAbilities() {
-  // 落雷预警：地面标记，先画
+  // ---- 悠悠球（先画线，再画球，球永远在最上层）----
   for (const fx of abilities) {
-    if (fx.kind !== 'bolt' || fx.fired) continue;
-    const p = Math.max(0, Math.min(1, fx.t / fx.warn));
-    ctx.globalAlpha = 0.16 * (1 - p * 0.5);
-    ctx.fillStyle = PALETTE.gold;
+    if (fx.kind !== 'yarn') continue;
+    const ax = SX(fx.x), ay = SY(fx.y);
+    const bx = SX(fx.bx), by = SY(fx.by);
+    const back = fx.phase === 'back';
+
+    // 毛线：去程绷直（sag 小），回程松一点（sag 大 + 一点摆动）
+    let nx = -(by - ay), ny = (bx - ax);
+    const nl = Math.hypot(nx, ny) || 1;
+    nx /= nl; ny /= nl;
+    const sag = (back ? 11 : 3) + Math.sin(fx.t * 42) * 2.2;
+    const mx = (ax + bx) / 2 + nx * sag;
+    const my = (ay + by) / 2 + ny * sag;
+
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = PALETTE.outline;
+    ctx.lineWidth = 5;
     ctx.beginPath();
-    ctx.arc(SX(fx.x), SY(fx.y), fx.radius, 0, TAU);
-    ctx.fill();
-    ctx.globalAlpha = 0.8;
-    ctx.strokeStyle = PALETTE.gold;
+    ctx.moveTo(ax, ay);
+    ctx.quadraticCurveTo(mx, my, bx, by);
+    ctx.stroke();
+
+    ctx.strokeStyle = PALETTE.yarn;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.quadraticCurveTo(mx, my, bx, by);
+    ctx.stroke();
+  }
+
+  for (const fx of abilities) {
+    if (fx.kind !== 'yarn') continue;
+    const bx = SX(fx.bx), by = SY(fx.by);
+    const r = fx.halfWidth;
+    const spin = fx.t * 26;
+
+    ctx.save();
+    ctx.translate(bx, by);
+    ctx.rotate(spin);
+    // 描边底
+    ctx.fillStyle = PALETTE.outline;
+    ctx.beginPath(); ctx.arc(0, 0, r + 3.5, 0, TAU); ctx.fill();
+    // 球体
+    ctx.fillStyle = PALETTE.yarn;
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
+    // 毛线纹（两条交叉弧，跟着球一起转 → 读得出"在滚"）
+    ctx.strokeStyle = 'rgba(255,255,255,.8)';
     ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(SX(fx.x), SY(fx.y), fx.radius, 0, TAU);
-    ctx.stroke();
-    // 收缩内圈：缩到中心 = 该炸了
-    ctx.globalAlpha = 0.55;
-    ctx.beginPath();
-    ctx.arc(SX(fx.x), SY(fx.y), fx.radius * (1 - p), 0, TAU);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
+    ctx.beginPath(); ctx.arc(0, 0, r * 0.62, 0.25, 2.5); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, 0, r * 0.62, 3.4, 5.6); ctx.stroke();
+    // 高光
+    ctx.fillStyle = PALETTE.yarnCore;
+    ctx.beginPath(); ctx.arc(-r * 0.28, -r * 0.34, r * 0.3, 0, TAU); ctx.fill();
+    ctx.restore();
+
+    // 回到手上的那一瞬：小爆点
+    if (fx.phase === 'dead' || fx.travelled < 4) {
+      ctx.globalAlpha = 0.6;
+      ctx.fillStyle = PALETTE.yarnCore;
+      ctx.beginPath(); ctx.arc(bx, by, r * 1.8, 0, TAU); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
   }
 
-  // 冲击波：扩散环
+  // ---- 甩尾陀螺：会转的旋风弧 ----
   for (const fx of abilities) {
-    if (fx.kind !== 'nova') continue;
+    if (fx.kind !== 'spin') continue;
     const p = Math.min(1, fx.t / fx.life);
-    const r = fx.radius * (0.25 + 0.75 * p);
-    ctx.globalAlpha = 0.85 * (1 - p * 0.8);
-    ctx.strokeStyle = PALETTE.excite;
-    ctx.lineWidth = Math.max(1, 5 - 4 * p);
-    ctx.beginPath();
-    ctx.arc(SX(fx.x), SY(fx.y), r, 0, TAU);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
-
-  // 贯穿：锥形收窄的光束（外层 + 白芯）
-  for (const fx of abilities) {
-    if (fx.kind !== 'beam') continue;
-    const p = Math.min(1, fx.t / fx.life);
-    const x0 = SX(fx.x), y0 = SY(fx.y), x1 = SX(fx.ex), y1 = SY(fx.ey);
-    let ux = x1 - x0, uy = y1 - y0;
-    const len = Math.hypot(ux, uy) || 1;
-    ux /= len; uy /= len;
-    const nx = -uy, ny = ux;
-    const hw = fx.halfWidth;
-
-    ctx.globalAlpha = 0.95 * (1 - p);
-    ctx.fillStyle = '#FFF6D0';
-    ctx.beginPath();
-    ctx.moveTo(x0 + nx * hw, y0 + ny * hw);
-    ctx.lineTo(x1 + nx * 2, y1 + ny * 2);
-    ctx.lineTo(x1 - nx * 2, y1 - ny * 2);
-    ctx.lineTo(x0 - nx * hw, y0 - ny * hw);
-    ctx.closePath();
-    ctx.fill();
-
-    const cw = hw * 0.38;
-    ctx.globalAlpha = 1 - p;
-    ctx.fillStyle = fx.crit ? PALETTE.gold : '#FFFFFF';
-    ctx.beginPath();
-    ctx.moveTo(x0 + nx * cw, y0 + ny * cw);
-    ctx.lineTo(x1 + nx * 0.5, y1 + ny * 0.5);
-    ctx.lineTo(x1 - nx * 0.5, y1 - ny * 0.5);
-    ctx.lineTo(x0 - nx * cw, y0 - ny * cw);
-    ctx.closePath();
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  }
-
-  // 落雷爆发：中心闪光 + 扩散环，最后画（一闪而过）
-  for (const fx of abilities) {
-    if (fx.kind !== 'bolt' || !fx.fired) continue;
-    const p = Math.min(1, (fx.t - fx.warn) / fx.life);
     const cx = SX(fx.x), cy = SY(fx.y);
-    ctx.globalAlpha = 0.95 * (1 - p);
-    ctx.fillStyle = '#FFF0A8';
-    ctx.beginPath();
-    ctx.arc(cx, cy, fx.radius * 0.55 * (1 - p * 0.6), 0, TAU);
-    ctx.fill();
-    ctx.globalAlpha = 0.85 * (1 - p);
-    ctx.strokeStyle = PALETTE.gold;
-    ctx.lineWidth = Math.max(1, 4 - 3 * p);
-    ctx.beginPath();
-    ctx.arc(cx, cy, fx.radius * (0.55 + 0.65 * p), 0, TAU);
-    ctx.stroke();
+    for (let i = 0; i < 3; i++) {
+      const q = p - i * 0.10;
+      if (q < 0) continue;
+      const r = fx.radius * (0.34 + 0.72 * q);
+      const a0 = fx.t * 17 + i * 2.1;
+      ctx.globalAlpha = (1 - p) * (0.92 - i * 0.24);
+      ctx.strokeStyle = i === 0 ? '#FFFFFF' : PALETTE.dust;
+      ctx.lineWidth = Math.max(1, 7 - i * 2 - 5 * q);
+      ctx.lineCap = 'round';
+      // 两段弧（不闭合）—— 闭合圆会被读成"爆炸"
+      ctx.beginPath(); ctx.arc(cx, cy, r, a0, a0 + 2.2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, r, a0 + 3.2, a0 + 5.3); ctx.stroke();
+    }
     ctx.globalAlpha = 1;
+  }
+
+  // ---- 踩奶扑击 ----
+  for (const fx of abilities) {
+    if (fx.kind !== 'pounce') continue;
+    const cx = SX(fx.x), cy = SY(fx.y);
+
+    if (!fx.landed) {
+      // 落地前：收缩的虚线靶心（越近越紧，玩家能读出"要下来了"）
+      const p = Math.min(1, fx.t / fx.airTime);
+      ctx.globalAlpha = 0.45 + 0.45 * p;
+      ctx.strokeStyle = PALETTE.gold;
+      ctx.lineWidth = 3;
+      ctx.setLineDash([7, 6]);
+      ctx.beginPath(); ctx.arc(cx, cy, fx.radius * (1.5 - 0.5 * p), 0, TAU); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    } else {
+      const q = Math.min(1, (fx.t - fx.airTime) / POUNCE.fxLife);
+      // 压出来的扁椭圆（比圆更"被砸过"）
+      ctx.globalAlpha = 0.8 * (1 - q);
+      ctx.fillStyle = PALETTE.dust;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + 5, fx.radius * (0.75 + 0.5 * q),
+                  fx.radius * (0.28 + 0.12 * q), 0, 0, TAU);
+      ctx.fill();
+      // 冲击环
+      ctx.globalAlpha = (1 - q) * 0.95;
+      ctx.strokeStyle = PALETTE.gold;
+      ctx.lineWidth = Math.max(1, 5 - 4 * q);
+      ctx.beginPath(); ctx.arc(cx, cy, fx.radius * (0.6 + 1.05 * q), 0, TAU); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
   }
 }
 
@@ -2050,7 +2408,10 @@ window.PAWPACK = {
   _abilities: () => abilities,
   _spawnAt: (type, x, y) => spawnEnemy(type, false, x, y),
   // 技能判定直接暴露：这几条是"编译能过但一跑就错"的重灾区
-  _castBeam: castBeam, _castBolt: castBolt, _castNova: castNova,
+  _castYarn: castYarn, _castSpin: castSpin, _castPounce: castPounce,
+  // 只推进技能实例（不给敌人/玩家跑逻辑）—— 悠悠球要飞 0.25s，
+  // 测试期间怪不能自己走位，否则判定位置不可预测
+  _updateAbilities: updateAbilities,
   _render: render,
 };
 </script>

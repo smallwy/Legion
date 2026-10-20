@@ -1,0 +1,3176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>吧唧军团 · 森林觅食（ATB 即时回合制）</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: #14211A; font-family: system-ui, "Microsoft YaHei", sans-serif;
+  }
+  #wrap { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+  #cv { display: block; border-radius: 8px; box-shadow: 0 12px 40px rgba(0,0,0,.55); cursor: default; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<script>
+"use strict";
+
+/* ============================================================
+   1. 配置
+   ============================================================ */
+
+const W = 960, H = 600;
+/** 战场区（单位活动范围）与 UI 区的分界 */
+const FIELD_BOTTOM = 472;
+
+const COL = {
+  sky: '#A8DCEF', skyLow: '#D8F0E4',
+  far: '#7FB68C', farr: '#6AA37A',
+  mid: '#4E8F63', midr: '#3E7A52',
+  near: '#2F6B48',
+  grass: '#5FAF5F', grassDark: '#4A9450', grassLight: '#8CD47C',
+  dirt: '#C4A06A', dirtDark: '#A8854F', dirtLight: '#D8BA88',
+  outline: '#2E3F33',
+  cream: '#FFF8E7', gold: '#FFC53D', goldDeep: '#E8A317',
+  danger: '#FF5C5C', dangerDeep: '#C93B3B',
+  safe: '#5FCB71', teal: '#46C2B4', sky2: '#79C8EE',
+  purple: '#B47CE0', pink: '#FF9EC4',
+  ink: '#2E2A22', inkSoft: '#6B6152',
+  panel: '#2B3A2E', panelHi: '#3A4C3C', panelEdge: '#1E2A21',
+  hp: '#5FCB71', hpLow: '#FF8A5C', hpCrit: '#FF5C5C',
+  atb: '#FFC53D', atbFull: '#FFE58A',
+  petBg: '#40341F', petBgOn: '#5A4A2A',
+};
+
+/**
+ * ATB 参数。
+ *
+ * 这是"即时回合制"的心脏：时间**不停**，只是当有宠物攒满行动条时
+ * 全场减速到 16%，让你从容选招 —— 慢放期间敌人还在打你，
+ * 所以"慢慢想"是有代价的。这是 ATB 和纯回合制的分界线。
+ */
+/** 单场战斗上限（秒）。到点按剩余血量判，防止双方都打不动的僵局 */
+const BATTLE_TIMEOUT = 75;
+
+const ATB = {
+  full: 100,
+  slow: 0.16,        // 有人待选时的世界速度
+  castAnim: 0.34,    // 原地出手的动作时长
+  autoPick: 6.0,     // 慢放超过这么久还没选，自动用第一招（防挂机卡死）
+};
+
+/**
+ * 近战出手的位移时间线。
+ *
+ * 原来那只叫「冲刺」的东西其实只往前顶了 55%、最远 90px 就弹回来 ——
+ * 看着像原地抖了一下，谁都看得出来没打到人。现在改成**真的走过去**：
+ *
+ *   0            ~ 0.28s   冲过去（落在目标身前一个身位）
+ *   0.28s        ~ 0.38s   停下、发力（命中判定与特效都压在这一帧）
+ *   0.38s        ~ 0.68s   走回自己的格子（**无条件复位**）
+ *
+ * 「复位」是硬约束：锚点 = 站位 = 前后排判定的依据。只要有一次没走回去，
+ * 下一次出手的起点就偏了，几场之后整队会自己漂到敌方阵里去。
+ */
+const MOVE = {
+  approach: 0.28,
+  hold: 0.10,
+  back: 0.30,
+  trailEvery: 0.045,   // 残影间隔
+};
+
+/** 卡牌尺寸：底部宠物条 */
+const CARD = { w: 172, h: 100, gap: 10, y0: 488 };
+CARD.x0 = (W - (CARD.w * 5 + CARD.gap * 4)) / 2;
+
+/**
+ * 战场格子。
+ *
+ * 单位按数组索引"挤"到两条竖列上的话，4 只以上就互相盖住 ——
+ * 「横版都重叠了」就是这个。改成**固定格子**：每个单位锁死在一个格心，
+ * 出手时人跑出去、跑回来，但锚点不动，所以无论几只都不会重叠。
+ *
+ * 列的方向就是纵深：
+ *   petX[0] 后排、petX[1] 前排（贴近敌方）
+ *   enemyX[0] 前排、enemyX[1] 后排
+ *
+ * 行基线下移过一段：原来后排落在 y=178，单位头顶直接顶到 90 左右，
+ * 整个 y<180 的区域都被单位占掉，背景连一条完整的林线都放不下 ——
+ * 「战斗发生在树上」有一半是这么来的（背景没地方站，只能和单位抢空间）。
+ */
+const GRID = {
+  rows: 3,
+  rowY: [228, 314, 400],      // 后 → 前
+  rowSc: [0.84, 0.94, 1.04],  // 透视：前排画大一点
+  petX: [172, 288],
+  enemyX: [640, 756],
+  cellW: 104, cellH: 104,
+};
+
+/** 格子索引 = row*2 + col，编队和战斗共用同一套编号 */
+function slotIndex(row, col) { return row * 2 + col; }
+function slotRow(i) { return Math.floor(i / 2); }
+function slotCol(i) { return i % 2; }
+
+/* ============================================================
+   2. 宠物 / 技能 / 敌人定义
+   ============================================================ */
+
+/**
+ * 五只可出战宠物。
+ * `spd` 决定行动条涨速 —— 猫最快（几乎每 3 秒一次），狗最慢（5 秒一次）。
+ * 这个差距就是"编队"的意义：带谁上场 = 队伍的行动节奏长什么样。
+ */
+const PET_DEFS = [
+  { id: 'cat', name: '橘子', species: '猫', tint: '#FFB454',
+    hp: 26, spd: 30, atk: 1.00, size: 96,
+    skills: ['scratch', 'arch'],
+    trait: '出手最快，单体最痛' },
+  { id: 'dog', name: '豆豆', species: '狗', tint: '#8FD3FF',
+    hp: 40, spd: 20, atk: 1.00, size: 106,
+    skills: ['charge', 'bark'],
+    trait: '血最厚，会把仇恨全揽过来' },
+  { id: 'ham', name: '团子', species: '仓鼠', tint: '#FFA8D5',
+    hp: 20, spd: 25, atk: 0.90, size: 76,
+    skills: ['stuff', 'burrow'],
+    trait: '击杀能多带食物，会钻地躲' },
+  { id: 'rab', name: '布丁', species: '兔', tint: '#FFF0C9',
+    hp: 24, spd: 26, atk: 0.90, size: 88,
+    skills: ['kick', 'nuzzle'],
+    trait: '唯一会治疗的' },
+  { id: 'duck', name: '麻薯', species: '鸭', tint: '#C9A8FF',
+    hp: 28, spd: 22, atk: 0.90, size: 92,
+    skills: ['splash', 'quack'],
+    trait: '全队提速，群伤' },
+];
+
+/**
+ * 技能表。
+ * `target` 决定要不要再点一次：
+ *   'enemy' 点敌方一个 / 'ally' 点我方一个 / 'allEnemies' 'allAllies' 'self' 直接放
+ */
+const SKILLS = {
+  scratch: {
+    name: '挠', target: 'enemy', color: '#FFB454',
+    desc: '单体 14 伤',
+    cast(r, t) { hitOne(r, t, 14); addSlash(t.x, t.y - 34, 1, COL.gold, 78); say('挠!', t, COL.gold); },
+  },
+  arch: {
+    name: '弓背', target: 'self', color: '#FF9EC4',
+    desc: '2.2 秒内挨打减 60%，被咬就反挠 7',
+    cast(r) {
+      // 减伤窗口要长到覆盖敌人下一次出手 —— 猫 3 秒出一次手，
+      // 而野猪 5 秒才咬一口，窗口设 1 秒的话大概率白放。
+      r.guard = 0.6; r.counter = 7; r.guardT = 2.2;
+      say('哈——', r, COL.pink);
+      addShock(r.x, r.y + 4, COL.pink, 1.1);
+      addRing(r.x, r.y, COL.pink, 0.4);
+    },
+  },
+  charge: {
+    name: '撞', target: 'enemy', color: '#8FD3FF',
+    desc: '单体 11 伤，把它的行动条撞空',
+    cast(r, t) {
+      hitOne(r, t, 11);
+      t.atb = 0;
+      t.stunT = Math.max(t.stunT, 0.7);
+      addShock(t.x, t.y + 4, COL.sky2, 1.4);
+      say('撞!', t, COL.sky2);
+    },
+  },
+  bark: {
+    name: '汪汪', target: 'self', color: '#7FB6FF',
+    desc: '全体敌人改打你，自己得 14 护盾',
+    cast(r) {
+      for (const e of aliveEnemies()) {
+        if (e.tauntT !== undefined) { e.tauntOn = r.id; e.tauntT = 3; }
+      }
+      r.shield = (r.shield || 0) + 14;
+      say('汪!汪!', r, COL.sky2);
+      addShock(r.x, r.y + 4, COL.sky2, 1.6);
+      addRing(r.x, r.y, COL.sky2, 0.55);
+    },
+  },
+  stuff: {
+    name: '塞嘴', target: 'enemy', color: '#FFA8D5',
+    desc: '单体 8 伤；打死它额外带回 1 份食物',
+    cast(r, t) {
+      r.stuffKill = true;              // 标记：这一击若击杀则产粮
+      hitOne(r, t, 8);
+      r.stuffKill = false;
+      say('塞!', t, COL.pink);
+    },
+  },
+  burrow: {
+    name: '钻地', target: 'self', color: '#C9A88F',
+    desc: '本回合不可被选中，行动条立刻 +40',
+    cast(r) {
+      r.hidden = 1.1;
+      r.atb = Math.min(ATB.full - 1, r.atb + 40);
+      say('钻!', r, COL.dirt);
+      addRing(r.x, r.y, COL.dirt, 0.35);
+    },
+  },
+  kick: {
+    name: '踢', target: 'enemy', color: '#FFF0C9',
+    desc: '单体 9 伤 + 定住 2 秒',
+    cast(r, t) {
+      hitOne(r, t, 9);
+      t.stunT = Math.max(t.stunT, 2);
+      addShock(t.x, t.y + 4, COL.gold, 1.2);
+      say('踢!', t, COL.gold);
+    },
+  },
+  nuzzle: {
+    name: '蹭蹭', target: 'allAllies', color: '#FFC0CB',
+    desc: '全队回 12 血，顺手解掉定身',
+    cast(r) {
+      // 回 7 时这笔交易是净亏：放弃一次 9 点伤害，只换 7 点血，
+      // 战斗还被拖长一轮，等于替敌人多打你一次。提到 12 才勉强打平。
+      for (const p of alivePets()) { healPet(p, 12); p.stunT = 0; }
+      say('蹭~', r, COL.pink);
+    },
+  },
+  splash: {
+    name: '扑翅', target: 'allEnemies', color: '#C9A8FF',
+    desc: '全体敌人 6 伤',
+    cast(r) {
+      for (const e of aliveEnemies()) hitOne(r, e, 6, 0.5);
+      for (const e of aliveEnemies()) addShock(e.x, e.y + 4, COL.purple, 1.0);
+      addRing(r.x, r.y, COL.purple, 0.5);
+      say('扑!', r, COL.purple);
+    },
+  },
+  quack: {
+    name: '嘎嘎', target: 'allAllies', color: '#B47CE0',
+    desc: '全队行动条 +35',
+    cast(r) {
+      for (const p of alivePets()) p.atb = Math.min(ATB.full - 1, p.atb + 35);
+      say('嘎!', r, COL.purple);
+      addRing(r.x, r.y, COL.purple, 0.5);
+      for (const p of alivePets()) addRing(p.x, p.y, COL.purple, 0.4);
+    },
+  },
+};
+
+/**
+ * 近战技能：出手人会真的跑到目标面前打一下，再走回格子。
+ *
+ * 哪些算近战不是拍脑袋 —— 是「这个词本身要求身体接触」：
+ * 挠、撞、塞、踢都要碰到对方；弓背/汪汪/群疗/扑翅/嘎嘎是原地起效。
+ * 这条表决定了画面上动不动，所以它必须和技能描述对得上，
+ * 不然玩家会看到「撞」这个字配一个原地不动的动画。
+ */
+const MELEE_SKILLS = {
+  scratch: 1,   // 挠
+  charge: 1,    // 撞
+  stuff: 1,     // 塞嘴
+  kick: 1,      // 踢
+};
+
+/**
+ * 森林里的敌人。
+ * `kind` 决定 AI 倾向：
+ *   brute   —— 咬最靠前的宠物
+ *   thief   —— 偷食物（不打你，但你的产出被吃掉）
+ *   bruiser —— 随机咬
+ *   boss    —— 打全体
+ */
+const ENEMY_DEFS = {
+  boar: { name: '野猪', sprite: 'enemy-tank', tint: '#D98A5B',
+          hp: 46, spd: 15, atk: 7, size: 112, kind: 'brute' },
+  crow: { name: '乌鸦', sprite: 'enemy-flyer', tint: '#9B8FE0',
+          hp: 22, spd: 26, atk: 4, size: 84, kind: 'thief' },
+  racc: { name: '浣熊', sprite: 'enemy-walker', tint: '#B7B7B7',
+          hp: 34, spd: 21, atk: 6, size: 94, kind: 'bruiser', ward: 0.30 },
+  boss: { name: '獠牙野猪王', sprite: 'enemy-tank', tint: '#C86A4A',
+          hp: 270, spd: 17, atk: 10, size: 196, kind: 'boss' },
+};
+
+/** 森林深度 → 这一层撞见什么。越深越肥，也越疼 */
+const DEPTHS = [
+  { d: 1, name: '林缘',     enemies: ['crow', 'crow', 'racc'],            food: 2,
+    note: '刚进林子，风吹草动' },
+  { d: 2, name: '橡树坡',   enemies: ['racc', 'racc', 'crow'],            food: 3,
+    note: '橡子落了一地' },
+  { d: 3, name: '溪谷营地', enemies: ['boar', 'racc', 'crow', 'crow'],    food: 4,
+    note: '有谁在这儿扎过营' },
+  { d: 4, name: '苔沼',     enemies: ['boar', 'boar', 'racc'],            food: 6,
+    note: '泥里全是脚印' },
+  { d: 5, name: '野猪王的窝', enemies: ['boss', 'crow', 'crow'],           food: 14,
+    note: '再往里就回不来了', isBoss: true },
+];
+
+const MAX_DEPTH = DEPTHS.length;
+const START_FOOD = 6;
+const MAX_PARTY = 5;
+
+/* ============================================================
+   3. 精灵
+   ============================================================ */
+
+const SPRITE_SRC = {
+  'pet': 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABhUlEQVR42mNgGAWjYIABIz5JKTG5/8j8Z68eMRJjKCn6GPEZ8mj7FhQxOU8fgo4gVR8TsYYwMDAwPNq+BcN3lOpjGug0wEKOJnyhQHMHYAtiSgDToM2GUmJy/891dKGIiehrEWXom4vXUPhGFWWk5QJiDSZXDcEQwOZ7BgYGBvHEcAZlWWUGBgYGhlsbN2DIMxvpwuWPNbURFQosuPIyNp/ADMflUyv/ALyJV87T5z+6IwZfIsQV/NQA2KKBEVfwC8lIwcXfPXmGatKlO9ht0FNB4aKbIaKvhVEvYA2BB0uWYJgNdwQuy9EcgWw5DCjExDAQlQaObNuDwb926RqG5X27tmCyL91huHbpGlYzSCqKcWkgBRBjBs5yYElUAlYNWgxseA28xvALq3jMsgVYywGsUfDs1SPGmGULSLKAHMuJapLhCgliAT7LCRZE+EKCGpYT3R74wwZRxvLrDwMp6qneIIEZnLBgDlb5BQkp9GmSYWtqk9tMYxrUHRNSOxrkdmQGFAAAtGvMozZ4G9gAAAAASUVORK5CYII=',
+  'enemy-walker': 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAcCAYAAAAAwr0iAAABpklEQVR42uVXsU7DMBQ8RwaxFDF16BC1E1LVoQKGfgJTBVJ3fgG2Dt3akYGBkU/ogJj4ApQBEENVCQkpKEIZvBClS9UlDMWQOnZiJ6EduK11/O7evTz7BfiPqFXtqFa1IwCgmyCvd8LlD8eOrI2Rf8PKG6iomHdnFz7zCM1DNhq3MOgh8b/PPKKTPScHAJJFPhq3tLMa9CY/gUXhMnKlAL7ZhDwuQtx7c/mQsF4pwDRrU3Fimax1kXNXxNLkOgeeHl9xeLSf+QzH9cUbPt3h0gVMVp4jsuzjm8vA8OQMB8dXeL4/x+2Hs1IKKlPuTmdGBI1mxcg9pQOn/S0A+FMB7nSGl7sduQPudIZGs2IUUJeUI04uLQEXUSZpGojYhu3uvJC9aRCz12pD0/dBRay6K6QnoehCEdKsS4qk3Vx71W1j4oAtpGe+ClbatcmD5cm63gm15gaaNTTI0O7OEbBFYt1nHoHzm0C9EwKOHaU5QXWGBnE9YOohRBShXQLZvKYzUsnWfOYR7k5WKahMue4LlAYeL6sLqGxTUXKd9lN2QVnka/mqKQNfSkAEv8mTRVUAAAAASUVORK5CYII=',
+  'enemy-flyer': 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAeCAYAAABNChwpAAAB1ElEQVR42tVWv0vDQBT+EkKLQysOiZBAF7EkW5FCN7HQQnB0LP0j3Nwc3Nw6+gdIR2fBgsVNkdKtpeBSsGCqg+1UKY2LF/LjWu+1odq3JJe8e99337137wAB07WMe7y95epaxo3TFwBkECw3GWJRYF3LuLnJkBJSjMDA6UvtpLqQhB+8nVQxcPqSSGyJwjYMElaHCg4ACojWTqpoVYrcfwf1e2o4cQV0LeOmZ1Nv3KyWA/+Pru+895GsrLYFvD1Oz6boDF9hqUaEhB+c+YxkhZtLC7eAAb92byOTrWwpAD7PmA8vhmHabpiI4gfnTYrTWHzDtF1GQl4XeJgIU3tuFXQeboLjXgNWtsRNwma1HMyDXgMrl6F1eBL51qyW0X18BgDvyexqfwcAYBbyJDVI50AYdJ7PLkfBeYsSJvB2cQmKr3V+Jt4LBk5fMkx7bUlomDYCVeAnwSNCWf2iOSy+/xwQOglblaLQ/vvNLOQjvYF3EkoiPaC+l1pK6srL+NeeIOOPTYjAk/MReMblSyrDZUjEosDA6Uu1cYIsbW2cELoTbEYOUFUQXf3mKOB1w/fPWHzIl1Ledfw09RWRfZnruUQFZ0Gp3/9tDigiFYCf5iQiKdX/G43V/rVflKS8AAAAAElFTkSuQmCC',
+  'enemy-tank': 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABmElEQVR42tWWzUrDQBSFT4ZBpARxlUWoBUHwZyPotrv6EF13VRCE0odw5RtIF658CR9BISsRXGlwkVWxIRQJxIUNzkyb68wkaWNWIfPznXvn3JsB/vPje53M9zpZmT1YGXi3P0S3P0QZEWzTWeQ2kVPfP6I3x2Q/xxTeG4zJOQ+TGyMRrEo4APQGYyNPsCrhNiKMPHB3fYVZMAIAXN7vk+NHkxqqYBaMcHJxaz3eyDJ06vCASTUw27ov0zO0MpAvFiN/Dh6lOeHLEwCgfXgmfT8+PZcyQTUoRzflKpwSoIqgjoRVcd5legNbB5wS0ZwyVKNfdeYmHqA8IfphqRXrgG2efF/VnGwdcIqxcQ9IAqL319qBKoMXTfD2DgoXqmM6c4qCc9Q+wL22djRfyScAYKu1o70mjUKpIzbLAwAwj6e1webxFGnLlbohE9OfttzaRKRR+PsuiOAqHAB4EiNN4p93A0/8BTa6lOZG8YHMRkieRS7upQS69C9Q4WqF5Iu33V2tNIsZFUWIDE5Bqej44ohWZo24iqmcb/vc1rslJwrMAAAAAElFTkSuQmCC',
+};
+
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const IMG = {}, SKIN = {};
+let assetsReady = false, assetsLeft = 0;
+
+/**
+ * 离线合成「染色 + 描边」贴图。每张图只做一次，运行时依旧一次 drawImage。
+ * （Cocos 侧没有 Canvas source-in 的等价写法，那边应该让美术直接出带描边的图。）
+ */
+function bake(img, tint, outline, r) {
+  const pad = r + 1;
+  const c = document.createElement('canvas');
+  c.width = img.width + pad * 2;
+  c.height = img.height + pad * 2;
+  const g = c.getContext('2d');
+
+  const dyed = document.createElement('canvas');
+  dyed.width = img.width; dyed.height = img.height;
+  const dg = dyed.getContext('2d');
+  dg.drawImage(img, 0, 0);
+  if (tint) {
+    dg.globalCompositeOperation = 'source-atop';
+    dg.globalAlpha = 0.5;
+    dg.fillStyle = tint;
+    dg.fillRect(0, 0, dyed.width, dyed.height);
+    dg.globalAlpha = 1;
+  }
+
+  const sil = document.createElement('canvas');
+  sil.width = img.width; sil.height = img.height;
+  const sg = sil.getContext('2d');
+  sg.drawImage(dyed, 0, 0);
+  sg.globalCompositeOperation = 'source-in';
+  sg.fillStyle = outline;
+  sg.fillRect(0, 0, sil.width, sil.height);
+
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    g.drawImage(sil, pad + Math.cos(a) * r, pad + Math.sin(a) * r);
+  }
+  g.drawImage(dyed, pad, pad);
+  c.pad = pad;
+  return c;
+}
+
+for (const k in SPRITE_SRC) assetsLeft++;
+
+/**
+ * 全部图解码完才合成。
+ *
+ * 这里刻意**不**用「计数器减到 0」判断 —— 那个写法只有在 onload 保证异步时
+ * 才成立。一旦某张图同步就绪（缓存命中、data URI、离线测试桩），第一张加载完
+ * 就会误判"全部到齐"，随后 bake(undefined) 直接崩。按"实际到齐数量"判定，
+ * 同步异步都对。
+ */
+function tryFinishAssets() {
+  if (assetsReady) return;
+  if (Object.keys(IMG).length < assetsLeft) return;
+  for (const kk in IMG) SKIN['img:' + kk] = bake(IMG[kk], null, COL.outline, 2);
+  for (const p of PET_DEFS) SKIN[p.id] = bake(IMG['pet'], p.tint, COL.outline, 2);
+  for (const ek in ENEMY_DEFS) {
+    SKIN['e:' + ek] = bake(IMG[ENEMY_DEFS[ek].sprite], ENEMY_DEFS[ek].tint, COL.outline, 2);
+  }
+  assetsReady = true;
+}
+
+for (const k in SPRITE_SRC) {
+  const im = new Image();
+  im.onload = im.onerror = () => {
+    if (im.width > 0) IMG[k] = im;
+    tryFinishAssets();
+  };
+  im.src = SPRITE_SRC[k];
+}
+
+/* ============================================================
+   4. 状态
+   ============================================================ */
+
+const S = {
+  phase: 'roster',     // roster | battle | trail | result
+  rng: Math.random,
+  nextId: 1,
+
+  food: START_FOOD,    // 干粮：出征前喂宠物 + 战斗中被乌鸦偷
+  carried: 0,          // 这趟已经拿到、但还没带回家的食物
+  depth: 0,            // 0 = 还没出发；1..5 在森林里
+  // 默认带三只直接能出发（猫后排、狗前排、仓鼠后排）——
+  // 打开就要能玩，不该先让人研究怎么上阵
+  party: ['cat', 'dog', 'ham'],
+  /**
+   * 站位：长度 6，索引 = row*2+col（列 0 后 / 列 1 前），值 = petId。
+   * 这是**全自动战斗下玩家唯一的临场干预手段**：站前排挨打多、站后排更安全。
+   */
+  slots: ['cat', null, null, 'dog', 'ham', null],
+  pickSlot: null,      // 编队里被选中、等待换位的那一格
+  fed: {},             // { petId: true } 是否喂过
+
+  pets: [],            // 战斗单位
+  enemies: [],
+  fx: [],
+  ghosts: [],          // 冲刺残影（单独一队，因为要画在单位之前）
+  fxDelay: 0,          // 出手期间产生的特效统一延后这么多秒（= 跑到目标身前的时间）
+  pendingHit: null,    // { at, pause, shake } 顿帧和震屏也要等命中的那一帧
+  await: [],           // 行动条满了、等玩家选招的宠物（队首可操作）
+  awaitT: 0,           // 慢放持续时长（超时自动出手）
+  aiming: null,        // { actor, skillId } 正在等玩家点目标
+
+  timeScale: 1,
+  battleT: 0,
+  battleRealT: 0,      // 真实时间，超时判定用它（battleT 吃时间缩放，会被顿帧拖慢）
+  auto: true,          // 战斗全自动施法（测试里置 false 可手动接管）
+  castGap: 0,          // 两次出手的最小间隔，避免同帧齐放糊成一团
+  hitPause: 0,         // 出手顿帧
+  ateThisTrail: false,
+  result: '',
+  log: [],
+  hover: null,
+  banner: null,
+  shake: 0,
+};
+
+function makePet(defId) {
+  const d = PET_DEFS.find(p => p.id === defId);
+  const fed = !!S.fed[defId];
+  return {
+    id: S.nextId++,
+    side: 'pet',
+    def: d,
+    name: d.name,
+    hp: d.hp + (fed ? 2 : 0),
+    maxHp: d.hp + (fed ? 2 : 0),
+    // dmgMul 是**倍率**，不是基础伤害。早期把基础值塞这儿，
+    // 结果敌人传进来的 rawDmg 本身就是 atk，伤害被平方（乌鸦 6 伤打出 36）。
+    dmgMul: d.atk * (fed ? 1.20 : 1),
+    spd: d.spd * (fed ? 1.12 : 1),
+    atb: 0,
+    x: 0, y: 0, hx: 0, hy: 0,
+    anim: null,
+    guard: 0, guardT: 0, counter: 0,
+    shield: 0,
+    hidden: 0,
+    stunT: 0,
+    hitT: 0,
+    hitDelay: 0,
+    animSX: 0, animSY: 0,
+    dying: 0,
+    bob: Math.random() * 6.28,
+    fed,
+  };
+}
+
+function makeEnemy(defId, slot) {
+  const d = ENEMY_DEFS[defId];
+  const c = S.depth;
+  // 深度加成：血量和攻击随层数长，但**不加数量**（数量交给 DEPTHS 表控制）
+  const hpMul = 1 + (c - 1) * 0.10;
+  const atkMul = 1 + (c - 1) * 0.09;
+  return {
+    id: S.nextId++,
+    side: 'enemy',
+    def: d,
+    name: d.name,
+    hp: Math.round(d.hp * hpMul),
+    maxHp: Math.round(d.hp * hpMul),
+    atk: d.atk * atkMul,     // 基础伤害（hitOne 的 rawDmg）
+    dmgMul: 1,               // 倍率，敌人不做二次缩放
+    spd: d.spd,
+    atb: 18 + slot * 7,     // 错开起手，避免同帧齐动
+    x: 0, y: 0, hx: 0, hy: 0,
+    anim: null,
+    shield: 0,
+    stunT: 0,
+    hitT: 0,
+    hitDelay: 0,
+    animSX: 0, animSY: 0,
+    dying: 0,
+    bob: Math.random() * 6.28,
+    slot,
+    tauntOn: 0, tauntT: 0,
+  };
+}
+
+/* ============================================================
+   5. 战斗核心
+   ============================================================ */
+
+function alivePets() { return S.pets.filter(p => p.hp > 0 && !p.dying); }
+function aliveEnemies() { return S.enemies.filter(e => e.hp > 0 && !e.dying); }
+
+function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+
+/**
+ * 把 party 里的人分配到 6 个格子（slots 优先，剩下的人补空位）。
+ * 同一个 id 只认第一次出现，避免 slots 里手滑重复时整队错位。
+ */
+function assignPetGrid() {
+  const at = {}, taken = {};
+  for (let i = 0; i < 6; i++) {
+    const id = S.slots[i];
+    if (!id) continue;
+    const p = S.pets.find(x => x.def.id === id && at[x.id] === undefined);
+    if (!p) continue;
+    at[p.id] = i;
+    taken[i] = true;
+  }
+  let cursor = 0;
+  for (const p of S.pets) {
+    if (at[p.id] === undefined) {
+      while (cursor < 6 && taken[cursor]) cursor++;
+      if (cursor < 6) { at[p.id] = cursor; taken[cursor] = true; }
+      else at[p.id] = 0;
+    }
+    const i = at[p.id];
+    p.gridRow = slotRow(i);
+    p.gridCol = slotCol(i);
+  }
+}
+
+/** 敌人：先填前排列（0），满了再往后排 —— 前排先挨打，符合直觉 */
+function assignEnemyGrid() {
+  let k = 0;
+  for (const e of S.enemies) {
+    if (e.def.kind === 'boss') {
+      e.gridRow = 1; e.gridCol = 0; e.isBoss = true;
+      continue;
+    }
+    e.gridRow = k % GRID.rows;
+    e.gridCol = Math.floor(k / GRID.rows);
+    k++;
+  }
+}
+
+/**
+ * 让 slots 和 party 保持一致。
+ * 编队界面只改 slots（然后反推 party），但测试和旧代码会直接写 S.party。
+ */
+function syncSlotsFromParty() {
+  for (let i = 0; i < 6; i++) {
+    if (S.slots[i] && S.party.indexOf(S.slots[i]) < 0) S.slots[i] = null;
+  }
+  for (const id of S.party) {
+    if (S.slots.indexOf(id) >= 0) continue;
+    let free = -1;
+    for (let i = 0; i < MAX_PARTY; i++) {
+      if (!S.slots[i]) { free = i; break; }
+    }
+    if (free < 0) break;
+    S.slots[free] = id;
+  }
+}
+
+/** 按格子算锚点。单位从此只认格心，出手动画不改锚点 */
+function layoutBattle() {
+  assignPetGrid();
+  assignEnemyGrid();
+
+  for (const p of S.pets) {
+    const r = p.gridRow === undefined ? 1 : p.gridRow;
+    const c = p.gridCol === undefined ? 1 : p.gridCol;
+    p.hx = GRID.petX[c];
+    p.hy = GRID.rowY[r];
+    p.sc = GRID.rowSc[r];
+    p.dispSize = p.def.size * p.sc * 0.82;
+    p.x = p.hx;
+    p.y = p.hy;
+    p.anim = null;
+  }
+
+  for (const e of S.enemies) {
+    const r = e.gridRow === undefined ? 1 : e.gridRow;
+    const c = e.gridCol === undefined ? 0 : e.gridCol;
+    if (e.def.kind === 'boss') {
+      // boss 压住两格，故意大一号 —— 它要看起来"装不下"
+      e.hx = (GRID.enemyX[0] + GRID.enemyX[1]) / 2;
+      e.hy = 316;
+      e.sc = 1.0;
+      e.dispSize = e.def.size * 0.62;
+    } else {
+      e.hx = GRID.enemyX[c];
+      e.hy = GRID.rowY[r];
+      e.sc = GRID.rowSc[r];
+      e.dispSize = e.def.size * e.sc * 0.78;
+    }
+    e.x = e.hx;
+    e.y = e.hy;
+    e.anim = null;
+  }
+}
+
+/**
+ * 近战出手：跑到目标身前 → 发力 → 走回格子。
+ *
+ * 判定不在这里做（判定在 cast 里瞬时完成，见 petAct 的说明），
+ * 这里只负责把「人」搬过去再搬回来，并给出命中时刻给特效对表。
+ *
+ * @param actor  出手的人
+ * @param target 要打的人。传 null = 原地技能（弓背/汪汪/群疗），只做一个发力动作
+ * @returns 动画对象，带 hitAt（命中发生在这段动画的第几秒）
+ */
+function startAttackMove(actor, target) {
+  const fromX = actor.hx, fromY = actor.hy;
+
+  if (!target || target === actor) {
+    actor.anim = {
+      kind: 'brace', t: 0, dur: 0.30, hitAt: 0.10,
+      fromX, fromY, sx: 0, sy: 0, dir: 1, trailT: 0,
+    };
+    return actor.anim;
+  }
+
+  const dir = Math.sign(target.hx - fromX) || 1;
+  // 停在"贴身"距离：两只身体半个宽度之和，再留 6px 呼吸。
+  // 用 hx 而不是 x —— x 是渲染坐标，动画期间一直在变，拿它算目标点会跑偏。
+  const gap = (target.dispSize || 70) * 0.34 + (actor.dispSize || 70) * 0.30 + 6;
+  const stopX = target.hx - dir * gap;
+  // 冲过去的人站在对方稍靠前的位置（y 大一点 = 更靠近镜头），读起来才有前后关系
+  const stopY = target.hy + 10;
+
+  actor.anim = {
+    kind: 'run', t: 0,
+    dur: MOVE.approach + MOVE.hold + MOVE.back,
+    hitAt: MOVE.approach,
+    fromX, fromY, stopX, stopY, dir,
+    sx: 0, sy: 0, trailT: 0,
+  };
+  return actor.anim;
+}
+
+/** 冲刺残影：只存贴图和位置，画在单位之前，读起来像一条光带 */
+function pushGhost(u) {
+  const skin = u.side === 'pet' ? SKIN[u.def.id]
+    : SKIN['e:' + enemyKeyOf(u.def)];
+  if (!skin) return;
+  S.ghosts.push({
+    x: u.x, y: u.y, skin, size: u.dispSize || 70,
+    t: 0, life: 0.20,
+  });
+  if (S.ghosts.length > 26) S.ghosts.shift();
+}
+
+function tickAnim(u, dt) {
+  if (!u.anim) return;
+  const a = u.anim;
+  a.t += dt;
+  const t = a.t;
+
+  if (a.kind === 'brace') {
+    // 原地发力：蹲一下 → 弹一下。没有位移，纯粹是"蓄"和"放"
+    const k = clamp01(t / a.dur);
+    const sq = Math.sin(k * Math.PI);
+    a.sx = -0.09 * sq;
+    a.sy = 0.11 * sq;
+  } else if (t < MOVE.approach) {
+    // 冲过去：ease-out，起步猛、到点收住；中途带一个很小的跳弧
+    const k = t / MOVE.approach;
+    const s = 1 - Math.pow(1 - k, 2.2);
+    u.x = a.fromX + (a.stopX - a.fromX) * s;
+    u.y = a.fromY + (a.stopY - a.fromY) * s - Math.sin(k * Math.PI) * 16;
+    // 速度感：横向拉长 + 竖向压扁，落地前回正
+    a.sx = -0.13 * Math.sin(k * Math.PI);
+    a.sy = 0.17 * Math.sin(k * Math.PI);
+
+    a.trailT -= dt;
+    if (a.trailT <= 0) { a.trailT = MOVE.trailEvery; pushGhost(u); }
+  } else if (t < MOVE.approach + MOVE.hold) {
+    // 停在目标身前发力：压扁（Squash），命中特效就在这一段的开头
+    u.x = a.stopX; u.y = a.stopY;
+    const k = (t - MOVE.approach) / MOVE.hold;
+    a.sx = 0.22 * (1 - k);
+    a.sy = -0.19 * (1 - k);
+  } else {
+    // 走回自己的格子：smoothstep + 收尾一点点过冲，落地才不显得"瞬移"
+    const k = clamp01((t - MOVE.approach - MOVE.hold) / MOVE.back);
+    const s = k * k * (3 - 2 * k);
+    u.x = a.stopX + (a.fromX - a.stopX) * s;
+    u.y = a.stopY + (a.fromY - a.stopY) * s;
+    const over = Math.sin(k * Math.PI) * 0.045;
+    a.sx = -over;
+    a.sy = over * 1.4;
+  }
+
+  if (t >= a.dur) {
+    // 复位：直接赋值，不做任何插值兜底。
+    // 这里一旦"大概回到"而不是"精确回到"，站位判定就会开始漂，
+    // 而站位是自动战斗里唯一的战斗内决策 —— 它不能有误差。
+    u.x = u.hx;
+    u.y = u.hy;
+    u.anim = null;
+    a.sx = 0; a.sy = 0;
+    return;
+  }
+  u.animSX = a.sx || 0;
+  u.animSY = a.sy || 0;
+}
+
+function hitOne(actor, target, rawDmg, falloff) {
+  if (!target || target.hp <= 0 || target.dying) return 0;
+
+  // 顺序很重要：会心 → 减伤 → 护盾 → 保底。
+  // 早期版本把「最低 1 点」放在护盾之前，导致 999 点护盾仍然每次漏 1 血 ——
+  // 「汪汪」给的 14 护盾等于形同虚设。
+  // 这里乘的是**倍率**（dmgMul），不是攻击力。
+  // 早期写成 actor.atk，而敌人调用时传的 rawDmg 本身就是 e.atk，
+  // 结果伤害被平方：乌鸦 6 伤实际打出 36，14 秒就能灭掉整队。
+  let dmg = rawDmg * (actor.dmgMul || 1) * (falloff === undefined ? 1 : falloff);
+
+  const crit = S.rng() < 0.12;
+  if (crit) dmg *= 1.6;
+  if (target.guardT > 0) dmg *= (1 - target.guard);
+  dmg = Math.round(dmg);
+
+  // 浣熊"护着"其他家伙：只要还有活的浣熊，别的敌人少挨 30%。
+  // 这是给"先打谁"这件事一个硬理由 —— 全部敌人都只会掉血的话，
+  // 最优解永远是打最脆的那个，目标选择等于没有选择。
+  if (target.side === 'enemy' && target.def.kind !== 'bruiser') {
+    const hasWard = S.enemies.some(e => e.hp > 0 && e.dying <= 0 && e.def.ward);
+    if (hasWard) dmg *= (1 - 0.30);
+  }
+
+  if (target.shield > 0) {
+    const absorb = Math.min(target.shield, dmg);
+    target.shield -= absorb;
+    dmg -= absorb;
+  }
+
+  if (dmg <= 0) {
+    addFloat(target.x, target.y - 40, '挡住', COL.sky2, 15);
+    return 0;
+  }
+
+  target.hp -= dmg;
+  // 受击压扁要跟着「拳到肉」那一帧走，不能跟着判定走 ——
+  // 否则人还没跑过去，对方先自己抖一下，整个位移就白做了。
+  if (S.fxDelay > 0) target.hitDelay = Math.max(target.hitDelay || 0, S.fxDelay);
+  else target.hitT = 0.22;
+
+  const hx0 = target.x, hy0 = target.y - (target.dispSize || 70) * 0.42;
+  addImpact(hx0, hy0, crit ? COL.gold : '#FFF2C8', crit ? 1.6 : 1);
+  if (crit) addSlash(hx0, hy0, 1, COL.gold, 92);
+
+  addFloat(target.x, target.y - 40, (crit ? '会心 ' : '') + dmg,
+           crit ? COL.gold : COL.cream, crit ? 24 : 18);
+  addKibble(target.x, target.y - 10, crit ? 6 : 3, crit);
+
+  // 反击
+  if (target.counter > 0 && target.guardT > 0 && actor.side === 'enemy') {
+    actor.hp -= target.counter;
+    addFloat(actor.x, actor.y - 36, String(target.counter), COL.pink, 15);
+  }
+
+  if (target.hp <= 0) killUnit(target, actor);
+  return dmg;
+}
+
+function killUnit(u, by) {
+  u.hp = 0;
+  u.dying = 0.55;
+  if (u.side === 'enemy') {
+    const gain = u.def.kind === 'boss' ? 4 : 1;
+    S.carried += gain;
+    addShock(u.x, u.y + 4, u.def.kind === 'boss' ? COL.gold : '#FFE9A8', u.def.kind === 'boss' ? 2.2 : 1.3);
+    addFloat(u.x, u.y - 60, '+' + gain + ' 食物', COL.gold, 20);
+    // 仓鼠的「塞嘴」：这一击打死就多带一份
+    if (by && by.side === 'pet' && by.stuffKill) S.carried += 1;
+    S.shake = Math.max(S.shake, u.def.kind === 'boss' ? 12 : 4);
+  } else {
+    S.shake = Math.max(S.shake, 6);
+    addShock(u.x, u.y + 4, COL.danger, 1.1);
+    addFloat(u.x, u.y - 50, u.name + '倒下了', COL.danger, 18);
+  }
+}
+
+function healPet(p, amount) {
+  if (p.hp <= 0) return;
+  const before = p.hp;
+  p.hp = Math.min(p.maxHp, p.hp + amount);
+  const real = p.hp - before;
+  if (real > 0) {
+    addBeam(p.x, p.y, COL.safe);
+    addFloat(p.x, p.y - 44, '+' + real, COL.safe, 17);
+  }
+}
+function enemyAct(e) {
+  if (e.stunT > 0) { e.stunT = 0; return; }
+
+  // 仇恨：被「汪汪」拉住的优先打那只
+  const taunt = e.tauntT > 0 ? S.pets.find(p => p.id === e.tauntOn && p.hp > 0) : null;
+  const cands = alivePets().filter(p => p.hidden <= 0);
+  if (!cands.length && !taunt) { e.atb = 0; return; }
+
+  // 站位判定一律用 hx（格子锚点），不能用 x。
+  // x 是渲染坐标 —— 一只正在冲刺的宠物，x 已经跑到敌方阵里去了，
+  // 这时候按 x 排「谁最靠前」，会把冲到一半的那只算成前排，
+  // 站位决策就变成一个随动画相位变化的随机数。
+  const frontFirst = (list) => list.slice().sort((a, b) => b.hx - a.hx);
+
+  if (e.def.kind === 'boss') {
+    // 全体横扫，但**总伤害恒定**：按存活人数平分。
+    // 固定单体伤害的话，5 只队伍挨的总伤害比 4 只高 25% ——
+    // 结果"多带一只"更容易团灭，这反直觉，而且鼓励玩家带更少的人。
+    const anim = startAttackMove(e, null);
+    S.fxDelay = anim.hitAt;
+    const share = 3.0 / Math.max(1, cands.length);
+    for (const p of cands) hitOne(e, p, e.atk * share);
+    addShock(e.x, e.y + 4, COL.danger, 2.2);
+    addRing(e.x, e.y, COL.danger, 0.6);
+    addFloat(e.x, e.y - 70, '横冲直撞!', COL.danger, 20);
+    S.fxDelay = 0;
+    S.pendingHit = { at: anim.hitAt, pause: 0.09, shake: 12 };
+  } else if (e.def.kind === 'thief') {
+    // 乌鸦偷干粮 —— 不打你，吃你的产出。这是"觅食"里最疼的一种失手。
+    // 它飞到场地中段再下嘴，位置比谁都靠前，读起来像"闯进来了"。
+    const anim = startAttackMove(e, { hx: 430, hy: e.hy + 26, dispSize: 46 });
+    S.fxDelay = anim.hitAt;
+    const n = 1;
+    if (S.carried > 0) {
+      S.carried = Math.max(0, S.carried - n);
+      addFloat(e.x, e.y - 60, '被叼走 ' + n + ' 份', COL.danger, 17);
+    } else if (S.food > 0) {
+      S.food -= n;
+      addFloat(e.x, e.y - 60, '偷走干粮 ' + n, COL.danger, 17);
+    } else {
+      const t = cands[(S.rng() * cands.length) | 0];
+      hitOne(e, t, e.atk * 0.8);
+    }
+    S.fxDelay = 0;
+    S.pendingHit = { at: anim.hitAt, pause: 0.06, shake: 2 };
+  } else if (e.def.kind === 'brute') {
+    // 野猪撞最靠前的那只。
+    // 注意排序方向：hx 越大越靠近敌方，所以"最靠前"是降序取第一个。
+    // 原来写的是 a.x - b.x 升序 —— 撞的其实是**最后排**，站位的意义刚好反过来。
+    const t = taunt || frontFirst(cands)[0];
+    const anim = startAttackMove(e, t);
+    S.fxDelay = anim.hitAt;
+    hitOne(e, t, e.atk);
+    addShock(t.x, t.y + 4, COL.danger, 1.5);
+    S.fxDelay = 0;
+    S.pendingHit = { at: anim.hitAt, pause: 0.08, shake: 7 };
+    // 击退：只推渲染坐标，**不动 hx**。
+    // 早期这里写的是 t.x -= 12，等于把宠物永久往左挪了 12px ——
+    // 被撞几次之后整队会自己走出格子，而格子里画着的框还在原地。
+  } else {
+    // 普通敌人偏向咬前排（70%）。
+    // 不给这个权重的话，站位对它们毫无影响，玩家把谁放前面就变成纯装饰 ——
+    // 而"放谁在前面"恰好是全自动战斗里唯一的战斗内决策。
+    const byFront = frontFirst(cands).slice(0, 2);
+    const t = taunt || (S.rng() < 0.75
+      ? byFront[(S.rng() * byFront.length) | 0]
+      : cands[(S.rng() * cands.length) | 0]);
+    const anim = startAttackMove(e, t);
+    S.fxDelay = anim.hitAt;
+    hitOne(e, t, e.atk);
+    S.fxDelay = 0;
+    S.pendingHit = { at: anim.hitAt, pause: 0.06, shake: 4 };
+  }
+  e.atb = 0;
+}
+
+/* ---- 玩家出手 ---- */
+
+function petAct(p, skillId, target) {
+  const sk = SKILLS[skillId];
+  if (!sk) return;
+  const tgt = target || pickAutoTarget(p, sk);
+
+  // 单一守卫：需要敌人的技能，场上没敌人就直接消耗这次出手。
+  // 每个 cast 里各自判空太容易漏（「撞」少一行就崩），入口拦一次更可靠。
+  if ((sk.target === 'enemy' || sk.target === 'allEnemies') && !tgt) {
+    p.atb = 0;
+    return;
+  }
+  if (sk.target === 'enemy' && (!tgt || tgt.hp <= 0)) { p.atb = 0; return; }
+
+  // 近战：真的走到目标身前打；远程/辅助：原地发力。
+  // 判定和位移**解耦** —— 判定必须瞬时（否则跑的这 0.28 秒里目标可能已经死了、
+  // 被嘲讽走了、或者自己被打死），但视觉必须等拳头到肉才亮。
+  const melee = !!MELEE_SKILLS[skillId] && tgt && tgt !== p;
+  const anim = startAttackMove(p, melee ? tgt : null);
+
+  S.fxDelay = anim.hitAt;     // 这期间产生的特效全部延后到命中那一帧
+  sk.cast(p, tgt);
+  S.fxDelay = 0;
+
+  S.pendingHit = { at: anim.hitAt, pause: 0.075, shake: melee ? 3 : 1 };
+
+  p.atb = 0;
+  S.castCount = (S.castCount || 0) + 1;
+  // 这里**不能**清 p.guard —— 弓背刚把它设上，清掉等于这个技能不存在。
+  // 减伤靠 guardT 自然到期来控制时长。
+  S.awaitT = 0;
+}
+
+/**
+ * 自动施法的"脑子"。
+ *
+ * 全自动不等于闭眼放第一个技能 —— 那样队伍里所有功能性技能都等于不存在，
+ * 变成"五只宠物的普攻速度赛"。三条判据按优先级：
+ *   1. 群疗：队伍总血 < 62% 才放（否则等于放弃一次输出，见 CR-020 治疗负收益）
+ *   2. 群伤：场上 ≥ 2 只才放（对单只不划算）
+ *   3. 自保型（弓背/钻地这种 self）：自己血 < 55% 才放
+ * 都不满足就用第一个技能。
+ */
+function chooseSkill(p) {
+  const ids = p.def.skills;
+  const hpK = p.hp / Math.max(1, p.maxHp);
+  const alive = alivePets();
+  const teamK = alive.reduce((a, x) => a + Math.max(0, x.hp), 0) /
+                Math.max(1, alive.reduce((a, x) => a + x.maxHp, 0));
+  const foeN = aliveEnemies().length;
+
+  for (const sid of ids) {
+    const sk = SKILLS[sid];
+    if (!sk) continue;
+    // 群疗必须有"群"：只剩一只时它是在给自己回血，等于用一次出手换
+    // 一次不挨打，敌人却还在攒条 —— 实测会打成无限循环（双方都打不死）。
+    if (sk.target === 'allAllies' && alive.length >= 2 && teamK < 0.62) return sid;
+    if (sk.target === 'allEnemies' && foeN >= 2) return sid;
+    if (sk.target === 'self' && hpK < 0.55) return sid;
+  }
+  return ids[0];
+}
+
+/** 攒满行动条 → 自动出一招 */
+function autoCast(p) {
+  petAct(p, chooseSkill(p), null);
+}
+
+/** 全体技能的展示目标 = 自己；单体技能自动挑一个 */
+function pickAutoTarget(actor, sk) {
+  if (sk.target === 'enemy') {
+    const list = aliveEnemies();
+    if (!list.length) return null;
+    return list.slice().sort((a, b) => a.hp - b.hp)[0];
+  }
+  return actor;
+}
+function tickBattle(dt) {
+  if (S.phase !== 'battle') return;
+
+  // 1) 时间缩放。
+  //
+  // 手动模式（S.auto = false，测试用）保留 16% 慢放让玩家选招；
+  // 自动模式下不再慢放，改成出手瞬间的**顿帧** —— 每一下打出去都"咯噔"一下，
+  // 节奏比匀速快放清楚得多，而且不打断观战。
+  if (S.hitPause > 0) S.hitPause = Math.max(0, S.hitPause - dt);
+  S.castGap = Math.max(0, S.castGap - dt);
+
+  // 顿帧要等"拳到肉"那一刻才砸下去。
+  // 出手瞬间就顿的话，人还在半路上，画面顿在一个空动作上，力度全跑掉了。
+  if (S.pendingHit) {
+    S.pendingHit.at -= dt;
+    if (S.pendingHit.at <= 0) {
+      S.hitPause = Math.max(S.hitPause, S.pendingHit.pause);
+      S.shake = Math.max(S.shake, S.pendingHit.shake);
+      S.pendingHit = null;
+    }
+  }
+
+  const slow = !S.auto && S.await.length > 0;
+  S.timeScale = slow ? ATB.slow
+    : (S.hitPause > 0 ? 0.32 : 1);
+  const d = dt * S.timeScale;
+
+  if (slow) {
+    S.awaitT += dt;
+    // 防挂机：慢放太久自动丢第一招，避免玩家发呆导致局面僵死
+    if (S.awaitT > ATB.autoPick) {
+      const p = S.await[0];
+      if (p && p.hp > 0) { petAct(p, p.def.skills[0], null); S.await.shift(); }
+      S.awaitT = 0;
+    }
+  } else if (S.await.length && S.auto) {
+    S.await.length = 0;   // 切到自动时清掉遗留的待选队列
+  }
+
+  S.battleT += d;
+  S.battleRealT += dt;
+
+  // 2) 动画 / 计时器
+  for (const u of S.pets.concat(S.enemies)) {
+    tickAnim(u, d);
+    if (u.hitT > 0) u.hitT = Math.max(0, u.hitT - d);
+    if (u.hitDelay > 0) {
+      u.hitDelay = Math.max(0, u.hitDelay - d);
+      if (u.hitDelay === 0) u.hitT = 0.22;   // 延迟到命中那一帧才闪白/压扁
+    }
+    if (u.stunT > 0) u.stunT = Math.max(0, u.stunT - d);
+    if (u.guardT > 0) u.guardT = Math.max(0, u.guardT - d);
+    if (u.hidden > 0) u.hidden = Math.max(0, u.hidden - d);
+    if (u.tauntT > 0) u.tauntT = Math.max(0, u.tauntT - d);
+    if (u.dying > 0) u.dying = Math.max(0, u.dying - d);
+    u.bob += d * 2.4;
+  }
+
+  // 3) 行动条
+  for (const p of S.pets) {
+    if (p.hp <= 0 || p.dying > 0) continue;
+    if (p.stunT > 0) continue;
+    if (S.await.indexOf(p) >= 0) continue;
+    // 跑动期间**照样攒条**，只是不触发下一次出手。
+    // 每只每次出手多停 0.3 秒的话，一场 15 秒的战斗就慢成 20 秒 ——
+    // 「动作变好看」不该暗中变成「全队输出变低」。
+    if (p.anim) { p.atb = Math.min(ATB.full, p.atb + p.spd * d); continue; }
+    if (p.atb >= ATB.full && !S.auto) {
+      // 手动模式：条满就停下等玩家选招
+      p.atb = ATB.full;
+      S.await.push(p);
+      continue;
+    }
+    if (p.atb >= ATB.full) {
+      // 自动模式：条满即出招，但要错开 —— 同一帧五只一起放，
+      // 屏幕上会同时炸五团特效，谁也看不清谁打了谁
+      if (S.castGap > 0) continue;
+      p.atb = ATB.full;
+      autoCast(p);
+      S.castGap = 0.24;
+      continue;
+    }
+    p.atb += p.spd * d;
+  }
+  for (const e of S.enemies) {
+    if (e.hp <= 0 || e.dying > 0) continue;
+    if (e.stunT > 0) continue;
+    if (e.anim) { e.atb = Math.min(ATB.full, e.atb + e.spd * d); continue; }
+    e.atb += e.spd * d;
+    if (e.atb >= ATB.full) enemyAct(e);
+  }
+
+  // 4) 选目标中：取消无效目标
+  if (S.aiming) {
+    const a = S.aiming.actor;
+    if (!a || a.hp <= 0) S.aiming = null;
+  }
+
+  tickFx(dt);
+
+  // 5) 胜负
+  if (!aliveEnemies().length && !S.enemies.some(e => e.dying > 0)) endBattle(true);
+  else if (!alivePets().length && !S.pets.some(p => p.dying > 0)) endBattle(false);
+  else if (S.battleRealT > BATTLE_TIMEOUT) {
+    // 超时兜底。
+    //
+    // 全自动战斗比手动更容易僵住：玩家没法"换个打法"，一旦双方都打不动对方
+    // （残血治疗循环、护盾对磨），这一局就永远结束不了。按剩余血量比例判，
+    // 至少让局面往下走。
+    const myK = S.pets.reduce((a, p) => a + Math.max(0, p.hp), 0) /
+                Math.max(1, S.pets.reduce((a, p) => a + p.maxHp, 0));
+    const foeK = S.enemies.reduce((a, e) => a + Math.max(0, e.hp), 0) /
+                 Math.max(1, S.enemies.reduce((a, e) => a + e.maxHp, 0));
+    addLog('打不动了，按剩下的血算');
+    endBattle(myK >= foeK);
+  }
+}
+
+/* ============================================================
+   7. 流程：编队 → 森林 → 战斗 → 结算
+   ============================================================ */
+
+function startRun() {
+  S.carried = 0;
+  S.depth = 0;
+  S.food = Math.max(0, S.food);
+  goDeeper();
+}
+
+function goDeeper() {
+  S.depth++;
+  if (S.depth > MAX_DEPTH) { finishRun(true); return; }
+  startBattle();
+}
+
+function startBattle() {
+  const d = DEPTHS[S.depth - 1];
+  S.phase = 'battle';
+  S.enemies = [];
+  S.fx = [];
+  S.ghosts.length = 0;
+  S.fxDelay = 0;
+  S.pendingHit = null;
+  S.await = [];
+  S.awaitT = 0;
+  S.aiming = null;
+  S.battleT = 0;
+  // battleRealT 是超时判定的时钟，**必须每场归零**。
+  // 漏掉这一行的话，第二场一开场就带着上一场累积的秒数，
+  // 第一帧就撞上 BATTLE_TIMEOUT —— 双方满血，按血量比判「赢」，
+  // 于是整趟森林变成「点一下直接通关」，而且看起来一切正常。
+  S.battleRealT = 0;
+  S.castGap = 0.3;      // 开场先定一下，别一进场就齐射
+  S.hitPause = 0;
+  S.castCount = 0;
+
+  // 出战宠物：喂过的带加成，血量按上一场剩余继承
+  const prev = {};
+  for (const p of S.pets) prev[p.def.id] = p.hp;
+  S.pets = S.party.map(id => {
+    const p = makePet(id);
+    if (prev[id] !== undefined) p.hp = Math.min(p.maxHp, Math.max(1, prev[id]));
+    return p;
+  });
+
+  d.enemies.forEach((k, i) => S.enemies.push(makeEnemy(k, i)));
+  layoutBattle();
+
+  S.banner = { text: d.name + ' · ' + d.note, t: 2.4 };
+  addLog('走进「' + d.name + '」');
+}
+
+/**
+ * 把人一次性摆回格子。
+ *
+ * 战斗一结束 tickBattle 就直接 return，动画不再推进 —— 如果这时候正好有人
+ * 跑在半路上（打完最后一击还没走回来），他会**永久**停在敌方阵里。
+ * 结算画面虽然不画单位，但下一场的开场和调试录制都会读到这个坐标。
+ */
+function snapUnitsHome() {
+  for (const u of S.pets.concat(S.enemies)) {
+    u.x = u.hx; u.y = u.hy;
+    u.anim = null;
+    u.animSX = 0; u.animSY = 0;
+    u.hitDelay = 0;
+  }
+  S.pendingHit = null;
+  S.fxDelay = 0;
+}
+
+function endBattle(win) {
+  if (S.phase !== 'battle') return;
+  snapUnitsHome();
+  if (win) {
+    const d = DEPTHS[S.depth - 1];
+    S.carried += d.food;
+    addFloat(W / 2, 200, '找到 ' + d.food + ' 份食物', COL.gold, 24);
+    addLog('打退了这一波，捡到 ' + d.food + ' 份食物');
+    S.phase = 'trail';
+    S.banner = null;
+    for (const p of S.pets) { p.guardT = 0; p.guard = 0; p.counter = 0; p.hidden = 0; }
+  } else {
+    // 打输了：丢一半战利品，被赶回家
+    const lost = Math.floor(S.carried / 2);
+    S.carried -= lost;
+    S.food += S.carried;
+    S.carried = 0;
+    addLog('团灭了，只抢回一半（丢了 ' + lost + ' 份）');
+    S.phase = 'result';
+    S.result = 'lose';
+  }
+}
+
+function finishRun(win) {
+  S.food += S.carried;
+  addLog('把 ' + S.carried + ' 份食物背回了家');
+  S.carried = 0;
+  S.phase = 'result';
+  S.result = win ? 'win' : 'retreat';
+}
+
+/** 撤退：把已经拿到的全背回家 */
+function retreat() {
+  if (S.phase !== 'trail') return;
+  addLog('撤了，背回 ' + S.carried + ' 份');
+  S.food += S.carried;
+  const n = S.carried;
+  S.carried = 0;
+  S.phase = 'result';
+  S.result = 'retreat';
+  S.resultFood = n;
+}
+
+/**
+ * 营地开饭：花 3 份干粮，全队回一半血。一层只能吃一次。
+ *
+ * 刻意**不**做自动回血（见 endBattle 的注释）。让"吃不吃"变成玩家按下的
+ * 一次决定，食物才有双重身份：它既是战力，也是这一趟的分数。
+ * 优先吃背包里的（已经算进这趟产出），再动家里的存粮 —— 前者是"这趟少带点回家"，
+ * 后者才是"家里变穷"，两种代价不一样重。
+ */
+const EAT_COST = 3;
+const EAT_HEAL = 0.5;
+
+function eatNow() {
+  if (S.ateThisTrail) { addLog('这一层已经吃过了'); return false; }
+  if (S.carried + S.food < EAT_COST) { addLog('干粮不够，吃不起'); return false; }
+
+  let left = EAT_COST;
+  const fromCarry = Math.min(S.carried, left);
+  S.carried -= fromCarry;
+  left -= fromCarry;
+  S.food -= left;
+
+  for (const p of S.pets) {
+    if (p.hp <= 0) continue;
+    healPet(p, Math.round(p.maxHp * EAT_HEAL));
+  }
+  S.ateThisTrail = true;
+  addLog('开了个饭，全队回了半管血');
+  return true;
+}
+
+function backToCamp() {
+  S.phase = 'roster';
+  S.pets = [];
+  S.enemies = [];
+  S.fx = [];
+  S.depth = 0;
+  S.carried = 0;
+  S.aiming = null;
+  S.await = [];
+  S.banner = null;
+}
+
+function addLog(text) {
+  S.log.push(text);
+  if (S.log.length > 40) S.log.shift();
+}
+
+/* ============================================================
+   8. 特效
+   ============================================================ */
+
+/**
+ * 所有特效的唯一入口。
+ *
+ * 关键在 `delay`：出手判定是瞬时的，但人要跑过去打，拳到肉是 0.28 秒之后。
+ * cast 期间产生的每一个视觉（飘字 / 爆点 / 冲击波 / 闪白）都先挂上
+ * `S.fxDelay`，到点才亮 —— 所以 SKILLS 里一句都不用改。
+ */
+function fxPush(o) {
+  o.t = 0;
+  o.delay = S.fxDelay || 0;
+  S.fx.push(o);
+  if (S.fx.length > 140) S.fx.splice(0, S.fx.length - 140);
+}
+
+function addFloat(x, y, text, color, size) {
+  fxPush({ kind: 'float', x, y, text, color, size: size || 16, life: 0.95, vy: -46 });
+}
+function addRing(x, y, color, life) {
+  fxPush({ kind: 'ring', x, y, color, life: life || 0.4 });
+}
+
+/** 命中星芒：一亮斑 + 八条放射线。这是「打到了」最直观的一帧 */
+function addImpact(x, y, color, power) {
+  fxPush({
+    kind: 'impact', x, y, color, power: power || 1,
+    life: 0.28, rot: S.rng() * 6.283,
+  });
+}
+
+/** 弧形斩击：一道粗弧 + 前端高光，看得出是"挥"出去的 */
+function addSlash(x, y, dir, color, size) {
+  fxPush({
+    kind: 'slash', x, y, dir: dir || 1, color,
+    size: size || 74, life: 0.30,
+  });
+}
+
+/** 地面冲击波：三道同心椭圆向外扩，用于冲撞 / 落地 / 横扫 */
+function addShock(x, y, color, power) {
+  fxPush({ kind: 'shock', x, y, color, power: power || 1, life: 0.46 });
+}
+
+/** 治疗光柱 + 上升光粒 */
+function addBeam(x, y, color) {
+  fxPush({ kind: 'beam', x, y, color, life: 0.62 });
+  for (let i = 0; i < 7; i++) {
+    fxPush({
+      kind: 'spark', x: x + (S.rng() - 0.5) * 44, y: y - 4,
+      color, life: 0.55 + S.rng() * 0.3,
+      vy: -70 - S.rng() * 60, sway: S.rng() * 6.283,
+    });
+  }
+}
+
+function addKibble(x, y, n, big) {
+  for (let i = 0; i < n; i++) {
+    const a = S.rng() * 6.283, sp = 70 + S.rng() * 150;
+    fxPush({
+      kind: 'bit', x, y, life: 0.45 + S.rng() * 0.28,
+      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 70,
+      color: big ? COL.gold : COL.cream, r: big ? 4.5 : 3.2,
+    });
+  }
+}
+function say(text, u, color) {
+  // 目标可能为空（最后一个敌人刚死、或玩家点晚了）——
+  // 这里不报错就会在同一个位置崩，而且只在"刚好打死最后一只"时才触发，很难复现
+  if (!u) return;
+  addFloat(u.x, u.y - 56, text, color || COL.cream, 19);
+}
+
+function tickFx(dt) {
+  for (const f of S.fx) {
+    // 还没到"拳到肉"的时刻：不推进、不绘制、不消失
+    if (f.delay > 0) { f.delay -= dt; continue; }
+    f.t += dt;
+    if (f.kind === 'float') f.y += f.vy * dt;
+    if (f.kind === 'bit') {
+      f.x += f.vx * dt; f.y += f.vy * dt;
+      f.vy += 580 * dt;
+    }
+    if (f.kind === 'spark') {
+      f.y += f.vy * dt;
+      f.x += Math.sin(f.t * 9 + f.sway) * 22 * dt;
+      f.vy *= 0.985;
+    }
+  }
+  let w = 0;
+  for (let i = 0; i < S.fx.length; i++) {
+    const f = S.fx[i];
+    if (f.delay > 0 || f.t < f.life) S.fx[w++] = f;
+  }
+  S.fx.length = w;
+
+  // 残影
+  let gw = 0;
+  for (let i = 0; i < S.ghosts.length; i++) {
+    const gh = S.ghosts[i];
+    gh.t += dt;
+    if (gh.t < gh.life) S.ghosts[gw++] = gh;
+  }
+  S.ghosts.length = gw;
+
+  if (S.banner) {
+    S.banner.t -= dt;
+    if (S.banner.t <= 0) S.banner = null;
+  }
+  if (S.shake > 0) S.shake = Math.max(0, S.shake - dt * 26);
+}
+
+/* ============================================================
+   9. 绘制：森林场景
+   ============================================================ */
+
+/* ---- 构图只有一句话：两侧是密林，中间是光 ----
+ *
+ * 这不是美术口味问题，是给自动战斗找一条干净的视线通道。
+ * 单位的 x 区间是 120~808、y 区间是 132~410，所以任何带"具体形状"的东西
+ * （树干、叶球、高光）都不能落进这个矩形 —— 一旦落进去，玩家看到的
+ * 就是"我的猫站在树上"。背景在这里只有一个职责：把空间交代清楚。
+ *
+ * 上一版在 x=92/186/820/884、baseY=254 摆了六棵**有树干有高光**的树，
+ * 而格子第一行就在 y=178 —— 树冠直接盖在敌人身上。那不是配色问题，
+ * 是图层职责问题：战场后面的东西只能做背景，不能抢视线。
+ */
+
+function roundRect(g, x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.lineTo(x + w - r, y);
+  g.quadraticCurveTo(x + w, y, x + w, y + r);
+  g.lineTo(x + w, y + h - r);
+  g.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  g.lineTo(x + r, y + h);
+  g.quadraticCurveTo(x, y + h, x, y + h - r);
+  g.lineTo(x, y + r);
+  g.quadraticCurveTo(x, y, x + r, y);
+  g.closePath();
+}
+
+/** 取小数部分（负数也要落在 0~1） */
+function frac(v) {
+  const f = v - Math.floor(v);
+  return f < 0 ? f + 1 : f;
+}
+
+/**
+ * 一棵真正画出来的树：树干 + 四团叶球 + 高光。
+ * 只用在画面最左/最右的密林里 —— 它们不在战场背后，所以可以有细节。
+ */
+function drawTree(x, baseY, scale, tone) {
+  const g = ctx;
+  const trunkW = 15 * scale, trunkH = 46 * scale;
+
+  // 树干：上窄下宽
+  g.fillStyle = tone === 'back' ? '#3E3226' : '#5B422C';
+  g.beginPath();
+  g.moveTo(x - trunkW * 0.38, baseY);
+  g.lineTo(x - trunkW * 0.26, baseY - trunkH);
+  g.lineTo(x + trunkW * 0.26, baseY - trunkH);
+  g.lineTo(x + trunkW * 0.42, baseY);
+  g.closePath();
+  g.fill();
+
+  const r = 32 * scale;
+  const cy = baseY - trunkH;
+  const dark = tone === 'back' ? '#2A4A36' : '#2F5C40';
+  const lit = tone === 'back' ? '#356047' : '#3F7650';
+
+  // 四团叶球拼成一顶不规则的冠 —— 单团圆太"图标"，四团才有体积
+  g.fillStyle = dark;
+  const blobs = [
+    [-r * 0.62, -r * 0.18, r * 0.66],
+    [r * 0.62, -r * 0.22, r * 0.62],
+    [-r * 0.20, -r * 0.86, r * 0.72],
+    [r * 0.30, -r * 0.72, r * 0.58],
+  ];
+  for (const bl of blobs) {
+    g.beginPath();
+    g.arc(x + bl[0], cy + bl[1], bl[2], 0, 6.283);
+    g.fill();
+  }
+  // 受光面（左上）
+  g.fillStyle = lit;
+  g.beginPath();
+  g.arc(x - r * 0.34, cy - r * 1.02, r * 0.46, 0, 6.283);
+  g.arc(x + r * 0.10, cy - r * 0.62, r * 0.34, 0, 6.283);
+  g.fill();
+}
+
+/**
+ * 远景林线：一排圆顶，横向铺满，**不带任何细节**。
+ *
+ * 它唯一的职责是"说明远处有林子"，而这件事只需要剪影 + 雾化。
+ * 一旦画上树干、叶球、高光，它就变成几棵"具体的树"——
+ * 具体的树摆在战场后面，就会变成"战斗发生在树上"。
+ *
+ * 用确定性伪随机（sin 哈希）算轮廓，同一个 seed 每帧同一条线，
+ * 否则林线会像雪花屏一样抖。
+ */
+function drawTreeBand(baseY, maxH, color, seed) {
+  const g = ctx;
+  const step = 58;
+  g.fillStyle = color;
+  g.beginPath();
+  g.moveTo(-30, baseY + 40);
+  for (let i = 0, x = -30; x < W + 60; i++, x += step) {
+    const h1 = frac(Math.sin(seed * 12.9898 + i * 78.233) * 43758.5453);
+    const h2 = frac(Math.sin(seed * 39.346 + i * 11.135) * 24634.6345);
+    const h = maxH * (0.38 + h1 * 0.62);
+    const r = step * (0.62 + h2 * 0.36);
+    g.lineTo(x - r, baseY - h * 0.36);
+    g.quadraticCurveTo(x, baseY - h - r * 0.55, x + r, baseY - h * 0.36);
+  }
+  g.lineTo(W + 60, baseY + 40);
+  g.closePath();
+  g.fill();
+}
+
+/**
+ * 侧林：把画面左右两边堵死的密林。
+ * 越靠画面边缘的树越高、越靠后，向内收的时候矮下去 ——
+ * 这条斜边就是"林间走廊"的边界，也是把视线引向中间的轨道。
+ */
+function drawSideForest(left, y0) {
+  const g = ctx;
+  const dir = left ? 1 : -1;
+  const anchor = left ? 0 : W;
+
+  for (let i = 0; i < 5; i++) {
+    const x = anchor + dir * (i * 34 + 6);
+    const base = y0 + 66 - i * 16;
+    const sc = 1.85 - i * 0.18;
+    drawTree(x, base, sc, i < 2 ? 'back' : 'front');
+  }
+
+  // 最前面压一层暗冠：挡住树根，让绿墙有厚度
+  g.fillStyle = 'rgba(24,58,40,.85)';
+  for (let i = 0; i < 4; i++) {
+    const x = anchor + dir * (i * 40 - 4);
+    const y = y0 + 96 - i * 12;
+    g.beginPath();
+    g.ellipse(x, y, 46 - i * 7, 30 - i * 4, 0, 0, 6.283);
+    g.fill();
+  }
+}
+
+/**
+ * 顶部垂下来的树冠边缘。
+ *
+ * 这一条是「你在树下」最省力也最强的暗示 —— 它完全落在单位之上（y<96），
+ * 不占用战场任何一块像素，但整张图立刻从"户外"变成"林子里"。
+ */
+function drawCanopyOverhang() {
+  const g = ctx;
+  g.fillStyle = 'rgba(30,66,44,.9)';
+  g.beginPath();
+  g.moveTo(-20, -10);
+  for (let i = 0, x = -20; x < W + 60; i++, x += 44) {
+    const h = 34 + frac(Math.sin(i * 17.3) * 4137.2) * 54;
+    g.lineTo(x, h);
+    g.quadraticCurveTo(x + 22, h + 30, x + 44, h * 0.55);
+  }
+  g.lineTo(W + 60, -10);
+  g.closePath();
+  g.fill();
+
+  // 冠底一层亮边（背光树叶的透光）
+  g.fillStyle = 'rgba(126,196,140,.32)';
+  for (let i = 0, x = -20; x < W + 60; i++, x += 44) {
+    const h = 34 + frac(Math.sin(i * 17.3) * 4137.2) * 54;
+    g.beginPath();
+    g.ellipse(x + 12, h + 16, 15, 7, 0.4, 0, 6.283);
+    g.fill();
+  }
+}
+
+/**
+ * 光柱：从左上角斜插下来。
+ *
+ * 只留三道，而且窄。第一版铺了六道宽的，整块上半屏被冲成灰白 ——
+ * 光柱的作用是"指方向"，不是"照亮全屏"。亮过草地的层次就本末倒置了。
+ */
+function drawGodRays() {
+  const g = ctx;
+  g.save();
+  g.globalCompositeOperation = 'lighter';
+  const rays = [[236, 62, 300], [452, 48, 330], [676, 54, 290]];
+  for (const ry of rays) {
+    const x = ry[0], w = ry[1], len = ry[2];
+    const grd = g.createLinearGradient(x, 40, x + 120, 40 + len);
+    grd.addColorStop(0, 'rgba(255,250,206,.20)');
+    grd.addColorStop(0.5, 'rgba(255,250,206,.07)');
+    grd.addColorStop(1, 'rgba(255,250,206,0)');
+    g.fillStyle = grd;
+    g.beginPath();
+    g.moveTo(x, 40);
+    g.lineTo(x + w, 40);
+    g.lineTo(x + w + 150, 40 + len);
+    g.lineTo(x + 70, 40 + len);
+    g.closePath();
+    g.fill();
+  }
+  g.restore();
+}
+
+/** 草丛：一根三叶，比"2px 的竖条"有质感，而且几乎不花成本 */
+function drawGrassTuft(x, y, s, color) {
+  const g = ctx;
+  g.strokeStyle = color;
+  g.lineWidth = 2 * s;
+  g.lineCap = 'round';
+  for (let i = -1; i <= 1; i++) {
+    g.beginPath();
+    g.moveTo(x + i * 3 * s, y);
+    g.quadraticCurveTo(x + i * 6 * s, y - 5 * s, x + i * 9 * s, y - 10 * s);
+    g.stroke();
+  }
+}
+
+function drawForestScene() {
+  const g = ctx;
+
+  /* ---- 1. 天空：只在中段露出一条，其余交给树冠 ---- */
+  const sky = g.createLinearGradient(0, 0, 0, 300);
+  sky.addColorStop(0, '#BEE6E4');
+  sky.addColorStop(0.5, '#CFF0DD');
+  sky.addColorStop(1, '#E8F6DC');
+  g.fillStyle = sky;
+  g.fillRect(0, 0, W, 300);
+
+  // 中央的一团天光，暗示林间开口正对着前面
+  const halo = g.createRadialGradient(470, 96, 20, 470, 96, 300);
+  halo.addColorStop(0, 'rgba(255,252,224,.85)');
+  halo.addColorStop(0.45, 'rgba(255,250,210,.28)');
+  halo.addColorStop(1, 'rgba(255,250,210,0)');
+  g.fillStyle = halo;
+  g.fillRect(0, 0, W, 320);
+
+  /* ---- 2. 远景林：一条被雾吃掉大半的林线（只在 y<200 活动） ---- */
+  drawTreeBand(196, 96, 'rgba(150,196,172,.34)', 3);
+  drawTreeBand(214, 72, 'rgba(112,170,140,.42)', 7);
+
+  /* ---- 3. 光柱 ---- */
+  drawGodRays();
+
+  /* ---- 4. 草地 ---- */
+  const gr = g.createLinearGradient(0, 170, 0, FIELD_BOTTOM);
+  gr.addColorStop(0, '#3F7C4A');
+  gr.addColorStop(0.22, '#57A257');
+  gr.addColorStop(0.6, '#6FB963');
+  gr.addColorStop(1, '#87CB73');
+  g.fillStyle = gr;
+  g.fillRect(0, 168, W, FIELD_BOTTOM - 168);
+
+  // 地平线的一道柔光，把林线和草地"接"起来（不接就会像贴纸）
+  const seam = g.createLinearGradient(0, 168, 0, 232);
+  seam.addColorStop(0, 'rgba(232,246,220,.55)');
+  seam.addColorStop(1, 'rgba(232,246,220,0)');
+  g.fillStyle = seam;
+  g.fillRect(0, 168, W, 64);
+
+  /* ---- 5. 空地光池：整块中央被阳光照着，没有边界 ---- */
+  const pool = g.createRadialGradient(464, 330, 40, 464, 330, 360);
+  pool.addColorStop(0, 'rgba(255,248,196,.26)');
+  pool.addColorStop(0.5, 'rgba(255,248,196,.11)');
+  pool.addColorStop(1, 'rgba(255,248,196,0)');
+  g.fillStyle = pool;
+  g.fillRect(0, 200, W, FIELD_BOTTOM - 200);
+
+  /* ---- 6. 踩秃的地面：只是一块更亮的椭圆，不做"泥巴色" ----
+   * 上一版画成土黄色，在绿地上像泼了一摊油。真正被踩秃的草地是**更浅的黄绿**。
+   */
+  g.fillStyle = 'rgba(198,208,132,.28)';
+  g.beginPath();
+  g.ellipse(464, 356, 268, 92, 0, 0, 6.283);
+  g.fill();
+  g.fillStyle = 'rgba(214,220,150,.22)';
+  g.beginPath();
+  g.ellipse(464, 340, 190, 60, 0, 0, 6.283);
+  g.fill();
+
+  /* ---- 7. 碎光斑 ---- */
+  for (let i = 0; i < 26; i++) {
+    const x = 90 + frac(Math.sin(i * 12.7) * 4375.8) * (W - 180);
+    const y = 250 + frac(Math.sin(i * 31.3) * 9217.4) * (FIELD_BOTTOM - 270);
+    const r = 14 + frac(Math.sin(i * 7.1) * 3311.2) * 30;
+    g.fillStyle = 'rgba(255,252,206,' + (0.05 + frac(Math.sin(i * 3.3)) * 0.06).toFixed(3) + ')';
+    g.beginPath();
+    g.ellipse(x, y, r, r * 0.38, 0, 0, 6.283);
+    g.fill();
+  }
+
+  /* ---- 8. 草丛：分两档深度，远的密而小、近的疏而大 ---- */
+  for (let i = 0; i < 78; i++) {
+    const x = 60 + frac(Math.sin(i * 41.7) * 8231.5) * (W - 120);
+    const y = 246 + frac(Math.sin(i * 23.1) * 5117.9) * (FIELD_BOTTOM - 260);
+    drawGrassTuft(x, y, 0.7, 'rgba(46,110,62,.22)');
+  }
+  for (let i = 0; i < 34; i++) {
+    const x = 40 + frac(Math.sin(i * 91.3) * 3313.7) * (W - 80);
+    const y = 380 + frac(Math.sin(i * 17.7) * 7717.3) * 80;
+    drawGrassTuft(x, y, 1.15, 'rgba(38,96,54,.30)');
+  }
+
+  /* ---- 9. 两侧密林（在草地之后画，才能压住草地边缘） ---- */
+  drawSideForest(true, 150);
+  drawSideForest(false, 150);
+
+  /* ---- 10. 顶部树冠 ---- */
+  drawCanopyOverhang();
+
+  /* ---- 11. 前景草丛：贴着画面底边，压住 UI 的分界线 ---- */
+  g.fillStyle = 'rgba(26,72,44,.55)';
+  for (let i = 0; i < 30; i++) {
+    const x = (i * 211.3) % W;
+    const y = FIELD_BOTTOM - 6 - (i % 4) * 5;
+    g.beginPath();
+    g.ellipse(x, y, 24, 10, 0, 0, 6.283);
+    g.fill();
+  }
+}
+
+/* ============================================================
+   10. 绘制：格子与单位
+   ============================================================ */
+
+/**
+ * 战场格子。
+ *
+ * 画它有两个理由：①让「站位」看得见 —— 不然玩家不知道自己在调什么；
+ * ②哪怕只剩一只宠物，画面也不会空得发慌。
+ *
+ * 前排格用暖色（交火区）、后排用冷色（安全区）。这个色温差比写
+ * 「前排/后排」四个字更直接 —— 玩家不用读字就知道该把脆皮放哪。
+ *
+ * 上一版的格框只有 .13 的描边，压在绿草地上基本看不见 ——
+ * 「界面太low」有一半是它没有存在感。现在按**UI 件**画：
+ * 明确的圆角底板 + 四角角标 + 站人时点亮，一眼能数出六个位置。
+ */
+function drawGrid() {
+  const g = ctx;
+  const cw = GRID.cellW, ch = GRID.cellH;
+  const top = 120;
+
+  // 中间的交火带：一条竖向柔光，把两侧阵型分开，避免读成一整片
+  const bandW = 190;
+  const cx = (GRID.petX[0] + GRID.enemyX[1]) / 2;
+  const grd = g.createLinearGradient(cx - bandW / 2, 0, cx + bandW / 2, 0);
+  grd.addColorStop(0, 'rgba(255,255,255,0)');
+  grd.addColorStop(0.5, 'rgba(255,244,206,.10)');
+  grd.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grd;
+  g.fillRect(cx - bandW / 2, top, bandW, FIELD_BOTTOM - top);
+
+  const plate = (px, py, main, glow) => {
+    const x = px - cw / 2, y = py - ch * 0.74;
+
+    // 底板：深色半透 + 一档内亮，让格子"凹"进地面
+    g.fillStyle = main;
+    roundRect(g, x, y, cw, ch, 14);
+    g.fill();
+
+    // 描边
+    g.strokeStyle = glow;
+    g.lineWidth = 1.6;
+    roundRect(g, x, y, cw, ch, 14);
+    g.stroke();
+
+    // 四角角标：比整圈描边更"界面"，也更不会和草地纹理混在一起
+    const L = 13, r = 9;
+    g.strokeStyle = glow.replace(/[\d.]+\)$/, '0.85)');
+    g.lineWidth = 2.4;
+    g.lineCap = 'round';
+    const corners = [
+      [x + 3, y + 3, 1, 1], [x + cw - 3, y + 3, -1, 1],
+      [x + 3, y + ch - 3, 1, -1], [x + cw - 3, y + ch - 3, -1, -1],
+    ];
+    for (const [bx, by, sx, sy] of corners) {
+      g.beginPath();
+      g.moveTo(bx + sx * L, by);
+      g.lineTo(bx + sx * r, by);
+      g.quadraticCurveTo(bx, by, bx, by + sy * r);
+      g.lineTo(bx, by + sy * L);
+      g.stroke();
+    }
+
+    // 格心一个极淡的方向标记（前排朝敌、后排朝己）
+    g.strokeStyle = glow.replace(/[\d.]+\)$/, '0.30)');
+    g.lineWidth = 1.4;
+  };
+
+  for (let r = 0; r < GRID.rows; r++) {
+    const py = GRID.rowY[r];
+    for (let c = 0; c < 2; c++) {
+      // 我方：后排冷、前排暖（越靠前越危险，颜色越烫）
+      plate(GRID.petX[c], py,
+        c === 1 ? 'rgba(255,206,140,.10)' : 'rgba(150,205,240,.075)',
+        c === 1 ? 'rgba(255,214,150,.42)' : 'rgba(170,215,255,.30)');
+
+      // 敌方：前排烫红、后排冷白
+      plate(GRID.enemyX[c], py,
+        c === 0 ? 'rgba(255,120,110,.10)' : 'rgba(255,255,255,.055)',
+        c === 0 ? 'rgba(255,140,120,.40)' : 'rgba(255,255,255,.22)');
+    }
+  }
+}
+
+/** 兼容旧调用：格子模式下缩放由 layoutBattle 写进 u.sc，这里只兜底 */
+function unitScale(u) {
+  if (u && u.sc) return u.sc;
+  return 1;
+}
+
+function drawUnit(u) {
+  const g = ctx;
+  const skin = u.side === 'pet' ? SKIN[u.def.id]
+    : SKIN['e:' + enemyKeyOf(u.def)];
+  if (!skin) return;
+
+  const sc = u.sc || 1;
+  const size = u.dispSize || (u.def.size * sc * 0.8);
+  const pad = skin.pad || 0;
+  const baseW = skin.width - pad * 2;
+  const k = size / baseW;
+  const w = skin.width * k, h = skin.height * k;
+
+  let alpha = 1;
+  if (u.dying > 0) alpha = Math.max(0, u.dying / 0.55);
+
+  // 影子：精灵浮起来的时候（冲刺小跳）影子要缩小、变淡，
+  // 不然人飞到天上影子还钉在地上，读起来就是"贴纸"。
+  const lift = u.anim && u.anim.kind === 'run' ? Math.max(0, u.anim.fromY - u.y) : 0;
+  const shK = Math.max(0.45, 1 - lift / 90);
+  g.globalAlpha = 0.20 * alpha * shK;
+  g.fillStyle = '#1B2A20';
+  g.beginPath();
+  g.ellipse(u.x, u.y + 6 * sc, size * 0.30 * shK, size * 0.10 * shK, 0, 0, 6.283);
+  g.fill();
+  g.globalAlpha = 1;
+
+  // 呼吸：站着不动的单位也要有生命感
+  const breathe = Math.sin(u.bob) * 0.022;
+  let sx = 1 + breathe, sy = 1 - breathe;
+
+  // 受击压扁（卡通最便宜的一招）
+  if (u.hitT > 0) { sx += 0.16 * (u.hitT / 0.22); sy -= 0.13 * (u.hitT / 0.22); }
+  // 待出手：拉长，读起来像"蓄势"
+  if (u.atb >= ATB.full && u.hp > 0) { sx -= 0.05; sy += 0.07; }
+  // 出手动作自己的挤压/拉伸（冲刺拉长、命中压扁、落地回弹）
+  sx += (u.animSX || 0);
+  sy += (u.animSY || 0);
+
+  const dw = w * sx, dh = h * sy;
+
+  g.globalAlpha = alpha;
+  if (u.hidden > 0) g.globalAlpha = alpha * 0.35;
+
+  // 受击闪白：贴图盖一层亮色
+  g.drawImage(skin, u.x - dw / 2, u.y - dh + 4, dw, dh);
+
+  if (u.hitT > 0) {
+    g.globalAlpha = alpha * (u.hitT / 0.22) * 0.85;
+    g.globalCompositeOperation = 'lighter';
+    g.fillStyle = '#FF8A8A';
+    g.beginPath();
+    g.ellipse(u.x, u.y - dh * 0.45, dw * 0.40, dh * 0.36, 0, 0, 6.283);
+    g.fill();
+    g.globalCompositeOperation = 'source-over';
+  }
+  g.globalAlpha = 1;
+
+  // 护盾
+  if (u.shield > 0) {
+    g.strokeStyle = 'rgba(140,200,255,.85)';
+    g.lineWidth = 3;
+    g.beginPath();
+    g.ellipse(u.x, u.y - dh * 0.42, dw * 0.52, dh * 0.52, 0, 0, 6.283);
+    g.stroke();
+  }
+  // 弓背 / 蹲防
+  if (u.guardT > 0) {
+    g.strokeStyle = 'rgba(255,158,196,.9)';
+    g.lineWidth = 2.5;
+    g.beginPath();
+    g.ellipse(u.x, u.y - dh * 0.42, dw * 0.55, dh * 0.55, 0, 0, 6.283);
+    g.stroke();
+  }
+  // 眩晕
+  if (u.stunT > 0) {
+    g.fillStyle = COL.gold;
+    for (let i = 0; i < 3; i++) {
+      const a = u.bob * 2 + i * 2.09;
+      g.beginPath();
+      g.arc(u.x + Math.cos(a) * 26, u.y - dh * 0.95 + Math.sin(a) * 7, 3.4, 0, 6.283);
+      g.fill();
+    }
+  }
+}
+
+/** ENEMY_DEFS 的 key → 用于 SKIN 索引 */
+function enemyKeyOf(def) {
+  for (const k in ENEMY_DEFS) if (ENEMY_DEFS[k] === def) return k;
+  return 'boar';
+}
+
+function drawAllUnits() {
+  const list = S.pets.concat(S.enemies)
+    .filter(u => u.hp > 0 || u.dying > 0)
+    .sort((a, b) => a.y - b.y);
+  for (const u of list) drawUnit(u);
+}
+
+/* ---- 行动条 / 血条：我方用卡片，敌方用头顶细条 ---- */
+
+function drawEnemyBars() {
+  const g = ctx;
+  for (const e of aliveEnemies()) {
+    const sc = e.sc || 1;
+    const w = Math.min(140, (e.dispSize || 70) * 0.92);
+    const x = e.x - w / 2;
+    const y = e.y + 8;
+    const boss = e.def.kind === 'boss';
+
+    // 血条
+    g.fillStyle = 'rgba(20,30,24,.55)';
+    roundRect(g, x - 1, y - 1, w + 2, (boss ? 10 : 7) + 2, 3);
+    g.fill();
+    const hpK = clamp01(e.hp / e.maxHp);
+    g.fillStyle = hpK > 0.5 ? COL.danger : (hpK > 0.25 ? '#FF9A5C' : '#FFD24D');
+    roundRect(g, x, y, w * hpK, boss ? 10 : 7, 3);
+    g.fill();
+
+    // 行动条（正在充能 → 快满了 → 上面飘个感叹号）
+    const ay = y + (boss ? 13 : 10);
+    g.fillStyle = 'rgba(20,30,24,.5)';
+    roundRect(g, x, ay, w, 4, 2);
+    g.fill();
+    const ak = clamp01(e.atb / ATB.full);
+    g.fillStyle = ak > 0.8 ? COL.gold : 'rgba(255,150,120,.9)';
+    roundRect(g, x, ay, w * ak, 4, 2);
+    g.fill();
+
+    if (e.atb >= ATB.full * 0.92 && e.hp > 0) {
+      g.fillStyle = COL.gold;
+      g.font = 'bold 15px system-ui, sans-serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText('!', e.x, y - 14);
+    }
+  }
+}
+
+/* ============================================================
+   11. 绘制：UI
+   ============================================================ */
+
+function hpColor(k) {
+  return k > 0.5 ? COL.hp : (k > 0.25 ? COL.hpLow : COL.hpCrit);
+}
+
+/**
+ * 战场压暗边。
+ *
+ * 一层很淡的四周收暗，能把视线压到画面中间 —— 这是让画面"不像截图拼的"
+ * 最便宜的办法。四边各一条线性渐变，不做径向（径向在某些低端机上有开销，
+ * 而且这里也不需要真的做暗角，只要边缘暗下去就够了）。
+ */
+function drawVignette() {
+  const g = ctx;
+  const h = FIELD_BOTTOM;
+  const d = 90;
+
+  let grd = g.createLinearGradient(0, 52, 0, 52 + d);
+  grd.addColorStop(0, 'rgba(8,14,11,.34)');
+  grd.addColorStop(1, 'rgba(8,14,11,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 52, W, d);
+
+  grd = g.createLinearGradient(0, h - d, 0, h);
+  grd.addColorStop(0, 'rgba(8,14,11,0)');
+  grd.addColorStop(1, 'rgba(8,14,11,.42)');
+  g.fillStyle = grd;
+  g.fillRect(0, h - d, W, d);
+
+  grd = g.createLinearGradient(0, 0, 70, 0);
+  grd.addColorStop(0, 'rgba(8,14,11,.30)');
+  grd.addColorStop(1, 'rgba(8,14,11,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 52, 70, h - 52);
+
+  grd = g.createLinearGradient(W - 70, 0, W, 0);
+  grd.addColorStop(0, 'rgba(8,14,11,0)');
+  grd.addColorStop(1, 'rgba(8,14,11,.30)');
+  g.fillStyle = grd;
+  g.fillRect(W - 70, 52, 70, h - 52);
+}
+
+/* ---- 底部队列：每张卡只讲三件事 —— 谁 / 还有多少血 / 什么时候出手 ---- */
+
+function drawPetCards() {
+  const g = ctx;
+  const y = CARD.y0;
+
+  for (let i = 0; i < S.party.length; i++) {
+    const id = S.party[i];
+    const def = PET_DEFS.find(p => p.id === id);
+    if (!def) continue;
+    const unit = S.pets.find(p => p.def.id === id);
+    const x = CARD.x0 + i * (CARD.w + CARD.gap);
+
+    const dead = !unit || unit.hp <= 0;
+    const ready = !!unit && !dead && unit.atb >= ATB.full;
+    const front = !!unit && unit.gridCol === 1;
+
+    // 卡底
+    g.fillStyle = dead ? '#1F2620' : (ready ? '#453819' : '#29352D');
+    roundRect(g, x, y, CARD.w, CARD.h, 12);
+    g.fill();
+
+    // 上缘高光：一条极淡的亮线，比纯色块有工艺感
+    g.fillStyle = 'rgba(255,255,255,.045)';
+    roundRect(g, x + 2, y + 2, CARD.w - 4, 22, 9);
+    g.fill();
+
+    g.strokeStyle = dead ? '#2B352B' : (ready ? COL.gold : 'rgba(255,255,255,.10)');
+    g.lineWidth = ready ? 2.2 : 1.2;
+    roundRect(g, x, y, CARD.w, CARD.h, 12);
+    g.stroke();
+
+    // 头像底盘 + 头像
+    g.fillStyle = 'rgba(0,0,0,.30)';
+    g.beginPath();
+    g.arc(x + 33, y + 40, 25, 0, 6.283);
+    g.fill();
+
+    const skin = SKIN[id];
+    if (skin) {
+      const sz = 52;
+      g.globalAlpha = dead ? 0.25 : 1;
+      g.drawImage(skin, x + 33 - sz / 2, y + 40 - sz / 2 - 3, sz, sz);
+      g.globalAlpha = 1;
+    }
+
+    // 名字 / 当前会放的技能
+    g.textAlign = 'left';
+    g.textBaseline = 'middle';
+
+    g.fillStyle = dead ? '#5E6A5E' : COL.cream;
+    g.font = 'bold 15px system-ui, sans-serif';
+    g.fillText(def.name, x + 64, y + 18);
+
+    g.fillStyle = dead ? '#4E5A4E' : '#8FA292';
+    g.font = '11px system-ui, sans-serif';
+    g.fillText(dead ? '倒下了' : SKILLS[chooseSkill(unit)].name, x + 64, y + 35);
+
+    // 站位角标：前排会被优先咬
+    if (!dead) {
+      g.textAlign = 'right';
+      g.fillStyle = front ? 'rgba(255,120,110,.95)' : 'rgba(255,255,255,.34)';
+      g.font = 'bold 10px system-ui, sans-serif';
+      g.fillText(front ? '前排' : '后排', x + CARD.w - 12, y + 18);
+    }
+
+    // 血条
+    const bx = x + 64, bw = CARD.w - 64 - 13;
+    g.fillStyle = 'rgba(0,0,0,.42)';
+    roundRect(g, bx, y + 50, bw, 10, 5);
+    g.fill();
+    if (unit && !dead) {
+      const k = clamp01(unit.hp / unit.maxHp);
+      g.fillStyle = hpColor(k);
+      roundRect(g, bx, y + 50, Math.max(3, bw * k), 10, 5);
+      g.fill();
+
+      g.fillStyle = 'rgba(0,0,0,.62)';
+      g.font = 'bold 9px system-ui, sans-serif';
+      g.textAlign = 'center';
+      g.fillText(unit.hp + '/' + unit.maxHp, bx + bw / 2, y + 55);
+      g.textAlign = 'left';
+    }
+
+    // 行动条（高的那条，因为它是全自动战斗里唯一"预告"）
+    g.fillStyle = 'rgba(0,0,0,.42)';
+    roundRect(g, bx, y + 66, bw, 22, 6);
+    g.fill();
+    if (unit && !dead) {
+      const k = clamp01(unit.atb / ATB.full);
+      g.fillStyle = ready ? COL.atbFull : COL.atb;
+      roundRect(g, bx, y + 66, Math.max(3, bw * k), 22, 6);
+      g.fill();
+
+      g.fillStyle = ready ? '#2A2416' : 'rgba(255,248,231,.94)';
+      g.font = 'bold 10px system-ui, sans-serif';
+      g.textAlign = 'center';
+      g.fillText(ready ? '出手！' : '行动 ' + Math.round(k * 100) + '%',
+                 bx + bw / 2, y + 77);
+      g.textAlign = 'left';
+    }
+
+    // 喂饱标记
+    if (unit && unit.fed && !dead) {
+      g.fillStyle = COL.gold;
+      g.beginPath();
+      g.arc(x + 12, y + 12, 5, 0, 6.283);
+      g.fill();
+    }
+  }
+}
+
+/* ---- 战斗日志：只留最近三条，落在两侧阵型之间的空档里，不挡任何单位 ---- */
+
+function drawBattleLog() {
+  if (!S.log.length) return;
+  const g = ctx;
+  const lines = S.log.slice(-3);
+  const cx = 470;
+
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+
+  for (let i = 0; i < lines.length; i++) {
+    // 越旧越淡：视线自然会落在最新那条上
+    const age = lines.length - 1 - i;
+    const a = age === 0 ? 0.9 : (age === 1 ? 0.46 : 0.24);
+    const y = 96 + age * 26;
+
+    g.globalAlpha = a;
+    const txt = lines[i];
+    g.font = 'bold 12px system-ui, sans-serif';
+    const w = Math.min(300, g.measureText(txt).width + 26);
+    g.fillStyle = 'rgba(14,22,17,.62)';
+    roundRect(g, cx - w / 2, y - 12, w, 24, 8);
+    g.fill();
+    g.fillStyle = COL.cream;
+    g.fillText(txt, cx, y);
+    g.globalAlpha = 1;
+  }
+}
+
+/* ---- 顶部 HUD ---- */
+
+function drawTopBar() {
+  const g = ctx;
+
+  const bg = g.createLinearGradient(0, 0, 0, 52);
+  bg.addColorStop(0, 'rgba(14,22,17,.95)');
+  bg.addColorStop(1, 'rgba(14,22,17,.66)');
+  g.fillStyle = bg;
+  g.fillRect(0, 0, W, 52);
+  g.fillStyle = 'rgba(255,255,255,.08)';
+  g.fillRect(0, 52, W, 1);
+
+  g.textBaseline = 'middle';
+
+  // ---- 左：粮食 ----
+  const bags = [
+    { label: '干粮', v: S.food, gold: false },
+    { label: '背上', v: S.carried, gold: true },
+  ];
+  let px = 18;
+  for (const b of bags) {
+    g.fillStyle = b.gold ? COL.gold : '#E8DFCB';
+    g.beginPath();
+    g.arc(px + 9, 26, 9, 0, 6.283);
+    g.fill();
+    g.fillStyle = '#1A2419';
+    g.font = 'bold 10px system-ui, sans-serif';
+    g.textAlign = 'center';
+    g.fillText(b.gold ? '+' : '粮', px + 9, 26);
+
+    g.textAlign = 'left';
+    g.fillStyle = b.gold ? COL.gold : COL.cream;
+    g.font = 'bold 15px system-ui, sans-serif';
+    const vs = String(b.v);
+    g.fillText(vs, px + 24, 20);
+    g.fillStyle = 'rgba(255,255,255,.42)';
+    g.font = '10px system-ui, sans-serif';
+    g.fillText(b.label, px + 24, 35);
+
+    px += 24 + Math.max(g.measureText(vs).width, 20) + 26;
+  }
+
+  // ---- 中：深度路线 ----
+  if (S.depth > 0) {
+    const cx = W / 2 + 12;
+    const n = MAX_DEPTH;
+    const gapX = 30;
+    const x0 = cx - ((n - 1) * gapX) / 2;
+
+    // 连线先画，节点盖在线上
+    g.strokeStyle = 'rgba(255,255,255,.14)';
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(x0, 26);
+    g.lineTo(x0 + (n - 1) * gapX, 26);
+    g.stroke();
+
+    for (let i = 0; i < n; i++) {
+      const on = i < S.depth - 1;
+      const cur = i === S.depth - 1;
+      const x = x0 + i * gapX;
+      g.beginPath();
+      g.arc(x, 26, cur ? 7 : 4.5, 0, 6.283);
+      g.fillStyle = cur ? COL.gold : (on ? '#6E9B6E' : 'rgba(255,255,255,.20)');
+      g.fill();
+      if (cur) {
+        g.strokeStyle = 'rgba(255,197,61,.35)';
+        g.lineWidth = 5;
+        g.beginPath();
+        g.arc(x, 26, 11, 0, 6.283);
+        g.stroke();
+      }
+    }
+
+    const d = DEPTHS[S.depth - 1];
+    if (d) {
+      g.textAlign = 'center';
+      g.fillStyle = 'rgba(255,248,231,.9)';
+      g.font = 'bold 11px system-ui, sans-serif';
+      g.fillText(d.name, cx, 44);
+    }
+  }
+
+  // ---- 右：自动标识 + 撤退 ----
+  g.textAlign = 'right';
+  if (S.phase === 'trail') {
+    g.fillStyle = 'rgba(255,92,92,.92)';
+    roundRect(g, W - 148, 13, 132, 26, 9);
+    g.fill();
+    g.fillStyle = '#FFF';
+    g.font = 'bold 12px system-ui, sans-serif';
+    g.textAlign = 'center';
+    g.fillText('撤退回家  Q', W - 82, 27);
+  } else if (S.phase === 'battle') {
+    g.fillStyle = 'rgba(255,197,61,.16)';
+    roundRect(g, W - 108, 15, 92, 22, 8);
+    g.fill();
+    g.strokeStyle = 'rgba(255,197,61,.5)';
+    g.lineWidth = 1;
+    roundRect(g, W - 108, 15, 92, 22, 8);
+    g.stroke();
+    g.fillStyle = COL.gold;
+    g.font = 'bold 11px system-ui, sans-serif';
+    g.textAlign = 'center';
+    g.fillText('自动战斗中', W - 62, 26);
+  }
+}
+
+/* ---- 各阶段的界面 ---- */
+
+/* ---- 编队：左边是站位格子，右边是宠物池 ---- */
+
+const ROSTER = {
+  pool: { w: 106, h: 232, gap: 8, x0: 364, y: 108 },
+  cellW: 118, cellH: 96,
+  colX: [152, 278],
+  rowY: [180, 292, 404],
+};
+
+/**
+ * 宠物池卡片的位置。
+ *
+ * 绘制和点击都从这里取坐标 —— 之前是绘制写一套、点击再写一套，
+ * 只要有一处改了另一处没改，就会出现"点不准"这种最难查的毛病。
+ */
+function rosterPool() {
+  const r = ROSTER.pool;
+  return PET_DEFS.map((d, i) => {
+    const x = r.x0 + i * (r.w + r.gap);
+    return {
+      id: d.id, def: d,
+      x, y: r.y, w: r.w, h: r.h,
+      fx: x + 8, fy: r.y + r.h - 42, fw: r.w - 16, fh: 26,
+    };
+  });
+}
+
+/**
+ * 站位格子的矩形（索引 = row*2 + col，和战斗里同一套编号）。
+ *
+ * 只出 5 格：宠物池就 5 只，画 6 格会让玩家以为"还能再带一只"，
+ * 然后把最后一格空着反复琢磨。少画一格比多画一格干净。
+ */
+function rosterCells() {
+  const out = [];
+  for (let r = 0; r < GRID.rows; r++) {
+    for (let c = 0; c < 2; c++) {
+      const i = slotIndex(r, c);
+      if (i > MAX_PARTY - 1) continue;     // 第 6 格（索引 5）不出
+      out.push({
+        i, row: r, col: c,
+        x: ROSTER.colX[c] - ROSTER.cellW / 2,
+        y: ROSTER.rowY[r] - ROSTER.cellH * 0.78,
+        w: ROSTER.cellW,
+        h: ROSTER.cellH,
+      });
+    }
+  }
+  return out;
+}
+
+const ROSTER_GO = { x: 364, y: 372, w: 562, h: 64 };
+
+function syncParty() { S.party = S.slots.filter(Boolean); }
+
+/** 上阵 / 下阵。上阵时自动补第一个空位 */
+function togglePet(id) {
+  const i = S.slots.indexOf(id);
+  if (i >= 0) {
+    S.slots[i] = null;
+  } else {
+    if (S.party.length >= MAX_PARTY) return;
+    const free = S.slots.indexOf(null);
+    if (free < 0) return;
+    S.slots[free] = id;
+  }
+  S.pickSlot = null;
+  syncParty();
+}
+
+function swapSlots(a, b) {
+  const t = S.slots[a];
+  S.slots[a] = S.slots[b];
+  S.slots[b] = t;
+  syncParty();
+}
+
+function toggleFeed(id) {
+  if (S.fed[id]) {
+    S.fed[id] = false;
+    S.food += 1;
+  } else if (S.food > 0) {
+    S.fed[id] = true;
+    S.food -= 1;
+  }
+}
+
+function drawRoster() {
+  const g = ctx;
+
+  // 背景：深林 + 远处树影
+  const bg = g.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#1B2E24');
+  bg.addColorStop(0.55, '#15231C');
+  bg.addColorStop(1, '#0E1712');
+  g.fillStyle = bg;
+  g.fillRect(0, 0, W, H);
+
+  g.globalAlpha = 0.13;
+  for (let i = 0; i < 9; i++) drawTree(i * 118 + 40, 576, 2.1, true);
+  g.globalAlpha = 1;
+
+  g.textBaseline = 'middle';
+
+  // ---- 标题 ----
+  g.textAlign = 'left';
+  g.fillStyle = COL.cream;
+  g.font = 'bold 25px system-ui, sans-serif';
+  g.fillText('带谁进森林', 28, 38);
+  g.fillStyle = 'rgba(255,255,255,.40)';
+  g.font = '12px system-ui, sans-serif';
+  g.fillText('站位决定谁先挨咬 · 出手全自动', 28, 64);
+
+  // ---- 右上：干粮 / 已选 ----
+  g.textAlign = 'right';
+  g.fillStyle = COL.gold;
+  g.font = 'bold 16px system-ui, sans-serif';
+  g.fillText('干粮 ' + S.food, W - 28, 34);
+  g.fillStyle = 'rgba(255,255,255,.38)';
+  g.font = '11px system-ui, sans-serif';
+  g.fillText('已选 ' + S.party.length + ' / ' + MAX_PARTY + ' 只', W - 28, 56);
+
+  // ---- 左：阵容 ----
+  g.textAlign = 'left';
+  g.fillStyle = 'rgba(255,255,255,.55)';
+  g.font = 'bold 12px system-ui, sans-serif';
+  g.fillText('阵容', 93, 90);
+  g.fillStyle = 'rgba(255,255,255,.28)';
+  g.font = '10px system-ui, sans-serif';
+  g.fillText('后排', 93, 456);
+  g.textAlign = 'right';
+  g.fillStyle = 'rgba(255,120,110,.6)';
+  g.fillText('前排（先挨咬）', 337, 456);
+
+  for (const cell of rosterCells()) {
+    const id = S.slots[cell.i];
+    const picked = S.pickSlot === cell.i;
+    const warm = cell.col === 1;
+
+    g.fillStyle = id
+      ? (warm ? 'rgba(255,214,150,.10)' : 'rgba(190,225,255,.07)')
+      : 'rgba(255,255,255,.028)';
+    roundRect(g, cell.x, cell.y, cell.w, cell.h, 12);
+    g.fill();
+
+    g.strokeStyle = picked
+      ? COL.gold
+      : (id ? (warm ? 'rgba(255,214,150,.26)' : 'rgba(190,225,255,.18)')
+            : 'rgba(255,255,255,.10)');
+    g.lineWidth = picked ? 2.4 : 1;
+    if (!id) g.setLineDash([5, 5]);
+    roundRect(g, cell.x, cell.y, cell.w, cell.h, 12);
+    g.stroke();
+    g.setLineDash([]);
+
+    if (id) {
+      const def = PET_DEFS.find(p => p.id === id);
+      const skin = SKIN[id];
+      if (skin) {
+        const sz = 62;
+        g.drawImage(skin, cell.x + cell.w / 2 - sz / 2, cell.y + 12, sz, sz);
+      }
+      g.textAlign = 'center';
+      g.fillStyle = COL.cream;
+      g.font = 'bold 12px system-ui, sans-serif';
+      g.fillText(def.name, cell.x + cell.w / 2, cell.y + cell.h - 16);
+    } else {
+      g.textAlign = 'center';
+      g.fillStyle = 'rgba(255,255,255,.16)';
+      g.font = 'bold 20px system-ui, sans-serif';
+      g.fillText('+', cell.x + cell.w / 2, cell.y + cell.h / 2 - 4);
+    }
+  }
+
+  // ---- 右：宠物池 ----
+  g.textAlign = 'left';
+  g.fillStyle = 'rgba(255,255,255,.55)';
+  g.font = 'bold 12px system-ui, sans-serif';
+  g.fillText('宠物', ROSTER.pool.x0, 90);
+
+  for (const c of rosterPool()) {
+    const d = c.def;
+    const on = S.slots.indexOf(d.id) >= 0;
+    const fed = !!S.fed[d.id];
+
+    g.fillStyle = on ? '#31301F' : '#1E2A24';
+    roundRect(g, c.x, c.y, c.w, c.h, 12);
+    g.fill();
+
+    if (on) {
+      g.fillStyle = 'rgba(255,197,61,.07)';
+      roundRect(g, c.x, c.y, c.w, c.h, 12);
+      g.fill();
+    }
+
+    g.strokeStyle = on ? 'rgba(255,197,61,.75)' : 'rgba(255,255,255,.09)';
+    g.lineWidth = on ? 2 : 1;
+    roundRect(g, c.x, c.y, c.w, c.h, 12);
+    g.stroke();
+
+    // 头像
+    const skin = SKIN[d.id];
+    if (skin) {
+      const sz = 64;
+      g.globalAlpha = on ? 1 : 0.62;
+      g.drawImage(skin, c.x + c.w / 2 - sz / 2, c.y + 12, sz, sz);
+      g.globalAlpha = 1;
+    }
+
+    g.textAlign = 'center';
+    g.fillStyle = on ? COL.cream : '#9EAC9C';
+    g.font = 'bold 15px system-ui, sans-serif';
+    g.fillText(d.name, c.x + c.w / 2, c.y + 92);
+
+    g.fillStyle = 'rgba(255,255,255,.32)';
+    g.font = '10px system-ui, sans-serif';
+    g.fillText(d.species + ' · 血 ' + d.hp + ' · 速 ' + d.spd, c.x + c.w / 2, c.y + 110);
+
+    // 技能（两行，只给名字 + 极短说明）
+    let sy = c.y + 132;
+    for (const sid of d.skills) {
+      const sk = SKILLS[sid];
+      g.fillStyle = sk.color;
+      g.beginPath();
+      g.arc(c.x + 12, sy + 4, 3.2, 0, 6.283);
+      g.fill();
+      g.fillStyle = 'rgba(255,255,255,.62)';
+      g.font = '10px system-ui, sans-serif';
+      g.textAlign = 'left';
+      g.fillText(sk.name, c.x + 21, sy + 4);
+      sy += 20;
+    }
+
+    // 喂食
+    g.fillStyle = fed ? 'rgba(255,197,61,.22)' : 'rgba(255,255,255,.06)';
+    roundRect(g, c.fx, c.fy, c.fw, c.fh, 7);
+    g.fill();
+    g.strokeStyle = fed ? 'rgba(255,197,61,.8)' : 'rgba(255,255,255,.12)';
+    g.lineWidth = 1;
+    roundRect(g, c.fx, c.fy, c.fw, c.fh, 7);
+    g.stroke();
+    g.textAlign = 'center';
+    g.fillStyle = fed ? COL.gold : 'rgba(255,255,255,.48)';
+    g.font = 'bold 11px system-ui, sans-serif';
+    g.fillText(fed ? '已喂饱' : '喂 1 干粮', c.fx + c.fw / 2, c.fy + 14);
+  }
+
+  // ---- 出发 ----
+  const can = S.party.length > 0;
+  g.fillStyle = can ? COL.gold : '#2A362C';
+  roundRect(g, ROSTER_GO.x, ROSTER_GO.y, ROSTER_GO.w, ROSTER_GO.h, 14);
+  g.fill();
+
+  if (can) {
+    g.fillStyle = 'rgba(255,255,255,.30)';
+    roundRect(g, ROSTER_GO.x + 2, ROSTER_GO.y + 2, ROSTER_GO.w - 4, 26, 12);
+    g.fill();
+  }
+
+  g.textAlign = 'center';
+  g.fillStyle = can ? '#2A2416' : '#66756A';
+  g.font = 'bold 20px system-ui, sans-serif';
+  g.fillText(can ? '进森林   空格' : '至少带一只', ROSTER_GO.x + ROSTER_GO.w / 2,
+             ROSTER_GO.y + ROSTER_GO.h / 2);
+
+  // ---- 说明 ----
+  const tips = [
+    '点宠物卡片上阵 / 下阵，点格子里的宠物再点另一个格子可以换位',
+    '战斗全自动：条攒满就出手。你能决定的只有站位、要不要开饭、往不往里走',
+    '食物一物两用 —— 带回家是收获，路上吃掉是续航',
+  ];
+  g.textAlign = 'left';
+  for (let i = 0; i < tips.length; i++) {
+    g.fillStyle = i === 0 ? 'rgba(255,255,255,.44)' : 'rgba(255,255,255,.28)';
+    g.font = '11.5px system-ui, sans-serif';
+    g.fillText(tips[i], 28, 468 + i * 22);
+  }
+}
+
+function trailButtons() {
+  const bw = 202, bh = 64, gap = 18;
+  const totalW = bw * 3 + gap * 2;
+  const x0 = (W - totalW) / 2;
+  const by = 292;
+  return [
+    { id: 'deeper',  x: x0, y: by, w: bw, h: bh, key: '空格',
+      title: '继续深入', sub: '风险自己担', color: COL.gold, dark: '#2A2416' },
+    { id: 'eat',     x: x0 + bw + gap, y: by, w: bw, h: bh, key: 'E',
+      title: S.ateThisTrail ? '已经吃过了' : '就地开饭',
+      sub: S.ateThisTrail ? '一层只能吃一次' : '耗 3 份，全队回一半',
+      color: S.ateThisTrail ? '#4A5A4A' : '#FFB454', dark: '#2A2416' },
+    { id: 'retreat', x: x0 + (bw + gap) * 2, y: by, w: bw, h: bh, key: 'Q',
+      title: '撤退回家', sub: '落袋为安', color: '#5FCB71', dark: '#152415' },
+  ];
+}
+
+function drawTrail() {
+  const g = ctx;
+  drawForestScene();
+  drawAllUnits();
+
+  // 压暗
+  g.fillStyle = 'rgba(16,28,20,.74)';
+  g.fillRect(0, 0, W, H);
+
+  const d = DEPTHS[S.depth - 1];
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+
+  g.fillStyle = COL.cream;
+  g.font = 'bold 26px system-ui, sans-serif';
+  g.fillText('清空了「' + d.name + '」', W / 2, 108);
+
+  g.fillStyle = COL.gold;
+  g.font = 'bold 19px system-ui, sans-serif';
+  g.fillText('背上 ' + S.carried + ' 份食物', W / 2, 150);
+
+  const next = DEPTHS[S.depth];
+  if (next) {
+    g.fillStyle = '#A8B8A4';
+    g.font = '13px system-ui, sans-serif';
+    g.fillText('再往里是「' + next.name + '」 — ' + next.note, W / 2, 186);
+    g.fillStyle = '#8A9A86';
+    g.font = '12px system-ui, sans-serif';
+    g.fillText('那里有 ' + next.enemies.length + ' 只，回来能多带 ' + next.food + ' 份', W / 2, 208);
+  } else {
+    g.fillStyle = COL.gold;
+    g.font = '13px system-ui, sans-serif';
+    g.fillText('再往里就走出森林了', W / 2, 192);
+  }
+
+  // 三个按钮
+  for (const b of trailButtons()) {
+    g.fillStyle = b.color;
+    roundRect(g, b.x, b.y, b.w, b.h, 12);
+    g.fill();
+
+    g.fillStyle = b.dark;
+    g.font = 'bold 17px system-ui, sans-serif';
+    g.fillText(b.title, b.x + b.w / 2, b.y + 24);
+    g.font = '11px system-ui, sans-serif';
+    g.fillText(b.sub, b.x + b.w / 2, b.y + 45);
+
+    // 按键角标
+    g.fillStyle = 'rgba(0,0,0,.28)';
+    roundRect(g, b.x + b.w - 40, b.y + 6, 34, 16, 5);
+    g.fill();
+    g.fillStyle = 'rgba(255,255,255,.9)';
+    g.font = 'bold 9.5px system-ui, sans-serif';
+    g.fillText(b.key, b.x + b.w - 23, b.y + 14);
+  }
+
+  // 队伍状态
+  const n = S.pets.length;
+  const gap = 106;
+  let px = W / 2 - ((n - 1) * gap) / 2;
+  for (const p of S.pets) {
+    g.fillStyle = p.hp > 0 ? COL.cream : '#7A5A5A';
+    g.font = 'bold 13px system-ui, sans-serif';
+    g.textAlign = 'center';
+    g.fillText(p.name, px, 404);
+    g.fillStyle = 'rgba(0,0,0,.5)';
+    roundRect(g, px - 42, 418, 84, 7, 3.5);
+    g.fill();
+    if (p.hp > 0) {
+      const k = clamp01(p.hp / p.maxHp);
+      g.fillStyle = hpColor(k);
+      roundRect(g, px - 42, 418, 84 * k, 7, 3.5);
+      g.fill();
+    }
+    g.fillStyle = '#8A9A86';
+    g.font = '11px system-ui, sans-serif';
+    g.fillText(Math.max(0, p.hp) + '/' + p.maxHp, px, 436);
+    px += gap;
+  }
+
+  g.fillStyle = '#6E8C6E';
+  g.font = '11px system-ui, sans-serif';
+  g.fillText('食物两头用：带回家是收获，路上吃掉是续航', W / 2, 470);
+}
+
+function drawResult() {
+  const g = ctx;
+  const bg = g.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#20342A');
+  bg.addColorStop(1, '#101C16');
+  g.fillStyle = bg;
+  g.fillRect(0, 0, W, H);
+
+  const ok = S.result === 'win' || S.result === 'retreat';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+
+  g.fillStyle = ok ? COL.gold : COL.danger;
+  g.font = 'bold 36px system-ui, sans-serif';
+  g.fillText(ok ? '到家了' : '全军覆没', W / 2, 168);
+
+  g.fillStyle = COL.cream;
+  g.font = 'bold 20px system-ui, sans-serif';
+  g.fillText('家里现在有 ' + S.food + ' 份干粮', W / 2, 232);
+
+  g.fillStyle = '#8A9A86';
+  g.font = '13px system-ui, sans-serif';
+  g.fillText(S.result === 'win' ? '森林走穿了，这一趟没白跑'
+    : (S.result === 'retreat' ? '及时收手，饭够吃两天' : '下次带够药再往里走'),
+    W / 2, 266);
+
+  // 日志
+  g.textAlign = 'left';
+  g.fillStyle = 'rgba(0,0,0,.35)';
+  roundRect(g, W / 2 - 300, 300, 600, 150, 10);
+  g.fill();
+  g.fillStyle = '#8A9A86';
+  g.font = '12px system-ui, sans-serif';
+  const logs = S.log.slice(-7);
+  logs.forEach((t, i) => g.fillText('· ' + t, W / 2 - 280, 322 + i * 19));
+
+  const bw = 240, bh = 56;
+  g.fillStyle = COL.gold;
+  roundRect(g, W / 2 - bw / 2, 480, bw, bh, 12);
+  g.fill();
+  g.fillStyle = '#2A2416';
+  g.font = 'bold 18px system-ui, sans-serif';
+  g.textAlign = 'center';
+  g.fillText('回营地 (空格)', W / 2, 508);
+}
+
+function drawBattleUI() {
+  const g = ctx;
+  // UI 底板 + 一道分界亮线（比纯色块干净）
+  g.fillStyle = '#181F1A';
+  g.fillRect(0, FIELD_BOTTOM, W, H - FIELD_BOTTOM);
+  g.fillStyle = 'rgba(255,255,255,.07)';
+  g.fillRect(0, FIELD_BOTTOM, W, 1);
+
+  drawPetCards();
+
+  // 底部一句话，替代原来的技能面板
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillStyle = 'rgba(255,255,255,.26)';
+  g.font = '11px system-ui, sans-serif';
+  g.fillText('出手全自动 · 你能决定的只有「谁站前排」和「要不要继续往里走」', W / 2, 596);
+}
+
+function drawBanner() {
+  if (!S.banner) return;
+  const g = ctx;
+  const a = Math.min(1, S.banner.t / 0.5);
+  g.globalAlpha = a;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.font = 'bold 20px system-ui, sans-serif';
+  const w = Math.min(700, g.measureText(S.banner.text).width + 64);
+  g.fillStyle = 'rgba(30,42,33,.86)';
+  roundRect(g, W / 2 - w / 2, 58, w, 38, 12);
+  g.fill();
+  g.fillStyle = COL.cream;
+  g.fillText(S.banner.text, W / 2, 77);
+  g.globalAlpha = 1;
+}
+
+/** 冲刺残影：画在所有单位之前，用 lighter 叠成一条光带 */
+function drawGhosts() {
+  const g = ctx;
+  if (!S.ghosts.length) return;
+  g.globalCompositeOperation = 'lighter';
+  for (const gh of S.ghosts) {
+    const k = gh.t / gh.life;
+    const skin = gh.skin;
+    const pad = skin.pad || 0;
+    const baseW = skin.width - pad * 2;
+    if (baseW <= 0) continue;
+    const kk = gh.size / baseW;
+    const w = skin.width * kk, h = skin.height * kk;
+    g.globalAlpha = 0.28 * (1 - k) * (1 - k);
+    g.drawImage(skin, gh.x - w / 2, gh.y - h + 4, w, h);
+  }
+  g.globalAlpha = 1;
+  g.globalCompositeOperation = 'source-over';
+}
+
+function drawFx() {
+  const g = ctx;
+  for (const f of S.fx) {
+    // 还没到命中那一刻：完全不画
+    if (f.delay > 0) continue;
+    const k = f.t / f.life;
+    if (k >= 1) continue;
+
+    if (f.kind === 'float') {
+      // 弹入：前 18% 从 0.4 倍放大回 1 倍，并且带一点回弹。
+      // 直接淡出会像"字幕"，弹一下才像"打出来的字"。
+      const inK = clamp01(k / 0.18);
+      const pop = 0.4 + 0.6 * (1 + Math.sin((inK - 1) * Math.PI * 0.5) * 0.22);
+      const sz = f.size * (inK < 1 ? pop : 1);
+      g.globalAlpha = k < 0.62 ? 1 : Math.max(0, 1 - (k - 0.62) / 0.38);
+      g.font = 'bold ' + sz.toFixed(1) + 'px system-ui, sans-serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.lineWidth = 4;
+      g.strokeStyle = 'rgba(20,30,24,.85)';
+      g.strokeText(f.text, f.x, f.y);
+      g.fillStyle = f.color;
+      g.fillText(f.text, f.x, f.y);
+      g.globalAlpha = 1;
+
+    } else if (f.kind === 'ring') {
+      g.globalAlpha = (1 - k) * 0.9;
+      g.strokeStyle = f.color;
+      g.lineWidth = 3.5 * (1 - k) + 1;
+      g.beginPath();
+      g.ellipse(f.x, f.y, 24 + k * 66, (24 + k * 66) * 0.42, 0, 0, 6.283);
+      g.stroke();
+      g.globalAlpha = 1;
+
+    } else if (f.kind === 'impact') {
+      // 星芒：中心亮斑 + 八条放射线，0.28 秒内收完
+      const p = f.power;
+      const r0 = (16 + k * 52) * p;
+      g.globalCompositeOperation = 'lighter';
+
+      const core = g.createRadialGradient(f.x, f.y, 0, f.x, f.y, r0 * 0.9);
+      // 注意：COL 里的颜色是 hex，不能拿来做 rgba 字符串拼接。
+      // 中心纯白、外圈用 f.color 以 globalAlpha 叠，效果一样而且不会拼出非法色值。
+      core.addColorStop(0, 'rgba(255,255,255,' + (0.92 * (1 - k)).toFixed(3) + ')');
+      core.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = core;
+      g.beginPath();
+      g.arc(f.x, f.y, r0 * 0.9, 0, 6.283);
+      g.fill();
+
+      if (k < 0.7) {
+        g.globalAlpha = (1 - k / 0.7) * 0.55;
+        g.fillStyle = f.color;
+        g.beginPath();
+        g.arc(f.x, f.y, r0 * 0.72, 0, 6.283);
+        g.fill();
+        g.globalAlpha = 1;
+      }
+
+      g.globalAlpha = 1 - k;
+      g.strokeStyle = '#FFFDF2';
+      g.lineCap = 'round';
+      for (let i = 0; i < 8; i++) {
+        const a = f.rot + i * (6.283 / 8) + k * 0.6;
+        const r1 = r0 * 0.55, r2 = r0 * (1.05 + (i % 2) * 0.35);
+        g.lineWidth = (i % 2 ? 1.6 : 2.8) * (1 - k) + 0.6;
+        g.beginPath();
+        g.moveTo(f.x + Math.cos(a) * r1, f.y + Math.sin(a) * r1);
+        g.lineTo(f.x + Math.cos(a) * r2, f.y + Math.sin(a) * r2);
+        g.stroke();
+      }
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = 'source-over';
+
+    } else if (f.kind === 'slash') {
+      // 弧形斩击：一段粗弧，从 -60° 扫到 +60°，越往后越细越淡
+      const R = f.size * 0.5;
+      const a0 = -1.05 + k * 0.5;
+      const a1 = 1.05 + k * 0.5;
+      const dir = f.dir;
+      g.save();
+      g.translate(f.x, f.y);
+      g.scale(dir, 1);
+      g.globalAlpha = (1 - k) * 0.95;
+      g.strokeStyle = '#FFFFFF';
+      g.lineCap = 'round';
+      g.lineWidth = 11 * (1 - k) + 2;
+      g.beginPath();
+      g.arc(0, 0, R * (0.9 + k * 0.25), a0, a1);
+      g.stroke();
+      g.globalAlpha = (1 - k) * 0.7;
+      g.strokeStyle = f.color;
+      g.lineWidth = 18 * (1 - k) + 3;
+      g.beginPath();
+      g.arc(0, 0, R * (0.86 + k * 0.25), a0, a1);
+      g.stroke();
+      g.restore();
+      g.globalAlpha = 1;
+
+    } else if (f.kind === 'shock') {
+      // 地面冲击波：三圈同心椭圆，一圈比一圈慢、一圈比一圈淡
+      const p = f.power;
+      for (let i = 0; i < 3; i++) {
+        const kk = clamp01(k - i * 0.14);
+        if (kk <= 0) continue;
+        const rx = (18 + kk * 74 * p) * (1 + i * 0.12);
+        g.globalAlpha = (1 - kk) * (0.75 - i * 0.2);
+        g.strokeStyle = i === 0 ? '#FFFDF2' : f.color;
+        g.lineWidth = 5 * (1 - kk) + 1;
+        g.beginPath();
+        g.ellipse(f.x, f.y, rx, rx * 0.36, 0, 0, 6.283);
+        g.stroke();
+      }
+      g.globalAlpha = 1;
+
+    } else if (f.kind === 'beam') {
+      // 治疗光柱：一道竖起的暖光，头部亮、底部散
+      const w = 34 * (0.6 + k * 0.5);
+      const h = 96 * (1 - k * 0.25);
+      const grd = g.createLinearGradient(f.x, f.y - h, f.x, f.y);
+      grd.addColorStop(0, 'rgba(255,255,255,0)');
+      grd.addColorStop(0.45, 'rgba(220,255,220,.55)');
+      grd.addColorStop(1, 'rgba(255,255,255,.12)');
+      g.globalCompositeOperation = 'lighter';
+      g.globalAlpha = (1 - k) * 0.85;
+      g.fillStyle = grd;
+      g.beginPath();
+      g.ellipse(f.x, f.y - h * 0.5, w * 0.5, h * 0.5, 0, 0, 6.283);
+      g.fill();
+      g.globalAlpha = (1 - k) * 0.7;
+      g.strokeStyle = f.color;
+      g.lineWidth = 2.5;
+      g.beginPath();
+      g.ellipse(f.x, f.y, 30 + k * 26, (30 + k * 26) * 0.34, 0, 0, 6.283);
+      g.stroke();
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = 'source-over';
+
+    } else if (f.kind === 'spark') {
+      g.globalCompositeOperation = 'lighter';
+      g.globalAlpha = (1 - k) * 0.9;
+      g.fillStyle = f.color;
+      g.beginPath();
+      g.arc(f.x, f.y, 2.6 * (1 - k * 0.6), 0, 6.283);
+      g.fill();
+      g.globalAlpha = 1;
+      g.globalCompositeOperation = 'source-over';
+
+    } else if (f.kind === 'bit') {
+      g.globalAlpha = 1 - k;
+      g.fillStyle = f.color;
+      g.beginPath();
+      g.arc(f.x, f.y, f.r * (1 - k * 0.5), 0, 6.283);
+      g.fill();
+      g.globalAlpha = 1;
+    }
+  }
+}
+
+/** 悬停高亮：正在选目标时，指向谁就框谁 */
+function drawHover() {
+  const g = ctx;
+  if (S.aiming && S.hover && S.hover.side === 'enemy' && S.hover.hp > 0) {
+    const e = S.hover;
+    const sz = e.dispSize || 80;
+    g.strokeStyle = COL.gold;
+    g.lineWidth = 3;
+    g.setLineDash([7, 5]);
+    g.beginPath();
+    g.ellipse(e.x, e.y - sz * 0.45, sz * 0.44, sz * 0.52, 0, 0, 6.283);
+    g.stroke();
+    g.setLineDash([]);
+  }
+}
+
+function render() {
+  const g = ctx;
+
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.clearRect(0, 0, W, H);
+
+  if (S.shake > 0.2) {
+    const a = S.shake;
+    g.translate((Math.random() - 0.5) * a, (Math.random() - 0.5) * a);
+  }
+
+  if (S.phase === 'roster') {
+    drawRoster();
+    return;
+  }
+  if (S.phase === 'result') {
+    drawResult();
+    return;
+  }
+  if (S.phase === 'trail') {
+    drawTrail();
+    return;
+  }
+
+  // 战斗
+  drawForestScene();
+  drawGrid();
+  drawGhosts();      // 残影要压在单位下面，否则会盖住正在出手的那只
+  drawAllUnits();
+  drawEnemyBars();
+  drawHover();
+  drawFx();
+  drawVignette();
+  drawTopBar();
+  drawBattleUI();
+  drawBattleLog();
+  drawBanner();
+}
+
+/* ============================================================
+   12. 输入
+   ============================================================ */
+
+const mouse = { x: 0, y: 0, down: false };
+
+function toGame(ev) {
+  const r = cv.getBoundingClientRect();
+  return {
+    x: (ev.clientX - r.left) * (W / r.width),
+    y: (ev.clientY - r.top) * (H / r.height),
+  };
+}
+
+function pickUnit(x, y) {
+  const list = S.enemies.concat(S.pets).filter(u => u.hp > 0 && !u.dying);
+  // 从近到远（y 大的优先），再按距离
+  list.sort((a, b) => b.y - a.y);
+  for (const u of list) {
+    const sz = u.dispSize || 80;
+    const r = sz * 0.52;
+    if (Math.hypot(x - u.x, y - (u.y - r * 0.7)) < r) return u;
+  }
+  return null;
+}
+
+function handleClick(gx, gy) {
+  if (S.phase === 'roster') return rosterClick(gx, gy);
+  if (S.phase === 'result') {
+    backToCamp();
+    return;
+  }
+  if (S.phase === 'trail') {
+    for (const b of trailButtons()) {
+      if (gx >= b.x && gx <= b.x + b.w && gy >= b.y && gy <= b.y + b.h) {
+        if (b.id === 'deeper') goDeeper();
+        else if (b.id === 'eat') eatNow();
+        else retreat();
+        return;
+      }
+    }
+    return;
+  }
+
+  // 战斗
+  if (S.phase !== 'battle') return;
+
+  // 自动模式下战斗中不需要任何输入。
+  // 手动模式（S.auto = false）仍保留点目标的分支，供调试与测试使用。
+  if (S.aiming) {
+    const u = pickUnit(gx, gy);
+    if (u && u.side === 'enemy' && u.hp > 0) {
+      confirmAim(u);
+      return;
+    }
+    S.aiming = null;   // 点空地取消
+  }
+}
+
+/**
+ * 手动选招（S.auto = false 时的调试路径）。
+ *
+ * 注意别和上面的 chooseSkill(p) 搞混 —— 两个函数原本同名，
+ * 后定义的把先定义的整个盖掉了，结果是自动战斗一开始就静默失效：
+ * chooseSkill 拿到的是"选招"版本（参数当 skillId），返回 undefined。
+ */
+function manualPickSkill(skillId) {
+  const actor = S.await[0];
+  if (!actor) return;
+  const sk = SKILLS[skillId];
+  if (sk.target === 'enemy') {
+    S.aiming = { actor, skillId };
+    return;
+  }
+  petAct(actor, skillId, null);
+  S.await.shift();
+}
+
+function confirmAim(target) {
+  if (!S.aiming) return;
+  const { actor, skillId } = S.aiming;
+  S.aiming = null;
+  petAct(actor, skillId, target);
+  const i = S.await.indexOf(actor);
+  if (i >= 0) S.await.splice(i, 1);
+}
+
+function rosterClick(gx, gy) {
+  // 1) 宠物池：先判喂食按钮（它在卡片内部，必须比卡片先命中）
+  for (const c of rosterPool()) {
+    if (gx < c.x || gx > c.x + c.w || gy < c.y || gy > c.y + c.h) continue;
+    if (gx >= c.fx && gx <= c.fx + c.fw && gy >= c.fy && gy <= c.fy + c.fh) {
+      toggleFeed(c.id);
+    } else {
+      togglePet(c.id);
+    }
+    return;
+  }
+
+  // 2) 站位格子：第一次点选中，第二次点换位
+  for (const cell of rosterCells()) {
+    if (gx < cell.x || gx > cell.x + cell.w || gy < cell.y || gy > cell.y + cell.h) continue;
+    if (S.pickSlot === null || S.pickSlot === undefined) {
+      if (S.slots[cell.i]) S.pickSlot = cell.i;
+    } else if (S.pickSlot === cell.i) {
+      S.pickSlot = null;
+    } else {
+      swapSlots(S.pickSlot, cell.i);
+      S.pickSlot = null;
+    }
+    return;
+  }
+
+  // 3) 出发
+  if (S.party.length && gx >= ROSTER_GO.x && gx <= ROSTER_GO.x + ROSTER_GO.w &&
+      gy >= ROSTER_GO.y && gy <= ROSTER_GO.y + ROSTER_GO.h) {
+    startRun();
+  }
+}
+
+cv.addEventListener('mousemove', ev => {
+  const p = toGame(ev);
+  mouse.x = p.x; mouse.y = p.y;
+  S.hover = (S.phase === 'battle') ? pickUnit(p.x, p.y) : null;
+  // 指针样式：能点的地方变手型。
+  // 战斗阶段全自动，场上没有可点区域，所以战斗不给手型 ——
+  // 给了反而误导玩家以为能点。
+  let pointer = false;
+  if (S.phase === 'trail' || S.phase === 'roster' || S.phase === 'result') pointer = true;
+  cv.style.cursor = pointer ? 'pointer' : 'default';
+});
+
+cv.addEventListener('mousedown', ev => {
+  const p = toGame(ev);
+  mouse.down = true;
+  handleClick(p.x, p.y);
+});
+
+cv.addEventListener('mouseup', () => { mouse.down = false; });
+
+const keys = new Set();
+window.addEventListener('keydown', ev => {
+  const k = ev.key.toLowerCase();
+
+  if (S.phase === 'roster') {
+    if (k === ' ') {
+      ev.preventDefault();
+      if (S.party.length) startRun();
+    }
+    return;
+  }
+  if (S.phase === 'result') {
+    if (k === ' ') backToCamp();
+    return;
+  }
+  if (S.phase === 'trail') {
+    if (k === ' ') { ev.preventDefault(); goDeeper(); }
+    if (k === 'q') retreat();
+    if (k === 'e') eatNow();
+    return;
+  }
+  if (S.phase === 'battle') {
+    // 全自动战斗里没有按键操作。只有把 S.auto 关掉做调试时才用 1/2 选招
+    if (!S.auto && (k === '1' || k === '2')) {
+      const actor = S.await[0];
+      if (actor) {
+        const sid = actor.def.skills[Number(k) - 1];
+        if (sid) manualPickSkill(sid);
+      }
+    }
+    if (k === 'escape') S.aiming = null;
+  }
+});
+window.addEventListener('keyup', ev => keys.delete(ev.key.toLowerCase()));
+
+/* ============================================================
+   13. 主循环 + 尺寸适配
+   ============================================================ */
+
+function resize() {
+  const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+  cv.width = W;
+  cv.height = H;
+  cv.style.width = Math.round(W * s) + 'px';
+  cv.style.height = Math.round(H * s) + 'px';
+  ctx.imageSmoothingEnabled = false;
+}
+window.addEventListener('resize', resize);
+
+let lastT = 0;
+function frame(t) {
+  const dt = lastT ? Math.min(0.05, (t - lastT) / 1000) : 1 / 60;
+  lastT = t;
+
+  if (!assetsReady) {
+    ctx.fillStyle = '#14211A';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#4A6A52';
+    ctx.font = '14px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('加载中…', W / 2, H / 2);
+    requestAnimationFrame(frame);
+    return;
+  }
+
+  if (S.phase === 'battle') tickBattle(dt);
+  else { tickFx(dt); }
+
+  render();
+  requestAnimationFrame(frame);
+}
+
+// 默认阵容要落到格子上，否则编队界面显示"已选 3 只"但格子全是空的
+syncSlotsFromParty();
+
+resize();
+requestAnimationFrame(frame);
+
+/* ============================================================
+   14. 测试接口
+   ============================================================ */
+
+window.PAWPACK = {
+  _S: S,
+  _PET_DEFS: PET_DEFS,
+  _SKILLS: SKILLS,
+  _ENEMY_DEFS: ENEMY_DEFS,
+  _DEPTHS: DEPTHS,
+  _ATB: ATB,
+  _CARD: CARD,
+
+  _reset() {
+    S.phase = 'roster';
+    S.food = START_FOOD;
+    S.carried = 0;
+    S.depth = 0;
+    S.party = [];
+    S.slots = [null, null, null, null, null, null];
+    S.pickSlot = null;
+    S.auto = true;
+    S.castGap = 0;
+    S.hitPause = 0;
+    S.fed = {};
+    S.pets = [];
+    S.enemies = [];
+    S.fx = [];
+    S.ghosts.length = 0;
+    S.fxDelay = 0;
+    S.pendingHit = null;
+    S.await = [];
+    S.awaitT = 0;
+    S.aiming = null;
+    S.result = '';
+    S.log = [];
+    S.banner = null;
+    S.ateThisTrail = false;
+    S.nextId = 1;
+  },
+
+  _setParty(ids) {
+    S.party = ids.slice();
+    S.slots = [null, null, null, null, null, null];
+    syncSlotsFromParty();
+  },
+  _setFed(id, v) { S.fed[id] = !!v; },
+  _startRun: startRun,
+  _goDeeper: goDeeper,
+  _retreat: retreat,
+  _eatNow: eatNow,
+  _backToCamp: backToCamp,
+  _startBattle: startBattle,
+
+  /** 只推进战斗，不渲染（测试用） */
+  _tick(dt) { tickBattle(dt); },
+  _chooseSkill: chooseSkill,
+  _confirmAim: confirmAim,
+  _petAct: petAct,
+  _enemyAct: enemyAct,
+  _alivePets: alivePets,
+  _aliveEnemies: aliveEnemies,
+  _pickUnit: pickUnit,
+  _layoutBattle: layoutBattle,
+  /** 直接渲染一帧（离屏截图 / 回归对比用；不给的话只能靠 rAF 撞运气） */
+  _render: render,
+};
+</script>
+</body>
+</html>

@@ -17,7 +17,8 @@ const path = require('path');
 const vm = require('vm');
 const assert = require('assert');
 
-const HTML = path.join(__dirname, '..', 'prototype', 'index.html');
+// 允许用 PROTO=<path> 指定被测文件 —— 改版时能拿新旧两版跑同一套采样对比难度
+const HTML = process.env.PROTO || path.join(__dirname, '..', 'prototype', 'index.html');
 const html = fs.readFileSync(HTML, 'utf8');
 
 const m = html.match(/<script>([\s\S]*)<\/script>/);
@@ -32,6 +33,8 @@ function makeCtx() {
   return {
     globalAlpha: 1, fillStyle: '', strokeStyle: '', lineWidth: 1,
     font: '', textAlign: '', textBaseline: '', imageSmoothingEnabled: true,
+    lineCap: 'butt', lineJoin: 'miter', globalCompositeOperation: 'source-over',
+    setLineDash: noop, getLineDash: () => [], measureText2: noop,
     setTransform: noop, resetTransform: noop, save: noop, restore: noop,
     translate: noop, scale: noop, rotate: noop,
     clearRect: noop, fillRect: noop, strokeRect: noop,
@@ -39,6 +42,10 @@ function makeCtx() {
     // 记录路径点：光束是手算四边形，NaN 或零面积时浏览器**静默不画**、不报错
     moveTo: (x, y) => stat.pts.push([x, y]),
     lineTo: (x, y) => stat.pts.push([x, y]),
+    // 曲线也要记点：悠悠球的毛线走 quadraticCurveTo，控制点出现 NaN 时
+    // 浏览器和 ctx 桩都不会报错，只会静默不画（和光束当年同一个坑）
+    quadraticCurveTo: (cx, cy, x, y) => { stat.pts.push([cx, cy]); stat.pts.push([x, y]); },
+    bezierCurveTo: (a, b, c, d, x, y) => { stat.pts.push([x, y]); },
     arc: noop, ellipse: noop, rect: noop, fill: noop, stroke: noop, clip: noop,
     fillText: noop, strokeText: noop,
     measureText: (s) => ({ width: String(s).length * 6 }),
@@ -360,12 +367,13 @@ ok('主动撤离（E）能进结算', () => {
 });
 
 // ============================================================
-console.log('\n=== 8. 技能判定（CR-017）===');
+console.log('\n=== 8. 技能判定（CR-018：悠悠球 / 甩尾 / 踩奶）===');
 
 /** 清场 + 把敌人摆到固定位置。返回摆好的敌人数组（引用） */
 function stage(list) {
   P.resetGame();
   P.G.phase = 'battle';
+  P.G.paused = false;
   while (P.enemies.length) P.enemies.pop();
   while (P._abilities().length) P._abilities().pop();
   const out = [];
@@ -376,72 +384,180 @@ function stage(list) {
   return out;
 }
 
-ok('三个英雄分别是贯穿 / 落雷 / 冲击', () => {
+/** 只推进技能实例的 n 帧（不跑敌人 AI，位置可预测） */
+function tickAb(n) {
+  for (let i = 0; i < n; i++) P._updateAbilities(1 / 60);
+}
+
+/** 假英雄（castYarn / castSpin 只读 x / y） */
+function fakeHero(x, y) {
+  return { x, y, aimX: 1, aimY: 0, target: null };
+}
+
+ok('三个英雄分别是悠悠球 / 甩尾 / 踩奶', () => {
   P.resetGame();
   // ⚠️ 不能用 deepStrictEqual：vm 沙箱里的 Array 与宿主的不是同一个原型，
   //    值完全相同也会判不等（上一版就误报在这）
   const kinds = P.squad.heroes.map(h => h.kind).join(',');
-  assert.strictEqual(kinds, 'beam,bolt,nova', '实际 ' + kinds);
+  assert.strictEqual(kinds, 'yarn,spin,pounce', '实际 ' + kinds);
 });
 
-ok('贯穿能穿透多个目标', () => {
-  // 三个怪排成一列，x 递增 40（都在 320 射程内、横向对齐）
-  const es = stage([{ x: 200, y: 0 }, { x: 240, y: 0 }, { x: 280, y: 0 }]);
+// ---------------- 悠悠球 ----------------
+
+ok('悠悠球去程能穿透多个目标', () => {
+  const es = stage([{ x: 150, y: 0 }, { x: 200, y: 0 }, { x: 250, y: 0 }]);
   const before = es.map(e => e.hp);
-  P._castBeam(100, 0, 1, 0, 320, 10, false, 0);
+  P._castYarn(fakeHero(0, 0), 1, 0, 10, false, 0);
+  tickAb(20);   // 20 帧 = 0.33s > 去程 0.252s
   const hurt = es.filter((e, i) => e.hp < before[i]).length;
   assert.strictEqual(hurt, 3, '只打到 ' + hurt + ' 个');
 });
 
-ok('贯穿有穿透上限（maxTargets=4）', () => {
-  const es = [];
-  for (let i = 0; i < 6; i++) es.push({ x: 200 + i * 35, y: 0 });
-  const list = stage(es);
+ok('悠悠球有命中上限（maxTargets=4）', () => {
+  const spec = [];
+  for (let i = 0; i < 6; i++) spec.push({ x: 100 + i * 32, y: 0 });
+  const list = stage(spec);
   const before = list.map(e => e.hp);
-  P._castBeam(100, 0, 1, 0, 320, 10, false, 0);
+  P._castYarn(fakeHero(0, 0), 1, 0, 10, false, 0);
+  tickAb(20);
   const hurt = list.filter((e, i) => e.hp < before[i]).length;
   assert.strictEqual(hurt, 4, '实际命中 ' + hurt + ' 个（应为 4）');
 });
 
-ok('贯穿的群体伤害递减（首个满伤，之后衰减）', () => {
-  const list = stage([{ x: 200, y: 0 }, { x: 240, y: 0 }]);
+ok('悠悠球的群体伤害递减（首个满伤，之后衰减）', () => {
+  const list = stage([{ x: 150, y: 0 }, { x: 200, y: 0 }]);
   const before = list.map(e => e.hp);
-  P._castBeam(100, 0, 1, 0, 320, 10, false, 0);
+  P._castYarn(fakeHero(0, 0), 1, 0, 10, false, 0);
+  tickAb(20);
   const d1 = before[0] - list[0].hp;
   const d2 = before[1] - list[1].hp;
   assert(d1 > 0 && d2 > 0, '两个都该掉血');
   assert(d2 < d1, '第二个伤害 ' + d2 + ' 应小于第一个 ' + d1);
 });
 
-ok('落雷在预警期间不结算（延迟 0.32s）', () => {
-  const list = stage([{ x: P.player.x + 700, y: P.player.y }]);
-  const e = list[0];
-  const hp0 = e.hp;
-  P._castBolt(P.player.x, P.player.y, e.x, e.y, 10, false, 0);
-  // 刚放下就是预警圈，血不该动
-  assert.strictEqual(e.hp, hp0, '预警期间就掉血了，结算提前了');
-  const fx = P._abilities().find(f => f.kind === 'bolt');
-  assert(fx && !fx.fired, '落雷实例应存在且未引爆');
+ok('悠悠球会自己回来（out → hold → back → 消失）', () => {
+  stage([{ x: 2000, y: 2000 }]);   // 怪放到很远，不干扰
+  P._castYarn(fakeHero(0, 0), 1, 0, 10, false, 0);
+  const fx = P._abilities()[0];
+  assert(fx && fx.kind === 'yarn', '悠悠球实例没建出来');
+  assert.strictEqual(fx.phase, 'out', '初始应为去程');
+
+  tickAb(20);                                    // 0.333s > 去程 340/1150≈0.296s
+  assert.strictEqual(fx.phase, 'hold', '去程结束应进入停顿，实际 ' + fx.phase);
+
+  tickAb(6);                                     // 过掉 0.07s 停顿
+  assert.strictEqual(fx.phase, 'back', '停顿结束应进入回程，实际 ' + fx.phase);
+
+  tickAb(40);
+  assert.strictEqual(P._abilities().length, 0, '回程结束应回收实例（还剩 ' + P._abilities().length + '）');
 });
 
-ok('落雷预警结束后真的结算', () => {
-  const list = stage([{ x: P.player.x + 700, y: P.player.y }]);
+ok('悠悠球回程伤害打折（0.7）', () => {
+  // 一个怪摆在 3/4 射程处：去程打满伤，回程再打 0.7 倍
+  const list = stage([{ x: 220, y: 0 }]);
   const e = list[0];
   const hp0 = e.hp;
-  P._castBolt(P.player.x, P.player.y, e.x, e.y, 10, false, 0);
-  for (let i = 0; i < 24; i++) P._step(1 / 60);   // 推进 0.4s > warn 0.32
-  assert(e.hp < hp0, '预警结束后没炸（hp 未变）');
+  P._castYarn(fakeHero(0, 0), 1, 0, 10, false, 0);
+  tickAb(20);                                    // 只跑去程（0.296s ≈ 17.7 帧）
+  const dmgOut = hp0 - e.hp;
+  tickAb(45);                                    // 跑完回程
+  const total = hp0 - e.hp;
+  assert(dmgOut > 0, '去程没打到');
+  assert(total > dmgOut, '回程没补伤害（总共 ' + total + '，去程 ' + dmgOut + '）');
+  // 回程那段应约等于去程的 0.7（两次都吃满伤系数 1，因为各自是第 1 个）
+  const back = total - dmgOut;
+  assert(Math.abs(back - 7) < 0.6, '回程伤害 ' + back + '，应约为 7');
 });
 
-ok('冲击波只打半径内，半径外不受影响', () => {
+ok('悠悠球回程把怪往猫的方向拽', () => {
+  const list = stage([{ x: 150, y: 0 }]);
+  const e = list[0];
+  P._castYarn(fakeHero(0, 0), 1, 0, 10, false, 0);
+  tickAb(20);                                    // 球越过怪，去程结束
+  const vxAfterOut = e.vx;
+  assert(vxAfterOut > 0, '去程应把怪往外推（vx=' + vxAfterOut.toFixed(1) + '）');
+  tickAb(20);                                    // 回程扫过（回程 340/1450≈14 帧）
+  assert(e.vx < vxAfterOut, '回程应该反向往猫拽（vx=' + e.vx.toFixed(1) + '）');
+});
+
+// ---------------- 甩尾陀螺 ----------------
+
+ok('甩尾只打半径内，半径外不受影响', () => {
   const list = stage([{ x: 50, y: 0 }, { x: 300, y: 0 }]);
   const [near, far] = list;
-  const hpNear = near.hp;
-  const hpFar = far.hp;
-  P._castNova(0, 0, 8, false, 0);
-  assert(near.hp < hpNear, '半径 96 内的怪没掉血');
+  const hpNear = near.hp, hpFar = far.hp;
+  P._castSpin(fakeHero(0, 0), 8, false, 0);
+  assert(near.hp < hpNear, '半径 106 内的怪没掉血');
   assert.strictEqual(far.hp, hpFar, '半径外的怪不该掉血');
 });
+
+ok('甩尾把怪向外甩飞（位移远大于普通击退）', () => {
+  const list = stage([{ x: 70, y: 0 }]);
+  const e = list[0];
+  P._castSpin(fakeHero(0, 0), 8, false, 0);
+  assert(e.vx > 1000, '甩飞初速只有 ' + e.vx.toFixed(0) + '，普通击退才 90');
+});
+
+ok('甩尾的保龄球：被甩飞的怪撞倒沿途的怪', () => {
+  // A 在 60（圈内），B 在 210（圈外、但在 A 的飞行路径上）
+  const list = stage([{ x: 60, y: 0 }, { x: 210, y: 0 }]);
+  const [a, b] = list;
+  const hpB = b.hp;
+  P._castSpin(fakeHero(0, 0), 8, false, 0);
+  assert(a.hp < 20, 'A 应该被直接打中');
+  assert(b.hp < hpB, 'B 在圈外但被撞到了，应该掉血（hp=' + b.hp + '）');
+});
+
+// ---------------- 踩奶扑击 ----------------
+
+ok('踩奶在滞空期间不结算', () => {
+  const h = P.squad.heroes[2];
+  P.resetGame();
+  P.G.phase = 'battle';
+  while (P.enemies.length) P.enemies.pop();
+  P._spawnAt('walker', h.x + 100, h.y);
+  const e = P.enemies[0];
+  const hp0 = e.hp;
+
+  h.target = e;
+  P._castPounce(h, 10, false, 0);
+  assert(h.leap, '踩奶应让英雄离开阵型起跳');
+  assert.strictEqual(e.hp, hp0, '滞空期间就掉血了，结算提前了');
+
+  const fx = P._abilities().find(f => f.kind === 'pounce');
+  assert(fx && !fx.landed, '踩奶实例应存在且未落地');
+});
+
+ok('踩奶落地后真的结算', () => {
+  const h = P.squad.heroes[2];
+  P.resetGame();
+  P.G.phase = 'battle';
+  while (P.enemies.length) P.enemies.pop();
+  P._spawnAt('walker', h.x + 100, h.y);
+  const e = P.enemies[0];
+  const hp0 = e.hp;
+
+  h.target = e;
+  P._castPounce(h, 10, false, 0);
+  tickAb(30);   // 0.5s > airTime 0.40
+  assert(e.hp < hp0, '落地后没结算（hp 未变）');
+});
+
+ok('踩奶的落点被限制在跳跃距离内', () => {
+  const h = P.squad.heroes[2];
+  P.resetGame();
+  P.G.phase = 'battle';
+  while (P.enemies.length) P.enemies.pop();
+  // 目标丢到 900px 外（远超 leapRange 240）
+  P._spawnAt('walker', h.x + 900, h.y);
+  h.target = P.enemies[0];
+  const x0 = h.x;
+  P._castPounce(h, 10, false, 0);
+  const jump = Math.abs(h.leap.x1 - x0);
+  assert(jump <= 271, '跳了 ' + jump.toFixed(0) + 'px，超过 leapRange 270');
+});
+
+// ---------------- 通用 ----------------
 
 ok('我方不再产生任何投射物', () => {
   P.resetGame();
@@ -458,41 +574,40 @@ ok('我方不再产生任何投射物', () => {
 ok('技能实例会过期回收（不同屏堆积）', () => {
   P.resetGame();
   P.G.phase = 'battle';
-  for (let i = 0; i < 40; i++) P._castNova(0, 0, 8, false, 0);
+  for (let i = 0; i < 40; i++) P._castSpin(fakeHero(0, 0), 8, false, 0);
   const peak = P._abilities().length;
-  for (let i = 0; i < 60; i++) P._step(1 / 60);
-  assert.strictEqual(P._abilities().length, 0, '过了 1 秒还剩 ' + P._abilities().length + ' 个（峰值 ' + peak + '）');
+  tickAb(60);
+  assert.strictEqual(P._abilities().length, 0,
+    '过了 1 秒还剩 ' + P._abilities().length + ' 个（峰值 ' + peak + '）');
 });
 
-ok('贯穿的四边形几何有效（无 NaN、无零面积）', () => {
+ok('三招渲染都不产出 NaN 坐标', () => {
   P.resetGame();
   P.G.phase = 'battle';
   stat.pts.length = 0;
-  P._castBeam(100, 100, 1, 0, 320, 10, false, 0);
+  P._castYarn(fakeHero(100, 100), 1, 0, 10, false, 0);
+  P._castSpin(fakeHero(100, 100), 8, false, 0);
+  const h = P.squad.heroes[2];
+  h.target = null;
+  P._castPounce(h, 10, false, 0);
+  tickAb(10);
   P._render();
-  assert(stat.pts.length > 0, '光束一个点都没画（渲染分支没进）');
+  assert(stat.pts.length > 0, '一个点都没画（渲染分支没进）');
   for (const [x, y] of stat.pts) {
     assert(Number.isFinite(x) && Number.isFinite(y), '出现非有限坐标 ' + x + ',' + y);
   }
-  // 四边形面积（鞋带公式）：零面积说明退化成一个点，什么都看不见
-  const a = Math.abs(
-    stat.pts[0][0] * stat.pts[1][1] - stat.pts[1][0] * stat.pts[0][1] +
-    stat.pts[1][0] * stat.pts[2][1] - stat.pts[2][0] * stat.pts[1][1] +
-    stat.pts[2][0] * stat.pts[3][1] - stat.pts[3][0] * stat.pts[2][1] +
-    stat.pts[3][0] * stat.pts[0][1] - stat.pts[0][0] * stat.pts[3][1]
-  ) / 2;
-  assert(a > 10, '四边形面积只有 ' + a.toFixed(1) + 'px²，基本等于没画');
 });
 
-ok('贯穿长度为 0 时也不产出 NaN', () => {
+ok('悠悠球零方向向量时也不产出 NaN', () => {
   P.resetGame();
   P.G.phase = 'battle';
   stat.pts.length = 0;
-  // 起点与终点重合：归一化会除零，代码里用 ||1 兜底，这条断言把这个兜底钉住
-  P._castBeam(100, 100, 1, 0, 0, 10, false, 0);
+  // aim 为 0 → 归一化会除零，代码里用 ||1 兜底
+  P._castYarn(fakeHero(100, 100), 0, 0, 10, false, 0);
+  tickAb(5);
   P._render();
   for (const [x, y] of stat.pts) {
-    assert(Number.isFinite(x) && Number.isFinite(y), '零长度光束产生了 NaN');
+    assert(Number.isFinite(x) && Number.isFinite(y), '零方向悠悠球产生了 NaN');
   }
 });
 

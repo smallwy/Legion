@@ -1,0 +1,126 @@
+/* ============================================================================
+   grove.html 真浏览器截图（playwright）
+   ----------------------------------------------------------------------------
+   走真 Chromium：字体、圆角、渐变、setLineDash 都是真的，
+   看到什么就是玩家看到什么。
+
+   这一版要验证三件事，所以截图分三组：
+     · 八关各一张 —— 每关是**不同的场地**，不逐关截看不出布局差异
+     · 六把武器各一张 —— 溜溜球 / 镰刀 / 影分身这些必须能看见
+     · 结算一张 —— 推关的衔接全在这儿
+
+   运行：
+     NODE_PATH=C:/Users/汪宇/.workbuddy/binaries/node/workspace/node_modules \
+       node grove-shot2.js
+   ========================================================================== */
+
+const path = require("path");
+const fs = require("fs");
+const { chromium } = require("playwright");
+
+const HTML = "file:///" + path.join(__dirname, "..", "prototype", "grove.html").replace(/\\/g, "/");
+const OUT = path.join(__dirname, "..", "shots");
+if (!fs.existsSync(OUT)) fs.mkdirSync(OUT, { recursive: true });
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+(async () => {
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1000, height: 660 }, deviceScaleFactor: 1 });
+  page.on("pageerror", e => console.log("  !! 页面报错: " + e.message));
+  await page.goto(HTML);
+  await sleep(400);
+
+  async function shot(name) {
+    const file = path.join(OUT, name);
+    await page.screenshot({ path: file });
+    console.log("  " + file);
+  }
+
+  // 1. 选人
+  await page.mouse.move(500, 260);
+  await sleep(120);
+  await shot("grove-01-选人.png");
+
+  // 2. 第 1 关开场
+  await page.keyboard.press("Digit1");
+  await sleep(700);
+  await shot("grove-02-第1关-苔原入口.png");
+
+  // 3. 预瞄线：造一颗球停在地上，左右两条预测线会自动出现
+  await page.evaluate(() => {
+    const { S } = window.GROVE;
+    S.texts.length = 0;
+    const f = S.foes.find(f => !f.dead);
+    window.GROVE.coatFoe(f, 3);
+    const b = S.balls[0];
+    b.x = 300; b.y = 462; b.vx = 0; b.vy = 0; b.onGround = true;
+    S.p.x = 250; S.p.y = 462;
+  });
+  await sleep(320);
+  await shot("grove-03-预瞄线.png");
+
+  // 4~11. 八关各一张
+  const levels = [
+    [1, "grove-04-第2关-泥沼.png", 460, 462],
+    [2, "grove-05-第3关-断崖.png", 300, 462],
+    [3, "grove-06-第4关-缓坡.png", 440, 462],
+    [4, "grove-07-第5关-弹跳林.png", 380, 462],
+    [5, "grove-08-第6关-深井.png", 200, 462],
+    [6, "grove-09-第7关-阶梯塔.png", 400, 462],
+    [7, "grove-10-第8关-双塔.png", 180, 462],
+  ];
+  for (const [idx, name, bx, by] of levels) {
+    await page.evaluate((i) => window.GROVE._start(2, i), idx);
+    await sleep(420);
+    await page.evaluate(({ bx, by }) => {
+      const { S } = window.GROVE;
+      S.texts.length = 0;
+      S.foes.forEach((f, k) => { if (k % 2 === 0) f.coat = k % 3 === 0 ? 1 : 2; });
+      const f = S.foes.find(x => !x.dead && x.coat === 0);
+      if (f) {
+        window.GROVE.coatFoe(f, 3);
+        const b = S.balls[0];
+        if (b) { b.x = bx; b.y = by; b.vx = 0; b.vy = 0; b.onGround = true; }
+      }
+    }, { bx, by });
+    await sleep(300);
+    await shot(name);
+  }
+
+  // 12~14. 武器手感：挑三个形状最不一样的，各截一张
+  const skills = [
+    [0, "grove-11-武器-溜溜球.png", 0.22],
+    [4, "grove-12-武器-回旋镰刀.png", 0.18],
+    [5, "grove-13-武器-影分身.png", 0.10],
+  ];
+  for (const [hero, name, wait] of skills) {
+    await page.evaluate((h) => {
+      const P = window.GROVE, S = P.S;
+      P._start(h, 0);
+      S.p.x = 420; S.p.y = 462; S.p.face = 1;
+      S.foes.forEach(f => { f.x = 2000; });
+      P.HEROES[h].fire(S.p);
+    }, hero);
+    await sleep(wait * 1000);
+    await shot(name);
+  }
+
+  // 15. 结算
+  await page.evaluate(() => {
+    const { S } = window.GROVE;
+    window.GROVE._start(0, 4);
+    S.killed = S.total;
+    S.stat.made = 4;
+    S.playT = 41.2;
+    S.food = 14;
+    S.clearT = 0.8;
+    S.phase = "clear";
+    S.best[4] = "S";
+  });
+  await sleep(280);
+  await shot("grove-14-结算.png");
+
+  await browser.close();
+  console.log("\n完成");
+})();

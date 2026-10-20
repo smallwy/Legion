@@ -20,6 +20,10 @@ node_modules/
 client/tools/*.log
 /tmp/
 
+# ---- 原型备份 / 过期截图（本地留档，不入库）----
+client/prototype/*.bak-*.html
+client/shots/_old/
+
 # ---- 编辑器 ----
 .vscode/
 .idea/

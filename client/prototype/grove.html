@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"/>
-<title>PAWPACK · 林地（单角色 · 裹·滚·熔）</title>
+<title>PAWPACK · 八关推关原型（Q 版 · 六把武器）</title>
 <style>
   html, body {
     margin: 0; padding: 0; height: 100%; overflow: hidden;
@@ -44,6 +44,20 @@
       泥坑：球裹上泥，变重，之后每次撞人 +2 层 —— 强化通道
       营地：落袋，收成 ×1 且额外 +1 —— 稳妥
       所以"往哪推"不是清场方向问题，是"我这一球想要什么"的问题。
+
+   ④ 推关制（这一版加的）。
+      选一只 → 第 1 关 → 结算停 3 秒自动进下一关。不回关卡列表，
+      因为一回到列表，人就会开始挑着打，推关的手感就断了。
+      进度存 localStorage，关掉再打开从上次那关继续。
+
+   ⑤ 六把武器，形状全不一样（这一版加的）。
+      溜溜球（去回）/ 音波喇叭（原地一圈）/ 滚坚果（贴地滚）/
+      萝卜炮（抛物线）/ 回旋镰刀（绕身一圈）/ 影分身（三线平推）。
+      命中效果完全相同，差异化只在怎么打到 —— 这是推球游戏，不是弹幕游戏。
+
+   ⑥ Q 版战斗场景（这一版改的）。
+      原来画的是暗色森林剪影，读起来像横版探险。现在每关一套主题色，
+      天空要亮、云山树全用圆弧、所有东西都有深色粗描边 —— 像贴纸，不像写实。
    ========================================================================== */
 
 /* ---------- 画布 ---------- */
@@ -97,52 +111,69 @@ function hash(i) {
    `fire()` 里的弹道形状是真的不一样，玩家按一下就知道自己换了人。
    ========================================================================== */
 
+/* ----------------------------------------------------------------------------
+   我方单位
+   ----------------------------------------------------------------------------
+   一局带一只，所以六只必须**按一下就知道换了人**。判据不是数值不同，
+   是弹道形状不同 —— 玩家不看 UI 也能从手感上认出来。
+
+     尖耳猫  溜溜球    甩出去、拉回来，来回都能打。站位对了能打两遍
+     短尾犬  音波喇叭  原地吼一圈。射程最短、覆盖最宽，专治贴身围殴
+     胖仓鼠  滚坚果    贴地滚，穿透，撞墙弹一次。地上有人的时候最好用
+     长耳兔  萝卜炮    抛物线，落点炸一片。唯一能打"高台背面"的
+     老实牛  回旋镰刀  绕自己转一大圈。伤害不高，但一圈扫平身边所有人
+     影狐    影分身    三道残影平推。射程最长、最直，一条线全穿
+
+   注意：这些弹丸打中的效果**都一样**（+1 层包裹）。不做元素克制、
+   不做伤害数字 —— 这是推球游戏，不是弹幕游戏。差异化只在"怎么打到"。
+   ========================================================================== */
+
 const HEROES = [
   {
-    id: "cat", name: "尖耳猫", tag: "三连毛球",
+    id: "cat", name: "尖耳猫", tag: "溜溜球",
     c1: "#F3B366", c2: "#FFEBCF", c3: "#DC8443",
     w: 38, h: 44, spd: 330, jump: 830,
-    atkCd: 0.30, dashCd: 0.60, dashPow: 620,
+    atkCd: 0.34, dashCd: 0.60, dashPow: 620,
     ears: "cat",
-    desc: "三连发 · 射程短",
+    desc: "甩出去再拉回来，来回都能糊一层。贴脸放等于打两下。",
     fire(u) {
-      for (let i = -1; i <= 1; i++) {
-        spawnShot({
-          x: u.x + u.face * 16, y: u.y - 26,
-          vx: u.face * 640, vy: i * 105,
-          r: 10, life: 0.32, color: "#FFDCA8",
-        });
-      }
-    },
-  },
-  {
-    id: "dog", name: "短尾犬", tag: "声波撞击",
-    c1: "#B98C63", c2: "#F2DFC4", c3: "#8A623E",
-    w: 46, h: 46, spd: 300, jump: 800,
-    atkCd: 0.46, dashCd: 0.55, dashPow: 660,
-    ears: "dog",
-    desc: "宽波 · 最贴身的距离",
-    fire(u) {
-      // 宽波：不是弹丸，是一个贴身的短矩形。判定在 updateShots 里按"带状"处理。
       spawnShot({
-        x: u.x + u.face * 44, y: u.y - 30,
-        vx: u.face * 380, vy: 0,
-        r: 26, life: 0.22, kind: "wave", color: "#FFF0C8", pierce: true,
+        x: u.x + u.face * 20, y: u.y - 26,
+        vx: 0, vy: 0, r: 15, life: 0.72,
+        kind: "yoyo", dir: u.face, u: u, spin: 0, t: 0,
+        color: "#FFC94E",
       });
     },
   },
   {
-    id: "ham", name: "胖仓鼠", tag: "坚果弹",
-    c1: "#D9C08C", c2: "#FFF6E2", c3: "#A98B5C",
-    w: 40, h: 40, spd: 350, jump: 780,
-    atkCd: 0.34, dashCd: 0.70, dashPow: 580,
-    ears: "ham",
-    desc: "穿透 · 射得最远",
+    id: "dog", name: "短尾犬", tag: "音波喇叭",
+    c1: "#B98C63", c2: "#F2DFC4", c3: "#8A623E",
+    w: 46, h: 46, spd: 300, jump: 800,
+    atkCd: 0.46, dashCd: 0.55, dashPow: 660,
+    ears: "dog",
+    desc: "原地吼一圈，射程短但范围宽。被围住的时候一个喇叭全震开。",
     fire(u) {
       spawnShot({
-        x: u.x + u.face * 16, y: u.y - 24,
-        vx: u.face * 940, vy: 0,
-        r: 9, life: 0.62, color: "#C99A5E", pierce: true,
+        x: u.x + u.face * 20, y: u.y - 26,
+        vx: 0, vy: 0, r: 26, life: 0.30,
+        kind: "wave", dir: u.face, u: u, grow: 330,
+        color: "#FFF0C8", pierce: true,
+      });
+    },
+  },
+  {
+    id: "ham", name: "胖仓鼠", tag: "滚坚果",
+    c1: "#D9C08C", c2: "#FFF6E2", c3: "#A98B5C",
+    w: 40, h: 40, spd: 350, jump: 780,
+    atkCd: 0.42, dashCd: 0.70, dashPow: 580,
+    ears: "ham",
+    desc: "一颗坚果贴地滚，撞墙会弹回来。地上站成一排的时候最好用。",
+    fire(u) {
+      spawnShot({
+        x: u.x + u.face * 18, y: u.y - 16,
+        vx: u.face * 560, vy: -40, r: 15, life: 1.6,
+        kind: "nut", dir: u.face, spin: 0,
+        color: "#B07A42", pierce: true, bounces: 1,
       });
     },
   },
@@ -150,49 +181,54 @@ const HEROES = [
     id: "rab", name: "长耳兔", tag: "萝卜炮",
     c1: "#F0E3E8", c2: "#FFFFFF", c3: "#D0A8B6",
     w: 38, h: 46, spd: 340, jump: 880,
-    atkCd: 0.52, dashCd: 0.65, dashPow: 600,
+    atkCd: 0.56, dashCd: 0.65, dashPow: 600,
     ears: "rab",
-    desc: "抛射 · 落点炸一片",
+    desc: "抛一颗萝卜出去，落地炸一片。唯一能打到高台背面和对面楼上。",
     fire(u) {
       spawnShot({
         x: u.x + u.face * 14, y: u.y - 30,
-        vx: u.face * 480, vy: -430,
+        vx: u.face * 520, vy: -440,
         r: 11, life: 2.0, kind: "lob", color: "#F2903F",
-        grav: 1400, aoe: 74,
+        grav: 1400, aoe: 84, spin: 0,
       });
     },
   },
   {
-    id: "ox", name: "老实牛", tag: "牛角顶",
+    id: "ox", name: "老实牛", tag: "回旋镰刀",
     c1: "#8FA3B8", c2: "#E6EEF6", c3: "#63788C",
     w: 56, h: 52, spd: 250, jump: 700,
-    atkCd: 0.62, dashCd: 0.80, dashPow: 700,
+    atkCd: 0.70, dashCd: 0.80, dashPow: 700,
     ears: "ox",
-    desc: "最宽 · 站着就是墙",
+    desc: "镰刀绕自己转一大圈，身边所有敌人一起糊。慢慢转，但一圈不漏。",
     fire(u) {
       spawnShot({
-        x: u.x + u.face * 34, y: u.y - 28,
-        vx: u.face * 300, vy: 0,
-        r: 34, life: 0.20, kind: "wave", color: "#D6E4F2", pierce: true,
+        x: u.x, y: u.y - 26,
+        vx: 0, vy: 0, r: 20, life: 0.62,
+        kind: "sickle", u: u, ang: -1.5, rad: 84,
+        ox: u.x, oy: u.y - 26, color: "#DDE8F2", pierce: true,
       });
     },
   },
   {
-    id: "fox", name: "影狐", tag: "影刃",
+    id: "fox", name: "影狐", tag: "影分身",
     c1: "#E08A5E", c2: "#FFE4D2", c3: "#B45F38",
     w: 42, h: 44, spd: 360, jump: 820,
-    atkCd: 0.38, dashCd: 0.50, dashPow: 700,
+    atkCd: 0.40, dashCd: 0.50, dashPow: 700,
     ears: "fox",
-    desc: "穿透 · 跑得最快",
+    desc: "三道残影平推出去，射程最长。一条直线上的三个人一起糊。",
     fire(u) {
-      spawnShot({
-        x: u.x + u.face * 18, y: u.y - 28,
-        vx: u.face * 780, vy: 0,
-        r: 12, life: 0.40, kind: "blade", color: "#7C6BE0", pierce: true,
-      });
+      for (let i = 0; i < 3; i++) {
+        spawnShot({
+          x: u.x + u.face * 16, y: u.y - 18 - i * 18,
+          vx: u.face * 860, vy: 0,
+          r: 13, life: 0.40, kind: "shadow", i: i,
+          color: "#B49CFF", pierce: true,
+        });
+      }
     },
   },
 ];
+
 
 /* ============================================================================
    2. 敌人
@@ -222,67 +258,470 @@ const FOES = {
 const GROUND_Y = 556;
 const WALL_L = 26, WALL_R = 934;
 
-const PLATS = [
-  { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+/** 同屏最多几颗球。超过就不许再造 —— 见 coatFoe 里的理由 */
+const MAX_BALLS = 2;
 
-  // 每层是**一整条**，只在中间留一个 66px 的缺口。
-  //
-  // 这一条是整张关卡的关键。最初把每层切成 3 段（缝隙 54px），
-  // 结果球滚到缝隙就掉下去 —— 一颗球永远撞不到同层第二个人，
-  // "推一次清一片"根本不成立，每只敌人都要单独造一颗球推一次。
-  // 雪人兄弟的每层之所以是完整一条，就是为了让球能横穿整层。
-  //
-  // 缺口的作用是给球一个"掉到下一层"的出口：
-  // 球滚到缺口处没有支撑，会落下去，于是"往缺口推还是往人推"
-  // 变成了真实的取舍。玩家跳过 66px 毫无压力，球却过不去。
-  { x: WALL_L, y: 462, w: 404, h: 18, kind: "ledge" },   // 26..430
-  { x: 496,    y: 462, w: 438, h: 18, kind: "ledge" },   // 496..934
-  { x: WALL_L, y: 350, w: 624, h: 18, kind: "ledge" },   // 26..650
-  { x: 720,    y: 350, w: 214, h: 18, kind: "ledge" },   // 720..934
-  { x: 340,    y: 248, w: 280, h: 18, kind: "ledge" },   // 顶层
+/* ----------------------------------------------------------------------------
+   关卡线（8 关，推关制）
+   ----------------------------------------------------------------------------
+   参考《雪人兄弟》：**一关就是一块具体的场地**，不是"同一块地换目标"。
+
+   每关的布局都是重新排的，八关有八种形状：
+     1 直井        两段台面，一道竖井直通地面
+     2 三池        左中右三口坑各吃一种落点，还有一层顶台
+     3 长球道      三层，中段拉长，球能在上面连撞
+     4 斜坡        竖井底下有坡，球会自己爬回来
+     5 弹菇        地面两朵菇把球弹上去
+     6 传送        球道被洞接成一条长链
+     7 阶梯        左右两道竖井错开一层，像楼梯
+     8 双塔        中间一大片空，两边两座塔
+
+   几何有一条硬规矩（冒烟测试第 11 段在守）：
+   相邻两层的缺口必须有 ≥100px 的垂直交集。球直径 48，缝窄了会被平台边缘接住，
+   看起来"能下去"其实永远下不去 —— 这个坑踩过一次，代价是三屏全部重画。
+
+   营地在最右，所以每关都要有一条"落点 → 营地"的通路，否则落袋关是死关。
+   -------------------------------------------------------------------------- */
+
+const THEMES = {
+  tundra: {
+    sky1: "#5FC6E8", sky2: "#C8F2FF", cloud: "#FFFFFF",
+    hill1: "#7FD3B0", hill2: "#A8E6C4",
+    grass: "#57B85E", grass2: "#8BDD7E",
+    dirt: "#8A5B3A", dirt2: "#5E3C26",
+    wood: "#C98A50", wood2: "#8B5A32", wood3: "#EFC089",
+    accent: "#FFE066",
+  },
+  swamp: {
+    sky1: "#F2B45C", sky2: "#FFE6AE", cloud: "#FFF6DE",
+    hill1: "#C9A45E", hill2: "#E0C489",
+    grass: "#7FA843", grass2: "#B4CF63",
+    dirt: "#7A5433", dirt2: "#4E3622",
+    wood: "#B87C46", wood2: "#7C5129", wood3: "#E2AF74",
+    accent: "#FFD447",
+  },
+  cliff: {
+    sky1: "#8E7BD6", sky2: "#D9D2FF", cloud: "#F2EEFF",
+    hill1: "#8A7FC4", hill2: "#B3A8E0",
+    grass: "#6E8FBF", grass2: "#9FB8DC",
+    dirt: "#5A4C74", dirt2: "#3A3050",
+    wood: "#9A7E8E", wood2: "#6B5364", wood3: "#C6A8B6",
+    accent: "#FFD9F0",
+  },
+  slope: {
+    sky1: "#FF9A5C", sky2: "#FFDDB0", cloud: "#FFF3E2",
+    hill1: "#E08A5E", hill2: "#F2B48A",
+    grass: "#D9764A", grass2: "#F2A06A",
+    dirt: "#8C4F32", dirt2: "#5E3320",
+    wood: "#C4703E", wood2: "#8A4A26", wood3: "#EEA06E",
+    accent: "#FFE9A8",
+  },
+  bouncy: {
+    sky1: "#E070B8", sky2: "#FFD6F0", cloud: "#FFF0FA",
+    hill1: "#C77FD0", hill2: "#E5AEE8",
+    grass: "#8FAE5E", grass2: "#BFD98A",
+    dirt: "#6A4A62", dirt2: "#452F42",
+    wood: "#B87BA8", wood2: "#83557A", wood3: "#E0A8CC",
+    accent: "#C6FF6E",
+  },
+  well: {
+    sky1: "#2E5E96", sky2: "#8CC4E8", cloud: "#D8EEFF",
+    hill1: "#3F6E9E", hill2: "#5F8FBC",
+    grass: "#4E8FA0", grass2: "#7FBFCB",
+    dirt: "#3A4F66", dirt2: "#25344A",
+    wood: "#6E8AA6", wood2: "#4A6076", wood3: "#9FBBD2",
+    accent: "#8FF0FF",
+  },
+  stairs: {
+    sky1: "#E8A83C", sky2: "#FFE08A", cloud: "#FFF6D6",
+    hill1: "#C79A52", hill2: "#E8C078",
+    grass: "#A8A24E", grass2: "#D2CC77",
+    dirt: "#7C5C34", dirt2: "#523A20",
+    wood: "#C79A52", wood2: "#8C6832", wood3: "#F0CE8E",
+    accent: "#FFD34E",
+  },
+  tower: {
+    sky1: "#2A2350", sky2: "#6E5AA8", cloud: "#B9A8E8",
+    hill1: "#3A3168", hill2: "#54488E",
+    grass: "#4E4A8E", grass2: "#7A72BE",
+    dirt: "#2E2A4C", dirt2: "#1C1A32",
+    wood: "#6E62A8", wood2: "#4A4278", wood3: "#A296D8",
+    accent: "#FFE066",
+  },
+};
+const THEME_ORDER = ["tundra", "swamp", "cliff", "slope", "bouncy", "well", "stairs", "tower"];
+
+const LEVELS = [
+  {
+    id: "entry", name: "苔原入口", sub: "直井 · 两段台面",
+    note: "一道竖井直通地面。先把「糊三下 → 推 → 烧」摸熟",
+    theme: "tundra",
+    goal: "clear", par: { time: 45, made: 7 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 474, h: 20, kind: "ledge" },   // 26..500
+      { x: 600,    y: 462, w: 260, h: 20, kind: "ledge" },   // 600..860
+      { x: WALL_L, y: 350, w: 474, h: 20, kind: "ledge" },
+      { x: 600,    y: 350, w: 260, h: 20, kind: "ledge" },
+      // 500..600 是竖井（正对火坑），860..934 是落营地的口子。
+    ],
+    pits: [
+      { x: 180, y: GROUND_Y, w: 100, kind: "mud"  },
+      { x: 500, y: GROUND_Y, w: 100, kind: "fire" },
+    ],
+    stumps: [],   // 教学关不放木桩：出生点就在旁边，所有弹丸出门第一帧就被它吃掉
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    spawns: [
+      { foe: "bug",  x: 180, y: 462 },
+      { foe: "bug",  x: 700, y: 462 },
+      { foe: "bug",  x: 820, y: 462 },
+      { foe: "bug",  x: 200, y: 350 },
+      { foe: "bug",  x: 760, y: 350 },
+    ],
+    spawn: { x: 90, y: GROUND_Y },
+  },
+
+  {
+    id: "marsh", name: "泥沼", sub: "三池 · 三种落点",
+    note: "左泥、中水、右火。球掉哪口坑，决定这一下赚不赚",
+    theme: "swamp",
+    goal: "collect", collect: 14, par: { time: 32, made: 7 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 254, h: 20, kind: "ledge" },   // 26..280
+      { x: 380,    y: 462, w: 480, h: 20, kind: "ledge" },   // 380..860
+      { x: WALL_L, y: 350, w: 254, h: 20, kind: "ledge" },
+      { x: 380,    y: 350, w: 480, h: 20, kind: "ledge" },
+      { x: 320,    y: 248, w: 320, h: 20, kind: "ledge" },   // 顶层
+    ],
+    pits: [
+      { x: 110, y: GROUND_Y, w: 110, kind: "mud"   },
+      { x: 280, y: GROUND_Y, w: 100, kind: "water" },   // 左竖井正下方
+      { x: 560, y: GROUND_Y, w: 120, kind: "fire"  },
+    ],
+    stumps: [{ x: 730, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    spawns: [
+      { foe: "bug",  x: 150, y: 462 },
+      { foe: "bug",  x: 520, y: 462 },
+      { foe: "bug",  x: 800, y: 462 },
+      { foe: "bug",  x: 180, y: 350 },
+      { foe: "boar", x: 700, y: 350 },
+      { foe: "crow", x: 460, y: 300, fly: true },
+    ],
+    spawn: { x: 230, y: GROUND_Y },
+  },
+
+  {
+    id: "cliff", name: "断崖", sub: "长球道 · 三层",
+    note: "中场拉成一条长台。球在上面能连撞一串，别让它中途掉下去",
+    theme: "cliff",
+    goal: "limit", ballLimit: 6, par: { time: 70, made: 8 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 394, h: 20, kind: "ledge" },   // 26..420
+      { x: 520,    y: 462, w: 340, h: 20, kind: "ledge" },   // 520..860
+      { x: WALL_L, y: 350, w: 394, h: 20, kind: "ledge" },
+      { x: 520,    y: 350, w: 340, h: 20, kind: "ledge" },
+      { x: 300,    y: 248, w: 400, h: 20, kind: "ledge" },
+    ],
+    pits: [
+      { x: 300, y: GROUND_Y, w: 100, kind: "mud"  },
+      { x: 440, y: GROUND_Y, w: 120, kind: "fire" },
+    ],
+    stumps: [{ x: 180, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    camp: { x: 848, y: GROUND_Y, w: 86 },
+    spawns: [
+      { foe: "bug",  x: 150, y: 462 },
+      { foe: "bug",  x: 650, y: 462 },
+      { foe: "bug",  x: 830, y: 462 },
+      { foe: "bug",  x: 150, y: 350 },
+      { foe: "bug",  x: 400, y: 350 },
+      { foe: "boar", x: 700, y: 350 },
+      { foe: "bug",  x: 420, y: 248 },
+      { foe: "crow", x: 560, y: 300, fly: true },
+    ],
+    spawn: { x: 90, y: GROUND_Y },
+  },
+
+  {
+    id: "slope", name: "缓坡", sub: "斜坡 · 球会自己爬回来",
+    note: "竖井底下有条坡。掉下去的球顺着坡又回到上层，一颗球能来回扫",
+    theme: "slope",
+    goal: "chain", chain: 3, par: { time: 70, made: 8 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 354, h: 20, kind: "ledge" },   // 26..380
+      { x: 550,    y: 462, w: 310, h: 20, kind: "ledge" },   // 550..860（坡顶正好接这一段的左端）
+      { x: WALL_L, y: 350, w: 354, h: 20, kind: "ledge" },
+      { x: 480,    y: 350, w: 380, h: 20, kind: "ledge" },
+      { x: 340,    y: 248, w: 380, h: 20, kind: "ledge" },
+    ],
+    ramps: [
+      // 坡底 400、坡顶 550：球爬到顶正好被 480..860 那段台面接住。
+      { x: 400, w: 150, yBot: GROUND_Y, yTop: 462 },
+    ],
+    pits: [
+      { x: 160, y: GROUND_Y, w: 100, kind: "mud"  },
+      { x: 640, y: GROUND_Y, w: 120, kind: "fire" },
+    ],
+    stumps: [{ x: 300, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    spawns: [
+      { foe: "bug",  x: 150, y: 462 },
+      { foe: "bug",  x: 700, y: 462 },
+      { foe: "bug",  x: 840, y: 462 },
+      // 350 层长球道上放三只：连锁的素材必须在同一条线上
+      { foe: "bug",  x: 530, y: 350 },
+      { foe: "bug",  x: 650, y: 350 },
+      { foe: "boar", x: 800, y: 350 },
+      { foe: "bug",  x: 360, y: 248 },
+    ],
+    spawn: { x: 90, y: GROUND_Y },
+  },
+
+  {
+    id: "trampoline", name: "弹跳林", sub: "弹簧菇 · 球会飞",
+    note: "地上两朵菇。推过去球直接弹上楼，省得你搬",
+    theme: "bouncy",
+    goal: "bank", bank: 5, par: { time: 65, made: 8 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 534, h: 20, kind: "ledge" },   // 26..560
+      { x: 640,    y: 462, w: 220, h: 20, kind: "ledge" },   // 640..860
+      { x: WALL_L, y: 350, w: 534, h: 20, kind: "ledge" },
+      { x: 640,    y: 350, w: 220, h: 20, kind: "ledge" },
+      { x: 150,    y: 248, w: 610, h: 20, kind: "ledge" },   // 顶层
+    ],
+    bouncers: [
+      // 弹起 228px：556 → 328，正好越过 350 层。
+      // 不能摆在"落点 → 营地"那条路上，球会被弹起来飞过营地（落袋关会变死关）。
+      { x: 480, y: GROUND_Y },
+      { x: 210, y: GROUND_Y },
+    ],
+    pits: [
+      { x: 90,  y: GROUND_Y, w: 100, kind: "mud"  },
+      { x: 300, y: GROUND_Y, w: 120, kind: "fire" },
+    ],
+    stumps: [{ x: 700, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    camp: { x: 830, y: GROUND_Y, w: 90 },
+    spawns: [
+      { foe: "bug",  x: 250, y: 248 },
+      { foe: "bug",  x: 620, y: 248 },
+      { foe: "bug",  x: 180, y: 350 },
+      { foe: "boar", x: 760, y: 350 },
+      { foe: "bug",  x: 300, y: 462 },
+      { foe: "bug",  x: 780, y: 462 },
+    ],
+    spawn: { x: 60, y: GROUND_Y },
+  },
+
+  {
+    id: "deepwell", name: "深井", sub: "传送洞 · 两段接成一链",
+    note: "两个洞通着。球从左进、从右出，一条球道当成两条用",
+    theme: "well",
+    goal: "chain", chain: 3, par: { time: 45, made: 7 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 314, h: 20, kind: "ledge" },   // 26..340
+      { x: 450,    y: 462, w: 410, h: 20, kind: "ledge" },   // 450..860
+      { x: WALL_L, y: 350, w: 314, h: 20, kind: "ledge" },
+      { x: 450,    y: 350, w: 410, h: 20, kind: "ledge" },
+      { x: 280,    y: 248, w: 380, h: 20, kind: "ledge" },
+    ],
+    portals: [
+      // 洞开在 462 球道层，不开地面 —— 地面上一个人都没有，洞只是装饰。
+      { id: "a", x: 320, y: 462, link: "b" },
+      { id: "b", x: 470, y: 462, link: "a" },
+    ],
+    pits: [
+      { x: 50,  y: GROUND_Y, w: 110, kind: "water" },
+      { x: 230, y: GROUND_Y, w: 100, kind: "mud"   },
+      { x: 540, y: GROUND_Y, w: 120, kind: "fire"  },
+    ],
+    stumps: [{ x: 720, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    spawns: [
+      { foe: "bug",  x: 120, y: 462 },
+      { foe: "bug",  x: 250, y: 462 },
+      { foe: "bug",  x: 520, y: 462 },
+      { foe: "bug",  x: 700, y: 462 },
+      { foe: "bug",  x: 200, y: 350 },
+      { foe: "boar", x: 780, y: 350 },
+      { foe: "crow", x: 480, y: 300, fly: true },
+    ],
+    spawn: { x: 60, y: GROUND_Y },
+  },
+
+  {
+    id: "stairs", name: "阶梯塔", sub: "错层双井 · 像楼梯",
+    note: "两道竖井错开一层。想上顶层，得从右边那道井爬",
+    theme: "stairs",
+    goal: "limit", ballLimit: 7, par: { time: 50, made: 8 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 194, h: 20, kind: "ledge" },   // 26..220
+      { x: 320,    y: 462, w: 200, h: 20, kind: "ledge" },   // 320..520
+      { x: 620,    y: 462, w: 240, h: 20, kind: "ledge" },   // 620..860
+      { x: WALL_L, y: 350, w: 194, h: 20, kind: "ledge" },
+      { x: 320,    y: 350, w: 380, h: 20, kind: "ledge" },   // 长球道
+      { x: 800,    y: 350, w: 60,  h: 20, kind: "ledge" },
+      { x: WALL_L, y: 248, w: 674, h: 20, kind: "ledge" },   // 顶层 26..700
+      { x: 800,    y: 248, w: 60,  h: 20, kind: "ledge" },
+    ],
+    pits: [
+      { x: 230, y: GROUND_Y, w: 110, kind: "fire" },
+      { x: 650, y: GROUND_Y, w: 100, kind: "mud"  },
+    ],
+    stumps: [{ x: 560, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    camp: { x: 848, y: GROUND_Y, w: 86 },
+    spawns: [
+      { foe: "bug",  x: 120, y: 462 },
+      { foe: "bug",  x: 420, y: 462 },
+      { foe: "bug",  x: 760, y: 462 },
+      { foe: "bug",  x: 420, y: 350 },
+      { foe: "bug",  x: 560, y: 350 },
+      { foe: "bug",  x: 660, y: 350 },
+      { foe: "bug",  x: 300, y: 248 },
+      { foe: "boar", x: 620, y: 248 },
+    ],
+    spawn: { x: 70, y: GROUND_Y },
+  },
+
+  {
+    id: "twin", name: "双塔", sub: "中空 · 两座塔",
+    note: "中间整片空。上塔容易，把球从塔顶送下来才是题",
+    theme: "tower",
+    goal: "clear", par: { time: 50, made: 9 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 294, h: 20, kind: "ledge" },   // 26..320
+      { x: 640,    y: 462, w: 220, h: 20, kind: "ledge" },   // 640..860
+      { x: WALL_L, y: 350, w: 294, h: 20, kind: "ledge" },
+      { x: 640,    y: 350, w: 220, h: 20, kind: "ledge" },
+      { x: WALL_L, y: 248, w: 254, h: 20, kind: "ledge" },   // 左塔顶
+      { x: 680,    y: 248, w: 180, h: 20, kind: "ledge" },   // 右塔顶
+    ],
+    pits: [
+      { x: 120, y: GROUND_Y, w: 100, kind: "mud"   },
+      { x: 380, y: GROUND_Y, w: 120, kind: "fire"  },
+      { x: 620, y: GROUND_Y, w: 100, kind: "water" },
+    ],
+    stumps: [{ x: 300, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    spawns: [
+      { foe: "bug",  x: 150, y: 462 },
+      { foe: "bug",  x: 720, y: 462 },
+      { foe: "bug",  x: 830, y: 462 },
+      { foe: "bug",  x: 160, y: 350 },
+      { foe: "boar", x: 760, y: 350 },
+      { foe: "bug",  x: 130, y: 248 },
+      { foe: "bug",  x: 750, y: 248 },
+      { foe: "crow", x: 480, y: 360, fly: true },
+      { foe: "crow", x: 560, y: 300, fly: true },
+    ],
+    spawn: { x: 70, y: GROUND_Y },
+  },
 ];
 
-/** 地面上的地形件。y 都是地面顶面。 */
-const PITS = [
-  { x: 300, y: GROUND_Y, w: 112, kind: "mud"  },
-  { x: 470, y: GROUND_Y, w: 130, kind: "fire" },
-];
+/* ============================================================================
+   3.5 目标
+   ----------------------------------------------------------------------------
+   七种目标，四种是"多做一点"，三种是"不许做某事"。后三种才真的会改写最优解：
 
-const STUMPS = [
-  { x: 196, y: GROUND_Y, w: 44, h: 78, hp: 2 },
-  // 木桩 B 放在 2 层缺口（650..720）的落点右侧：
-  // 球从缺口掉下来会一路右滚，先撞碎它，再滚进营地
-  { x: 770, y: GROUND_Y, w: 44, h: 78, hp: 2 },
-];
+     clear    清场   人都送走，怎么推都行                        —— 考手
+     limit    限球   只给 N 颗球，剩下的靠卷                       —— 考铺场
+     chain    连锁   一颗球装够 N 只                               —— 考顺序
+     bank     落袋   N 只必须走营地                               —— 考地形
+     collect  收成   收成攒够 N（火坑 ×2，营地只有 +1）            —— 唯一逼你贪的
+     intact   零崩   一颗球都不许崩                               —— 不许磨蹭
+     nohit    无伤   一次都不能被打                               —— 不许贴脸
 
-const CAMP = { x: 848, y: GROUND_Y, w: 86 };
+   目标数字全部拿机器人跑 `tools/grove-diag.js` 量过，不是拍脑袋。
+   ========================================================================== */
 
-/**
- * 敌人出生点。y 用平台顶面，落地后自然吸附。
- *
- * 只铺 3 层（462 / 356 / 262）。最初铺满 5 层共 8 只，实测机器人
- * 180 秒只能清掉 5 只 —— 不是打不过，是**爬上去的成本**占了大头：
- * 玩家每换一层要走到平台边缘、起跳、对准落点，一只敌人在最顶层
- * 就要花掉 20 秒。雪人兄弟每关也只有 3–6 只，密度比层数重要。
- */
-const SPAWNS = [
-  { foe: "bug",  x: 170, y: 462 },
-  { foe: "bug",  x: 620, y: 462 },
-  { foe: "bug",  x: 850, y: 462 },
-  { foe: "bug",  x: 200, y: 350 },
-  { foe: "boar", x: 800, y: 350 },
-  { foe: "crow", x: 480, y: 400, fly: true },
-];
+const GOALS = {
+  clear: {
+    id: "clear", name: "清场", verb: "送走全部",
+    brief: (st, n) => "把 " + n + " 只全送走，怎么推都行",
+  },
+  limit: {
+    id: "limit", name: "限球", verb: "只用 ",
+    brief: (st) => "最多造 " + st.ballLimit + " 颗球，多出来的都靠「卷」",
+  },
+  chain: {
+    id: "chain", name: "连锁", verb: "一球 ",
+    brief: (st) => "有一颗球里要装够 " + st.chain + " 只",
+  },
+  bank: {
+    id: "bank", name: "落袋", verb: "走营地 ",
+    brief: (st) => "至少 " + st.bank + " 只要从营地送走（火坑不算）",
+  },
+  collect: {
+    id: "collect", name: "收成", verb: "攒够 ",
+    brief: (st) => "收成攒到 " + st.collect + " —— 火坑 ×2，是唯一够快的路子",
+  },
+  intact: {
+    id: "intact", name: "零崩", verb: "不许崩",
+    brief: () => "一颗球都不许漏气崩开 —— 推得慢就是输",
+  },
+  nohit: {
+    id: "nohit", name: "无伤", verb: "不许挨打",
+    brief: () => "一次都不能被碰到 —— 预瞄线要用来躲，不只是用来推",
+  },
+};
 
-const PLAYER_SPAWN = { x: 96, y: GROUND_Y };
+/** 当前场景的四件套 + 三种特殊件。loadLevel() 换掉它们，其余代码照旧引用。 */
+let PLATS = LEVELS[0].plats;
+let PITS = LEVELS[0].pits;
+let STUMPS = LEVELS[0].stumps || [];
+let CAMP = LEVELS[0].camp;
+let SPAWNS = LEVELS[0].spawns;
+let PLAYER_SPAWN = LEVELS[0].spawn;
+let RAMPS = [];
+let BOUNCERS = [];
+let PORTALS = [];
+
+/** 当前关的主题配色。背景/平台/空气中的浮尘都从这里取色 */
+let TH = THEMES[LEVELS[0].theme];
+
+/** 把一关装进全局绑定。没写的特殊件一律给空数组，代码不用到处判 null */
+function loadLevel(i) {
+  const L = LEVELS[i] || LEVELS[0];
+  TH = THEMES[L.theme] || THEMES.tundra;
+  PLATS = L.plats;
+  PITS = L.pits;
+  STUMPS = L.stumps || [];
+  CAMP = L.camp;
+  RAMPS = L.ramps || [];
+  BOUNCERS = L.bouncers || [];
+  PORTALS = L.portals || [];
+  SPAWNS = L.spawns;
+  PLAYER_SPAWN = L.spawn;
+}
+
+/** 斜坡在某个 x 处的表面高度；不在任何斜坡上返回 null */
+function rampAt(x) {
+  for (const r of RAMPS) {
+    if (x < r.x || x > r.x + r.w) continue;
+    const t = (x - r.x) / r.w;
+    return { y: r.yBot + (r.yTop - r.yBot) * t, slope: (r.yBot - r.yTop) / r.w };
+  }
+  return null;
+}
 
 /* ============================================================================
    4. 状态
    ========================================================================== */
 
 const S = {
-  phase: "select",      // select | play | clear | fail
-  t: 0,                 // 关卡计时
+  phase: "select",      // select(选人) | play | clear | fail —— 没有选关这一站，是推关
+  stage: 0,             // 当前关卡索引
+  progress: 0,          // 推到第几关（存档用，通关 +1）
+  playT: 0,             // 这一关的战斗用时。和 S.t 分开：S.t 是动画钟，结算后还要走
+  clearT: 0,            // 结算面板已经停了多久（到点自动进下一关）
+  best: new Array(LEVELS.length).fill(null),   // 每关最佳评价（"S"/"A"/"B"/null）
+  t: 0,                 // 全局动画钟（云、火苗、闪烁都靠它）
   heroIdx: 0,
 
   p: null,              // 玩家
@@ -293,10 +732,10 @@ const S = {
   texts: [],            // 飘字
 
   food: 0,              // 收成
-  cleared: 0,           // 已消灭
+  killed: 0,            // 已消灭
   total: 0,
   // 球的归宿统计。用来回答"为什么打不完"：是造不出来，还是推不到位
-  stat: { made: 0, burned: 0, banked: 0, burst: 0 },
+  stat: { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0 },
 
   // 关卡可破坏件（每局重建，不能直接改 PLATS 常量）
   stumps: [],
@@ -306,12 +745,15 @@ const S = {
   shake: 0,
   flash: 0,
   hitStop: 0,
+  failWhy: "",          // 失败原因，结算面板要说清楚是哪一条没做到
+  aim: false,           // 按住 Shift：强制显示所有球的预测线
 
   rng: Math.random,     // 测试里可换成一个确定性序列
 
   keys: {},
   press: {},            // 本帧新按下的键（边沿），tick 末尾清空
   hover: -1,
+  hoverStage: -1,
   vignette: true,
   log: [],
 };
@@ -323,31 +765,56 @@ const KEYMAP = {
   ArrowUp: "jump", KeyW: "jump", Space: "jump",
   KeyJ: "atk",
   KeyK: "dash",
+  ShiftLeft: "aim", ShiftRight: "aim",
 };
 
 window.addEventListener("keydown", (ev) => {
+  // 非战斗阶段，方向键归界面用，不往角色身上送
+  const inPlay = S.phase === "play";
   const k = KEYMAP[ev.code];
-  if (k) {
+  if (k && inPlay) {
     // 只在"第一次按下"记一次边沿。浏览器按住键会不停重发 keydown，
     // 拿重发当新按键的话，按住空格就会一路连跳。
     if (!S.keys[k]) S.press[k] = true;
     S.keys[k] = true;
     ev.preventDefault();
   }
+  if (k === "aim") S.aim = true;
 
-  if (ev.code === "KeyR") { resetRun(); return; }
-  if (ev.code === "Enter" && S.phase !== "play") { resetRun(); return; }
+  if (ev.code === "KeyR" && (inPlay || S.phase === "clear" || S.phase === "fail")) {
+    beginRun(S.stage);
+    return;
+  }
+  if (ev.code === "Escape" && S.phase !== "select") {
+    S.phase = "select";
+    S.p = null;
+    return;
+  }
 
-  // 选人：数字键
+  // 选人：选完直接开打。没有选关这一步 —— 这是推关，不是关卡列表。
   if (S.phase === "select") {
-    const n = ["Digit1","Digit2","Digit3","Digit4","Digit5","Digit6"].indexOf(ev.code);
-    if (n >= 0 && n < HEROES.length) { S.heroIdx = n; beginRun(); }
+    const n = ["Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6"].indexOf(ev.code);
+    if (n >= 0 && n < HEROES.length) { S.heroIdx = n; beginRun(S.progress); return; }
+    if (ev.code === "Enter" || ev.code === "Space") {
+      beginRun(S.progress);
+      ev.preventDefault();
+    }
+    return;
+  }
+
+  // 结算：回车 / 空格 继续。通关就下一关，失败就重打本关 —— 不回列表。
+  if (S.phase === "clear" || S.phase === "fail") {
+    if (ev.code === "Enter" || ev.code === "Space") {
+      nextLevel();
+      ev.preventDefault();
+    }
   }
 });
 
 window.addEventListener("keyup", (ev) => {
   const k = KEYMAP[ev.code];
-  if (k) { S.keys[k] = false; ev.preventDefault(); }
+  if (k === "aim") S.aim = false;
+  if (k && S.phase === "play") { S.keys[k] = false; ev.preventDefault(); }
 });
 
 /* ============================================================================
@@ -424,6 +891,16 @@ function stepBody(b, dt) {
    6. 建局
    ========================================================================== */
 
+function curStage() { return LEVELS[S.stage] || LEVELS[0]; }
+function curGoal() { return GOALS[curStage().goal]; }
+
+/** 限球关还剩几颗额度；不限球返回 Infinity */
+function ballBudget() {
+  const st = curStage();
+  if (st.goal !== "limit") return Infinity;
+  return Math.max(0, st.ballLimit - S.stat.made);
+}
+
 function setupLevel() {
   S.foes = [];
   for (const sp of SPAWNS) {
@@ -448,23 +925,35 @@ function setupLevel() {
   S.frags = [];
   S.texts = [];
   S.food = 0;
-  S.cleared = 0;
-  S.stat = { made: 0, burned: 0, banked: 0, burst: 0 };
+  S.killed = 0;
+  S.failWhy = "";
+  S.stat = { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0 };
   S.t = 0;
   S.shake = 0;
   S.flash = 0;
   S.hitStop = 0;
 }
 
+/** 回选人界面 */
 function resetRun() {
   S.phase = "select";
-  setupLevel();
   S.p = null;
+  S.hoverStage = -1;
+  loadLevel(0);
+  setupLevel();
 }
 
-function beginRun() {
-  const H = HEROES[S.heroIdx];
+/** 开一关：装几何 -> 铺敌人 -> 放玩家 */
+function beginRun(i) {
+  if (typeof i === "number") S.stage = clamp(i, 0, LEVELS.length - 1);
+  S.playT = 0;
+  S.clearT = 0;
+  S.progress = Math.max(S.progress, S.stage);
+  const SI = curStage();
+  loadLevel(S.stage);
   setupLevel();
+
+  const H = HEROES[S.heroIdx];
   S.p = {
     hero: S.heroIdx,
     x: PLAYER_SPAWN.x, y: PLAYER_SPAWN.y,
@@ -479,7 +968,31 @@ function beginRun() {
     dead: false,
   };
   S.phase = "play";
-  addText(W / 2, 150, H.name + " · " + H.tag, "#FFFFFF", 26, 1.5);
+  addText(W / 2, 150, "第 " + (S.stage + 1) + " 关  " + SI.name + "  ·  " + curGoal().name,
+          "#FFFFFF", 26, 1.6);
+}
+
+/**
+ * 推关：通关就往下走，失败就重打本关。
+ * 不回关卡列表 —— 一回到列表，"推关"的感觉就断了，人会开始挑着打。
+ * 想换关只有一条路：ESC 回选人，再从存档进度继续。
+ */
+function nextLevel() {
+  if (S.phase === "fail") { beginRun(S.stage); return; }
+  if (S.stage + 1 < LEVELS.length) { beginRun(S.stage + 1); return; }
+  // 通关了。回到选人界面，进度留在最后一关（再按一次可以重打）
+  S.phase = "select";
+  S.p = null;
+}
+
+function saveProgress() {
+  try { localStorage.setItem("pawpack.progress", String(Math.min(S.progress, LEVELS.length - 1))); } catch (e) {}
+}
+function loadProgress() {
+  try {
+    const v = parseInt(localStorage.getItem("pawpack.progress"), 10);
+    if (v >= 0 && v < LEVELS.length) S.progress = v;
+  } catch (e) {}
 }
 
 /* ============================================================================
@@ -594,6 +1107,7 @@ function updatePlayer(dt) {
       if (f.dead || f.coat >= 3) continue;
       if (!overlap(p, f)) continue;
       p.hp -= 1;
+      S.stat.hits++;   // 无伤关就靠这一个数
       p.invT = 1.2;
       p.vx = -sign(f.x - p.x) * 320;
       p.vy = -260;
@@ -614,6 +1128,7 @@ function updatePlayer(dt) {
       // 也会被烫 —— 而那三块平台就在火坑上方，等于整片高地都是禁区。
       if (p.x > pit.x + 8 && p.x < pit.x + pit.w - 8 && p.y >= pit.y - 6) {
         p.hp -= 1;
+        S.stat.hits++;
         p.invT = 1.2;
         p.vy = -430;
         p.vx = sign(p.x - (pit.x + pit.w / 2)) * 210;
@@ -627,14 +1142,25 @@ function updatePlayer(dt) {
     }
   }
 
-  // ---- 捡地上的果子
+  // ---- 捡地上的掉落物。五种东西走同一条碰撞，效果分开算
   for (const d of S.drops) {
     if (d.taken) continue;
-    if (Math.abs(d.x - p.x) < 26 && Math.abs(d.y - (p.y - 12)) < 40) {
-      d.taken = true;
-      S.food += 1;
-      addText(d.x, d.y - 20, "+1", "#FFD86B", 17);
+    if (Math.abs(d.x - p.x) > 28 || Math.abs(d.y - (p.y - 14)) > 44) continue;
+    d.taken = true;
+    const K = DROP_KINDS[d.kind] || DROP_KINDS.fruit;
+    if (K.food) {
+      S.food += K.food;
+      addText(d.x, d.y - 22, "+" + K.food, K.color, 17);
     }
+    if (K.air) {
+      for (const bb of S.balls) bb.air = Math.min(1, bb.air + K.air);
+      addText(d.x, d.y - 22, "回气", K.color, 17);
+    }
+    if (K.heal) {
+      if (p.hp < p.maxHp) { p.hp++; addText(d.x, d.y - 22, "+1 心", K.color, 17); }
+      else { S.food += 2; addText(d.x, d.y - 22, "+2", K.color, 17); }
+    }
+    for (let i = 0; i < 6; i++) addFrag(d.x, d.y, 4, K.color);
   }
 
   // ---- 掉出世界（不该发生，但兜一下）
@@ -712,9 +1238,32 @@ function updateFoe(f, dt) {
  * 变成一颗新球。这一条必须和 burstBall 对称 ——
  * 卷进去几只，崩开就吐出几只，否则场上人数会自己增殖：
  * 实测漏了这一条，4 只敌人能滚成 12 只，而玩家一个都清不掉。
+ *
+ * 限球关的额度只在**新造一颗球**时扣。被球卷进去不扣 ——
+ * 否则"限 4 颗球"和"4 只敌人各造一颗"没区别，目标就不成立了。
  */
 function coatFoe(f, n, intoBall) {
   if (f.dead || f.coat >= 3) return;
+
+  // 额度用完：允许糊到 2 层（还能被路过的球卷走），但糊不成第三层
+  if (!intoBall && f.coat + n >= 3 && ballBudget() <= 0) {
+    f.coat = 2;
+    f.hitT = 0.20;
+    warnNoBall();
+    return;
+  }
+
+  // 同屏最多 2 颗球。这不是性能限制，是**注意力限制**：
+  // 场上有 4 颗球的时候，玩家不是在决策，是在救火（实测就是这么崩的）。
+  // 这条同时是"攒球不免费"最直接的答案 —— 你根本攒不了 3 颗，
+  // 只能往一颗球里攒 3 只，而那才是有意思的那件事。
+  if (!intoBall && f.coat + n >= 3 && S.balls.length >= MAX_BALLS) {
+    f.coat = 2;
+    f.hitT = 0.20;
+    warnBallFull();
+    return;
+  }
+
   f.coat = Math.min(3, f.coat + n);
   f.hitT = 0.20;
   addText(f.x, f.y - f.h - 12, "+" + n, "#E4FFA8", 16);
@@ -730,6 +1279,21 @@ function coatFoe(f, n, intoBall) {
   }
 }
 
+/** "球用完了"提示。不节流的话每帧一条，屏幕直接白掉 */
+function warnNoBall() {
+  if (S.t - (S._noBallAt || -9) < 1.4) return;
+  S._noBallAt = S.t;
+  addText(W / 2, 210, "球用完了 · 只能靠卷", "#FF9E8E", 20, 1.2);
+  S.shake = Math.max(S.shake, 4);
+}
+
+/** "手上有球了，先送走" —— 玩家必须知道为什么这次喷不出去 */
+function warnBallFull() {
+  if (S.t - (S._fullAt || -9) < 1.4) return;
+  S._fullAt = S.t;
+  addText(W / 2, 210, "手上已经两颗球 · 先推走一颗", "#FFD08A", 20, 1.2);
+}
+
 /** 被滚球卷进去：球变大变重，人从场上消失 */
 function absorbIntoBall(f, b) {
   f.dead = true;
@@ -738,6 +1302,11 @@ function absorbIntoBall(f, b) {
   b.r = 20 + Math.min(16, b.holds * 2.8);
   b.w = b.h = b.r * 2;
   b.vx *= 0.97;
+  // 卷人回一口气：连锁是有回报的，不然"卷"永远不如"另造一颗"
+  b.air = Math.min(1, b.air + 0.10);
+  if (b.holds > S.stat.maxHolds) S.stat.maxHolds = b.holds;
+  // 撞击之后爆一件掉落 —— 这是短反馈循环里唯一的"意外"
+  dropOnAbsorb(b);
   addText(b.x, b.y - b.r * 2 - 16, "卷进去 x" + b.holds, "#B9F06A", 17);
   S.shake = Math.max(S.shake, 5);
 }
@@ -746,15 +1315,19 @@ function makeBallFrom(f, vx, vy) {
   if (f.dead) return;
   f.dead = true;
   S.stat.made++;
+  S.stat.maxHolds = Math.max(S.stat.maxHolds, 1);
   const r = 22;
   S.balls.push({
     x: f.x, y: f.y, w: r * 2, h: r * 2, r,
     vx: vx || 0, vy: vy || 0,
     holds: 1, mud: false,
+    // 气：这一版的核心压力。球会一直漏，漏到 0 就崩开。
+    // 卷人回气，所以"铺场再引爆"是有回报的，但回报有上限。
+    air: 1,
     onGround: false, ground: null,
-    melt: 0, t: 0, spin: 0, dead: false,
+    t: 0, spin: 0, dead: false,
     packed: [f.def],
-    hitWall: 0,
+    hitWall: 0, bounceCd: 0, portalCd: 0,
   });
   S.shake = Math.max(S.shake, 6);
   for (let i = 0; i < 12; i++) addFrag(f.x, f.y - r, 7, "#9BE86E");
@@ -773,30 +1346,36 @@ function updateBalls(dt) {
     if (b.dead) continue;
     b.t += dt;
 
-    // 寿命上限。玩家贴着球一路推的话，球会永远有速度、永远不触发崩开，
-    // 这一局就结束不了（场上没敌人、但胜负条件要求球也清空）。
-    // 26 秒足够把球从场地一头推到另一头，再长就是玩家在磨。
-    if (b.t > 26) { burstBall(b); continue; }
+    // 寿命上限已由"气"接管（air <= 0 就崩），这里只留一个兜底，
+    // 防止极端情况下球卡在某个角上永远不死
+    if (b.t > 45) { burstBall(b); continue; }
 
     // 掉出世界（不该发生，但一旦发生就永远不消失，把整局卡死）
     if (b.y > H + 200) { b.dead = true; continue; }
 
-    // 滚动阻尼。滚得越久越慢，最后自己停下来 —— 停下来的球会崩开，
-    // 这是节奏压力：你造了球就必须在几秒内把它推出去。
-    if (b.onGround) {
-      // 阻尼决定"推一下能滚多远"。230 时只能滚 600px，球从中间平台
-      // 推出去走不到两端的结算点，70% 的球停在半路崩开（实测 20 造 14 崩）。
-      // 170 大约滚 1100px —— 一次推动就能横穿场地，撞两次墙才停。
-      const drag = b.mud ? 95 : 170;
-      if (Math.abs(b.vx) <= drag * dt) b.vx = 0;
-      else b.vx -= sign(b.vx) * drag * dt;
-    }
+    // ---- 漏气：这一版的核心压力
+    // 滚动时慢慢漏，停着漏得更快。于是"攒 3 只再推"不是免费的：
+    // 你攒的时间直接从这个球的剩余里程里扣。卷人回一口气，
+    // 所以铺场是有回报的，但回报封顶，攒不出永动机。
+    // 上一版用的是"停住 4.2 秒崩开"的固定倒计时 —— 玩家只要一路推着
+    // 球走，倒计时就永远不开始，等于没有压力。
+    const idle = b.onGround && Math.abs(b.vx) < 60;
+    b.air -= dt * (idle ? 0.11 : 0.055);
+    if (b.air <= 0) { b.air = 0; burstBall(b); continue; }
 
+    // ---- 不减速。
+    // 上一版给球加了摩擦（170/s），推出去滚 1100px 就自己停，玩家得追着推。
+    // 现在地面完全无摩擦：球一旦被推起来就一路滚，直到撞墙、掉坑、漏气崩开。
+    // 唯一的衰减来自**撞墙 ×0.62** —— 所以"往哪个方向推"变成一次真赌注：
+    // 推对了滚穿一整层，推错了撞两次墙才能停下来再补一脚。
+    //
+    // 副作用（故意留着的）：球的巡航速度比玩家快，追不上。
+    // 玩家必须提前决定，而不是跟在球屁股后面慢慢修 —— 这正是想要的手感。
     b.x += b.vx * dt;
     b.spin += b.vx * dt * 0.05;
     // 撞墙反弹
-    if (b.x - b.r < WALL_L) { b.x = WALL_L + b.r; b.vx = -b.vx * 0.72; S.shake = Math.max(S.shake, 4); }
-    if (b.x + b.r > WALL_R) { b.x = WALL_R - b.r; b.vx = -b.vx * 0.72; S.shake = Math.max(S.shake, 4); }
+    if (b.x - b.r < WALL_L) { b.x = WALL_L + b.r; b.vx = -b.vx * 0.62; S.shake = Math.max(S.shake, 4); }
+    if (b.x + b.r > WALL_R) { b.x = WALL_R - b.r; b.vx = -b.vx * 0.62; S.shake = Math.max(S.shake, 4); }
 
     // 撞木桩：球是唯一能打碎木桩的东西 —— 所以"想开新路"必须先造球
     for (const s of S.stumps) {
@@ -811,7 +1390,7 @@ function updateBalls(dt) {
       if (b.x + b.r > l && b.x - b.r < r) {
         if (b.vx > 0) { b.x = l - b.r; } else if (b.vx < 0) { b.x = r + b.r; }
         else { b.x = l - b.r; }
-        b.vx = -b.vx * 0.72;
+        b.vx = -b.vx * 0.62;
         s.hp -= 1;
         s.shake = 0.2;
         S.shake = Math.max(S.shake, 8);
@@ -819,16 +1398,16 @@ function updateBalls(dt) {
         addText(s.x, top - 20, s.hp > 0 ? "咔!" : "撞碎了!", "#FFD08A", 18);
         for (let i = 0; i < 10; i++) addFrag(s.x, top + 10, 6, "#A97E4E");
         if (s.hp <= 0) {
-          // 碎木桩掉两颗野果 —— 破坏要立刻给回报，否则玩家不会主动去撞
-          for (let i = 0; i < 2; i++) {
-            S.drops.push({ x: s.x + rand(-24, 24), y: top + 30, vy: 0, taken: false });
-          }
+          // 碎木桩掉果子 —— 破坏要立刻给回报，否则玩家不会主动去撞
+          dropFrom(s.x, top + 26, 0.6);
+          dropFrom(s.x, top + 26, 0.3);
         }
       }
     }
 
     // 重力 + 落地
     const prevY = b.y;
+    b._fallVy = b.vy;
     b.vy = Math.min(b.vy + GRAV * dt, MAXFALL);
     b.y += b.vy * dt;
     b.onGround = false;
@@ -844,6 +1423,60 @@ function updateBalls(dt) {
       if (best) { b.y = best.y; b.vy = 0; b.onGround = true; b.ground = best; }
     }
 
+    // ---- 斜坡（第 4 关）
+    // 球被"贴"在坡面上走：每帧把球底压到坡面高度，位移由 vx 决定，
+    // 所以坡度只是一个 y = f(x) 的约束，不需要额外的碰撞体。
+    // 速度变化用重力沿坡面的分量：上坡掉速、下坡加速 —— 这是物理，不是摩擦。
+    const rp = rampAt(b.x);
+    if (rp && b.y >= rp.y - 6 && b.vy >= -40) {
+      b.y = rp.y;
+      b.vy = 0;
+      b.onGround = true;
+      b.vx -= GRAV * rp.slope * 0.45 * dt;
+    }
+
+    // ---- 弹簧菇（第 5 关）
+    // 弹起 228px（980²/2g）：556 → 328，刚够越过 350 那层。
+    // 再高就会顶到 248 层的底面，球在两层之间来回弹，看起来像卡住了。
+    b.bounceCd = Math.max(0, (b.bounceCd || 0) - dt);
+    if (b.bounceCd <= 0) {
+      for (const bo of BOUNCERS) {
+        if (Math.abs(b.x - bo.x) > 30) continue;
+        if (b.y < bo.y - 60 || b.y > bo.y + 10) continue;
+        b.vy = -980;
+        // 几乎停住的球会被弹成"原地上下跳"，一直跳到漏气崩开（实测 12 次）。
+        // 给一点水平推力，保证它会飞出去。
+        if (Math.abs(b.vx) < 180) b.vx = (b.vx < 0 ? -1 : 1) * 200;
+        b.onGround = false;
+        b.bounceCd = 0.35;
+        addText(bo.x, bo.y - 74, "弹!", "#C9F27A", 18);
+        for (let i = 0; i < 8; i++) addFrag(bo.x, bo.y - 6, 6, "#8ED36A");
+        S.shake = Math.max(S.shake, 4);
+      }
+    }
+
+    // ---- 传送洞（第 6 关）
+    // 保持水平速度原样穿过去 —— 方向不变，只换位置。
+    // 所以"从左进、从右出"之后球还是往右滚，一球能把两端的人串成一条链。
+    b.portalCd = Math.max(0, (b.portalCd || 0) - dt);
+    if (b.portalCd <= 0) {
+      for (const pt of PORTALS) {
+        if (Math.abs(b.x - pt.x) > 26) continue;
+        if (b.y < pt.y - 70 || b.y > pt.y + 8) continue;
+        const o = PORTALS.find(q => q.id === pt.link);
+        if (!o) continue;
+        b.x = o.x;
+        b.y = o.y;
+        b.vy = 0;
+        b.portalCd = 0.45;
+        addText(o.x, o.y - 86, "穿过来了", "#9FE4FF", 17);
+        for (let i = 0; i < 10; i++) addFrag(pt.x, pt.y - 26, 6, "#7FD8F0");
+        for (let i = 0; i < 10; i++) addFrag(o.x, o.y - 26, 6, "#7FD8F0");
+        S.shake = Math.max(S.shake, 4);
+        break;
+      }
+    }
+
     // 撞敌人：不满 3 层的糊一层（泥球糊两层），已经 2 层的被一撞就卷进球里
     if (Math.abs(b.vx) > 60 || Math.abs(b.vy) > 60) {
       for (const f of S.foes) {
@@ -851,24 +1484,20 @@ function updateBalls(dt) {
         const dx = Math.abs(b.x - f.x), dy = Math.abs((b.y - b.r) - (f.y - f.h / 2));
         if (dx > b.r + f.w / 2 || dy > b.r + f.h / 2) continue;
         coatFoe(f, b.mud ? 2 : 1, b);
-        b.vx *= 0.94;
+        // 撞人不减速（阻尼那一节已经删了），只把球轻轻顶偏一点点，
+        // 否则球会"穿过"一排敌人而不产生任何节奏变化。
+        b.vx *= 0.995;
         S.shake = Math.max(S.shake, 5);
       }
     }
 
-    // 地形判定
-    ballTerrain(b);
+    // 地形判定。把"落下来时的竖直速度"一起传进去 ——
+    // 水塘只认砸进水里的球（见 ballTerrain 里的理由）。
+    ballTerrain(b, b._fallVy || 0);
 
-    // 崩开计时：速度掉到很低就开始计时。
-    // 4.2 秒是"够你跑过去推一把"的长度 —— 更短的话，玩家刚转身球就炸了。
-    if (Math.abs(b.vx) < 42 && b.onGround) {
-      b.melt += dt;
-      if (b.melt > 4.2) { burstBall(b); continue; }
-    } else {
-      b.melt = Math.max(0, b.melt - dt * 0.6);
-    }
-
+    // 气到很低就开始抖 —— 视觉上给"快崩了"的信号，不用玩家盯血条
     b.x = clamp(b.x, WALL_L + b.r, WALL_R - b.r);
+
   }
 
   // 清掉死球
@@ -877,8 +1506,166 @@ function updateBalls(dt) {
   S.balls.length = w;
 }
 
-function ballTerrain(b) {
-  // 火坑：烧掉，收成翻倍，但球没了 -> 断连锁
+/* ----------------------------------------------------------------------------
+   预瞄线
+   ----------------------------------------------------------------------------
+   这一版最重要的一件东西。没有它，玩家在"撞一下看看"；有了它，玩家在
+   "算这一球能撞几个、会落在哪"。同一个物理，两种游戏。
+
+   只模拟球自己会遇到的东西：墙、木桩、平台、地形。**不模拟敌人**，
+   因为敌人会让球减速（每次 ×0.94）—— 忽略它只会让预测偏"远"，
+   也就是"线画到哪，球至少能滚到哪"，宁可保守不要骗人。
+
+   静态的球画左右两条。推球在雪人式玩法里就是个二选一，
+   把两个后果并排摆出来，决策成本比读文字小一个数量级。
+   -------------------------------------------------------------------------- */
+const AIM_DT = 1 / 60;
+
+function predictBall(b, dir) {
+  const r = b.r;
+  let x = b.x, y = b.y;
+  let vx = dir * 620, vy = -40;
+  let air = b.air;
+  let mud = b.mud;
+  let onGround = false;
+  let bounce = 0, travel = 0, portalCd = 0, bouncerCd = 0;
+
+  const pts = [{ x, y: y - r }];
+  const marks = [];
+  const hitFoes = [];
+  let end = "air";
+
+  for (let i = 0; i < 360; i++) {
+    // 用滚动漏气速率（0.055），不用静止的 0.11：预测算的是"推出去之后
+    // 能滚多远"，按滚动算才对得上。
+    air -= AIM_DT * 0.055;
+    if (air <= 0) { end = "air"; break; }
+
+    // 不减速 —— 和 updateBalls 严格一致。这里如果偷偷加一点阻尼，
+    // 线就会画短，玩家按线推出去球多滚一截，"预瞄骗人"是这一版最不能犯的错。
+    x += vx * AIM_DT;
+    travel += Math.abs(vx) * AIM_DT;
+
+    if (x - r < WALL_L) { x = WALL_L + r; vx = -vx * 0.62; bounce++; }
+    if (x + r > WALL_R) { x = WALL_R - r; vx = -vx * 0.62; bounce++; }
+    // 允许反弹三次。球不减速之后，只画一次反弹会把线截在场地中间，
+    // 而玩家真正想知道的就是"撞完墙还能到哪"。
+    if (bounce > 2 || travel > 2400) { end = "wall"; break; }
+    if (onGround && Math.abs(vx) < 40) { end = "stop"; break; }
+
+    // 木桩：球撞上去就停，这是"想开新路先造球"的那道门
+    let stump = null;
+    for (const s of S.stumps) {
+      if (s.hp <= 0) continue;
+      const top = s.y - s.h;
+      if (y <= top + 2) continue;
+      if (x + r > s.x - s.w / 2 && x - r < s.x + s.w / 2) { stump = s; break; }
+    }
+    if (stump) { marks.push({ x, y: y - r, kind: "stump" }); end = "stump"; break; }
+
+    // 重力 + 落地
+    const prevY = y;
+    vy = Math.min(vy + GRAV * AIM_DT, MAXFALL);
+    y += vy * AIM_DT;
+    onGround = false;
+    if (vy >= 0) {
+      let best = null;
+      for (const p of PLATS) {
+        if (x + r < p.x || x - r > p.x + p.w) continue;
+        if (prevY <= p.y + 2 && y >= p.y) { if (!best || p.y < best.y) best = p; }
+      }
+      if (best) { y = best.y; vy = 0; onGround = true; }
+    }
+
+    // 斜坡：和 updateBalls 同一套公式
+    const rp = rampAt(x);
+    if (rp && y >= rp.y - 6 && vy >= -40) {
+      y = rp.y; vy = 0; onGround = true;
+      vx -= GRAV * rp.slope * 0.45 * AIM_DT;
+    }
+
+    // 弹簧菇
+    bouncerCd = Math.max(0, bouncerCd - AIM_DT);
+    if (bouncerCd <= 0) {
+      for (const bo of BOUNCERS) {
+        if (Math.abs(x - bo.x) > 30) continue;
+        if (y < bo.y - 60 || y > bo.y + 10) continue;
+        vy = -980; onGround = false; bouncerCd = 0.35;
+        if (Math.abs(vx) < 180) vx = (vx < 0 ? -1 : 1) * 200;
+        marks.push({ x: bo.x, y: bo.y - 46, kind: "bounce" });
+      }
+    }
+
+    // 传送洞
+    portalCd = Math.max(0, portalCd - AIM_DT);
+    if (portalCd <= 0) {
+      for (const pt of PORTALS) {
+        if (Math.abs(x - pt.x) > 26) continue;
+        if (y < pt.y - 70 || y > pt.y + 8) continue;
+        const o = PORTALS.find(q => q.id === pt.link);
+        if (!o) continue;
+        marks.push({ x: pt.x, y: pt.y - 46, kind: "portal" });
+        x = o.x; y = o.y; vy = 0; portalCd = 0.45;
+        marks.push({ x: o.x, y: o.y - 46, kind: "portal" });
+        break;
+      }
+    }
+
+    // 会撞到几只（不扣速，只数数）
+    for (const f of S.foes) {
+      if (f.dead || f.coat >= 3) continue;
+      if (hitFoes.indexOf(f) >= 0) continue;
+      if (Math.abs(x - f.x) < r + f.w / 2 && Math.abs((y - r) - (f.y - f.h / 2)) < r + f.h / 2) {
+        hitFoes.push(f);
+        marks.push({ x: f.x, y: f.y - f.h - 10, kind: "foe", n: hitFoes.length });
+      }
+    }
+
+    // 地形：火坑断连锁、泥坑变强、水塘沉底、营地收工
+    let hitPit = false;
+    for (const pit of PITS) {
+      if (pit.kind === "fire") {
+        if (x > pit.x + 8 && x < pit.x + pit.w - 8 && y >= pit.y - 8) {
+          marks.push({ x, y: y - r, kind: "fire" }); end = "fire"; hitPit = true; break;
+        }
+      } else if (pit.kind === "water") {
+        if (vy > 240 && x > pit.x + 6 && x < pit.x + pit.w - 6 && y >= pit.y - 10) {
+          marks.push({ x, y: y - r, kind: "water" }); end = "water"; hitPit = true; break;
+        }
+      } else if (pit.kind === "mud" && !mud) {
+        if (x > pit.x && x < pit.x + pit.w && y >= pit.y - 8) {
+          mud = true;
+          marks.push({ x, y: y - r, kind: "mud" });
+        }
+      }
+    }
+    if (hitPit) break;
+
+    if (y >= GROUND_Y - 6 && x > CAMP.x && x < CAMP.x + CAMP.w) {
+      marks.push({ x, y: GROUND_Y - 40, kind: "camp" }); end = "camp"; break;
+    }
+
+    if (i % 4 === 0) pts.push({ x, y: y - r, ph: bounce > 0 ? 1 : 0 });
+  }
+
+  pts.push({ x, y: y - r, ph: bounce > 0 ? 1 : 0 });
+  return { pts, marks, end, hits: hitFoes.length };
+}
+
+/** 取缓存：球没动、气没变、敌人没死，就不用重算 */
+function aimFor(b, dir) {
+  b._aim = b._aim || {};
+  const key = [Math.round(b.x / 6), Math.round(b.y / 6), Math.round(b.air * 24),
+               S.foes.map(f => (f.dead || f.coat >= 3) ? 0 : 1).join(""),
+               S.stumps.map(s => s.hp).join("")].join("|");
+  const slot = b._aim[dir];
+  if (slot && slot.key === key) return slot.val;
+  const val = predictBall(b, dir);
+  b._aim[dir] = { key, val };
+  return val;
+}
+
+function ballTerrain(b, fallVy) {  // 火坑：烧掉，收成翻倍，但球没了 -> 断连锁
   for (const pit of PITS) {
     if (pit.kind !== "fire") continue;
     if (b.x > pit.x + 8 && b.x < pit.x + pit.w - 8 && b.y >= pit.y - 8) {
@@ -886,11 +1673,32 @@ function ballTerrain(b) {
       S.stat.burned++;
       const gain = b.holds * 2;
       S.food += gain;
-      S.cleared += b.holds;
+      S.killed += b.holds;
       addText(b.x, pit.y - 70, "烧掉了 +" + gain, "#FFB05C", 22);
       for (let i = 0; i < 26; i++) addFrag(b.x, pit.y - 12, 8, i % 2 ? "#FF9A3C" : "#FFD86B");
       S.shake = Math.max(S.shake, 10);
       S.flash = 0.18;
+      return;
+    }
+  }
+
+  // 水塘：球沉底，人被冲回岸上。
+  // 这是三个落点里最差的一个：没有收成、球没了、人还得重新裹一遍。
+  // 它存在的唯一意义就是让"推过头"有代价 —— 没有水塘的那几关，
+  // 往左推和往右推一样安全，预瞄线就只剩"能撞几个"这一个信息。
+  for (const pit of PITS) {
+    if (pit.kind !== "water") continue;
+    // 只有"砸进去"才沉（竖直速度 > 240）。
+    // 不这么判的话，水塘放在场地两端就变成必死区：球撞墙反弹之后一定会
+    // 从水面滚过去，泥沼那关机器人沉了 113 颗球，240 秒只清掉 3 只。
+    if ((fallVy || 0) > 240 && b.x > pit.x + 6 && b.x < pit.x + pit.w - 6 && b.y >= pit.y - 10) {
+      b.dead = true;
+      S.stat.drowned++;
+      const back = respawnPacked(b, 1, b.x);
+      for (const f of back) S.foes.push(f);
+      addText(b.x, pit.y - 74, "沉底了…", "#8FD8F0", 20);
+      for (let i = 0; i < 18; i++) addFrag(b.x, pit.y - 14, 7, i % 2 ? "#7FC8E8" : "#CFEFFA");
+      S.shake = Math.max(S.shake, 5);
       return;
     }
   }
@@ -911,13 +1719,41 @@ function ballTerrain(b) {
   if (b.y >= GROUND_Y - 6 && b.x > CAMP.x && b.x < CAMP.x + CAMP.w) {
     b.dead = true;
     S.stat.banked++;
+    // 落袋关考的是"只数"，不是"球数"：一球装三只走营地算三只
+    S.stat.bankHolds += b.holds;
     const gain = b.holds + 1;
     S.food += gain;
-    S.cleared += b.holds;
+    S.killed += b.holds;
     addText(b.x, CAMP.y - 80, "落袋 +" + gain, "#FFD86B", 22);
     for (let i = 0; i < 16; i++) addFrag(b.x, CAMP.y - 40, 7, "#FFD86B");
     S.shake = Math.max(S.shake, 6);
   }
+}
+
+/**
+ * 把球里装着的人放回场上（崩开 / 沉底共用）。
+ * coat 给 1：重新裹一层，玩家还得再糊两下，不能白赚。
+ */
+function respawnPacked(b, coat, atX) {
+  const n = b.packed.length;
+  const out = [];
+  const cx = atX === undefined ? b.x : atX;
+  for (let i = 0; i < n; i++) {
+    const def = b.packed[i];
+    out.push({
+      def, kind: def.kind,
+      x: cx + (i - (n - 1) / 2) * 26, y: b.y - b.r * 2,
+      w: def.w, h: def.h,
+      vx: rand(-60, 60), vy: -260,
+      face: -1, coat: coat, dead: false,
+      onGround: false, ground: null,
+      fly: def.kind === "fly", homeY: b.y - b.r * 2 - 20,
+      stun: 0.5, hitT: 0, bob: rand(0, 6.28),
+      dir: S.rng() < 0.5 ? -1 : 1,
+      chargeT: 2, charging: 0,
+    });
+  }
+  return out;
 }
 
 function burstBall(b) {
@@ -925,26 +1761,56 @@ function burstBall(b) {
   S.stat.burst++;
   // 装几只就吐几只 —— 和 absorbIntoBall 严格对称。
   // 少了就白赚，多了敌人会自己增殖，两种都会让局面失控。
-  const n = b.packed.length;
-  for (let i = 0; i < n; i++) {
-    const def = b.packed[i];
-    const f = {
-      def, kind: def.kind,
-      x: b.x + (i - (n - 1) / 2) * 26, y: b.y - b.r * 2,
-      w: def.w, h: def.h,
-      vx: rand(-60, 60), vy: -260,
-      face: -1, coat: 1, dead: false,
-      onGround: false, ground: null,
-      fly: def.kind === "fly", homeY: b.y - b.r * 2 - 20,
-      stun: 0.5, hitT: 0, bob: rand(0, 6.28),
-      dir: S.rng() < 0.5 ? -1 : 1,
-      chargeT: 2, charging: 0,
-    };
-    S.foes.push(f);
-  }
+  for (const f of respawnPacked(b, 1)) S.foes.push(f);
   addText(b.x, b.y - b.r * 2 - 20, "崩开了…", "#FF9E8E", 19);
   for (let i = 0; i < 18; i++) addFrag(b.x, b.y - b.r, 7, "#8FBF5E");
   S.shake = Math.max(S.shake, 7);
+}
+
+/* ----------------------------------------------------------------------------
+   掉落
+   ----------------------------------------------------------------------------
+   球卷进一个人就爆一次。这不是"奖励"，是**让撞击有悬念**：
+
+     · 大部分时候是一颗野果（+1 收成），维持基础经济
+     · 偶尔是气罐（球回 28% 气）—— 连锁越长越容易出，直接强化"攒大球"
+     · 更少见的晶核（+5）、心（回 1 点血）
+     · 连锁越长，稀有池越宽 —— 这是"卷"除清场之外的第二层回报
+
+   用 S.rng，所以固定种子下序列可复现，测试能断言概率结构。
+   -------------------------------------------------------------------------- */
+const DROP_KINDS = {
+  fruit: { name: "野果", food: 1, color: "#FF6B5E", ring: "#FFD0C8" },
+  berry: { name: "蜜莓", food: 2, color: "#C46BFF", ring: "#EBC8FF" },
+  air:   { name: "气罐", air: 0.28, color: "#78D8FF", ring: "#D2F2FF" },
+  gem:   { name: "晶核", food: 5,  color: "#7CF2C8", ring: "#D6FFF0" },
+  heart: { name: "心",   heal: 1,   color: "#FF5A7A", ring: "#FFD6DE" },
+};
+
+/**
+ * 在 (x, y) 爆一件掉落物。
+ * boost 是"连锁长度加成"（0~1.5），越大越容易出稀有。
+ */
+function dropFrom(x, y, boost) {
+  boost = clamp(boost || 0, 0, 1.5);
+  const r = S.rng() * 100;
+  let kind;
+  if (r < 5 + boost * 9)        kind = "heart";
+  else if (r < 16 + boost * 20) kind = "gem";
+  else if (r < 32 + boost * 22) kind = "air";
+  else if (r < 62)              kind = "berry";
+  else                          kind = "fruit";
+
+  S.drops.push({
+    kind, x, y,
+    vx: rand(-160, 160), vy: rand(-400, -230),
+    taken: false, t: 0, spin: rand(0, 6.28),
+  });
+}
+
+/** 卷进去一个人：爆一件掉落，连锁越长越容易出好东西 */
+function dropOnAbsorb(b) {
+  dropFrom(b.x, b.y - b.r * 1.6, (b.holds - 1) * 0.5);
 }
 
 /* ============================================================================
@@ -952,60 +1818,142 @@ function burstBall(b) {
    ========================================================================== */
 
 function spawnShot(o) {
-  S.shots.push({
-    x: o.x, y: o.y, vx: o.vx, vy: o.vy || 0,
-    r: o.r || 9, life: o.life || 0.5, maxLife: o.life || 0.5,
-    color: o.color || "#FFFFFF",
-    kind: o.kind || "ball",
-    pierce: !!o.pierce,
-    grav: o.grav || 0,
-    aoe: o.aoe || 0,
-    hit: [],
-  });
+  const s = Object.assign({
+    vx: 0, vy: 0, r: 9, life: 0.5,
+    color: "#FFFFFF", kind: "ball",
+    pierce: false, grav: 0, aoe: 0,
+    dir: 1, t: 0, spin: 0, bounces: 0,
+  }, o);
+  s.maxLife = s.life;
+  s.hit = [];
+  S.shots.push(s);
 }
 
+/**
+ * 弹丸。六种 role 各走一条分支，但**命中之后的效果完全一样**（+1 层）。
+ * 差异化只在"怎么打到"：来回、绕圈、贴地滚、抛、平推。
+ */
 function updateShots(dt) {
+  const p = S.p;
   for (const s of S.shots) {
     if (s.dead) continue;
     s.life -= dt;
-    if (s.life <= 0) {
-      if (s.kind === "lob" && s.aoe > 0) explodeShot(s);
-      s.dead = true;
-      continue;
-    }
-    if (s.grav) s.vy += s.grav * dt;
-    s.x += s.vx * dt;
-    s.y += s.vy * dt;
+    s.t = (s.t || 0) + dt;
 
-    // 抛物弹落地就炸
-    if (s.kind === "lob") {
-      for (const p of PLATS) {
-        if (s.x < p.x || s.x > p.x + p.w) continue;
-        if (s.y >= p.y && s.vy > 0) { explodeShot(s); s.dead = true; break; }
+    /* ---- 溜溜球：伸出去、拉回来。绳子一直连着人，人动了球跟着动 ---- */
+    if (s.kind === "yoyo") {
+      const u = (s.u && !s.u.dead) ? s.u : p;
+      const T = 0.30;
+      const k = s.t < T ? s.t / T
+                        : Math.max(0, 1 - (s.t - T) / Math.max(0.001, s.maxLife - T));
+      s.x = u.x + s.dir * (18 + k * 152);
+      s.y = u.y - 26;
+      s.spin += dt * 30;
+      if (s.life <= 0) s.dead = true;
+    }
+    /* ---- 音波：原地扩张的一圈。判定跟着人，不跟着波前 ---- */
+    else if (s.kind === "wave") {
+      const u = (s.u && !s.u.dead) ? s.u : p;
+      s.r += (s.grow || 320) * dt;
+      s.x = u.x;
+      s.y = u.y - 26;
+    }
+    /* ---- 镰刀：绕着人转一圈，圆心起飞时定住（否则人一动镰刀跟不上） ---- */
+    else if (s.kind === "sickle") {
+      s.ang += dt * 10.5;
+      s.x = s.ox + Math.cos(s.ang) * s.rad;
+      s.y = s.oy + Math.sin(s.ang) * s.rad * 0.78;
+      s.spin += dt * 22;
+    }
+    /* ---- 坚果：抛物线落地，之后贴地滚。撞墙弹一次 ---- */
+    else if (s.kind === "nut") {
+      const prevBottom = s.y + s.r;
+      s.vy += 1600 * dt;
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.spin += s.vx * dt * 0.055;
+
+      // 落在平台顶上（只认"从上面穿下来"的那一层）
+      if (s.vy >= 0) {
+        let land = null;
+        for (const q of PLATS) {
+          if (s.x < q.x || s.x > q.x + q.w) continue;
+          const bottom = s.y + s.r;
+          if (prevBottom <= q.y + 6 && bottom >= q.y) {
+            if (land === null || q.y < land) land = q.y;
+          }
+        }
+        if (land !== null) { s.y = land - s.r; s.vy = 0; }
       }
-      if (s.dead) continue;
+
+      if (s.x - s.r < WALL_L) {
+        s.x = WALL_L + s.r;
+        s.vx = -s.vx * 0.86;
+        s.dir = -s.dir;
+        if (s.bounces-- <= 0) s.dead = true;
+      } else if (s.x + s.r > WALL_R) {
+        s.x = WALL_R - s.r;
+        s.vx = -s.vx * 0.86;
+        s.dir = -s.dir;
+        if (s.bounces-- <= 0) s.dead = true;
+      }
+      if (s.life <= 0) s.dead = true;
+    }
+    /* ---- 其余：直线 / 抛物 ---- */
+    else {
+      if (s.grav) s.vy += s.grav * dt;
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.spin = (s.spin || 0) + dt * 9;
+
+      if (s.kind === "lob") {
+        for (const q of PLATS) {
+          if (s.x < q.x || s.x > q.x + q.w) continue;
+          if (s.y + s.r >= q.y && s.vy > 0) { explodeShot(s); s.dead = true; break; }
+        }
+        if (s.dead) continue;
+      }
+      if (s.life <= 0) {
+        if (s.kind === "lob" && s.aoe > 0) explodeShot(s);
+        s.dead = true;
+        continue;
+      }
+      if (s.x < WALL_L - 40 || s.x > WALL_R + 40 || s.y < -100) { s.dead = true; continue; }
     }
 
-    if (s.x < WALL_L - 30 || s.x > WALL_R + 30 || s.y < -80) { s.dead = true; continue; }
-
+    /* ---- 命中判定 ---- */
     for (const f of S.foes) {
       if (f.dead || f.coat >= 3) continue;
       if (s.hit.indexOf(f) >= 0) continue;
-      const dx = Math.abs(s.x - f.x);
-      const dy = Math.abs(s.y - (f.y - f.h / 2));
-      if (dx > s.r + f.w / 2 || dy > s.r + f.h / 2) continue;
+
+      let got = false;
+      if (s.kind === "wave") {
+        // 扇形：只打面向方向、且在扩张环以内的
+        const dx = (f.x - s.x) * s.dir;
+        const dy = Math.abs((f.y - f.h / 2) - s.y);
+        got = dx > -34 && dx < s.r + f.w / 2 && dy < s.r * 0.85 + f.h / 2;
+      } else {
+        const dx = Math.abs(s.x - f.x);
+        const dy = Math.abs(s.y - (f.y - f.h / 2));
+        got = dx < s.r + f.w / 2 && dy < s.r + f.h / 2;
+      }
+      if (!got) continue;
+
       coatFoe(f, 1);
       s.hit.push(f);
-      if (!s.pierce) { s.dead = true; }
-      break;
+      if (!s.pierce) { s.dead = true; break; }
     }
-    // 木桩挡弹丸
-    for (const st of S.stumps) {
-      if (st.hp <= 0) continue;
-      if (Math.abs(s.x - st.x) < st.w / 2 + s.r && s.y > st.y - st.h) {
-        s.dead = true;
-        addFrag(s.x, s.y, 4, "#C8A070");
-        break;
+    if (s.dead) continue;
+
+    /* ---- 木桩挡弹丸（坚果和溜溜球不挡：一个是滚过去的，一个是飞过去的） ---- */
+    if (s.kind !== "nut" && s.kind !== "yoyo" && s.kind !== "sickle") {
+      for (const st of S.stumps) {
+        if (st.hp <= 0) continue;
+        if (Math.abs(s.x - st.x) < st.w / 2 + s.r && s.y > st.y - st.h) {
+          s.dead = true;
+          addFrag(s.x, s.y, 4, "#C8A070");
+          break;
+        }
       }
     }
   }
@@ -1073,11 +2021,41 @@ function tickFx(dt) {
   S.shake = Math.max(0, S.shake - dt * 34);
   S.flash = Math.max(0, S.flash - dt * 2.2);
 
+  // 掉落物：抛出去 → 落到最近的平台 → 被玩家捡 / 掉进坑里烧掉 / 15 秒后消失。
+  // 落在平台上而不是一律落地面，是因为从高层炸出来的果应该留在高层 ——
+  // 玩家在楼上打着架，不该跑下去捡一颗果子。
   for (const d of S.drops) {
     if (d.taken) continue;
+    d.t = (d.t || 0) + dt;
+    if (d.t > 15) { d.taken = true; continue; }
+
+    const py = d.y;
     d.vy = Math.min(d.vy + 1500 * dt, 900);
+    d.x += d.vx * dt;
     d.y += d.vy * dt;
-    if (d.y > GROUND_Y - 10) { d.y = GROUND_Y - 10; d.vy = 0; }
+    d.vx *= 0.994;
+
+    // 掉进火坑 / 水塘：直接没了（不然捡一堆果子站在火里吃，很怪）
+    let gone = false;
+    for (const pit of PITS) {
+      if (pit.kind === "mud") continue;
+      if (d.x > pit.x + 6 && d.x < pit.x + pit.w - 6 && d.y > pit.y - 8) {
+        d.taken = true; gone = true;
+        for (let i = 0; i < 5; i++) addFrag(d.x, d.y, 4, pit.kind === "fire" ? "#FFB05C" : "#8FD8F0");
+        break;
+      }
+    }
+    if (gone) continue;
+
+    if (d.vy >= 0) {
+      let best = null;
+      for (const p2 of PLATS) {
+        if (d.x < p2.x || d.x > p2.x + p2.w) continue;
+        if (py <= p2.y + 2 && d.y >= p2.y) { if (!best || p2.y < best.y) best = p2; }
+      }
+      if (best) { d.y = best.y - 9; d.vy = 0; d.vx = 0; }
+    }
+    if (d.y > GROUND_Y - 9) { d.y = GROUND_Y - 9; d.vy = 0; d.vx = 0; }
   }
 }
 
@@ -1106,66 +2084,104 @@ const COL = {
   camp: "#C99A4E",
 };
 
-function drawSky(g) {
-  const sky = g.createLinearGradient(0, 0, 0, 300);
-  sky.addColorStop(0, "#B7E2DE");
-  sky.addColorStop(0.5, "#CFF0DC");
-  sky.addColorStop(1, "#E9F7DD");
-  g.fillStyle = sky;
-  g.fillRect(0, 0, W, 300);
+/* ----------------------------------------------------------------------------
+   Q 版背景
+   ----------------------------------------------------------------------------
+   原来画的是"暗色森林剪影"：树冠压在顶上、四边压黑、整体低饱和。
+   问题是它像**横版探险**，不像**雪人兄弟那种一屏一关的卡通游乐场**。
 
-  // 中央天光：林间开口正对着画面
-  const halo = g.createRadialGradient(480, 90, 16, 480, 90, 320);
-  halo.addColorStop(0, "rgba(255,252,226,.82)");
-  halo.addColorStop(0.45, "rgba(255,250,212,.24)");
-  halo.addColorStop(1, "rgba(255,250,212,0)");
+   这里改成 Q 版战斗场景的四条硬规矩：
+     1. 天空要亮、要彩，占画面上半，不能压黑 —— 单位才跳得出来
+     2. 云、山、树全部用**圆弧**拼，不出现尖角（尖角 = 写实）
+     3. 所有东西都有深色粗描边（3px 左右），像贴纸
+     4. 背景对比度永远低于前景：远景只上 30% 不透明度，近景才实色
+   -------------------------------------------------------------------------- */
+
+function drawSky(g) {
+  const sky = g.createLinearGradient(0, 0, 0, 330);
+  sky.addColorStop(0, TH.sky1);
+  sky.addColorStop(0.55, TH.sky2);
+  sky.addColorStop(1, TH.sky2);
+  g.fillStyle = sky;
+  g.fillRect(0, 0, W, 340);
+
+  // Q 版太阳：一个圆 + 一圈更亮的晕，不做光芒射线（射线会像儿童简笔画）
+  const sunX = 790, sunY = 88;
+  const halo = g.createRadialGradient(sunX, sunY, 10, sunX, sunY, 150);
+  halo.addColorStop(0, "rgba(255,252,214,.55)");
+  halo.addColorStop(1, "rgba(255,252,214,0)");
   g.fillStyle = halo;
-  g.fillRect(0, 0, W, 330);
+  g.fillRect(sunX - 160, sunY - 160, 320, 320);
+  g.fillStyle = "rgba(255,250,205,.92)";
+  g.beginPath();
+  g.arc(sunX, sunY, 34, 0, 6.283);
+  g.fill();
 }
 
-/** 远景林线：纯剪影，无细节。有细节就会变成"具体的树"，就会抢视线。 */
-function drawTreeBand(g, baseY, maxH, color, seed) {
-  const step = 62;
+/** 一朵 Q 版云：三个圆叠一个平底，全部同一色，只有底部一条淡阴影 */
+function drawCloud(g, x, y, sc, alpha) {
+  g.save();
+  g.globalAlpha = alpha;
+  g.fillStyle = TH.cloud;
+  g.beginPath();
+  g.arc(x - 26 * sc, y + 4 * sc, 20 * sc, 0, 6.283);
+  g.arc(x + 2 * sc, y - 8 * sc, 28 * sc, 0, 6.283);
+  g.arc(x + 32 * sc, y + 4 * sc, 18 * sc, 0, 6.283);
+  g.rect(x - 26 * sc, y + 4 * sc, 58 * sc, 17 * sc);
+  g.fill();
+  g.fillStyle = "rgba(180,214,240,.30)";
+  g.beginPath();
+  g.ellipse(x + 4 * sc, y + 19 * sc, 44 * sc, 6 * sc, 0, 0, 6.283);
+  g.fill();
+  g.restore();
+}
+
+/** 远山：二次曲线堆出来的圆顶，两层，越远越淡 */
+function drawHills(g, baseY, amp, color, seed, step) {
   g.fillStyle = color;
   g.beginPath();
-  g.moveTo(-40, baseY + 60);
-  for (let i = 0, x = -40; x < W + 60; i++, x += step) {
-    const h1 = hash(i + seed * 13);
-    const h2 = hash(i * 3.1 + seed * 7);
-    const h = maxH * (0.4 + h1 * 0.6);
-    const r = step * (0.6 + h2 * 0.34);
-    g.lineTo(x - r, baseY - h * 0.34);
-    g.quadraticCurveTo(x, baseY - h - r * 0.5, x + r, baseY - h * 0.34);
+  g.moveTo(-40, baseY + 40);
+  for (let i = 0, x = -40; x < W + 80; i++, x += step) {
+    const h = amp * (0.55 + hash(i + seed) * 0.55);
+    g.quadraticCurveTo(x + step * 0.5, baseY - h * 1.5, x + step, baseY - amp * 0.16);
   }
-  g.lineTo(W + 60, baseY + 60);
+  g.lineTo(W + 80, baseY + 40);
   g.closePath();
   g.fill();
 }
 
-/** 两侧密林：可以有细节，因为它们不在战场背后 */
-function drawSideTree(g, x, baseY, sc, back) {
-  const tx = 15 * sc, th = 46 * sc;
-  g.fillStyle = back ? "#3E3226" : "#5B422C";
-  g.beginPath();
-  g.moveTo(x - tx * 0.38, baseY);
-  g.lineTo(x - tx * 0.26, baseY - th);
-  g.lineTo(x + tx * 0.26, baseY - th);
-  g.lineTo(x + tx * 0.42, baseY);
-  g.closePath();
+/** Q 版树：树干一个圆角方块，树冠三四个圆点，深色描边 */
+function drawTree(g, x, baseY, sc, back) {
+  g.save();
+  g.globalAlpha = back ? 0.34 : 1;
+  const tw = 16 * sc, th = 40 * sc;
+  // 树干
+  g.fillStyle = back ? "#5A4632" : "#8A5E3A";
+  rr(g, x - tw / 2, baseY - th, tw, th + 4, 5 * sc);
   g.fill();
-
-  const r = 32 * sc, cy = baseY - th;
-  g.fillStyle = back ? "#2A4A36" : "#2F5C40";
-  const blobs = [[-0.62, -0.18, 0.66], [0.62, -0.22, 0.62], [-0.2, -0.86, 0.72], [0.3, -0.72, 0.58]];
-  for (const b of blobs) {
+  // 树冠
+  const cy = baseY - th, r = 30 * sc;
+  g.fillStyle = back ? "#6FAE84" : "#4FBF74";
+  g.beginPath();
+  g.arc(x - r * 0.52, cy - r * 0.10, r * 0.62, 0, 6.283);
+  g.arc(x + r * 0.52, cy - r * 0.14, r * 0.58, 0, 6.283);
+  g.arc(x, cy - r * 0.72, r * 0.70, 0, 6.283);
+  g.fill();
+  if (!back) {
+    g.strokeStyle = "rgba(30,64,44,.55)";
+    g.lineWidth = 2.4;
     g.beginPath();
-    g.arc(x + b[0] * r, cy + b[1] * r, b[2] * r, 0, 6.283);
+    g.arc(x - r * 0.52, cy - r * 0.10, r * 0.62, 0, 6.283);
+    g.arc(x + r * 0.52, cy - r * 0.14, r * 0.58, 0, 6.283);
+    g.arc(x, cy - r * 0.72, r * 0.70, 0, 6.283);
+    g.stroke();
+    // 高光：一大两小，位置固定，模拟左上来光
+    g.fillStyle = "rgba(220,255,220,.45)";
+    g.beginPath();
+    g.arc(x - r * 0.22, cy - r * 0.95, r * 0.22, 0, 6.283);
     g.fill();
   }
-  g.fillStyle = back ? "#356047" : "#3F7650";
-  g.beginPath();
-  g.arc(x - r * 0.34, cy - r * 1.02, r * 0.46, 0, 6.283);
-  g.fill();
+  g.restore();
 }
 
 function drawForest(world) {
@@ -1174,142 +2190,68 @@ function drawForest(world) {
 
   drawSky(g);
 
-  // 远景两层林线，只落在 y < 230
-  drawTreeBand(g, 208, 92, "rgba(152,198,174,.36)", 3);
-  drawTreeBand(g, 226, 66, "rgba(112,172,142,.44)", 7);
+  // 云：远慢近快，三朵。位置用 hash 固定，不用随机 —— 每帧随机会闪。
+  drawCloud(g, 160 + Math.sin(S.t * 0.10) * 14, 66, 1.0, 0.92);
+  drawCloud(g, 470 + Math.sin(S.t * 0.14 + 2) * 18, 44, 0.74, 0.80);
+  drawCloud(g, 690 + Math.sin(S.t * 0.08 + 4) * 10, 104, 0.62, 0.62);
+  drawCloud(g, 300 + Math.sin(S.t * 0.12 + 1) * 12, 122, 0.48, 0.45);
 
-  // 光柱：三道，窄。指方向，不照亮全屏
-  g.save();
-  g.globalCompositeOperation = "lighter";
-  const rays = [[250, 58, 300], [470, 46, 330], [690, 52, 290]];
-  for (const ry of rays) {
-    const x = ry[0], w = ry[1], len = ry[2];
-    const grd = g.createLinearGradient(x, 30, x + 120, 30 + len);
-    grd.addColorStop(0, "rgba(255,250,208,.18)");
-    grd.addColorStop(0.5, "rgba(255,250,208,.06)");
-    grd.addColorStop(1, "rgba(255,250,208,0)");
-    g.fillStyle = grd;
-    g.beginPath();
-    g.moveTo(x, 30);
-    g.lineTo(x + w, 30);
-    g.lineTo(x + w + 150, 30 + len);
-    g.lineTo(x + 70, 30 + len);
-    g.closePath();
-    g.fill();
-  }
-  g.restore();
+  // 远山两层
+  drawHills(g, 300, 96, "rgba(255,255,255,.22)", 3, 210);
+  drawHills(g, 312, 62, TH.hill2, 7, 170);
+  drawHills(g, 326, 40, TH.hill1, 11, 130);
 
-  // 草地
-  const gr = g.createLinearGradient(0, 150, 0, H);
-  gr.addColorStop(0, "#3D7A48");
-  gr.addColorStop(0.2, "#55A054");
-  gr.addColorStop(0.62, "#6DB963");
-  gr.addColorStop(1, "#86CB72");
+  // 地面大色块：整片铺到 H，平台会盖在上面
+  const gr = g.createLinearGradient(0, 300, 0, H);
+  gr.addColorStop(0, TH.grass2);
+  gr.addColorStop(0.42, TH.grass);
+  gr.addColorStop(1, TH.grass);
   g.fillStyle = gr;
-  g.fillRect(0, 148, W, H - 148);
+  g.fillRect(0, 300, W, H - 300);
 
-  // 地平线柔光，把林线和草地接起来（不接会像贴纸）
-  const seam = g.createLinearGradient(0, 148, 0, 216);
-  seam.addColorStop(0, "rgba(233,247,221,.55)");
-  seam.addColorStop(1, "rgba(233,247,221,0)");
-  g.fillStyle = seam;
-  g.fillRect(0, 148, W, 68);
-
-  // 空地上的光斑
-  for (let i = 0; i < 22; i++) {
-    const x = 70 + hash(i * 1.7) * (W - 140);
-    const y = 240 + hash(i * 5.3 + 2) * (H - 280);
-    const r = 16 + hash(i * 9.1) * 34;
-    g.fillStyle = "rgba(255,252,206," + (0.045 + hash(i * 3.3) * 0.055).toFixed(3) + ")";
+  // 地面上的浅色条纹：给"深度"，但只在低对比度下出现
+  g.globalAlpha = 0.10;
+  g.fillStyle = "#FFFFFF";
+  for (let i = 0; i < 5; i++) {
+    const y = 340 + i * 52;
     g.beginPath();
-    g.ellipse(x, y, r, r * 0.36, 0, 0, 6.283);
+    g.ellipse(W / 2, y, 460 - i * 30, 10 + i * 2, 0, 0, 6.283);
     g.fill();
   }
+  g.globalAlpha = 1;
 
-  // 草丛：三叶一根，比竖条有质感
-  g.lineCap = "round";
-  for (let i = 0; i < 60; i++) {
-    const x = 46 + hash(i * 4.7) * (W - 92);
-    const y = 240 + hash(i * 2.9 + 1) * (H - 260);
-    if (y > 540) continue;
-    g.strokeStyle = "rgba(44,108,60,.22)";
-    g.lineWidth = 1.6;
-    for (let k = -1; k <= 1; k++) {
-      g.beginPath();
-      g.moveTo(x + k * 2.4, y);
-      g.quadraticCurveTo(x + k * 5, y - 5, x + k * 7.5, y - 10);
-      g.stroke();
-    }
+  // 远景树：低透明度，只在画面两端与地平线上，不挡中间战场
+  for (let i = 0; i < 7; i++) {
+    const x = 40 + i * 145 + hash(i * 3.1) * 30;
+    const sc = 0.62 + hash(i * 1.7) * 0.3;
+    drawTree(g, x, 322 + hash(i * 5.3) * 10, sc, true);
   }
 
-  /* ---- 远处的树：把 y=100~250 这片空白填掉 ----
-   * 顶层平台在 248，上面原本是一整片空天（占画面 40%），
-   * 读起来像"在草原上摆了几块木板"，而不是林子。
-   * 这几棵用极低对比度（叠了一层雾），作用只是交代纵深，
-   * 不能有细节 —— 有细节就会和单位抢注意力。 */
-  for (let i = 0; i < 6; i++) {
-    const x = 60 + i * 165 + hash(i * 3.1) * 40;
-    const hh = 110 + hash(i * 7.7) * 60;
-    const sc = 0.55 + hash(i * 1.3) * 0.25;
-    g.fillStyle = "rgba(74,128,102,.18)";
+  // 两侧近景树：压住画面边缘，让视线收在中间
+  drawTree(g, 10, 470, 1.9, false);
+  drawTree(g, W - 12, 470, 1.9, false);
+  drawTree(g, 46, 440, 1.3, false);
+  drawTree(g, W - 48, 440, 1.3, false);
+
+  // 空气里的浮尘：小圆点，向上飘。数量少、对比低
+  for (let i = 0; i < 16; i++) {
+    const ph = (S.t * 0.22 + hash(i * 7.7)) % 1;
+    const x = 60 + hash(i * 2.3) * (W - 120) + Math.sin(S.t * 0.6 + i) * 10;
+    const y = 520 - ph * 380;
+    g.globalAlpha = 0.20 * (1 - Math.abs(ph - 0.5) * 2);
+    g.fillStyle = "#FFFFFF";
     g.beginPath();
-    g.ellipse(x, 252 - hh * 0.55, 52 * sc, hh * 0.5, 0, 0, 6.283);
+    g.arc(x, y, 1.6 + hash(i) * 1.8, 0, 6.283);
     g.fill();
-    g.fillStyle = "rgba(56,104,84,.16)";
-    g.beginPath();
-    g.ellipse(x - 26 * sc, 252 - hh * 0.30, 34 * sc, hh * 0.34, 0, 0, 6.283);
-    g.ellipse(x + 30 * sc, 252 - hh * 0.36, 30 * sc, hh * 0.30, 0, 0, 6.283);
-    g.fill();
+    g.globalAlpha = 1;
   }
 
-  /* ---- 从树冠垂下来的藤蔓：给"上方"一点重量，视线才会往下落到战场 ---- */
-  g.strokeStyle = "rgba(44,96,58,.42)";
-  g.lineCap = "round";
-  for (let i = 0; i < 11; i++) {
-    const x = 40 + i * 88 + hash(i * 5.5) * 30;
-    const len = 40 + hash(i * 2.7) * 78;
-    g.lineWidth = 1.6 + hash(i) * 1.6;
-    g.beginPath();
-    g.moveTo(x, 44);
-    g.quadraticCurveTo(x + 10, 44 + len * 0.6, x - 2, 44 + len);
-    g.stroke();
-    // 叶片
-    g.fillStyle = "rgba(60,124,70,.34)";
-    for (let k = 0; k < 3; k++) {
-      const ly = 52 + len * (0.3 + k * 0.28);
-      g.beginPath();
-      g.ellipse(x + (k % 2 ? 7 : -6), ly, 8, 3.6, k % 2 ? 0.5 : -0.5, 0, 6.283);
-      g.fill();
-    }
-  }
-
-  // 两侧密林压住画面边缘
-  for (let i = 0; i < 4; i++) {
-    drawSideTree(g, 8 + i * 30, 470 - i * 14, 1.8 - i * 0.2, i < 2);
-    drawSideTree(g, W - 8 - i * 30, 470 - i * 14, 1.8 - i * 0.2, i < 2);
-  }
-  g.fillStyle = "rgba(22,56,38,.78)";
-  for (let i = 0; i < 3; i++) {
-    g.beginPath();
-    g.ellipse(14 + i * 26, 520 - i * 16, 42 - i * 6, 28 - i * 4, 0, 0, 6.283);
-    g.fill();
-    g.beginPath();
-    g.ellipse(W - 14 - i * 26, 520 - i * 16, 42 - i * 6, 28 - i * 4, 0, 0, 6.283);
-    g.fill();
-  }
-
-  // 顶部树冠
-  g.fillStyle = "rgba(30,66,44,.9)";
-  g.beginPath();
-  g.moveTo(-30, -10);
-  for (let i = 0, x = -30; x < W + 70; i++, x += 46) {
-    const hh = 32 + hash(i + 40) * 52;
-    g.lineTo(x, hh);
-    g.quadraticCurveTo(x + 23, hh + 28, x + 46, hh * 0.55);
-  }
-  g.lineTo(W + 70, -10);
-  g.closePath();
-  g.fill();
+  // 顶部不再压树冠，只留一条极淡的暖色渐晕，防止天空顶部过曝
+  const top = g.createLinearGradient(0, 0, 0, 40);
+  top.addColorStop(0, "rgba(255,255,255,.22)");
+  top.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = top;
+  g.fillRect(0, 0, W, 40);
 
   if (world) {
     g.save();
@@ -1323,59 +2265,116 @@ function drawForest(world) {
    ========================================================================== */
 
 function drawPlat(g, p) {
-  if (p.kind === "ground") {
-    g.fillStyle = COL.dirt;
-    g.fillRect(p.x, p.y, p.w, p.h);
-    g.fillStyle = COL.dirt2;
-    g.fillRect(p.x, p.y + p.h - 14, p.w, 14);
-    // 草皮
-    g.fillStyle = COL.grass3;
-    g.fillRect(p.x, p.y - 4, p.w, 8);
-    g.fillStyle = COL.grass2;
-    for (let i = 0, x = p.x; x < p.x + p.w; i++, x += 13) {
-      const hh = 5 + hash(i) * 7;
+  const isGround = p.kind === "ground";
+
+  if (isGround) {
+    // ---- 地面：泥土块 + 一层圆齿草皮。草齿是圆的，这是 Q 版和写实的唯一分界线
+    const dg = g.createLinearGradient(0, p.y, 0, p.y + p.h + 26);
+    dg.addColorStop(0, TH.dirt);
+    dg.addColorStop(1, TH.dirt2);
+    g.fillStyle = dg;
+    g.fillRect(p.x, p.y, p.w, p.h + 26);
+
+    // 土里的石子：几颗深色圆点，固定位置
+    g.fillStyle = "rgba(0,0,0,.14)";
+    for (let i = 0, x = p.x + 20; x < p.x + p.w - 16; i++, x += 62) {
+      const o = hash(i + 31);
       g.beginPath();
-      g.moveTo(x, p.y);
-      g.quadraticCurveTo(x + 4, p.y - hh, x + 8, p.y);
+      g.ellipse(x + o * 18, p.y + 16 + o * 20, 4 + o * 4, 3 + o * 3, 0, 0, 6.283);
       g.fill();
+    }
+
+    // 草皮底
+    g.fillStyle = TH.grass2;
+    g.beginPath();
+    g.moveTo(p.x, p.y + 6);
+    g.lineTo(p.x, p.y - 4);
+    for (let x = p.x, i = 0; x <= p.x + p.w; i++, x += 22) {
+      g.arc(x + 11, p.y - 4, 12, Math.PI, 0);
+    }
+    g.lineTo(p.x + p.w, p.y + 6);
+    g.closePath();
+    g.fill();
+
+    // 草皮亮面
+    g.fillStyle = TH.grass;
+    g.beginPath();
+    g.moveTo(p.x, p.y + 2);
+    g.lineTo(p.x, p.y - 6);
+    for (let x = p.x, i = 0; x <= p.x + p.w; i++, x += 26) {
+      g.arc(x + 13, p.y - 6, 12, Math.PI, 0);
+    }
+    g.lineTo(p.x + p.w, p.y + 2);
+    g.closePath();
+    g.fill();
+
+    // 草皮顶部深描边：只描上缘，不封边（封边会像贴纸框）
+    g.strokeStyle = "rgba(24,58,34,.32)";
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(p.x, p.y - 4);
+    for (let x = p.x, i = 0; x <= p.x + p.w; i++, x += 22) {
+      g.arc(x + 11, p.y - 4, 12, Math.PI, 0);
+    }
+    g.stroke();
+
+    // 草尖：三两根，稀疏
+    g.strokeStyle = "rgba(40,110,52,.35)";
+    g.lineWidth = 2;
+    g.lineCap = "round";
+    for (let i = 0, x = p.x + 14; x < p.x + p.w; i++, x += 74) {
+      const hh = 5 + hash(i + 7) * 5;
+      g.beginPath();
+      g.moveTo(x, p.y - 7);
+      g.quadraticCurveTo(x + 3, p.y - 7 - hh, x + 6, p.y - 7);
+      g.stroke();
     }
     return;
   }
 
-  // 木台：圆角 + 顶亮底暗 + 藤蔓垂挂
-  const wob = 0;
-  rr(g, p.x, p.y, p.w, p.h, 9);
-  g.fillStyle = COL.wood;
+  // ---- 浮空台：Q 版砖块。厚描边 + 上亮下暗 + 底部一圈"厚边"
+  const hh = p.h;
+
+  // 底部的深色厚边（视觉重量来源，没有它就是"一块板"）
+  g.fillStyle = TH.wood2;
+  rr(g, p.x - 2, p.y + 3, p.w + 4, hh + 9, 9);
   g.fill();
-  g.strokeStyle = COL.wood2;
-  g.lineWidth = 2;
+
+  // 主体
+  const wg = g.createLinearGradient(0, p.y, 0, p.y + hh + 8);
+  wg.addColorStop(0, TH.wood3);
+  wg.addColorStop(0.32, TH.wood);
+  wg.addColorStop(1, TH.wood2);
+  g.fillStyle = wg;
+  rr(g, p.x, p.y, p.w, hh + 6, 9);
+  g.fill();
+
+  // 深色粗描边
+  g.strokeStyle = COL.outline;
+  g.lineWidth = 2.6;
+  rr(g, p.x, p.y, p.w, hh + 6, 9);
   g.stroke();
 
-  // 顶面受光
-  g.fillStyle = COL.wood3;
-  rr(g, p.x + 2, p.y + 1, p.w - 4, 5, 3);
+  // 顶面高光：一条 4px 的亮带，两端留 8px 圆角
+  g.fillStyle = "rgba(255,255,255,.55)";
+  rr(g, p.x + 5, p.y + 3, Math.max(0, p.w - 10), 4, 2);
   g.fill();
 
-  // 木纹
-  g.strokeStyle = "rgba(60,40,26,.28)";
-  g.lineWidth = 1;
-  for (let i = 0; i < p.w; i += 34) {
+  // 砖缝：竖短线，只画在台面里，不越界
+  g.strokeStyle = "rgba(60,36,20,.24)";
+  g.lineWidth = 1.4;
+  for (let i = 0, x = p.x + 26; x < p.x + p.w - 12; i++, x += 44) {
     g.beginPath();
-    g.moveTo(p.x + i + 8, p.y + 3);
-    g.lineTo(p.x + i + 8, p.y + p.h - 3);
+    g.moveTo(x, p.y + 9);
+    g.lineTo(x, p.y + hh + 2);
     g.stroke();
   }
 
-  // 垂下来的藤蔓：让平台有"长在林子里"的感觉，成本几乎为零
-  g.strokeStyle = "rgba(58,110,62,.55)";
-  g.lineWidth = 2;
-  g.lineCap = "round";
-  for (let i = 0, x = p.x + 18; x < p.x + p.w - 10; i++, x += 46) {
-    const len = 10 + hash(i + p.x) * 22;
-    g.beginPath();
-    g.moveTo(x, p.y + p.h);
-    g.quadraticCurveTo(x + 4, p.y + p.h + len * 0.6, x + 1, p.y + p.h + len);
-    g.stroke();
+  // 两端的护角：Q 版平台的习惯做法，读起来"结实"
+  g.fillStyle = "rgba(255,255,255,.22)";
+  for (const ex of [p.x + 6, p.x + p.w - 14]) {
+    rr(g, ex, p.y + 7, 8, hh - 2, 3);
+    g.fill();
   }
 }
 
@@ -1428,6 +2427,48 @@ function drawPit(g, pit) {
     return;
   }
 
+  if (pit.kind === "water") {
+    // 水面比坑口低一截，读起来才像"能沉下去"
+    g.fillStyle = "#22323C";
+    g.beginPath();
+    g.moveTo(x, y);
+    g.lineTo(x + 14, y + 24);
+    g.lineTo(x + w - 14, y + 24);
+    g.lineTo(x + w, y);
+    g.closePath();
+    g.fill();
+
+    const wg = g.createLinearGradient(x, y + 2, x, y + 24);
+    wg.addColorStop(0, "rgba(120,206,236,.95)");
+    wg.addColorStop(1, "rgba(34,92,124,.96)");
+    g.fillStyle = wg;
+    g.beginPath();
+    g.moveTo(x + 4, y + 2);
+    g.lineTo(x + 16, y + 21);
+    g.lineTo(x + w - 16, y + 21);
+    g.lineTo(x + w - 4, y + 2);
+    g.closePath();
+    g.fill();
+
+    // 两条随时间平移的亮带 —— 别的坑都在动，水面不动会被当成地板
+    for (let i = 0; i < 3; i++) {
+      const ph = (S.t * 0.55 + i * 0.34) % 1;
+      g.globalAlpha = 0.55 * (1 - Math.abs(ph - 0.5) * 2);
+      g.fillStyle = "#DCF6FF";
+      g.beginPath();
+      g.ellipse(x + 20 + ph * (w - 46), y + 9 + i * 5, 16, 2.1, 0, 0, 6.283);
+      g.fill();
+      g.globalAlpha = 1;
+    }
+    g.strokeStyle = "rgba(28,56,68,.85)";
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(x, y); g.lineTo(x + 14, y + 24);
+    g.moveTo(x + w, y); g.lineTo(x + w - 14, y + 24);
+    g.stroke();
+    return;
+  }
+
   // 泥坑
   g.fillStyle = COL.mud;
   g.beginPath();
@@ -1459,6 +2500,136 @@ function drawPit(g, pit) {
   g.moveTo(x, y); g.lineTo(x + 14, y + 20);
   g.moveTo(x + w, y); g.lineTo(x + w - 14, y + 20);
   g.stroke();
+}
+
+/* ---------- 斜坡 ---------- */
+function drawRamp(g, r) {
+  const x1 = r.x, x2 = r.x + r.w;
+  const y1 = r.yBot + 6, y2 = r.yTop + 4;
+
+  g.save();
+  g.lineCap = "butt";
+  // 坡身：先铺一层深色当描边，再叠亮面 —— 只画一道渐变的话，
+  // 远看就是一根斜木棍，读不出"这是能走的坡"。
+  g.strokeStyle = COL.outline;
+  g.lineWidth = 26;
+  g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+
+  const grad = g.createLinearGradient(x1, y1, x2, y2);
+  grad.addColorStop(0, "#8A6242");
+  grad.addColorStop(1, "#B98A5C");
+  g.strokeStyle = grad;
+  g.lineWidth = 20;
+  g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+
+  // 顶面高光：走在这条线上的是球，给它一条亮边
+  g.strokeStyle = "rgba(255,240,200,.55)";
+  g.lineWidth = 3;
+  g.beginPath(); g.moveTo(x1, y1 - 9); g.lineTo(x2, y2 - 9); g.stroke();
+
+  // 枕木：一条条斜纹，让"这是坡"一眼看得出来
+  g.strokeStyle = "rgba(48,32,20,.55)";
+  g.lineWidth = 3;
+  for (let i = 0; i <= 7; i++) {
+    const t = i / 7;
+    const px = x1 + (x2 - x1) * t, py = y1 + (y2 - y1) * t;
+    g.beginPath(); g.moveTo(px - 7, py - 9); g.lineTo(px + 7, py + 9); g.stroke();
+  }
+
+  // 顶端一枚上行箭头：不画的话玩家会以为那是个装饰
+  g.fillStyle = "rgba(255,238,170,.75)";
+  const ax = x2 - 16, ay = y2 - 6;
+  g.beginPath();
+  g.moveTo(ax, ay - 12); g.lineTo(ax - 9, ay + 2); g.lineTo(ax + 9, ay + 2);
+  g.closePath(); g.fill();
+  g.restore();
+}
+
+/* ---------- 弹簧菇 ---------- */
+function drawBouncer(g, b) {
+  const ph = Math.sin(S.t * 4.4 + b.x * 0.02);
+  const squash = 1 + ph * 0.10;
+  const top = b.y - 30;
+  const bw = 30 * (1 / squash), bh = 22 * squash;
+
+  // 影子
+  g.fillStyle = "rgba(20,40,26,.22)";
+  g.beginPath();
+  g.ellipse(b.x, b.y + 2, 26, 6, 0, 0, 6.283);
+  g.fill();
+
+  // 柄
+  g.fillStyle = "#E8E0C2";
+  g.beginPath();
+  rr(g, b.x - 6, top + bh * 0.5, 12, b.y - top - bh * 0.5 - 2, 5);
+  g.fill();
+
+  // 伞
+  const capG = g.createLinearGradient(b.x, top, b.x, top + bh);
+  capG.addColorStop(0, "#FF9A7A");
+  capG.addColorStop(1, "#D9463F");
+  g.fillStyle = capG;
+  g.beginPath();
+  g.ellipse(b.x, top + bh * 0.55, bw, bh * 0.72, 0, Math.PI, 0);
+  g.fill();
+  g.fillStyle = "#FFC6A8";
+  g.beginPath();
+  g.ellipse(b.x, top + bh * 0.55, bw, 4.5, 0, 0, 6.283);
+  g.fill();
+
+  // 伞上的白点
+  g.fillStyle = "rgba(255,246,200,.92)";
+  for (const dx of [-14, 0, 14]) {
+    g.beginPath();
+    g.arc(b.x + dx, top + bh * 0.34 - Math.abs(dx) * 0.18, 3.2, 0, 6.283);
+    g.fill();
+  }
+  g.strokeStyle = "rgba(40,64,36,.5)";
+  g.lineWidth = 2;
+  g.beginPath();
+  g.ellipse(b.x, top + bh * 0.55, bw, bh * 0.72, 0, Math.PI, 0);
+  g.stroke();
+}
+
+/* ---------- 传送洞 ---------- */
+function drawPortal(g, pt) {
+  const cy = pt.y - 16;
+  // 洞
+  g.fillStyle = "#101C26";
+  g.beginPath();
+  g.ellipse(pt.x, pt.y - 6, 28, 11, 0, 0, 6.283);
+  g.fill();
+  const pg = g.createRadialGradient(pt.x, pt.y - 6, 2, pt.x, pt.y - 6, 30);
+  pg.addColorStop(0, "rgba(120,236,255,.95)");
+  pg.addColorStop(0.55, "rgba(46,150,196,.55)");
+  pg.addColorStop(1, "rgba(20,60,90,0)");
+  g.fillStyle = pg;
+  g.beginPath();
+  g.ellipse(pt.x, pt.y - 6, 30, 13, 0, 0, 6.283);
+  g.fill();
+
+  // 三圈旋转的光环：静止的洞会被当成装饰
+  for (let i = 0; i < 3; i++) {
+    const k = ((S.t * 0.8 + i / 3) % 1);
+    g.globalAlpha = 0.55 * (1 - k);
+    g.strokeStyle = i % 2 ? "#9FE4FF" : "#D8F8FF";
+    g.lineWidth = 2;
+    g.beginPath();
+    g.ellipse(pt.x, pt.y - 6, 10 + k * 22, (10 + k * 22) * 0.42, 0, 0, 6.283);
+    g.stroke();
+    g.globalAlpha = 1;
+  }
+
+  // 洞里飘起来的小火星
+  for (let i = 0; i < 3; i++) {
+    const k = ((S.t * 0.5 + i / 3) % 1);
+    g.globalAlpha = 0.8 * (1 - k);
+    g.fillStyle = "#BFF0FF";
+    g.beginPath();
+    g.arc(pt.x + Math.sin(S.t * 2 + i) * 12, cy - k * 26, 2.2, 0, 6.283);
+    g.fill();
+    g.globalAlpha = 1;
+  }
 }
 
 function drawStump(g, s) {
@@ -1564,8 +2735,11 @@ function drawLevel() {
   const g = ctx;
   for (const p of PLATS) if (p.kind === "ground") drawPlat(g, p);
   for (const pit of PITS) drawPit(g, pit);
+  for (const r of RAMPS) drawRamp(g, r);      // 坡压在台面下面，接缝才自然
   drawCamp(g);
   for (const p of PLATS) if (p.kind !== "ground") drawPlat(g, p);
+  for (const b of BOUNCERS) drawBouncer(g, b);
+  for (const pt of PORTALS) drawPortal(g, pt);
   for (const s of S.stumps) drawStump(g, s);
 }
 
@@ -1901,49 +3075,368 @@ function drawBall(g, b) {
     g.fillText("x" + b.holds, cx, cy + r * 0.52);
   }
 
-  // 快崩开了：抖动 + 裂纹
-  if (b.melt > 1.4) {
-    const k = (b.melt - 1.4) / 1.6;
-    g.strokeStyle = "rgba(255,90,70," + (0.35 + k * 0.5).toFixed(2) + ")";
+  // 剩余的气：球外侧画一圈弧。这是"这颗球还能滚多久"的**唯一**读数，
+  // 必须能在不读数字的情况下看出大概 —— 所以用长度而不是数字。
+  const air = b.air === undefined ? 1 : b.air;
+  const a0 = -Math.PI / 2;
+  g.lineWidth = 3.4;
+  g.lineCap = "round";
+  g.strokeStyle = "rgba(20,30,22,.28)";
+  g.beginPath();
+  g.arc(cx, cy, r + 6, 0, 6.283);
+  g.stroke();
+  g.strokeStyle = air > 0.55 ? "rgba(150,235,120,.85)"
+                : air > 0.28 ? "rgba(255,206,90,.9)"
+                : "rgba(255,110,90,.95)";
+  g.beginPath();
+  g.arc(cx, cy, r + 6, a0, a0 + 6.283 * air);
+  g.stroke();
+
+  // 快漏完了：裂纹 + 抖。给一个"再不动手就没了"的即时信号
+  if (air < 0.42) {
+    const k = (0.42 - air) / 0.42;
+    const jx = Math.sin(S.t * 46) * k * 2.2;
+    g.strokeStyle = "rgba(255,90,70," + (0.3 + k * 0.55).toFixed(2) + ")";
     g.lineWidth = 2;
     for (let i = 0; i < 3; i++) {
       const a = i * 2.1 + hash(i) * 3;
       g.beginPath();
-      g.moveTo(cx + Math.cos(a) * r * 0.2, cy + Math.sin(a) * r * 0.2);
-      g.lineTo(cx + Math.cos(a) * r * 0.85, cy + Math.sin(a) * r * 0.85);
+      g.moveTo(cx + jx + Math.cos(a) * r * 0.2, cy + Math.sin(a) * r * 0.2);
+      g.lineTo(cx + jx + Math.cos(a) * r * 0.85, cy + Math.sin(a) * r * 0.85);
       g.stroke();
     }
   }
 }
 
-function drawShot(g, s) {
-  const k = s.life / s.maxLife;
-  g.globalAlpha = clamp(k * 1.6, 0, 1);
-  if (s.kind === "blade") {
-    g.fillStyle = s.color;
-    g.beginPath();
-    g.ellipse(s.x, s.y, s.r * 1.8, s.r * 0.6, sign(s.vx) * 0.2, 0, 6.283);
-    g.fill();
-  } else if (s.kind === "wave") {
-    g.strokeStyle = s.color;
-    g.lineWidth = 3;
-    g.globalAlpha = clamp(k, 0, 1) * 0.9;
-    g.beginPath();
-    g.arc(s.x, s.y, s.r * (1.4 - k * 0.4), -1.1, 1.1);
-    g.stroke();
-    g.beginPath();
-    g.arc(s.x, s.y, s.r * (1.1 - k * 0.3), -1.1, 1.1);
-    g.stroke();
-  } else {
-    g.fillStyle = s.color;
-    g.beginPath();
-    g.arc(s.x, s.y, s.r * (0.8 + k * 0.2), 0, 6.283);
-    g.fill();
-    g.globalAlpha *= 0.4;
-    g.beginPath();
-    g.arc(s.x - sign(s.vx) * s.r * 0.9, s.y, s.r * 0.7, 0, 6.283);
-    g.fill();
+/* ----------------------------------------------------------------------------
+   预瞄线：画在关卡之上、单位之下。压在所有东西下面，但比地面亮。
+   -------------------------------------------------------------------------- */
+const AIM_COL = {
+  fire:  "255,146,72",
+  camp:  "255,212,88",
+  stump: "226,226,226",
+  stop:  "126,232,255",
+  air:   "126,232,255",
+  water: "120,214,255",
+};
+
+function drawAimLine(g, b, A, dir) {
+  const pts = A.pts;
+  if (!pts || pts.length < 2) return;
+  const col = AIM_COL[A.end] || AIM_COL.air;
+
+  // 按"反弹前 / 反弹后"切段。撞墙之后球会滚回来，这一段是真的，
+  // 但它和"我主动推出去"不是同一件事 —— 画成同样的线，玩家会以为
+  // 球会一直往那个方向走（截图里看起来就是一条笔直的长线）。
+  const parts = [];
+  let cur = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i].ph !== pts[i - 1].ph) { parts.push(cur); cur = [pts[i - 1]]; }
+    cur.push(pts[i]);
   }
+  parts.push(cur);
+
+  g.lineCap = "round";
+  g.setLineDash([8, 7]);
+  for (let k = 0; k < parts.length; k++) {
+    const seg = parts[k];
+    if (seg.length < 2) continue;
+    g.globalAlpha = k === 0 ? 1 : 0.3;
+    g.strokeStyle = "rgba(10,22,14,.62)";
+    g.lineWidth = 6.5;
+    g.beginPath();
+    g.moveTo(seg[0].x, seg[0].y);
+    for (let i = 1; i < seg.length; i++) g.lineTo(seg[i].x, seg[i].y);
+    g.stroke();
+    g.strokeStyle = "rgba(" + col + ",1)";
+    g.lineWidth = 3.4;
+    g.beginPath();
+    g.moveTo(seg[0].x, seg[0].y);
+    for (let i = 1; i < seg.length; i++) g.lineTo(seg[i].x, seg[i].y);
+    g.stroke();
+  }
+  g.setLineDash([]);
+  g.globalAlpha = 0.9;
+
+  // 终点：一个空心圈。落点比路径更重要 —— 玩家算的是"最后停在哪"
+  const last = pts[pts.length - 1];
+  g.globalAlpha = 0.82;
+  g.beginPath();
+  g.arc(last.x, last.y, 8, 0, 6.283);
+  g.stroke();
+  g.beginPath();
+  g.arc(last.x, last.y, 3, 0, 6.283);
+  g.fillStyle = "rgba(" + col + ",.9)";
+  g.fill();
+
+  // 沿途事件
+  g.globalAlpha = 0.95;
+  g.font = "bold 12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  for (const m of A.marks) {
+    const label = m.kind === "fire" ? "烧"
+                : m.kind === "camp" ? "袋"
+                : m.kind === "mud"  ? "泥"
+                : m.kind === "stump" ? "桩"
+                : m.kind === "water" ? "水"
+                : m.kind === "bounce" ? "弹"
+                : m.kind === "portal" ? "洞"
+                : String(m.n);
+    g.lineWidth = 3;
+    g.strokeStyle = "rgba(16,26,20,.85)";
+    g.strokeText(label, m.x, m.y);
+    g.fillStyle = m.kind === "fire" ? "#FFB07A"
+                : m.kind === "camp" ? "#FFE08A"
+                : m.kind === "foe"  ? "#C9F06E"
+                : m.kind === "water" ? "#8FD8F0"
+                : m.kind === "bounce" ? "#B6EE72"
+                : m.kind === "portal" ? "#9FE4FF"
+                : "rgba(220,235,240,.9)";
+    g.fillText(label, m.x, m.y);
+  }
+
+  // 这一球能撞几只 —— 连锁关唯一的决策依据
+  if (A.hits > 0) {
+    g.font = "bold 12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+    g.textAlign = "left";
+    g.fillStyle = "rgba(" + col + ",.95)";
+    g.strokeStyle = "rgba(16,26,20,.85)";
+    g.lineWidth = 3;
+    const tx = last.x + 12, ty = last.y - 14;
+    g.strokeText("撞 " + A.hits, tx, ty);
+    g.fillText("撞 " + A.hits, tx, ty);
+  }
+  g.restore();
+}
+
+function drawAim(g) {
+  for (const b of S.balls) {
+    if (b.dead) continue;
+    // 球停下来 = 玩家正在做决定。这一刻给信息，比让人试错便宜得多。
+    // 滚动中默认不画（画面会很脏），按住 Shift 才全显示。
+    const still = b.onGround && Math.abs(b.vx) < 140;
+    if (!still && !S.aim) continue;
+    const dirs = still ? [-1, 1] : [sign(b.vx)];
+    for (const d of dirs) drawAimLine(g, b, aimFor(b, d), d);
+  }
+}
+
+function drawShot(g, s) {
+  const k = clamp(s.life / s.maxLife, 0, 1);
+
+  /* ---- 溜溜球：一根绳 + 一个转起来的盘。绳子从人身上出去，这条线是"特色"本身 ---- */
+  if (s.kind === "yoyo") {
+    const u = s.u;
+    g.globalAlpha = 1;
+    g.strokeStyle = "#FFF3D6";
+    g.lineWidth = 2.2;
+    g.lineCap = "round";
+    g.beginPath();
+    if (u && !u.dead) {
+      g.moveTo(u.x + s.dir * 14, u.y - 30);
+      g.quadraticCurveTo((u.x + s.x) / 2, Math.min(u.y - 30, s.y) - 16, s.x, s.y);
+    }
+    g.stroke();
+
+    g.save();
+    g.translate(s.x, s.y);
+    g.rotate(s.spin);
+    g.fillStyle = "#FFC94E";
+    g.beginPath();
+    g.arc(0, 0, s.r, 0, 6.283);
+    g.fill();
+    g.strokeStyle = COL.outline;
+    g.lineWidth = 2.4;
+    g.stroke();
+    g.fillStyle = "#FF8A3C";
+    g.beginPath();
+    g.arc(0, 0, s.r * 0.42, 0, 6.283);
+    g.fill();
+    g.strokeStyle = "rgba(255,255,255,.85)";
+    g.lineWidth = 1.6;
+    g.beginPath();
+    g.moveTo(-s.r * 0.8, 0);
+    g.lineTo(s.r * 0.8, 0);
+    g.stroke();
+    g.restore();
+    return;
+  }
+
+  /* ---- 音波：三层弧，向外推，同时向内收窄 ---- */
+  if (s.kind === "wave") {
+    g.globalAlpha = clamp(k * 1.2, 0, 1);
+    g.strokeStyle = s.color;
+    g.lineCap = "round";
+    for (let i = 0; i < 3; i++) {
+      const rr2 = s.r * (0.62 + i * 0.24);
+      g.lineWidth = 6 - i * 1.6;
+      g.globalAlpha = clamp(k * 1.2, 0, 1) * (0.9 - i * 0.22);
+      g.beginPath();
+      if (s.dir > 0) g.arc(s.x, s.y, rr2, -0.95, 0.95);
+      else g.arc(s.x, s.y, rr2, Math.PI - 0.95, Math.PI + 0.95);
+      g.stroke();
+    }
+    g.globalAlpha = 1;
+    return;
+  }
+
+  /* ---- 镰刀：绕人一圈。刀刃要画大 —— 太小就只是"脚下一道白光" ---- */
+  if (s.kind === "sickle") {
+    const R = s.r * 2.0;
+    g.save();
+    g.translate(s.x, s.y);
+    g.rotate(s.spin);
+
+    // 挥过的轨迹：一条淡弧，把"刚才扫过哪"留在画面上
+    g.globalAlpha = 0.30;
+    g.strokeStyle = "#8FE4FF";
+    g.lineWidth = 10;
+    g.lineCap = "round";
+    g.beginPath();
+    g.arc(0, 0, R, -1.9, -0.3);
+    g.stroke();
+    g.globalAlpha = 1;
+
+    // 刀身：外沿亮、内沿暗，中间一条白高光
+    g.strokeStyle = "#5C6B7C";
+    g.lineWidth = 13;
+    g.beginPath();
+    g.arc(0, 0, R, -1.5, 0.42);
+    g.stroke();
+    g.strokeStyle = s.color;
+    g.lineWidth = 9;
+    g.beginPath();
+    g.arc(0, 0, R, -1.5, 0.42);
+    g.stroke();
+    g.strokeStyle = "#FFFFFF";
+    g.lineWidth = 3;
+    g.beginPath();
+    g.arc(0, 0, R + 1.5, -1.4, 0.3);
+    g.stroke();
+
+    // 刀柄：从弧尾往圆心方向伸出
+    g.strokeStyle = "#7A5230";
+    g.lineWidth = 7;
+    g.lineCap = "round";
+    g.beginPath();
+    g.moveTo(Math.cos(0.42) * R, Math.sin(0.42) * R);
+    g.lineTo(Math.cos(0.42) * (R - 24), Math.sin(0.42) * (R - 24));
+    g.stroke();
+    g.restore();
+    return;
+  }
+
+  /* ---- 坚果：贴地滚，带旋转的纹路 ---- */
+  if (s.kind === "nut") {
+    g.globalAlpha = 1;
+    g.save();
+    g.translate(s.x, s.y);
+    g.rotate(s.spin);
+    g.fillStyle = s.color;
+    g.beginPath();
+    g.arc(0, 0, s.r, 0, 6.283);
+    g.fill();
+    g.strokeStyle = COL.outline;
+    g.lineWidth = 2.4;
+    g.stroke();
+    g.strokeStyle = "rgba(255,236,196,.8)";
+    g.lineWidth = 2;
+    g.beginPath();
+    g.arc(0, 0, s.r * 0.62, -0.6, 1.9);
+    g.stroke();
+    g.beginPath();
+    g.arc(0, 0, s.r * 0.62, 2.1, 4.4);
+    g.stroke();
+    g.restore();
+    return;
+  }
+
+  /* ---- 萝卜炮：一颗带绿叶的胡萝卜，翻滚 ---- */
+  if (s.kind === "lob") {
+    g.globalAlpha = 1;
+    g.save();
+    g.translate(s.x, s.y);
+    g.rotate(s.spin);
+    g.fillStyle = s.color;
+    g.beginPath();
+    g.moveTo(-11, -6);
+    g.quadraticCurveTo(4, -11, 12, 0);
+    g.quadraticCurveTo(4, 11, -11, 6);
+    g.closePath();
+    g.fill();
+    g.strokeStyle = COL.outline;
+    g.lineWidth = 2;
+    g.stroke();
+    g.fillStyle = "#5FBF5A";
+    g.beginPath();
+    g.ellipse(-13, -4, 6, 3.4, -0.5, 0, 6.283);
+    g.ellipse(-13, 4, 5, 3, 0.5, 0, 6.283);
+    g.fill();
+    g.restore();
+    return;
+  }
+
+  /* ---- 影分身：三只小狐影平推。要有尖耳和尖吻，否则读起来只是三个白团 ---- */
+  if (s.kind === "shadow") {
+    const a = clamp(k * 1.5, 0, 1);
+    const dir = s.dir || 1;
+    const drawFox = (cx, cy, sc, alpha, body) => {
+      g.globalAlpha = alpha;
+      g.fillStyle = body;
+      g.beginPath();
+      g.ellipse(cx, cy, s.r * 1.0 * sc, s.r * 0.72 * sc, 0, 0, 6.283);
+      g.fill();
+      // 尖吻（朝飞行方向）
+      g.beginPath();
+      g.moveTo(cx + dir * s.r * 0.7 * sc, cy - s.r * 0.16 * sc);
+      g.lineTo(cx + dir * s.r * 1.7 * sc, cy + s.r * 0.10 * sc);
+      g.lineTo(cx + dir * s.r * 0.66 * sc, cy + s.r * 0.42 * sc);
+      g.closePath();
+      g.fill();
+      // 两只尖耳
+      for (const sd of [-1, 1]) {
+        g.beginPath();
+        g.moveTo(cx + sd * s.r * 0.62 * sc - dir * s.r * 0.1 * sc, cy - s.r * 0.30 * sc);
+        g.lineTo(cx + sd * s.r * 0.42 * sc - dir * s.r * 0.2 * sc, cy - s.r * 1.24 * sc);
+        g.lineTo(cx + sd * s.r * 0.12 * sc - dir * s.r * 0.2 * sc, cy - s.r * 0.52 * sc);
+        g.closePath();
+        g.fill();
+      }
+      // 一条甩起来的尾巴
+      g.strokeStyle = body;
+      g.lineWidth = s.r * 0.34 * sc;
+      g.lineCap = "round";
+      g.beginPath();
+      g.moveTo(cx - dir * s.r * 0.85 * sc, cy + s.r * 0.1 * sc);
+      g.quadraticCurveTo(cx - dir * s.r * 1.6 * sc, cy - s.r * 0.5 * sc,
+                         cx - dir * s.r * 1.35 * sc, cy - s.r * 1.0 * sc);
+      g.stroke();
+    };
+
+    // 拖尾
+    for (let t = 3; t >= 1; t--) {
+      drawFox(s.x - dir * t * 16, s.y, 1 - t * 0.10, a * 0.16 * (4 - t) / 3, s.color);
+    }
+    // 本体
+    drawFox(s.x, s.y, 1, a, "#EDE6FF");
+    g.globalAlpha = a;
+    // 眼睛
+    g.fillStyle = "#3B2E6B";
+    g.beginPath();
+    g.arc(s.x + dir * s.r * 0.28, s.y - s.r * 0.12, s.r * 0.13, 0, 6.283);
+    g.arc(s.x + dir * s.r * 0.62, s.y - s.r * 0.10, s.r * 0.13, 0, 6.283);
+    g.fill();
+    g.globalAlpha = 1;
+    return;
+  }
+
+  // 兜底：一个带拖尾的圆
+  g.globalAlpha = clamp(k * 1.6, 0, 1);
+  g.fillStyle = s.color;
+  g.beginPath();
+  g.arc(s.x, s.y, s.r * (0.8 + k * 0.2), 0, 6.283);
+  g.fill();
   g.globalAlpha = 1;
 }
 
@@ -1951,13 +3444,117 @@ function drawShot(g, s) {
    16. 绘制：HUD 与选择界面
    ========================================================================== */
 
+/* ----------------------------------------------------------------------------
+   目标进度 / 判定
+   ---------------------------------------------------------------------------- */
+
+function goalProgress() {
+  const st = curStage();
+  const done = S.killed >= S.total;
+  if (st.goal === "limit") {
+    const left = Math.max(0, st.ballLimit - S.stat.made);
+    return {
+      text: "球 " + S.stat.made + " / " + st.ballLimit + (done ? "" : " · 已清 " + S.killed + "/" + S.total),
+      frac: S.stat.made / st.ballLimit, done,
+    };
+  }
+  if (st.goal === "chain") {
+    return {
+      text: "最大 x" + S.stat.maxHolds + " / " + st.chain + (done ? "" : " · 已清 " + S.killed + "/" + S.total),
+      frac: S.stat.maxHolds / st.chain,
+      done: S.stat.maxHolds >= st.chain,
+    };
+  }
+  if (st.goal === "bank") {
+    return {
+      text: "落袋 " + S.stat.bankHolds + " / " + st.bank + (done ? "" : " · 已清 " + S.killed + "/" + S.total),
+      frac: S.stat.bankHolds / st.bank,
+      done: S.stat.bankHolds >= st.bank,
+    };
+  }
+  if (st.goal === "collect") {
+    return {
+      text: "收成 " + S.food + " / " + st.collect + (done ? "" : " · 已清 " + S.killed + "/" + S.total),
+      frac: S.food / st.collect,
+      done: S.food >= st.collect,
+    };
+  }
+  // 两种"不许犯错"的目标：数字越小越好，进度条反着走
+  if (st.goal === "intact") {
+    return {
+      text: "崩开 " + S.stat.burst + " 次 · 一次都不行" + (done ? "" : " · 已清 " + S.killed + "/" + S.total),
+      frac: S.stat.burst === 0 ? 1 : 0,
+      done: S.stat.burst === 0,
+    };
+  }
+  if (st.goal === "nohit") {
+    return {
+      text: "挨打 " + S.stat.hits + " 次 · 一次都不行" + (done ? "" : " · 已清 " + S.killed + "/" + S.total),
+      frac: S.stat.hits === 0 ? 1 : 0,
+      done: S.stat.hits === 0,
+    };
+  }
+  return {
+    text: "剩余 " + (S.total - S.killed) + " 只 · 球 " + S.stat.made,
+    frac: S.killed / Math.max(1, S.total), done,
+  };
+}
+
+/** 结算评价：时间达标 +1 分，球数达标 +1 分。2 分 S，1 分 A，0 分 B */
+function rate() {
+  const st = curStage();
+  let sc = 0;
+  if (S.playT <= st.par.time) sc++;
+  if (S.stat.made <= st.par.made) sc++;
+  return sc >= 2 ? "S" : sc === 1 ? "A" : "B";
+}
+
+/* 关卡轨迹：顶上一排点。推关的「进度感」全靠这一条 ——
+   没有它，玩家打第 5 关和打第 1 关的感觉是一样的。 */
+function drawTrail(g) {
+  const n = LEVELS.length;
+  const gap = 22;
+  const cx = W / 2;
+  const total = (n - 1) * gap;
+
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.font = "bold 13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  g.lineWidth = 3.4;
+  g.strokeStyle = "rgba(6,20,14,.55)";
+  const label = "第 " + (S.stage + 1) + " / " + n + " 关   " + curStage().name;
+  g.strokeText(label, cx, 22);
+  g.fillStyle = "rgba(255,255,255,.94)";
+  g.fillText(label, cx, 22);
+
+  for (let i = 0; i < n; i++) {
+    const x = cx - total / 2 + i * gap;
+    const y = 45;
+    const done = i < S.stage;
+    const cur = i === S.stage;
+    g.beginPath();
+    g.arc(x, y, cur ? 6 : 4.2, 0, 6.283);
+    g.fillStyle = cur ? "#FFE066" : done ? "#B9F06A" : "rgba(255,255,255,.26)";
+    g.fill();
+    if (cur) {
+      g.strokeStyle = "rgba(255,224,102,.55)";
+      g.lineWidth = 2.4;
+      g.beginPath();
+      g.arc(x, y, 10 + Math.sin(S.t * 4) * 1.6, 0, 6.283);
+      g.stroke();
+    }
+  }
+}
+
 function drawHUD(g) {
   const p = S.p;
   if (!p) return;
   const H = HEROES[p.hero];
 
+  drawTrail(g);
+
   // 左上：角色 + 心
-  g.fillStyle = "rgba(12,26,20,.55)";
+  g.fillStyle = "rgba(12,26,20,.72)";
   rr(g, 16, 14, 236, 62, 14);
   g.fill();
   g.strokeStyle = "rgba(255,255,255,.14)";
@@ -2000,44 +3597,61 @@ function drawHUD(g) {
     g.fill();
   }
 
-  // 右上：收成 + 剩余
-  g.fillStyle = "rgba(12,26,20,.55)";
-  rr(g, W - 246, 14, 230, 62, 14);
+  // 右上：目标 + 进度
+  // 底色 0.72 不是随手定的：这一块正好压在顶部树冠上，0.55 的时候
+  // 树冠的黑影会透过来，目标名读不清（截图里第一眼就发现了）
+  g.fillStyle = "rgba(12,26,20,.72)";
+  rr(g, W - 268, 14, 252, 140, 14);
   g.fill();
   g.strokeStyle = "rgba(255,255,255,.14)";
   g.lineWidth = 1.5;
   g.stroke();
 
-  g.fillStyle = "#FFD86B";
-  g.beginPath();
-  g.arc(W - 214, 38, 11, 0, 6.283);
-  g.fill();
-  g.fillStyle = "#8A6430";
-  g.beginPath();
-  g.arc(W - 214, 34, 3.4, 0, 6.283);
-  g.fill();
+  const SI = curStage();
+  g.textAlign = "left";
+  g.textBaseline = "middle";
+  g.fillStyle = "rgba(200,230,200,.72)";
+  g.font = "12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  g.fillText("第 " + (S.stage + 1) + " 关   " + SI.name, W - 250, 36);
 
   g.fillStyle = "#FFE9B0";
-  g.font = "bold 24px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.textAlign = "left";
-  g.fillText(String(S.food), W - 196, 40);
+  g.font = "bold 18px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  g.fillText(curGoal().name, W - 250, 60);
 
-  const alive = S.foes.filter(f => !f.dead).length;
-  g.fillStyle = "rgba(210,235,210,.8)";
-  g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.textAlign = "right";
-  g.fillText("剩余 " + alive, W - 32, 34);
-  g.fillStyle = "rgba(190,220,190,.55)";
+  // 进度条：目标数值 / 当前值。四关共用一条，字换，形状不换。
+  const pr = goalProgress();
+  g.fillStyle = "rgba(255,255,255,.13)";
+  rr(g, W - 250, 76, 216, 8, 4);
+  g.fill();
+  if (pr.frac > 0) {
+    g.fillStyle = pr.done ? "#B9F06A" : "#8ED6F0";
+    rr(g, W - 250, 76, Math.max(4, 216 * clamp(pr.frac, 0, 1)), 8, 4);
+    g.fill();
+  }
+  g.fillStyle = pr.done ? "#D6FFA8" : "rgba(220,240,225,.85)";
   g.font = "12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.fillText("已清 " + S.cleared, W - 32, 54);
+  g.fillText(pr.text, W - 250, 97);
+
+  // 收成：同一块面板里，别飘到外面去
+  g.fillStyle = "#FFD86B";
+  g.beginPath();
+  g.arc(W - 243, 120, 7, 0, 6.283);
+  g.fill();
+  g.fillStyle = "#FFE9B0";
+  g.font = "bold 15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  g.fillText("收成 " + S.food, W - 228, 120);
+
+  g.fillStyle = "rgba(190,220,190,.45)";
+  g.font = "11px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  g.fillText("ESC 回选人   ·   R 重来   ·   Shift 看全部预测线", W - 250, 140);
 
   // 底部操作提示（前 8 秒）
-  if (S.t < 8) {
-    g.globalAlpha = clamp((8 - S.t) / 3, 0, 1) * 0.8;
+  if (S.playT < 8) {
+    g.globalAlpha = clamp((8 - S.playT) / 3, 0, 1) * 0.8;
     g.fillStyle = "#E8F6DC";
     g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
     g.textAlign = "center";
-    g.fillText("← → 移动   ·   空格 跳   ·   J 喷裹   ·   K 撞飞   ·   走进球里推它", W / 2, H - 22);
+    g.fillText("← → 移动   ·   空格 跳   ·   J 喷裹   ·   K 撞飞   ·   走进球里推它   ·   Shift 看全部预测线", W / 2, H - 22);
     g.globalAlpha = 1;
   }
 }
@@ -2054,7 +3668,7 @@ function drawSelect(g) {
 
   g.fillStyle = "rgba(200,230,200,.6)";
   g.font = "14px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.fillText("一局只带一只。它们的「喷」手感完全不同 —— 按 1–6 或点击", W / 2, 92);
+  g.fillText(S.progress > 0 ? ("从第 " + (S.progress + 1) + " 关继续 —— 六只的手感完全不同，按 1–6 或点击") : "一局只带一只。六把武器六种手感 —— 按 1–6 或点击", W / 2, 92);
 
   const cw = 268, chh = 176, gapx = 22, gapy = 20;
   const totalW = cw * 3 + gapx * 2;
@@ -2111,6 +3725,28 @@ function drawSelect(g) {
    17. 主循环
    ========================================================================== */
 
+function checkGoal() {
+  const st = curStage();
+  if (S.killed < S.total) return false;
+  if (st.goal === "limit") return S.stat.made <= st.ballLimit;
+  if (st.goal === "chain") return S.stat.maxHolds >= st.chain;
+  if (st.goal === "bank")  return S.stat.bankHolds >= st.bank;
+  if (st.goal === "collect") return S.food >= st.collect;
+  if (st.goal === "intact")  return S.stat.burst === 0;
+  if (st.goal === "nohit")   return S.stat.hits === 0;
+  return true;
+}
+
+function goalFailWhy() {
+  const st = curStage();
+  if (st.goal === "chain") return "人都送走了，但没有一颗球装够 " + st.chain + " 只（最大 x" + S.stat.maxHolds + "）";
+  if (st.goal === "bank")  return "人都送走了，但从营地过的只有 " + S.stat.bankHolds + " 只（要 " + st.bank + " 只）";
+  if (st.goal === "collect") return "人都送走了，但收成只有 " + S.food + "（要 " + st.collect + "）—— 火坑 ×2 才是正路";
+  if (st.goal === "intact")  return "人都送走了，但崩了 " + S.stat.burst + " 颗球（一次都不许）";
+  if (st.goal === "nohit")   return "人都送走了，但挨了 " + S.stat.hits + " 下（一次都不许）";
+  return "人都送走了，但用了 " + S.stat.made + " 颗球（只给 " + st.ballLimit + " 颗）";
+}
+
 function tick(dt) {
   S.t += dt;
 
@@ -2120,6 +3756,7 @@ function tick(dt) {
   }
 
   if (S.phase === "play") {
+    S.playT += dt;
     updatePlayer(dt);
     for (const f of S.foes) updateFoe(f, dt);
     updateShots(dt);
@@ -2130,12 +3767,40 @@ function tick(dt) {
     for (let i = 0; i < S.foes.length; i++) if (!S.foes[i].dead) S.foes[w++] = S.foes[i];
     S.foes.length = w;
 
-    // 胜利判定：场上没人了，而且没有还在滚的球（球里装着人）
+    // 收工判定：场上没人，且没有还在滚的球（球里装着人）
     if (S.foes.length === 0 && S.balls.length === 0 && S.phase === "play") {
-      S.phase = "clear";
-      S.food += 3;   // 清场奖励
-      addText(W / 2, 280, "空地清干净了", "#FFE9B0", 32, 2.2);
+      if (checkGoal()) {
+        S.phase = "clear";
+        S.food += 3;   // 清场奖励
+        const rk = rate();
+        const ORD2 = { B: 1, A: 2, S: 3 };
+        const idx = S.stage;
+        if (!S.best[idx] || ORD2[rk] > ORD2[S.best[idx]]) S.best[idx] = rk;
+        S.progress = Math.max(S.progress, S.stage + 1);
+        saveProgress();
+        addText(W / 2, 250, "这一屏清干净了", "#FFE9B0", 32, 2.2);
+      } else {
+        S.phase = "fail";
+        S.failWhy = goalFailWhy();
+      }
     }
+
+    // 死局：限球关额度用完、场上没球、还有人没送走 —— 这局没救了。
+    // 直接判负比让人干等着好，留一个"还能翻"的假象最伤。
+    if (S.phase === "play" && curStage().goal === "limit") {
+      const st = curStage();
+      const alive = S.foes.length;
+      if (st.ballLimit - S.stat.made <= 0 && S.balls.length === 0 && alive > 0) {
+        S.phase = "fail";
+        S.failWhy = "球用完了，还有 " + alive + " 只没送走";
+      }
+    }
+  }
+
+  // 通关面板停留 3 秒自动推进。想多看一会儿就按住 Shift（按住时暂停倒计时）。
+  if (S.phase === "clear" && !S.aim) {
+    S.clearT += dt;
+    if (S.clearT > 3.0) nextLevel();
   }
 
   tickFx(dt);
@@ -2157,7 +3822,10 @@ function render() {
   drawForest(false);
   drawLevel();
 
-  if (S.phase !== "select") {
+  if (S.phase === "play" || S.phase === "clear" || S.phase === "fail") {
+    // 预测线画在关卡之上、单位之下：它属于"地形信息"，不属于"角色"
+    if (S.phase === "play") drawAim(g);
+
     // 按 y 排序：后面的先画，前面的盖住后面的
     const units = [];
     for (const f of S.foes) units.push({ y: f.y, d: () => drawFoe(g, f) });
@@ -2191,17 +3859,62 @@ function render() {
 
     for (const s of S.shots) drawShot(g, s);
 
-    // 地上的果子
+    // 地上的掉落物。每一种长得不一样 —— "惊喜感"的一半来自"一眼认出这是什么"
     for (const d of S.drops) {
       if (d.taken) continue;
-      g.fillStyle = "#FF6B5E";
+      const K = DROP_KINDS[d.kind] || DROP_KINDS.fruit;
+      const bob = Math.sin((d.t || 0) * 4 + (d.spin || 0)) * 1.6;
+      const dy = d.y + bob;
+
+      // 落地一圈微光，草丛里也能看见
+      const glow = g.createRadialGradient(d.x, dy, 1, d.x, dy, 16);
+      glow.addColorStop(0, K.ring);
+      glow.addColorStop(1, "rgba(255,255,255,0)");
+      g.globalAlpha = 0.42;
+      g.fillStyle = glow;
       g.beginPath();
-      g.arc(d.x, d.y, 7, 0, 6.283);
+      g.arc(d.x, dy, 16, 0, 6.283);
       g.fill();
-      g.fillStyle = "#5DA84E";
-      g.beginPath();
-      g.ellipse(d.x + 3, d.y - 7, 5, 2.6, -0.5, 0, 6.283);
-      g.fill();
+      g.globalAlpha = 1;
+
+      if (d.kind === "gem") {
+        g.fillStyle = K.color;
+        g.beginPath();
+        g.moveTo(d.x, dy - 11); g.lineTo(d.x + 8, dy); g.lineTo(d.x, dy + 11); g.lineTo(d.x - 8, dy);
+        g.closePath(); g.fill();
+        g.fillStyle = "rgba(255,255,255,.75)";
+        g.beginPath();
+        g.moveTo(d.x, dy - 8); g.lineTo(d.x + 4, dy - 1); g.lineTo(d.x, dy + 2); g.lineTo(d.x - 4, dy - 1);
+        g.closePath(); g.fill();
+      } else if (d.kind === "air") {
+        g.fillStyle = K.color;
+        rr(g, d.x - 7, dy - 10, 14, 20, 5);
+        g.fill();
+        g.fillStyle = "rgba(255,255,255,.8)";
+        rr(g, d.x - 3, dy - 6, 4, 10, 2);
+        g.fill();
+      } else if (d.kind === "heart") {
+        g.fillStyle = K.color;
+        g.beginPath();
+        g.arc(d.x - 5, dy - 3, 5.4, 0, 6.283);
+        g.arc(d.x + 5, dy - 3, 5.4, 0, 6.283);
+        g.fill();
+        g.beginPath();
+        g.moveTo(d.x - 10, dy - 1); g.lineTo(d.x, dy + 10); g.lineTo(d.x + 10, dy - 1);
+        g.closePath(); g.fill();
+      } else if (d.kind === "berry") {
+        g.fillStyle = K.color;
+        for (const [ox, oy] of [[-5, 2], [5, 2], [0, -5]]) {
+          g.beginPath(); g.arc(d.x + ox, dy + oy, 6, 0, 6.283); g.fill();
+        }
+        g.fillStyle = "rgba(255,255,255,.6)";
+        g.beginPath(); g.arc(d.x - 6, dy - 6, 1.8, 0, 6.283); g.fill();
+      } else {
+        g.fillStyle = K.color;
+        g.beginPath(); g.arc(d.x, dy, 7.5, 0, 6.283); g.fill();
+        g.fillStyle = "#5DA84E";
+        g.beginPath(); g.ellipse(d.x + 3, dy - 7, 5, 2.6, -0.5, 0, 6.283); g.fill();
+      }
     }
 
     // 粒子
@@ -2240,26 +3953,135 @@ function render() {
 
     // 结算
     if (S.phase === "clear" || S.phase === "fail") {
-      g.fillStyle = "rgba(8,18,14,.7)";
-      g.fillRect(0, 0, W, H);
       const ok = S.phase === "clear";
+      const cx = W / 2;
+      const st = curStage();
+
+      // 先整体压暗，再盖一张实心卡片。
+      // 只压暗不盖卡片的话，平台木条和敌人会直接穿过结算文字 ——
+      // 截图里"造球 4 · 崩开 0"那行正好压在木条上，读不出来。
+      g.fillStyle = ok ? "rgba(6,14,10,.80)" : "rgba(18,6,10,.84)";
+      g.fillRect(0, 0, W, H);
+
+      const cardY = 62, cardH = 476;
+      g.fillStyle = "rgba(20,34,28,.97)";
+      rr(g, cx - 274, cardY, 548, cardH, 22);
+      g.fill();
+      g.strokeStyle = ok ? "rgba(185,240,106,.34)" : "rgba(255,158,142,.32)";
+      g.lineWidth = 2;
+      g.stroke();
+
+      // 顶部彩条：一句话交代"你打到了哪"
+      g.fillStyle = ok ? "#B9F06A" : "#FF9E8E";
+      rr(g, cx - 274, cardY, 548, 6, 3);
+      g.fill();
+
       g.textAlign = "center";
       g.textBaseline = "middle";
+
+      g.fillStyle = "rgba(196,224,204,.62)";
+      g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+      g.fillText("第 " + (S.stage + 1) + " / " + LEVELS.length + " 关   ·   " + st.sub, cx, cardY + 34);
+
+      g.fillStyle = "#F2FBEC";
+      g.font = "bold 27px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+      g.fillText(st.name + "   ·   " + curGoal().name, cx, cardY + 68);
+
       g.fillStyle = ok ? "#B9F06A" : "#FF9E8E";
-      g.font = "bold 42px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-      g.fillText(ok ? "满载而归" : "饿晕了…", W / 2, 236);
+      g.font = "bold 17px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+      g.fillText(ok ? "过关" : "没做到", cx, cardY + 100);
 
+      // 评价：只在达标时给。失败了不给评级 —— 评级是奖励，不是羞辱
+      if (ok) {
+        const rk = rate();
+        const rcol = rk === "S" ? "#FFE58A" : rk === "A" ? "#B9F06A" : "#9FC8B4";
+        g.fillStyle = rcol;
+        g.font = "bold 84px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+        g.fillText(rk, cx, cardY + 172);
+        g.fillStyle = "rgba(200,230,200,.55)";
+        g.font = "12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+        g.fillText("S = 用时 ≤ " + st.par.time + "s 且 造球 ≤ " + st.par.made + " 颗", cx, cardY + 220);
+      } else {
+        g.fillStyle = "#FFD3C8";
+        g.font = "15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+        g.fillText(S.failWhy || "饿晕了…", cx, cardY + 160);
+      }
+
+      // 数据：一行够用，字要小、颜色要退，别和评级抢
       g.fillStyle = "#EAF6E2";
-      g.font = "bold 26px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-      g.fillText("收成 " + S.food + " 份", W / 2, 296);
+      g.font = "bold 16px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+      g.fillText("送走 " + S.killed + " / " + S.total + " 只", cx, cardY + 258);
 
-      g.fillStyle = "rgba(200,230,200,.7)";
-      g.font = "15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-      g.fillText("清掉 " + S.cleared + " / " + S.total + " 只 · 用时 " + S.t.toFixed(1) + " 秒", W / 2, 336);
+      let goalLine = "";
+      if (st.goal === "limit") goalLine = "用球 " + S.stat.made + " / " + st.ballLimit + " 颗";
+      else if (st.goal === "chain") goalLine = "最大一球 x" + S.stat.maxHolds + "（要 " + st.chain + "）";
+      else if (st.goal === "bank") goalLine = "从营地走 " + S.stat.bankHolds + " 只（要 " + st.bank + "）";
+      else if (st.goal === "collect") goalLine = "收成 " + S.food + " / " + st.collect + "（火坑 ×2）";
+      else if (st.goal === "intact") goalLine = "崩开 " + S.stat.burst + " 次（要 0）";
+      else if (st.goal === "nohit") goalLine = "挨打 " + S.stat.hits + " 次（要 0）";
+      if (goalLine) {
+        g.fillStyle = "rgba(200,230,200,.85)";
+        g.font = "14px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+        g.fillText(goalLine, cx, cardY + 286);
+      }
 
-      g.fillStyle = "#B9F06A";
-      g.font = "bold 15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-      g.fillText("按 R 再来一趟（换一只试试）", W / 2, 396);
+      g.fillStyle = "rgba(200,230,200,.58)";
+      g.font = "12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+      g.fillText("用时 " + S.playT.toFixed(1) + "s   ·   造球 " + S.stat.made +
+                "   ·   崩开 " + S.stat.burst + "   ·   收成 " + S.food, cx, cardY + 314);
+
+      // 分隔线
+      g.strokeStyle = "rgba(255,255,255,.10)";
+      g.lineWidth = 1;
+      g.beginPath();
+      g.moveTo(cx - 200, cardY + 336);
+      g.lineTo(cx + 200, cardY + 336);
+      g.stroke();
+
+      // ---- 下一关预告：这是"推关"的关键。人得知道后面还有东西 ----
+      const last = S.stage + 1 >= LEVELS.length;
+      if (ok) {
+        if (last) {
+          g.fillStyle = "#FFE58A";
+          g.font = "bold 21px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+          g.fillText("全部通关！", cx, cardY + 372);
+          g.fillStyle = "rgba(200,230,200,.62)";
+          g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+          g.fillText("八个场地都清干净了   ·   按 ESC 换个角色再来一遍", cx, cardY + 402);
+        } else {
+          const nx = LEVELS[S.stage + 1];
+          g.fillStyle = "rgba(190,220,200,.55)";
+          g.font = "12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+          g.fillText("下一关", cx, cardY + 362);
+          g.fillStyle = "#EAF6E2";
+          g.font = "bold 19px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+          g.fillText((S.stage + 2) + ". " + nx.name + "   ·   " + nx.sub, cx, cardY + 390);
+          g.fillStyle = "rgba(185,240,106,.72)";
+          g.font = "12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+          g.fillText(nx.note, cx, cardY + 416);
+        }
+      } else {
+        g.fillStyle = "#FFD3C8";
+        g.font = "14px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+        g.fillText("重打本关：换个思路，先卷一个再推", cx, cardY + 380);
+      }
+
+      // 倒计时条：3 秒自动走。按住 Shift 暂停，读得慢的人不会被抢
+      if (ok) {
+        const k = clamp(1 - S.clearT / 3.0, 0, 1);
+        g.fillStyle = "rgba(255,255,255,.10)";
+        rr(g, cx - 130, cardY + 438, 260, 5, 3);
+        g.fill();
+        g.fillStyle = "rgba(185,240,106,.72)";
+        rr(g, cx - 130, cardY + 438, Math.max(2, 260 * k), 5, 3);
+        g.fill();
+      }
+
+      g.fillStyle = "rgba(200,230,200,.62)";
+      g.font = "bold 13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+      g.fillText(ok
+        ? (last ? "回车 / 点击  回选人" : "回车 / 点击  立即下一关   ·   R 重打   ·   ESC 回选人")
+        : "回车 / 点击  重打本关   ·   ESC 回选人", cx, cardY + 458);
     }
   } else {
     drawSelect(g);
@@ -2277,7 +4099,7 @@ function render() {
   g.restore();
 }
 
-/* ---------- 鼠标悬停 / 点击选人 ---------- */
+/* ---------- 鼠标悬停 / 点击 ---------- */
 function hitSelect(mx, my) {
   const cw = 268, chh = 176, gapx = 22, gapy = 20;
   const totalW = cw * 3 + gapx * 2;
@@ -2299,16 +4121,19 @@ function toLocal(ev) {
 }
 
 cv.addEventListener("mousemove", (ev) => {
-  if (S.phase !== "select") return;
   const loc = toLocal(ev);
-  S.hover = hitSelect(loc.x, loc.y);
+  if (S.phase === "select") S.hover = hitSelect(loc.x, loc.y);
 });
 
 cv.addEventListener("mousedown", (ev) => {
-  if (S.phase !== "select") return;
   const loc = toLocal(ev);
-  const i = hitSelect(loc.x, loc.y);
-  if (i >= 0) { S.heroIdx = i; beginRun(); }
+  if (S.phase === "select") {
+    const i = hitSelect(loc.x, loc.y);
+    if (i >= 0) { S.heroIdx = i; beginRun(S.progress); }
+    return;
+  }
+  // 结算界面点一下 = 继续（下一关 / 重打本关）
+  if (S.phase === "clear" || S.phase === "fail") nextLevel();
 });
 
 /* ---------- 启动 ---------- */
@@ -2321,6 +4146,7 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
+loadProgress();
 resetRun();
 if (typeof requestAnimationFrame === "function") {
   requestAnimationFrame(frame);
@@ -2334,10 +4160,12 @@ if (typeof requestAnimationFrame === "function") {
 
 /* ---------- 调试导出 ---------- */
 window.GROVE = {
-  S, HEROES, FOES, PLATS, PITS, STUMPS, CAMP,
+  S, HEROES, FOES, GOALS, LEVELS, THEMES,
   resetRun, beginRun, tick, render,
   setupLevel, updatePlayer, updateFoe, updateShots, updateBalls,
   coatFoe, makeBallFrom, burstBall, spawnShot,
+  predictBall, aimFor, ballBudget, checkGoal, rate, goalProgress,
+  curStage, curGoal, loadLevel, rampAt, nextLevel, saveProgress,
   hitSelect,
   // 模拟按键：既要置"按住"状态，也要置"本帧按下"的边沿。
   // 只置 keys 的话，atk / dash / jump 这三个读边沿的动作全部不触发 ——
@@ -2347,8 +4175,26 @@ window.GROVE = {
     if (!S.keys[k]) S.press[k] = true;
     S.keys[k] = true;
   },
-  _start(i) { S.heroIdx = i === undefined ? 0 : i; beginRun(); },
+  /** _start(角色, 关卡) —— 省略关卡就用当前这一关 */
+  _start(hero, stage) {
+    S.heroIdx = hero === undefined ? 0 : hero;
+    beginRun(stage === undefined ? S.stage : stage);
+  },
 };
+
+// PLATS / PITS / STUMPS / CAMP 是 let（换屏会整个替换），
+// 导出时必须用 getter，否则外面拿到的是第一屏的旧数组 —— 测试会假通过。
+Object.defineProperty(window.GROVE, "PLATS", { get: () => PLATS });
+Object.defineProperty(window.GROVE, "PITS",  { get: () => PITS });
+Object.defineProperty(window.GROVE, "STUMPS", { get: () => STUMPS });
+Object.defineProperty(window.GROVE, "CAMP",  { get: () => CAMP });
+Object.defineProperty(window.GROVE, "SPAWNS", { get: () => SPAWNS });
+Object.defineProperty(window.GROVE, "PLAYER_SPAWN", { get: () => PLAYER_SPAWN });
+Object.defineProperty(window.GROVE, "RAMPS", { get: () => RAMPS });
+Object.defineProperty(window.GROVE, "BOUNCERS", { get: () => BOUNCERS });
+Object.defineProperty(window.GROVE, "PORTALS", { get: () => PORTALS });
+window.GROVE.WALL_L = WALL_L;
+window.GROVE.WALL_R = WALL_R;
 </script>
 </body>
 </html>

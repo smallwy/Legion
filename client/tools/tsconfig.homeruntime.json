@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2015",
+    "module": "ES2015",
+    "moduleResolution": "node",
+    "strict": true,
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": []
+  },
+  "include": [
+    "../assets/scripts/HomeRuntime.ts",
+    "../temp/declarations/cc.d.ts",
+    "../temp/declarations/cc.custom-macro.d.ts",
+    "../temp/declarations/jsb.d.ts",
+    "../temp/declarations/cc.env.d.ts"
+  ]
+}

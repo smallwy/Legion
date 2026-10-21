@@ -15,11 +15,12 @@
     10. 八关几何：竖井能下到地面 / 木桩不站坑里不挡落点 / **营地推得到**
     11. 目标系统：限球额度 / 连锁计数 / 落袋按只数
     12. 漏气速率：停着约 11 秒、卷人回气
-    13. 预瞄线：画出来的路径必须和实际推出去的结果一致
+     13. 预瞄线：画出来的路径必须和实际推出去的结果一致
+    24. 一趟：饱食 / 连锁倍率 / 收工回家 / 关卡内台词 / 结算面板能渲染
 
    运行：
-     node grove-smoke.js            ← 秒级，不跑机器人（109 项）
-     ALL9=1 node grove-smoke.js     ← 加跑八关巡回 + 7 条设计断言，共 171 项（约 3 分钟）
+     node grove-smoke.js            ← 秒级，不跑机器人（358 项）
+     ALL9=1 node grove-smoke.js     ← 加跑八关巡回 + 设计断言，共 368 项（约 3 分钟）
      TRACE=1 ...                    ← 机器人跑动时每 5 秒打一行状态
 
    机器人逻辑在 grove-bot.js（和 grove-diag.js 共用一份），
@@ -62,6 +63,9 @@ function mkCtx() {
     save: noop, restore: noop, translate: noop, rotate: noop, scale: noop,
     beginPath: noop, closePath: noop, moveTo: noop, lineTo: noop,
     arc: noop, ellipse: noop, bezierCurveTo: noop, quadraticCurveTo: noop,
+    // rect 是 drawTree 的树干在用的。桩缺方法时只会在"真的去渲染"的那条
+    // 测试里炸 —— 而之前没有任何一条测试调 render()，所以它一直没被发现。
+    rect: noop, roundRect: noop,
     fill: noop, stroke: noop, clip: noop,
     fillRect: noop, strokeRect: noop, clearRect: noop,
     fillText: noop, strokeText: noop,
@@ -1736,6 +1740,208 @@ console.log("\n=== 22. 第八轮：冰壳 / 球撞球 / 助跑推 / 横向施法
     P._start(0, 0);
     eq(S.aim, false, "预瞄线默认是关的（球滚动的轨迹不显示）");
   }
+}
+
+/* ============================================================================
+   24. 一趟：饱食 / 倍率 / 收工回家
+   ----------------------------------------------------------------------------
+   这一段测的是这次新增的三件事，它们全在"关与关之间"，不在战斗里：
+     · 越往里走越饿（belly 每关 -16，全饿收走冲刺）
+     · 连锁倍率（只有收工才结算 → "贪一关"有收益也有代价）
+     · 关卡内台词（第一颗球 / 一球三只 / 结算那句）
+   ========================================================================== */
+
+/** 不跑机器人，直接把这一关判成"清干净了" */
+function forceClear(P, S, food) {
+  S.foes.length = 0;
+  S.balls.length = 0;
+  S.wave = P.WAVES.length - 1;
+  S.waveGap = 0;
+  S.killed = S.total;
+  S.food = food === undefined ? 10 : food;
+  // 把所有目标的判据一次性满足 —— 这一段测的是"趟"，不是哪一关的目标
+  S.stat.made = 0;
+  S.stat.maxHolds = 99;
+  S.stat.bankHolds = 99;
+  S.stat.burst = 0;
+  S.stat.hits = 0;
+  P.tick(1 / 60);
+}
+
+console.log("\n=== 24a. 一关 = 一顿饭：肚子掉一档、倍率涨一档 ===");
+{
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+  P._start(0, 0);
+  eq(S.belly, 100, "出门时肚子是满的");
+  eq(S.trip.multi, 1, "倍率从 1.00 起");
+  eq(S.trip.loot, 0, "还没攒下东西");
+
+  forceClear(P, S, 40);
+  eq(S.phase, "clear", "清干净了");
+  eq(S.belly, 84, "过一关掉 16（100 -> 84）");
+  near(S.trip.multi, 1.15, 0.001, "过一关倍率 +0.15");
+  eq(S.trip.stages, 1, "这一趟推过 1 关");
+  // 收成 = 场上收的 40 + 清场奖励 3
+  eq(S.trip.loot, 43, "这一趟攒下 43（收成 40 + 清场 3）");
+
+  P.nextLevel();
+  eq(S.belly, 84, "进下一关不会回血（饿是跨关的）");
+  forceClear(P, S, 40);
+  eq(S.belly, 68, "再过一关 84 -> 68（进入半饿）");
+  eq(P.bellyTier(), 1, "68 是半饿档");
+  near(S.trip.multi, 1.30, 0.001, "第二关倍率 1.30");
+  eq(S.trip.loot, 86, "两关累计 43 + 43");
+
+  // 一路推到全饿：8 关推满，belly 早就见底
+  for (let i = 0; i < 5; i++) { P.nextLevel(); forceClear(P, S, 40); }
+  eq(S.belly, 0, "推到底之前肚子就空了（下限 0，不出现负饱食）");
+  eq(P.bellyTier(), 0, "0 是全饿档");
+  near(S.trip.multi, 2.0, 0.001, "倍率封顶在 2.00（不能无限涨）");
+}
+
+console.log("\n=== 24b. 收工：攒的 × 倍率才落袋，回家就吃饱 ===");
+{
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+  P._start(0, 0);
+  forceClear(P, S, 40);           // 攒 43，倍率 1.15
+  const before = S.home.loot;
+  P.goHome(false);
+  eq(S.phase, "select", "收工回到门口");
+  eq(S.home.loot, before + Math.round(43 * 1.15), "落袋 = 攒下的 × 倍率（49）");
+  eq(S.home.lastLoot, 49, "记下这趟带回了多少（门口要显示）");
+  eq(S.home.runs, 1, "出门次数 +1");
+  eq(S.belly, 100, "回家吃饭，肚子回满");
+  eq(S.trip.loot, 0, "新的一趟从 0 开始");
+  eq(S.trip.stages, 0, "关数归零");
+  eq(S.trip.multi, 1, "倍率归 1（所以每关都收工的人永远拿 ×1.0）");
+}
+
+console.log("\n=== 24c. 贪的收益是真的：一笔账算得清 ===");
+{
+  // 同样的 3 关、同样的收成，一个每关收工、一个贪到底
+  const runTo = (n) => {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    P._start(0, 0);
+    let got = 0;
+    for (let i = 0; i < n; i++) {
+      forceClear(P, S, 40);
+      if (i < n - 1) { P.nextLevel(); continue; }
+      got = Math.round(S.trip.loot * S.trip.multi);
+    }
+    return got;
+  };
+  const grabby = runTo(3);
+  // 每关都收工：三关各拿一次 ×1.0
+  const sb2 = boot();
+  const P2 = sb2.GROVE, S2 = P2.S;
+  P2._start(0, 0);
+  let safe = 0;
+  for (let i = 0; i < 3; i++) {
+    forceClear(P2, S2, 40);
+    safe += Math.round(S2.trip.loot * S2.trip.multi);
+    P2.goHome(false);
+  }
+  ok(grabby > safe, "贪到底比每关收工拿得多（" + grabby + " > " + safe + "）",
+     "差 " + (grabby - safe));
+}
+
+console.log("\n=== 24d. 全饿跑不动：饿必须有后果 ===");
+{
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+  P._start(0, 0);
+
+  S.p.dashCd = 0;
+  P._press("dash", true);
+  P.tick(1 / 60);
+  ok(S.p.dashT > 0, "满饱能冲");
+  P._press("dash", false);
+
+  S.belly = 10;
+  S.p.dashT = 0;
+  S.p.dashCd = 0;
+  P._press("dash", true);
+  P.tick(1 / 60);
+  eq(S.p.dashT, 0, "全饿按 K 冲不出去");
+  ok(S.texts.some(t => String(t.txt).includes("跑不动")), "并且说清楚为什么（不是按了没反应）");
+  P._press("dash", false);
+
+  S.belly = 100;
+  eq(P.bellyTier(), 2, "100 是满饱档");
+}
+
+console.log("\n=== 24e. 关卡内台词：性格不只在门口 ===");
+{
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+  P._start(0, 0);
+  eq(S.say.life, 0, "开局不说话（先让它忙）");
+
+  const f = S.foes[0];
+  f.coat = 2;
+  P.makeBallFrom(f, 300, -100);
+  P.tick(1 / 60);
+  ok(S.say.life > 0, "第一次造出球，它冒了一句话");
+  eq(S.say.txt, P.VOICE[P.HEROES[0].id].first, "说的是这一只自己的台词（不是通用文案）");
+
+  // 一球卷三只 → big 那句
+  S.say.life = 0;
+  S.say.fired.big = false;
+  S.stat.maxHolds = 3;
+  P.tick(1 / 60);
+  eq(S.say.txt, P.VOICE[P.HEROES[0].id].big, "一球卷走 3 只的时候换成得意那句");
+
+  // 每关只响一次
+  S.say.life = 0;
+  S.say.fired.big = true;
+  S.stat.maxHolds = 5;
+  P.tick(1 / 60);
+  eq(S.say.life, 0, "同一关不会重复说同一句（不刷屏）");
+
+  // 六只说的是六句不同的话
+  const firsts = P.HEROES.map(h => P.VOICE[h.id].first);
+  eq(new Set(firsts).size, 6, "六只的台词各不相同");
+}
+
+console.log("\n=== 24f. 结算那句跟饿不饿绑 ===");
+{
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+  P._start(0, 0);
+
+  S.belly = 100;
+  const full = P.finishSay(true);
+  S.belly = 50;
+  const half = P.finishSay(true);
+  S.belly = 10;
+  const empty = P.finishSay(true);
+  ok(full !== half && half !== empty, "满饱 / 半饿 / 全饿说的是三句不同的话",
+     [full, half, empty].join(" / "));
+  eq(empty, "先……先回家吧。", "全饿时那句话就是在劝你收工");
+  ok(P.finishSay(false).length > 0, "失败也有话说（不是空字符串）");
+}
+
+console.log("\n=== 24g. 结算面板的两个按钮：画在哪就点在哪 ===");
+{
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+  P._start(0, 0);
+  forceClear(P, S, 40);
+
+  const B = P.settleBtns();
+  ok(B.cont.x + B.cont.w <= B.home.x, "两个按钮不重叠");
+  ok(B.cont.x > 0 && B.home.x + B.home.w < 960, "都在画面内");
+  ok(B.home.y + B.home.h <= 44 + 500, "按钮没掉出卡片（卡片底 544）");
+  ok(P.inRect({ x: B.home.x + 10, y: B.home.y + 10 }, B.home), "点在收工按钮里 = 命中");
+  ok(!P.inRect({ x: B.cont.x + 10, y: B.cont.y + 10 }, B.home), "点在继续按钮里 ≠ 命中收工");
+
+  // 结算面板必须能画出来（这一段最容易在改坐标时崩）
+  let threw = null;
+  try { P.render(); } catch (e) { threw = e.message; }
+  eq(threw, null, "结算面板能渲染（含两个按钮、肚子条、台词）");
 }
 
 console.log("\n" + "=".repeat(56));

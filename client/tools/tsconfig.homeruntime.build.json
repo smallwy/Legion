@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.homeruntime.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "noEmit": false,
+    "outDir": "./_rt-build"
+  }
+}

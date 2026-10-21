@@ -1932,9 +1932,15 @@ console.log("\n=== 24g. 结算面板的两个按钮：画在哪就点在哪 ==="
   forceClear(P, S, 40);
 
   const B = P.settleBtns();
+  const C = P.CARD;
   ok(B.cont.x + B.cont.w <= B.home.x, "两个按钮不重叠");
   ok(B.cont.x > 0 && B.home.x + B.home.w < 960, "都在画面内");
-  ok(B.home.y + B.home.h <= 44 + 500, "按钮没掉出卡片（卡片底 544）");
+  // 卡片底取自运行时，不写死。写死 544 之后卡片一加高，这条断言就变成
+  // 在验一个已经不存在的尺寸 —— 通过得毫无意义。
+  ok(B.home.y + B.home.h <= C.y + C.h,
+     "按钮没掉出卡片（卡片底 " + (C.y + C.h) + "，按钮底 " + (B.home.y + B.home.h) + "）");
+  // 按钮底下留白。提示行已经挪到卡片外面了，这里只要保证按钮不贴着下边框的圆角
+  ok(C.y + C.h - (B.home.y + B.home.h) >= 20, "按钮和卡片底之间留了白");
   ok(P.inRect({ x: B.home.x + 10, y: B.home.y + 10 }, B.home), "点在收工按钮里 = 命中");
   ok(!P.inRect({ x: B.cont.x + 10, y: B.cont.y + 10 }, B.home), "点在继续按钮里 ≠ 命中收工");
 

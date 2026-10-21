@@ -277,6 +277,9 @@ class HomeController {
            `Badge-工作台-hot` 这类节点，不清掉就会一路套娃
            （`-hot` → `-hot-hot` → `-hot-hot-hot`），最终把徽标层塞爆。 */
         this.stripStaleHots(canvas);
+        /* 归位要排在 bindBadges 之前：热区是按徽标当前尺寸算的，
+           先把图标/文字摆正，再挂热区，热区和视觉才对得上。 */
+        this.alignHud();
         this.bindPets();
         /* 存档刷新必须排在 bindDock / bindHud 之前：
            它们绑的事件回调里会读 this.save（比如出战卡文案），
@@ -286,6 +289,111 @@ class HomeController {
         this.bindDock();
         this.bindHud();
         this.bindAmbient();
+    }
+
+    /* ----------------------------------------------------------------------
+     * 1b. 对齐：图标 / 文字按容器中心归位
+     * -------------------------------------------------------------------- */
+
+    /**
+     * 把所有"图标 + 文字"的组合重新归位。
+     *
+     * 场景里这些坐标是手写 JSON 摆的，五个徽标各写一遍，于是：
+     *   · 说明底板的文字统一放在 (1,-1)，而底板有 48 宽（三个字）和 37 宽
+     *     （两个字）两种 —— 结果每块牌子里的字都偏左 6.5px、偏上 3.5px；
+     *   · 徽标里的图标各有 0~1px 漂移（(7,-7) 想居中的是 47×48 里的 32×32，
+     *     应然是 (7.5,-8)）；
+     *   · 左上角提示条的图标/文字/箭头三个中心落在 -22 / -23.5 / -21，
+     *     差 2.5px，一条水平线上三个高度。
+     * 单个看都不明显，五个并排（工作台 / 图鉴 / 灶台）就一眼是歪的。
+     *
+     * 这里统一按**容器中心**算一遍，不再依赖手摆的数字。前提是这些节点的
+     * anchor 都是 (0,1)（场景里确实全是），所以 position 就等于"左上角"，
+     * 居中公式可以直接用 (父宽 - 子宽) / 2。
+     */
+    private alignHud() {
+        const BADGE_W = 47, BADGE_H = 48;
+        /* 说明底板离圆徽 46px：牌子顶边压在圆徽下沿上面 2px，
+           看起来是"挂"在徽标下面，不是浮在旁边 */
+        const CAP_GAP = 46;
+
+        const badges = this.canvas.getChildByName('Badges');
+        if (badges) {
+            for (const b of badges.children.slice()) {
+                if (!b.name.startsWith('Badge-') || b.name.indexOf('-hot') >= 0) continue;
+                const key = b.name.slice(6);
+
+                const ico = b.getChildByName('ico');
+                const iut = ico && ico.getComponent(UITransform);
+                if (ico && iut) {
+                    ico.setPosition((BADGE_W - iut.contentSize.width) / 2,
+                                    -(BADGE_H - iut.contentSize.height) / 2, 0);
+                }
+
+                const cap = badges.getChildByName(`Cap-${key}`);
+                const cut = cap && cap.getComponent(UITransform);
+                if (!cap || !cut) continue;
+                const cw = cut.contentSize.width, ch = cut.contentSize.height;
+                // 底板与圆徽共用一条竖直中轴
+                cap.setPosition(b.position.x + (BADGE_W - cw) / 2, b.position.y - CAP_GAP, 0);
+
+                const txt = cap.getChildByName('txt');
+                const tut = txt && txt.getComponent(UITransform);
+                if (txt && tut) {
+                    txt.setPosition((cw - tut.contentSize.width) / 2,
+                                    -(ch - tut.contentSize.height) / 2, 0);
+                }
+            }
+        }
+
+        const hud = this.canvas.getChildByName('HUD');
+        if (!hud) return;
+
+        /* 左上角提示条：「爪印 · 文案 · 箭头」三点一线。
+           三个东西高度不同（20 / 15 / 16），所以按各自高度算居中，不能写同一个 y。 */
+        const tip = hud.getChildByName('HudTip');
+        const tut2 = tip && tip.getComponent(UITransform);
+        if (tip && tut2) {
+            const ph = tut2.contentSize.height;
+            for (const nm of ['paw', 'txt', 'ar']) {
+                const n = tip.getChildByName(nm);
+                const ut = n && n.getComponent(UITransform);
+                if (n && ut) n.setPosition(n.position.x, -(ph - ut.contentSize.height) / 2, 0);
+            }
+        }
+
+        /* 进度条卡：关卡名和连锁倍率都跟进度点对齐同一条中线。
+           原来 stage 比 pip 高 2px、chain 比 pip 低 1px —— 一行字配一排方块，
+           差 2px 就是"没对齐"。 */
+        const prog = hud.getChildByName('HudProgress');
+        const pip = prog && prog.getChildByName('pip-0');
+        const put = pip && pip.getComponent(UITransform);
+        if (prog && pip && put) {
+            const mid = pip.position.y - put.contentSize.height / 2;
+            for (const nm of ['txt-stage', 'txt-chain']) {
+                const n = prog.getChildByName(nm);
+                const ut = n && n.getComponent(UITransform);
+                if (n && ut) n.setPosition(n.position.x, mid + ut.contentSize.height / 2, 0);
+            }
+        }
+
+        /* 设置按钮：43×46 里放 30×30，应然是 (6.5,-8)，原来写成 (6,-6)。 */
+        const btn = hud.getChildByName('IconBtn');
+        const but = btn && btn.getComponent(UITransform);
+        if (btn && but) {
+            const ico = btn.getChildByName('ico');
+            const iut = ico && ico.getComponent(UITransform);
+            if (ico && iut) {
+                ico.setPosition((but.contentSize.width - iut.contentSize.width) / 2,
+                                -(but.contentSize.height - iut.contentSize.height) / 2, 0);
+            }
+        }
+
+        /* Logo 副标题与主标题左边缘对齐。两行字差 2px，中文标题和全大写英文
+           并排时特别明显 —— 英文的 M 左边缘会显得往里缩。 */
+        const title = hud.getChildByName('Logo-Title');
+        const sub = hud.getChildByName('Logo-Sub');
+        if (title && sub) sub.setPosition(title.position.x, sub.position.y, 0);
     }
 
     /**

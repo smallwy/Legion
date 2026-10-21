@@ -158,23 +158,83 @@ fs.writeFileSync(path.join(OUT, 'index.html'), `<!DOCTYPE html>
   if (st !== null || ho !== null) {
     groveBoot(ho === null ? 0 : Number(ho), st === null ? 0 : Number(st));
   }
+  // ?phase=clear / fail —— 直接构造结算画面。结算 UI 是这一版改动最大的地方，
+  // 但它只在"打完一关"时出现，靠跑帧永远截不到（机器人要跑几十秒）。
+  const ph = q.get('phase');
+  if (ph === 'clear' || ph === 'fail') {
+    const S = GROVE.S;
+    S.phase = ph;
+    S.killed = 9; S.total = 9; S.playT = 41.2;
+    S.food = 12;
+    S.stat.made = 3; S.stat.burst = 0; S.stat.maxHolds = 3;
+    S.trip.loot = 21; S.trip.multi = 1.15; S.trip.stages = 2;
+    S.belly = 62;
+    if (ph === 'fail') S.failWhy = '球被烧掉 2 次 —— 这一关要的是从营地走 3 只';
+  }
+
+  // ?ball=1 —— 在玩家前面摆一颗球。推球是这个玩法的核心交互，
+  // 但它要先"糊三下变球"才出现，靠跑帧截不到，得先造一颗。
+  if (q.get('ball')) {
+    // 必须把当前波次序号传进去。spawnWave() 不传参时 WAVES[undefined] 是空数组，
+    // S.wave 会被写成 undefined —— HUD 上那行直接变成"第 NaN / 3 波"。
+    GROVE.spawnWave(GROVE.S.wave || 0);
+    const f = GROVE.S.foes[0];
+    if (f) {
+      GROVE.coatFoe(f, 3);
+      if (!GROVE.S.balls.length) GROVE.makeBallFrom(f, 0, 0);
+      const b = GROVE.S.balls[0];
+      if (b) {
+        b.x = GROVE.S.p.x + 78;
+        b.y = GROVE.S.p.y;
+        b.vx = 0; b.vy = 0; b.pushed = false;
+      }
+    }
+  }
 
   const stage = document.getElementById('grove-stage');
   if (!stage) console.error('[harness] 没找到 #grove-stage —— 组件没挂 DOM 层');
+  window.__grove = GROVE;   // 调试用：控制台能直接看 S.p / S.phase
 
-  let last = performance.now(), n = 0;
-  function loop(now) {
-    const dt = Math.min((now - last) / 1000, 0.034);
-    last = now;
-    gb.update(dt);
-    if (++n < frames) { requestAnimationFrame(loop); return; }
-    // 再画一帧把最终状态留下，然后停住等截图
-    gb.update(0.016);
-    window.__harnessDone = true;
-    document.title = 'DONE ' + n;
-    console.log('[harness] 跑完 ' + n + ' 帧');
+  /* 等美术图解码完再跑帧。
+     资源是异步 new Image() 加载的，而下面跑帧是同步的 —— 不等待的话
+     截图截到的是"立绘还没到、只有代码图形"的那一版，头像会是一个纯色圆。
+     这个坑只在把 rAF 换成同步循环之后才暴露出来（原来是靠 2 秒的真实时间等到的）。 */
+  await new Promise((r) => setTimeout(r, 400));
+
+  // ?act=cast-left / cast-right —— 结尾前几帧按下方向 + 攻击，
+  // 让截图正好停在"施法动作进行到一半"。动作只有 0.26 秒，
+  // 靠人手点截图永远截不到。
+  const act = q.get('act');
+  const dirKey = act === 'cast-left' ? 'left' : act === 'cast-right' ? 'right' : null;
+
+  /* 固定步长同步跑完，不等 rAF。
+     上一版把 gb.update 挂在 requestAnimationFrame 上，帧率一抖（这个环境实测
+     只有 30fps 上下）就"跑不满也不报错"，截图截到的是第 80 帧而不是第 120 帧 ——
+     同一个 URL 截两次画面不一样，验证就没意义了。
+     固定 1/60 之后：同一个 URL 每次跑出来的画面完全一样。 */
+  for (let i = 0; i < frames; i++) {
+    if (dirKey && i === frames - 12) GROVE._press(dirKey, true);
+    if (dirKey && i === frames - 7) {
+      GROVE._press(dirKey, false);
+      GROVE._press('atk', true);
+    }
+    // 推球演示：提前按住方向，走过去顶球
+    if (act === 'push' && i === frames - 40) GROVE._press('right', true);
+    gb.update(1 / 60);
+
+    /* 推到球就停，不等固定帧数跑完。
+       按固定帧数跑的话，球早就滚出画面、甚至进坑烧掉了 —— 截出来的图里
+       只有"推!"两个字，看不见球，也就看不见这一下到底有没有劲。 */
+    if (act === 'push' && i > frames - 40) {
+      const b = (GROVE.S.balls || []).find((x) => x && !x.dead && x.pushed);
+      if (b) break;
+    }
   }
-  requestAnimationFrame(loop);
+  gb.update(1 / 60);
+  window.__harnessDone = true;
+  document.title = 'DONE ' + frames;
+  console.log('[harness] 跑完 ' + frames + ' 帧（固定 1/60 步长）');
+
 </script>
 </body>
 </html>

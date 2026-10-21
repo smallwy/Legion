@@ -78,6 +78,18 @@ const ART_MANIFEST: ReadonlyArray<readonly [string, string]> = [
     ['ui-pip', 'grove/ui-pip'],
     ['ui-pip-on', 'grove/ui-pip-on'],
     ['ui-coin', 'grove/ui-coin'],
+    // 战斗 HUD / 结算面板。这几张是"奶油风"的唯一来源 ——
+    // 缺了它们 hudSkin() 会返回 cream: false，整块退回深色玻璃风，
+    // 不会出现"奶白底 + 浅绿字"那种读不出来的组合。
+    ['ui-tip', 'grove/ui-tip'],
+    ['ui-cream', 'grove/ui-cream'],
+    ['ui-prog', 'grove/ui-prog'],
+    ['ui-res', 'grove/ui-res'],
+    ['ui-belly', 'grove/ui-belly'],
+    ['ui-btn', 'grove/ui-btn'],
+    ['ui-ring', 'grove/ui-ring'],
+    ['ui-star', 'grove/ui-star'],
+    ['ui-arrow', 'grove/ui-arrow'],
 ];
 
 @ccclass('GroveBattle')

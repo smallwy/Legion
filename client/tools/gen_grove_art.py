@@ -41,6 +41,21 @@ UI_SIZES = {         # 小图标目标边长
     'ui-pip': 38,
     'ui-pip-on': 38,
     'ui-coin': 32,
+    'ui-star': 56,
+    'ui-arrow': 64,
+    'ui-ring': 104,
+}
+
+# 面板类：按**高度**收敛，宽度按比例走（九宫格拉伸用，角部要够清晰）
+#   存的尺寸 ≈ 显示尺寸的 1.5~2 倍：再大是浪费（canvas 只有 960x600），
+#   再小九宫格的圆角会糊。
+PANEL_SIZES = {
+    'ui-tip':    {'h': 96},    # panel-hud-tip   左上角色卡 / 提示条
+    'ui-cream':  {'h': 96},    # panel-cream     右上目标卡
+    'ui-prog':   {'h': 72},    # panel-hud-prog  关卡进度条
+    'ui-res':    {'h': 420},   # panel-res       结算卡片
+    'ui-belly':  {'h': 52},    # belly-bar       肚子条
+    'ui-btn':    {'h': 96},    # btn-go          主按钮
 }
 
 os.makedirs(OUT, exist_ok=True)
@@ -53,11 +68,19 @@ def save(img, name):
 
 
 def fit_h(src, h):
+    # 先裁掉透明 padding。面板图四周留了几个像素的空边，
+    # 不裁的话九宫格会把这些空边一起拉伸 —— 画出来面板底下多一条半透明的带子。
+    bb = src.getbbox()
+    if bb:
+        src = src.crop(bb)
     w, hh = src.size
     return src.resize((max(1, round(w * h / hh)), h), Image.LANCZOS)
 
 
 def fit_s(src, s):
+    bb = src.getbbox()
+    if bb:
+        src = src.crop(bb)
     w, h = src.size
     k = s / max(w, h)
     return src.resize((max(1, round(w * k)), max(1, round(h * k))), Image.LANCZOS)
@@ -84,9 +107,26 @@ for name, src_rel in [
     ('ui-pip', 'home/pip.png'),
     ('ui-pip-on', 'home/pip-on.png'),
     ('ui-coin', 'icons/coin.png'),
+    ('ui-star', 'home/star.png'),
+    ('ui-arrow', 'home/tip-arrow.png'),
+    ('ui-ring', 'home/badge-ring.png'),
 ]:
     src = os.path.join(SRC, *src_rel.split('/'))
     im = fit_s(Image.open(src).convert('RGBA'), UI_SIZES[name])
+    n = save(im, name)
+    total += n
+    rows.append((name, im.size, n))
+
+for name, src_rel in [
+    ('ui-tip', 'home/panel-hud-tip.png'),
+    ('ui-cream', 'home/panel-cream.png'),
+    ('ui-prog', 'home/panel-hud-prog.png'),
+    ('ui-res', 'home/panel-res.png'),
+    ('ui-belly', 'home/belly-bar.png'),
+    ('ui-btn', 'home/btn-go.png'),
+]:
+    src = os.path.join(SRC, *src_rel.split('/'))
+    im = fit_h(Image.open(src).convert('RGBA'), PANEL_SIZES[name]['h'])
     n = save(im, name)
     total += n
     rows.append((name, im.size, n))

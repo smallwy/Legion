@@ -195,6 +195,24 @@ function artOf(key) {
   return w > 0 ? a : null;
 }
 
+/* ----------------------------------------------------------------------------
+   手感常量。**放在 HEROES 之前**，因为绘制、物理、预瞄线三处都要读同一份 ——
+   上一版推球初速在 updatePlayer 里写 620、在 predictBall 里也写 620，
+   两处各写一遍，改一处忘一处的时候，预测线就会开始骗人。
+   -------------------------------------------------------------------------- */
+/** 施法动作时长（秒）。0.16 太快，肉眼只看到闪白；0.26 够走完"后坐 → 前冲 → 回落" */
+const CAST_T = 0.30;
+/** 站着不动推球的初速。
+ *  **这个数不能随手加大。** 试过 800：泥沼/阶梯塔直接从"能进营地"变成
+ *  "全图一次都推不进去" —— 球从平台上被推出去是抛物线，初速一变落点就整体前移，
+ *  正好落进营门前那道火坑。八关的落点都是按 620 摆的，动它就是动关卡。 */
+const PUSH_BASE = 620;
+/** 助跑满格再加多少（620 → 1209）。跑满约 380px */
+const PUSH_RUN = 0.95;
+/** 推出去的球多久散掉。3.2 秒只够滚 1984px，很多关推出去滚一半就没了 ——
+ *  读作"球推不动"。4.6 秒足够滚穿一整屏再回来。 */
+const PUSH_LIFE = 4.6;
+
 const HEROES = [
   {
     id: "cat", name: "尖耳猫", tag: "溜溜球",
@@ -1565,6 +1583,8 @@ function updatePlayer(dt) {
   p.invT = Math.max(0, p.invT - dt);
   p.castAnim = Math.max(0, p.castAnim - dt);
   p.dashAnim = Math.max(0, p.dashAnim - dt);
+  // 推球后的后坐。人往后退一点点再弹回来 —— 只靠"手停住"读不出力道。
+  p.pushBack = Math.max(0, (p.pushBack || 0) - dt);
   p.jumpBuf = Math.max(0, p.jumpBuf - dt);
   p.coyote = p.onGround ? 0.10 : Math.max(0, p.coyote - dt);
 
@@ -1641,9 +1661,14 @@ function updatePlayer(dt) {
   }
 
   // ---- 喷（J）
-  if (S.press.atk && p.atkT <= 0) {
+  // **按住连发**。原来读的是 S.press（边沿）—— 按住 J 只打第一下，
+  // 玩家会以为"按键没反应"。节流交给 atkCd，本来就是干这个的。
+  // castDir 单独记一份：施法动作要朝"这一下打出去的方向"倾，
+  // 而不是施法过程中玩家又转身跟着转（那会变成原地抽搐）。
+  if (S.keys.atk && p.atkT <= 0) {
     p.atkT = H.atkCd;
-    p.castAnim = 0.16;
+    p.castAnim = CAST_T;
+    p.castDir = p.face;
     H.fire(p);
   }
 
@@ -1690,14 +1715,20 @@ function updatePlayer(dt) {
 
   // ---- 走位推球：贴近球就推走（和原版一样，不需要新按键）
   // **推多远，看你跑了多远。**
-  // 用户原话："站的越远推球，球的推力越大"。站着不动推是 620，
-  // 退后跑满 380px 再推能到 1180 —— 于是"先退开、再冲过去"变成
+  // 用户原话："站的越远推球，球的推力越大"。站着不动推是 PUSH_BASE，
+  // 退后跑满 380px 再推能再多 75% —— 于是"先退开、再冲过去"变成
   // 一个有代价的好习惯：退开的那两秒，敌人也在往你身上走。
+  //
+  // 上一版"感觉推不动"，问题不在数值而在**反馈**：推的那一帧什么也没发生。
+  // 现在推球这一刻同时给四样东西 —— 顿帧、球压扁、人后坐、球拖影。
   const runUp = Math.min(1, (p.runD || 0) / 380);
-  const pushPow = 620 * (1 + 0.95 * runUp);
+  const pushPow = PUSH_BASE * (1 + PUSH_RUN * runUp);
   for (const b of S.balls) {
     if (b.dead) continue;
-    if (Math.abs(b.x - p.x) < b.r + p.w / 2 - 4 &&
+    // 判定窗口 = 两个圆刚好相切再加 2px。上一版是 -4 ——
+    // 人得先"陷进球里 4px"才算推，而人和球之间没有碰撞体，
+    // 于是高速冲过去的那一帧常常整个跳过窗口：看起来就是"从球里穿过去了"。
+    if (Math.abs(b.x - p.x) < b.r + p.w / 2 + 2 &&
         b.y > p.y - p.h - b.r * 2 && b.y < p.y + 20) {
       const pushDir = (b.x - p.x) !== 0 ? sign(b.x - p.x) : p.face;
       if (Math.abs(b.vx) < 140) {
@@ -1707,13 +1738,25 @@ function updatePlayer(dt) {
         b.pushed = true;
         b.relT = 0;
         b.wallHits = 0;
+        // 球被顶瘪一下：沿运动方向压短、垂直方向鼓起来 ——
+        // 这是"它真的被撞了"唯一不靠文字的表达。
+        b.pushSquash = 0.30 + runUp * 0.14;
+        b.pushDir = pushDir;
         p.runD = 0;
-        S.shake = Math.max(S.shake, 5 + runUp * 5);
+        // 人被顶住：继续全速往前跑的话，读起来像"人从球里穿过去了"。
+        p.vx *= 0.2;
+        p.pushBack = 0.16;
+        p.face = pushDir;
+        hitStop(0.04 + runUp * 0.03);
+        S.shake = Math.max(S.shake, 6 + runUp * 7);
         addText(b.x, b.y - b.r * 2 - 12,
                 runUp > 0.75 ? "蓄力推!" : "推!",
                 runUp > 0.75 ? "#FFD86B" : "#CFE9FF",
-                runUp > 0.75 ? 21 : 18);
-        if (runUp > 0.4) for (let i = 0; i < 6; i++) addFrag(b.x, b.y - b.r, 5, "#EAF7C0");
+                runUp > 0.75 ? 22 : 18);
+        for (let i = 0; i < 4 + Math.round(runUp * 6); i++) {
+          addFrag(b.x - pushDir * b.r * 0.6, b.y - b.r * 0.5 + rand(-10, 10), 5,
+                  runUp > 0.4 ? "#EAF7C0" : "#DCE9F7");
+        }
       }
     }
   }
@@ -2278,6 +2321,8 @@ function updateBalls(dt) {
   for (const b of list) {
     if (b.dead) continue;
     b.t += dt;
+    // 推球形变回弹：0.3 秒内从压扁回到圆。不衰减的话，球会一直是个横椭圆。
+    if (b.pushSquash > 0) b.pushSquash = Math.max(0, b.pushSquash - dt * 1.9);
 
     // 寿命上限已由"气"接管（air <= 0 就崩），这里只留一个兜底，
     // 防止极端情况下球卡在某个角上永远不死
@@ -2305,7 +2350,7 @@ function updateBalls(dt) {
     // 但彻底堵死"无限滚"。自造但没推过的球不受这条约束 —— 玩家还能走上去推它。
     if (b.pushed) {
       b.relT = (b.relT || 0) + dt;
-      if (b.relT > 3.2) { burstBall(b, "滚远了…"); continue; }
+      if (b.relT > PUSH_LIFE) { burstBall(b, "滚远了…"); continue; }
     }
 
     // ---- 不减速。
@@ -2550,7 +2595,7 @@ const AIM_DT = 1 / 60;
 function predictBall(b, dir) {
   const r = b.r;
   let x = b.x, y = b.y;
-  let vx = dir * 620, vy = -40;
+  let vx = dir * PUSH_BASE, vy = -40;
   let air = b.air;
   let mud = b.mud;
   let onGround = false;
@@ -2570,7 +2615,7 @@ function predictBall(b, dir) {
     // 推出后 1.6 秒必散 —— 和 updateBalls 的寿命同一条。
     // 不画这一段，玩家就会以为线尾那段还算数，等于骗人。
     relT += AIM_DT;
-    if (relT > 3.2) {
+    if (relT > PUSH_LIFE) {
       marks.push({ x, y: y - r, kind: "expire" });
       end = "expire";
       break;
@@ -4289,7 +4334,10 @@ function drawPetSprite(g, img, x, footY, w, h, face, A, o) {
   if (face < 0) g.scale(-1, 1);
   // 出手闪白：代码图形是盖一层白矩形；贴图改提亮度，只作用于不透明像素，
   // 不会在角色周围留一个白框。浏览器不支持 filter 时赋值被忽略，不报错。
-  if (o.flash > 0) g.filter = "brightness(" + (1 + o.flash * 1.8).toFixed(2) + ")";
+  //
+  // 系数 0.8 不是 1.8。1.8 的时候 brightness 到 1.72，橙色猫直接被提成白猫 ——
+  // 截图里看就是"换了只宠物"。闪白只该让人注意到"它在出手"，不该改颜色。
+  if (o.flash > 0) g.filter = "brightness(" + (1 + o.flash * 0.8).toFixed(2) + ")";
   g.drawImage(img, -dw / 2, -dh, dw, dh);
   g.restore();
   g.globalAlpha = 1;
@@ -4838,6 +4886,25 @@ function drawFoe(g, f) {
 function drawBall(g, b) {
   const cx = b.x, cy = b.y - b.r;
   const r = b.r;
+  // 被推的那一刻沿运动方向拉长、垂直方向压扁（0..0.45，0.3 秒内收回去）。
+  // 球是圆的，圆的滚动本身看不出"受力" —— 这一下形变是推球唯一的物理读数。
+  const sq = b.pushSquash || 0;
+  const rx = r * (1 + sq * 0.42);
+  const ry = r * (1 - sq * 0.26);
+
+  // 拖影：速度越快拖得越长。四个残影，alpha 递减。
+  const sp = Math.abs(b.vx);
+  if (sp > 260) {
+    const k = Math.min(1, (sp - 260) / 700);
+    for (let i = 1; i <= 3; i++) {
+      g.globalAlpha = 0.16 * k * (1 - i * 0.24);
+      g.fillStyle = b.mud ? "#8A6A40" : "#CFEE7C";
+      g.beginPath();
+      g.ellipse(cx - sign(b.vx) * i * 11 * k, cy, rx * (1 - i * 0.08), ry * (1 - i * 0.08), 0, 0, 6.283);
+      g.fill();
+    }
+    g.globalAlpha = 1;
+  }
 
   // 影子
   g.globalAlpha = 0.2;
@@ -4859,7 +4926,7 @@ function drawBall(g, b) {
   // 球体
   g.fillStyle = b.mud ? "#7A5C36" : "#C9E96E";
   g.beginPath();
-  g.arc(cx, cy, r, 0, 6.283);
+  g.ellipse(cx, cy, rx, ry, 0, 0, 6.283);
   g.fill();
   g.strokeStyle = COL.outline;
   g.lineWidth = 2.4;
@@ -5415,22 +5482,32 @@ function drawTrail(g) {
   const cx = W / 2;
   const total = (n - 1) * gap;
 
-  g.textAlign = "center";
+  g.textAlign = "left";
   g.textBaseline = "middle";
   g.font = "bold 13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
   g.lineWidth = 3.4;
   g.strokeStyle = "rgba(6,20,14,.55)";
   const label = "第 " + (S.stage + 1) + " / " + n + " 关   " + curStage().name;
-  g.strokeText(label, cx, 22);
-  g.fillStyle = "rgba(255,255,255,.94)";
-  g.fillText(label, cx, 22);
 
-  // 波次：一关 2~3 波，最后一波是 BOSS。没有这一行，玩家不知道"还剩多久"。
+  /* 波次：一关 2~3 波，最后一波是 BOSS。没有这一行，玩家不知道"还剩多久"。
+   *
+   * **两块一起量、一起居中。** 上一版把关卡名居中、波次钉在 cx+132 ——
+   * 关卡名一变长（"泥沼"→"陡坡·顶层推球"），两块之间的缝就忽大忽小，
+   * 看起来像两个没对齐的控件。现在按两块的实际宽度算起点。
+   */
   const wtxt = "第 " + Math.min(S.wave + 1, WAVES.length) + " / " + WAVES.length + " 波";
-  g.textAlign = "left";
-  g.strokeText(wtxt, cx + 132, 22);
+  const PAD = 24;
+  const w1 = g.measureText(label).width;
+  const w2 = g.measureText(wtxt).width;
+  const x0 = cx - (w1 + PAD + w2) / 2;
+
+  g.strokeText(label, x0, 22);
+  g.fillStyle = "rgba(255,255,255,.94)";
+  g.fillText(label, x0, 22);
+
+  g.strokeText(wtxt, x0 + w1 + PAD, 22);
   g.fillStyle = (S.wave >= WAVES.length - 1) ? "#FF9E82" : "rgba(255,255,255,.82)";
-  g.fillText(wtxt, cx + 132, 22);
+  g.fillText(wtxt, x0 + w1 + PAD, 22);
   g.textAlign = "center";
 
   const pipOff = artOf("ui-pip");
@@ -5447,8 +5524,8 @@ function drawTrail(g) {
       // 浅色方块糊在白云上就没了（原代码的圆点也是靠这个底圈才看得见）
       const s = cur ? 16 : 11;
       // 底圈跟着方块走（圆角矩形，不是圆）：形状不一致时读起来像"灰点 + 灰块"两层东西
-      rr(g, x - s / 2 - 1.6, y - s / 2 - 1.6, s + 3.2, s + 3.2, 4);
-      g.fillStyle = "rgba(20,34,26,.30)";
+      rr(g, x - s / 2 - 2, y - s / 2 - 2, s + 4, s + 4, 4.5);
+      g.fillStyle = cur || done ? "rgba(20,34,26,.42)" : "rgba(20,34,26,.26)";
       g.fill();
       g.globalAlpha = cur ? 1 : done ? 0.95 : 0.72;
       g.drawImage(done || cur ? pipOn : pipOff, x - s / 2, y - s / 2, s, s);
@@ -5507,6 +5584,110 @@ function drawWaveGap(g) {
   g.restore();
 }
 
+/* ============================================================================
+   14b. 面板 / 皮肤
+   ============================================================================
+   有美术面板图就走"奶油风"，没有就退回原来的深色玻璃风。
+
+   **两套配色写在同一处**：上一版把颜色散在 drawHUD 和结算里各写一遍，
+   改了一处忘了另一处，出现过"底是奶白、字是浅绿"（对比度 1.4:1，
+   截图上几乎读不出来）。这里只允许通过 hudSkin() 取色。
+   ========================================================================== */
+
+/**
+ * 九宫格拉伸。四个角不拉伸、四条边单向拉伸、中间双向拉伸。
+ * 直接 `drawImage(img, x, y, w, h)` 拉一张圆角面板，圆角会变成椭圆 ——
+ * 在 548×500 的结算卡上那四个角一眼就看得出是"被拽开的"。
+ *
+ * `ds` 是**源图**上的角尺寸。目标角尺寸要按缩放比折算，不能直接用 ds：
+ * 上一版写死 `dd = min(ds, w/2, h/2)`，把 583×96 的提示条铺到 236×62 时
+ * dd 被算成 31，而 31+31 已经等于 62 —— 中间那一行高度变成 0，
+ * 上下两边硬压在一起，圆角挤成一条缝。
+ */
+function drawNine(g, img, x, y, w, h, ds) {
+  const iw = img.width || img.naturalWidth;
+  const ih = img.height || img.naturalHeight;
+  if (!iw || !ih || w <= 0 || h <= 0) return;
+  const k = Math.min(w / iw, h / ih);
+  const dd = Math.max(2, Math.min(ds * k, w / 2 - 1, h / 2 - 1));
+  const ss = Math.min(ds, iw / 2 - 1, ih / 2 - 1);
+  const sx = [0, ss, iw - ss], sw = [ss, iw - ss * 2, ss];
+  const dx = [x, x + dd, x + w - dd], dw = [dd, w - dd * 2, dd];
+  const sy = [0, ss, ih - ss], sh = [ss, ih - ss * 2, ss];
+  const dy = [y, y + dd, y + h - dd], dh = [dd, h - dd * 2, dd];
+  for (let r = 0; r < 3; r++) {
+    for (let c = 0; c < 3; c++) {
+      if (sw[c] <= 0 || sh[r] <= 0 || dw[c] <= 0 || dh[r] <= 0) continue;
+      g.drawImage(img, sx[c], sy[r], sw[c], sh[r], dx[c], dy[r], dw[c], dh[r]);
+    }
+  }
+}
+
+/** 画一块面板底：有图贴图（九宫格），没图画原来的半透明圆角。 */
+function panelBg(g, key, x, y, w, h, ds, fallbackFill, fallbackRadius) {
+  const img = artOf(key);
+  const r = fallbackRadius === undefined ? 14 : fallbackRadius;
+
+  /* 贴纸三件套：投影 → 面板 → 深棕描边。
+   *
+   * 之前只贴了一张奶白图，图本身的边是 1~2px 淡棕，落在绿草地上"没有轮廓" ——
+   * 截图里那块 UI 读起来像网页里的 card，不像游戏里的牌子。
+   * Q 版卡通的识别特征就是**深色粗描边**：只加这一圈，东西立刻从"控件"变"贴纸"。
+   */
+  g.fillStyle = "rgba(26,16,8,.22)";
+  rr(g, x + 1, y + 4, w, h, r);
+  g.fill();
+
+  let okArt = false;
+  if (img) {
+    drawNine(g, img, x, y, w, h, ds);
+    okArt = true;
+  } else {
+    g.fillStyle = fallbackFill || "rgba(12,26,20,.72)";
+    rr(g, x, y, w, h, r);
+    g.fill();
+  }
+
+  g.strokeStyle = img ? "rgba(92,60,34,.40)" : "rgba(255,255,255,.14)";
+  g.lineWidth = img ? 2.2 : 1.5;
+  rr(g, x + 1.1, y + 1.1, w - 2.2, h - 2.2, Math.max(6, r - 1));
+  g.stroke();
+  return okArt;
+}
+
+/** 取当前配色。cream = 奶油面板图到位。 */
+function hudSkin() {
+  const cream = !!artOf("ui-tip");
+  if (cream) {
+    return {
+      cream: true,
+      ink: "#4A3524",          // 主文字 / 深棕
+      ink2: "rgba(74,53,36,.70)",
+      ink3: "rgba(74,53,36,.46)",
+      hi: "#A85E20",           // 强调（目标名、关卡名）
+      good: "#3F7D24",
+      warn: "#B06A2C",
+      bad: "#B0453A",
+      barBg: "rgba(120,92,64,.20)",
+      barOn: "#E0A23C",
+      barDone: "#5FA53A",
+    };
+  }
+  return {
+    cream: false,
+    ink: "#EAF6E2",
+    ink2: "rgba(200,230,200,.72)",
+    ink3: "rgba(190,220,190,.45)",
+    hi: "#FFE9B0",
+    good: "#B9F06A",
+    warn: "#FFD86B",
+    bad: "#FF9E8E",
+    barBg: "rgba(255,255,255,.13)",
+    barOn: "#8ED6F0",
+    barDone: "#B9F06A",
+  };
+}
+
 function drawHUD(g) {
   const p = S.p;
   if (!p) return;
@@ -5550,15 +5731,16 @@ function drawHUD(g) {
   }
 
   // 左上：角色 + 心
-  g.fillStyle = "rgba(12,26,20,.72)";
-  rr(g, 16, 14, 236, 62, 14);
-  g.fill();
-  g.strokeStyle = "rgba(255,255,255,.14)";
-  g.lineWidth = 1.5;
-  g.stroke();
+  const K = hudSkin();
+  panelBg(g, "ui-tip", 16, 14, 236, 62, 40, "rgba(12,26,20,.72)", 14);
 
   // 头像：有美术圆头像就贴，没图就画代码脸
   const av = artOf("head-" + H.id);
+  const ring = artOf("ui-ring");
+  if (ring) {
+    // 徽章环：外圈一圈描边，把头像从奶油底上"抠"出来
+    g.drawImage(ring, 26 - 3, 23 - 3, 50, 50);
+  }
   g.save();
   g.beginPath();
   g.arc(48, 45, 22, 0, 6.283);
@@ -5570,27 +5752,29 @@ function drawHUD(g) {
     g.fillRect(26, 23, 44, 44);
   }
   g.restore();
-  g.strokeStyle = av ? "rgba(255,255,255,.55)" : H.c3;
-  g.lineWidth = 2;
-  g.beginPath();
-  g.arc(48, 45, 22, 0, 6.283);
-  g.stroke();
+  if (!ring) {
+    g.strokeStyle = av ? "rgba(255,255,255,.55)" : H.c3;
+    g.lineWidth = 2;
+    g.beginPath();
+    g.arc(48, 45, 22, 0, 6.283);
+    g.stroke();
+  }
   if (!av) drawEyes(g, 48, 44, 7, 2.6, 1, false);
 
-  g.fillStyle = "#EAF6E2";
+  g.fillStyle = K.ink;
   g.font = "bold 16px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
   g.textAlign = "left";
   g.textBaseline = "middle";
   g.fillText(H.name, 78, 36);
   g.font = "12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.fillStyle = "rgba(200,230,200,.72)";
-  g.fillText(H.tag, 78, 54);
+  g.fillStyle = K.ink2;
+  g.fillText(H.tag, 78, 52);
 
   // 心
   for (let i = 0; i < p.maxHp; i++) {
-    const hx = 172 + i * 22, hy = 45;
+    const hx = 168 + i * 20, hy = 45;
     const on = i < p.hp;
-    g.fillStyle = on ? "#FF6E7A" : "rgba(255,255,255,.16)";
+    g.fillStyle = on ? "#E85466" : (K.cream ? "rgba(120,92,64,.22)" : "rgba(255,255,255,.16)");
     g.beginPath();
     g.moveTo(hx, hy + 7);
     g.bezierCurveTo(hx - 11, hy - 2, hx - 6, hy - 11, hx, hy - 5);
@@ -5601,62 +5785,96 @@ function drawHUD(g) {
   // 右上：目标 + 进度
   // 底色 0.72 不是随手定的：这一块正好压在顶部树冠上，0.55 的时候
   // 树冠的黑影会透过来，目标名读不清（截图里第一眼就发现了）
-  g.fillStyle = "rgba(12,26,20,.72)";
-  rr(g, W - 268, 14, 252, 140, 14);
-  g.fill();
-  g.strokeStyle = "rgba(255,255,255,.14)";
-  g.lineWidth = 1.5;
-  g.stroke();
+  panelBg(g, "ui-cream", W - 268, 14, 252, 100, 26, "rgba(12,26,20,.72)", 14);
 
-  const SI = curStage();
+  // 卡片里**不放关卡名**。顶部正中已经有「第 2 / 8 关 泥沼」，
+  // 同一句话在一屏上说两遍，卡片第一行就白占了 —— 这里只留目标。
   g.textAlign = "left";
   g.textBaseline = "middle";
-  g.fillStyle = "rgba(200,230,200,.72)";
-  g.font = "12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.fillText("第 " + (S.stage + 1) + " 关   " + SI.name, W - 250, 36);
-
-  g.fillStyle = "#FFE9B0";
-  g.font = "bold 18px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.fillText(curGoal().name, W - 250, 60);
+  g.fillStyle = K.hi;
+  g.font = "bold 19px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  g.fillText(curGoal().name, W - 250, 40);
 
   // 进度条：目标数值 / 当前值。四关共用一条，字换，形状不换。
+  // 底板用美术的胶囊条，填充仍用代码画 —— 填充要按百分比变长，
+  // 贴图做不到"裁一半"，除非再切一张图。
   const pr = goalProgress();
-  g.fillStyle = "rgba(255,255,255,.13)";
-  rr(g, W - 250, 76, 216, 8, 4);
-  g.fill();
-  if (pr.frac > 0) {
-    g.fillStyle = pr.done ? "#B9F06A" : "#8ED6F0";
-    rr(g, W - 250, 76, Math.max(4, 216 * clamp(pr.frac, 0, 1)), 8, 4);
+  const progArt = artOf("ui-prog");
+  const BX = W - 250, BY = 58, BW = 216, BH = 14;
+  // 次序：先贴美术胶囊（它内部是不透明的奶油白 + 一圈棕描边），
+  // 再在里侧 3px 铺一层暗色当"空槽"，最后才是橙色填充。
+  // 上一版把暗槽画在美术**前面**，被那张不透明的内芯整个盖掉了 ——
+  // 0% 的时候进度条只剩一圈描边，读起来像"一个输入框"。
+  if (progArt) {
+    // 整图拉伸，不走九宫格：这张图 456×72，目标是 216×14，九宫格会把
+    // 两端的圆头压成两个针尖。整图拉伸的圆头变成扁椭圆，反而更像一条胶囊。
+    g.drawImage(progArt, BX, BY, BW, BH);
+  } else {
+    g.fillStyle = K.cream ? "rgba(122,92,60,.55)" : "rgba(255,255,255,.20)";
+    rr(g, BX, BY, BW, BH, BH / 2);
     g.fill();
   }
-  g.fillStyle = pr.done ? "#D6FFA8" : "rgba(220,240,225,.85)";
-  g.font = "12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.fillText(pr.text, W - 250, 97);
+  // 空槽的对比度是量出来的：0.34 的时候这条读不出"槽"，只剩一根浅线 ——
+  // 玩家看不到"还差多少"，进度条就退化成一条装饰线。
+  g.fillStyle = K.cream ? "rgba(96,66,40,.52)" : "rgba(255,255,255,.16)";
+  rr(g, BX + 3, BY + 3, BW - 6, BH - 6, (BH - 6) / 2);
+  g.fill();
+  if (pr.frac > 0) {
+    g.fillStyle = pr.done ? K.barDone : K.barOn;
+    rr(g, BX + 3, BY + 3, Math.max(5, (BW - 6) * clamp(pr.frac, 0, 1)), BH - 6, (BH - 6) / 2);
+    g.fill();
+  }
 
-  // 收成：同一块面板里，别飘到外面去
+  // 进度文字里去掉和目标名重复的前缀。
+  // goalProgress() 给的是 "收成 0 / 12 · 已清 0/8"，而上面的大字已经写着"收成"——
+  // 逐字重复的标题读起来像表单，不像 HUD。只在这一处剥，函数本身不动
+  // （结算和冒烟断言都吃它的原文）。
+  let gline = pr.text;
+  const gname = curGoal().name;
+  if (gline.indexOf(gname + " ") === 0) gline = gline.slice(gname.length + 1);
+
+  g.fillStyle = pr.done ? K.good : K.ink2;
+  g.font = "12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  g.fillText(gline, BX, 85);
+
+  // 收成挪到这一行的右端，不再单占一行。
+  // 单占一行时它写的是「收成 0」，而进度行（收成关）读的是同一个数 S.food ——
+  // 上下两行同一个数字，玩家会以为看错了。现在左边是"目标和打到哪了"，
+  // 右边是"手上有多少"，是两件事。
   const coinArt = artOf("ui-coin");
+  const coinTxt = "" + S.food;
+  g.font = "bold 14px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  const cw = g.measureText(coinTxt).width;
+  const cxRight = W - 34;
   if (coinArt) {
-    g.drawImage(coinArt, W - 251, 112, 16, 16);
+    g.drawImage(coinArt, cxRight - cw - 19, 78, 15, 15);
   } else {
     g.fillStyle = "#FFD86B";
     g.beginPath();
-    g.arc(W - 243, 120, 7, 0, 6.283);
+    g.arc(cxRight - cw - 12, 85, 6.5, 0, 6.283);
     g.fill();
   }
-  g.fillStyle = "#FFE9B0";
-  g.font = "bold 15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.fillText("收成 " + S.food, W - 228, 120);
+  g.textAlign = "right";
+  g.fillStyle = K.hi;
+  g.fillText(coinTxt, cxRight, 85);
+  g.textAlign = "left";
 
-  g.fillStyle = "rgba(190,220,190,.45)";
-  g.font = "11px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.fillText("ESC 回选人   ·   R 重来   ·   Shift 看全部预测线", W - 250, 140);
+  // 卡片里不再挂"ESC 回选 · R 重来 · Shift 预测线"。
+  // 屏幕底部本来就有那条 8 秒操作提示（含 Shift），两处都说等于都没说 ——
+  // 而且它占了卡片最后 20px，把目标卡撑成一个表格。
 
   // 底部操作提示（前 8 秒）
   if (S.playT < 8) {
-    g.globalAlpha = clamp((8 - S.playT) / 3, 0, 1) * 0.8;
-    g.fillStyle = "#E8F6DC";
-    g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+    g.globalAlpha = clamp((8 - S.playT) / 3, 0, 1) * 0.82;
     g.textAlign = "center";
+    // 奶油风下是浅底，白字看不见 —— 换成深字 + 一条浅底
+    if (K.cream) {
+      g.fillStyle = "rgba(255,250,238,.80)";
+      rr(g, W / 2 - 300, H - 36, 600, 26, 13);
+      g.fill();
+    }
+    g.fillStyle = K.cream ? K.ink : "#E8F6DC";
+    g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
     g.fillText("← → 移动   ·   空格 跳   ·   J 喷裹   ·   K 撞飞   ·   走进球里推它   ·   Shift 看全部预测线", W / 2, H - 22);
     g.globalAlpha = 1;
   }
@@ -6270,8 +6488,8 @@ function tick(dt) {
 
 /* 结算卡片与两个按钮的几何。**绘制和点击判定共用这一份** ——
  * 门口那六只踩过一次"画一遍算一遍坐标、判定再算一遍"的坑，改布局必错开。 */
-const CARD_Y = 44, CARD_H = 500;
-const BTN_Y = CARD_Y + 430, BTN_W = 210, BTN_H = 42, BTN_GAP = 20;
+const CARD_Y = 75, CARD_H = 450;
+const BTN_Y = CARD_Y + 352, BTN_W = 190, BTN_H = 40, BTN_GAP = 24;
 function settleBtns() {
   const cx = W / 2;
   return {
@@ -6310,13 +6528,82 @@ function render() {
         // 无敌闪烁：半透明，不是消失 —— 消失会让人以为死了
         g.globalAlpha = 0.45;
       }
-      drawPet(g, p.x, p.y, p.w, p.h, H, p.face, {
-        squash: p.onGround ? 0 : (p.vy < 0 ? -0.16 : 0.12),
-        flash: p.castAnim > 0 ? 0.35 : 0,
+
+      /* ---- 施法动作 ----
+         立绘是静态站姿（还有一半是正脸），光靠"闪白"根本读不出在出手。
+         这里用**以脚为轴的切变**做前倾/后坐：
+           0 → 0.28  后坐蓄力（往后仰，越仰越慢）
+           0.28 → 1  前冲（整个人朝施法方向甩出去，再落回站姿）
+         切变比旋转好：旋转会把脚也转走，人就浮起来了；
+         切变脚在原地不动，只有上身往前压 —— 那才像"使劲"。
+
+         代码图形版和贴图版都走这一层（包在 drawPet 外面），
+         所以以后换了美术也不用再改一次动作。 */
+      const ck = p.castAnim > 0 ? 1 - p.castAnim / CAST_T : -1;
+      let lean = 0;
+      if (ck >= 0) {
+        lean = ck < 0.28 ? -(ck / 0.28) : Math.pow(1 - (ck - 0.28) / 0.72, 1.5);
+      }
+      // 推球后坐：和施法方向相反的小幅平移
+      const pb = p.pushBack > 0 ? Math.sin((p.pushBack / 0.16) * Math.PI) : 0;
+      const dir = p.castAnim > 0 ? (p.castDir || p.face) : p.face;
+
+      g.save();
+      g.translate(-p.face * pb * 7, 0);
+
+      /* 不做残影。试过一版"身后留半透明影子"，截图里读起来就是两只宠物，
+         玩家第一反应是"出 bug 了"，不是"它在冲"。动效宁缺勿滥。 */
+      if (lean !== 0) {
+        /* 位移 + 切变都以脚为轴：脚钉在地上，只有上身朝 dir 甩出去。
+         *
+         * **切变系数必须乘 dir。** 上一版的 -lean*0.52 是常量 ——
+         * 向右施法时上半身往右压（对），向左施法时身体虽然整体左移了，
+         * 上半身却还是被往右推：读起来就是"人往左冲、脸朝右看"。
+         */
+        g.translate(p.x + dir * lean * p.w * 0.50, p.y);
+        g.transform(1, 0, -lean * 0.56 * dir, 1, 0, 0);
+        g.translate(-p.x, -p.y);
+      }
+      // 朝向也走 dir：施法这 0.26 秒里，脸的朝向和身体的倾斜必须是同一个数，
+      // 分开取（一个 p.face 一个 castDir）就会出现"往左打、转过来看右边"。
+      drawPet(g, p.x, p.y, p.w, p.h, H, dir, {
+        // 前冲段再压一点：形变比位移更容易读成"发力"，而且不用改立绘
+        squash: (p.onGround ? 0 : (p.vy < 0 ? -0.16 : 0.12)) + Math.max(0, lean) * 0.18,
+        flash: p.castAnim > 0 && ck > 0.24 && ck < 0.6 ? 0.42 : 0,
         belly: 0.15 + 0.85 * clamp(S.belly / 100, 0, 1),
         mood: bellyTier() === 0 ? 1 : bellyTier() === 1 ? 0.22 : 0,
       });
+      g.restore();
       g.globalAlpha = 1;
+
+      // 出手光：手的位置炸一圈十字光。**画在身前** ——
+      // 它同时也是朝向的读数，正脸立绘翻面看不出来，光的方向一眼就看得出来。
+      if (ck >= 0.16 && ck < 0.72) {
+        const k = (ck - 0.16) / 0.56;
+        const hx = p.x + dir * (p.w * 0.5 + k * 16);
+        const hy = p.y - p.h * 0.60;
+        const rr2 = 8 + k * 15;
+        g.globalAlpha = (1 - k) * 0.9;
+        // 先画一圈暖色外描边再画白十字：纯白十字在浅绿草地上读不出来
+        for (const [col, lw] of [["#FFB43C", 5.4 * (1 - k * 0.5)], ["#FFFFFF", 2.4 * (1 - k * 0.5)]]) {
+          g.strokeStyle = col;
+          g.lineWidth = lw;
+          g.lineCap = "round";
+          for (let i = 0; i < 4; i++) {
+            const a = i * Math.PI / 2 + 0.78;
+            g.beginPath();
+            g.moveTo(hx + Math.cos(a) * rr2 * 0.42, hy + Math.sin(a) * rr2 * 0.42);
+            g.lineTo(hx + Math.cos(a) * rr2, hy + Math.sin(a) * rr2);
+            g.stroke();
+          }
+        }
+        g.fillStyle = "#FFFFFF";
+        g.beginPath();
+        g.arc(hx, hy, 4 * (1 - k * 0.45), 0, 6.283);
+        g.fill();
+        g.globalAlpha = 1;
+      }
+
       // 冲撞的方向指示
       if (p.dashT > 0) {
         g.strokeStyle = "rgba(200,245,180,.5)";
@@ -6515,7 +6802,9 @@ function render() {
     }
     g.globalAlpha = 1;
 
-    drawHUD(g);
+    // HUD 只在战斗阶段画。结算时压暗层会把它压成两块灰面板，
+    // 和中间那张亮白卡片并排，读起来像"两个坏掉的控件"。
+    if (S.phase === "play") drawHUD(g);
 
     // 受伤闪红
     if (S.flash > 0) {
@@ -6532,57 +6821,91 @@ function render() {
       // 先整体压暗，再盖一张实心卡片。
       // 只压暗不盖卡片的话，平台木条和敌人会直接穿过结算文字 ——
       // 截图里"造球 4 · 崩开 0"那行正好压在木条上，读不出来。
-      g.fillStyle = ok ? "rgba(6,14,10,.90)" : "rgba(18,6,10,.92)";
+      //
+      // 奶油面板自带奶白底 + 棕描边 + 投影，压暗不用那么重：
+      // 压到 0.9 的话，后面那片森林全黑，一张奶白卡片浮在纯黑上，
+      // 和主界面那套奶油风断成两个游戏。压到 0.62 还看得见"我在哪一关"。
+      const K = hudSkin();
+      // 中性偏冷的暗色。用暖棕（14,12,10）压在这张橙黄天空上，
+      // 整块会读成"棕色板"，和奶油卡片的暖白撞在一起很脏。
+      g.fillStyle = K.cream
+        ? (ok ? "rgba(9,12,11,.52)" : "rgba(20,9,9,.56)")
+        : (ok ? "rgba(6,14,10,.90)" : "rgba(18,6,10,.92)");
       g.fillRect(0, 0, W, H);
 
       const cardY = CARD_Y, cardH = CARD_H;
-      g.fillStyle = "rgba(20,34,28,.97)";
-      rr(g, cx - 274, cardY, 548, cardH, 22);
-      g.fill();
-      g.strokeStyle = ok ? "rgba(185,240,106,.34)" : "rgba(255,158,142,.32)";
-      g.lineWidth = 2;
-      g.stroke();
-
-      // 顶部彩条：一句话交代"你打到了哪"
-      g.fillStyle = ok ? "#B9F06A" : "#FF9E8E";
-      rr(g, cx - 274, cardY, 548, 6, 3);
-      g.fill();
+      const creamCard = panelBg(g, "ui-res", cx - 230, cardY, 460, cardH, 46,
+                                "rgba(20,34,28,.97)", 22);
+      if (!creamCard) {
+        // 代码底：描边 + 顶部彩条。有美术卡的时候这两样都不要 ——
+        // 奶白卡自己有一圈棕描边，再压一条亮绿/亮红彩条会像贴纸。
+        g.strokeStyle = ok ? "rgba(185,240,106,.34)" : "rgba(255,158,142,.32)";
+        g.lineWidth = 2;
+        rr(g, cx - 230, cardY, 460, cardH, 20);
+        g.stroke();
+        g.fillStyle = ok ? "#B9F06A" : "#FF9E8E";
+        rr(g, cx - 230, cardY, 460, 6, 3);
+        g.fill();
+      }
 
       g.textAlign = "center";
       g.textBaseline = "middle";
 
-      g.fillStyle = "rgba(196,224,204,.62)";
+      /* 行距是量出来的，不是拍的。
+         ui-res 那张图 524×420 铺成 548×cardH 之后，圆角约 64px、边框约 15px ——
+         内容从 +32 起才不会被圆角咬掉；最后一行离卡底至少留 40，
+         否则按钮会压在边框上（上一版就是按钮骑在圆角上，读起来像"卡片裂了"）。 */
+      g.fillStyle = K.ink3;
       g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-      g.fillText("第 " + (S.stage + 1) + " / " + LEVELS.length + " 关   ·   " + st.sub, cx, cardY + 28);
+      g.fillText("第 " + (S.stage + 1) + " / " + LEVELS.length + " 关   ·   " + st.sub, cx, cardY + 34);
 
-      g.fillStyle = "#F2FBEC";
-      g.font = "bold 25px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+      g.fillStyle = K.ink;
+      g.font = "bold 22px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
       g.fillText(st.name + "   ·   " + curGoal().name, cx, cardY + 58);
 
-      g.fillStyle = ok ? "#B9F06A" : "#FF9E8E";
+      g.fillStyle = ok ? K.good : K.bad;
       g.font = "bold 16px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-      g.fillText(ok ? "过关" : "没做到", cx, cardY + 86);
+      g.fillText(ok ? "过关" : "没做到", cx, cardY + 82);
 
       // 评价：只在达标时给。失败了不给评级 —— 评级是奖励，不是羞辱
       if (ok) {
         const rk = rate();
-        const rcol = rk === "S" ? "#FFE58A" : rk === "A" ? "#B9F06A" : "#9FC8B4";
-        g.fillStyle = rcol;
-        g.font = "bold 58px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText(rk, cx, cardY + 130);
-        g.fillStyle = "rgba(200,230,200,.55)";
-        g.font = "11px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText("S = 用时 ≤ " + st.par.time + "s 且 造球 ≤ " + st.par.made + " 颗", cx, cardY + 178);
+        const rcol = K.cream
+          ? (rk === "S" ? "#C0871A" : rk === "A" ? "#3F7D24" : "#7A6A55")
+          : (rk === "S" ? "#FFE58A" : rk === "A" ? "#B9F06A" : "#9FC8B4");
+        // 星：S 给三颗，A 两颗，B 一颗。**星是"你做到了多少"的读数**，
+        // 比一个字母更直觉 —— 字母要靠记住 S/A/B 的顺序。
+        const starArt = artOf("ui-star");
+        const nStar = rk === "S" ? 3 : rk === "A" ? 2 : 1;
+        if (starArt) {
+          // 三星整体压在中心偏左，字母接在右边当"读数"。
+          // 星和字母都居中排的话，三星 + S 会读成"三颗星 和一个字"两坨东西。
+          const mid = cx - 22;
+          for (let i = 0; i < 3; i++) {
+            const sx = mid + (i - 1) * 34;
+            g.globalAlpha = i < nStar ? 1 : 0.20;
+            g.drawImage(starArt, sx - 16, cardY + 102, 32, 32);
+          }
+          g.globalAlpha = 1;
+          g.fillStyle = rcol;
+          g.font = "bold 22px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+          g.fillText(rk, cx + 52, cardY + 118);
+        } else {
+          g.fillStyle = rcol;
+          g.font = "bold 52px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+          g.fillText(rk, cx, cardY + 118);
+        }
       } else {
-        g.fillStyle = "#FFD3C8";
+        g.fillStyle = K.cream ? "#A2492F" : "#FFD3C8";
         g.font = "15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText(S.failWhy || "饿晕了…", cx, cardY + 130);
+        g.fillText(S.failWhy || "饿晕了…", cx, cardY + 122);
       }
 
-      // 数据：一行够用，字要小、颜色要退，别和评级抢
-      g.fillStyle = "#EAF6E2";
+      // 数据：两行，第一行是"送走多少"，第二行是"目标那条线打没打到"
+      g.fillStyle = K.ink;
       g.font = "bold 15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-      g.fillText("送走 " + S.killed + " / " + S.total + " 只", cx, cardY + 204);
+      g.fillText("送走 " + S.killed + " / " + S.total + " 只   ·   用时 " + S.playT.toFixed(1) + "s",
+                 cx, cardY + 152);
 
       let goalLine = "";
       if (st.goal === "limit") goalLine = "用球 " + S.stat.made + " / " + st.ballLimit + " 颗";
@@ -6592,92 +6915,118 @@ function render() {
       else if (st.goal === "intact") goalLine = "崩开 " + S.stat.burst + " 次（要 0）";
       else if (st.goal === "nohit") goalLine = "挨打 " + S.stat.hits + " 次（要 0）";
       if (goalLine) {
-        g.fillStyle = "rgba(200,230,200,.85)";
+        g.fillStyle = K.ink2;
         g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText(goalLine, cx, cardY + 226);
+        g.fillText(goalLine, cx, cardY + 172);
       }
 
-      g.fillStyle = "rgba(200,230,200,.58)";
-      g.font = "11px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-      g.fillText("用时 " + S.playT.toFixed(1) + "s   ·   造球 " + S.stat.made +
-                "   ·   崩开 " + S.stat.burst + "   ·   收成 " + S.food, cx, cardY + 246);
 
       // 分隔线
-      g.strokeStyle = "rgba(255,255,255,.10)";
+      g.strokeStyle = K.cream ? "rgba(120,92,64,.26)" : "rgba(255,255,255,.10)";
       g.lineWidth = 1;
       g.beginPath();
-      g.moveTo(cx - 210, cardY + 266);
-      g.lineTo(cx + 210, cardY + 266);
+      g.moveTo(cx - 184, cardY + 194);
+      g.lineTo(cx + 184, cardY + 194);
       g.stroke();
 
       /* ---- 它说 ---- 
          性格不能只活在门口那 1.6 秒。这里是玩家**一定会看**的地方，
          所以那句"邀功 / 求饶"放在这儿，比在战斗中冒泡更有用。 */
       const said = finishSay(ok);
-      g.fillStyle = "rgba(255,233,176,.92)";
+      g.fillStyle = K.cream ? "#8A5716" : "rgba(255,233,176,.92)";
       g.font = "bold 15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-      g.fillText(HEROES[S.heroIdx].name + "：「" + said + "」", cx, cardY + 292);
+      g.fillText(HEROES[S.heroIdx].name + "：「" + said + "」", cx, cardY + 214);
 
       /* ---- 这一趟的账 ---- 
          倍率只有收工才结算，所以这里必须把"现在走能拿多少"写清楚 ——
          不写的话，"累计倍率"就是一个玩家看不见的数字，等于没做。 */
       const gain = Math.round(S.trip.loot * S.trip.multi);
       const nextMulti = Math.min(2, 1 + 0.15 * (S.trip.stages + 1));
-      g.fillStyle = "rgba(200,230,200,.72)";
+      g.fillStyle = K.ink2;
       g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
       g.fillText("这一趟走了 " + S.trip.stages + " 关   ·   攒下 " + S.trip.loot + " 果   ×   " +
-                S.trip.multi.toFixed(2) + "   =   " + gain, cx, cardY + 316);
+                S.trip.multi.toFixed(2) + "   =   " + gain, cx, cardY + 236);
 
       // 肚子：一条会缩的条 + 一个口语化的档位词。
       // **不给数字** —— 玩家要判断的是"还撑不撑得住"，不是精确到 84 还是 68。
       // 标签放在条的上方左对齐（放左边会孤零零挂在条外面，像没摆好的图片）
       {
-        const bw = 176, bx = cx - bw / 2, by = cardY + 344;
-        g.fillStyle = "rgba(200,230,200,.58)";
+        const bw = 168, bx = cx - bw / 2, by = cardY + 260;
+        g.fillStyle = K.ink3;
         g.font = "11px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
         g.textAlign = "left";
         g.fillText("肚子   ·   " + ["全饿 —— 冲刺没有了", "半饿", "满饱"][bellyTier()],
-                   bx, by - 10);
+                   bx, by);
         g.textAlign = "center";
-        g.fillStyle = "rgba(255,255,255,.10)";
-        rr(g, bx, by, bw, 6, 3); g.fill();
+        const bellyArt = artOf("ui-belly");
+        // 高度必须给够。96×52 的胶囊压到 16px 时，整图拉伸会把那圈棕描边
+        // 糊成一条实心橙色椭圆 —— 截图里看起来像个"橙色豆子"，不是血条。
+        // 20px + 九宫格（按缩放比折角）才能读出"一条胶囊"。
+        const barY = by + 8, barH = 20;
+        if (bellyArt) {
+          drawNine(g, bellyArt, bx, barY, bw, barH, 18);
+        } else {
+          g.fillStyle = "rgba(255,255,255,.10)";
+          rr(g, bx, barY + 7, bw, 6, 3); g.fill();
+        }
         const bk = clamp(S.belly / 100, 0, 1);
-        g.fillStyle = bellyTier() === 0 ? "#FF9E8E" : bellyTier() === 1 ? "#FFD86B" : "#B9F06A";
-        rr(g, bx, by, Math.max(3, bw * bk), 6, 3); g.fill();
+        g.fillStyle = bellyTier() === 0 ? (K.cream ? "#C0553E" : "#FF9E8E")
+                     : bellyTier() === 1 ? (K.cream ? "#D08A22" : "#FFD86B")
+                                         : (K.cream ? "#5FA53A" : "#B9F06A");
+        rr(g, bx + 7, barY + 5, Math.max(3, (bw - 14) * bk), 10, 5); g.fill();
       }
 
       // ---- 下一关预告：这是"推关"的关键。人得知道后面还有东西 ----
+      // 只留关卡名 + 一句说明。"再往里一关"那行小标题删了 ——
+      // 它占掉 22px，而这句话本身没有信息（人当然知道后面还有一关）。
       const last = S.stage + 1 >= LEVELS.length;
       const B = settleBtns();
       if (ok && !last) {
         const nx = LEVELS[S.stage + 1];
-        g.fillStyle = "rgba(190,220,200,.55)";
-        g.font = "11px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText("再往里一关", cx, cardY + 366);
-        g.fillStyle = "#EAF6E2";
+        g.fillStyle = K.ink;
         g.font = "bold 18px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText((S.stage + 2) + ". " + nx.name + "   ·   " + nx.sub, cx, cardY + 388);
-        g.fillStyle = "rgba(185,240,106,.72)";
-        g.font = "11px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText(nx.note, cx, cardY + 408);
+        g.fillText((S.stage + 2) + ". " + nx.name + "   ·   " + nx.sub, cx, cardY + 316);
       } else if (ok && last) {
-        g.fillStyle = "#FFE58A";
+        g.fillStyle = K.cream ? "#C0871A" : "#FFE58A";
         g.font = "bold 19px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText("八个场地全清干净了", cx, cardY + 384);
-        g.fillStyle = "rgba(200,230,200,.62)";
+        g.fillText("八个场地全清干净了", cx, cardY + 316);
+        g.fillStyle = K.ink2;
         g.font = "12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText("这一趟走到底了 —— 收工之后可以换一只再来", cx, cardY + 408);
+        g.fillText("这一趟走到底了 —— 收工之后可以换一只再来", cx, cardY + 334);
       } else {
-        g.fillStyle = "#FFD3C8";
+        g.fillStyle = K.cream ? "#A2492F" : "#FFD3C8";
         g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText("换个思路，先卷一个再推   ·   或者今天就到这儿", cx, cardY + 392);
+        g.fillText("换个思路，先卷一个再推   ·   或者今天就到这儿", cx, cardY + 322);
       }
 
       /* ---- 两个按钮：继续（贪） / 收工（稳） ----
          默认高亮"继续"，因为默认应该是贪 —— 玩家没选的时候，让游戏推着他往前走。
          但两个都得看得见、都得好按，不然"贪"就不是选择，是唯一路径。 */
       const hov = S.hoverBtn === undefined ? -1 : S.hoverBtn;
+      const btnArt = artOf("ui-btn");
       const drawBtn = (r, hi, main, sub, accent) => {
+        if (btnArt) {
+          // 美术底：招牌黄按钮。**只在被指着的时候上色**，
+          // 另一个压暗压到 0.55 —— 两个一样亮的黄按钮会互相抢，
+          // "贪还是稳"就变成"两个都行"，这个选择也就不存在了。
+          g.globalAlpha = hi ? 1 : 0.55;
+          drawNine(g, btnArt, r.x, r.y, r.w, r.h, 40);
+          g.globalAlpha = 1;
+          // 指着的那个再加一圈光，鼠标不移上去也认得出默认项
+          if (hi) {
+            g.strokeStyle = "rgba(255,244,200,.75)";
+            g.lineWidth = 2;
+            rr(g, r.x - 2, r.y - 2, r.w + 4, r.h + 4, 13);
+            g.stroke();
+          }
+          g.fillStyle = hi ? "#5A3A16" : "rgba(90,58,22,.62)";
+          g.font = "bold 15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+          g.fillText(main, r.x + r.w / 2, r.y + 15);
+          g.fillStyle = hi ? "rgba(90,58,22,.74)" : "rgba(90,58,22,.40)";
+          g.font = "10px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+          g.fillText(sub, r.x + r.w / 2, r.y + 30);
+          return;
+        }
         g.fillStyle = hi ? accent.fill : "rgba(255,255,255,.055)";
         rr(g, r.x, r.y, r.w, r.h, 12); g.fill();
         g.strokeStyle = hi ? accent.line : "rgba(255,255,255,.16)";
@@ -6710,11 +7059,14 @@ function render() {
       drawBtn(B.home, hov === 1, "收工回家", "+ " + gain + " 果  ·  吃饱", AMB);
 
       // 提示行
-      g.fillStyle = "rgba(200,230,200,.62)";
+      // 它是"整个画面"的热键，不是卡片内容 —— 放卡片下面。
+      // 塞在卡里会骑在下边框的圆角上，读起来像"卡片裂了一条缝"。
+      // 颜色也不能沿用卡片内的深棕：现在是压在压暗层上，深棕等于没写。
+      g.fillStyle = "rgba(255,248,232,.66)";
       g.font = "bold 12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
       g.fillText(ok && !last ? "回车 / 点击  继续   ·   E  收工回家   ·   ESC 回选人"
                              : "回车 / 点击  重打   ·   E  收工回家   ·   ESC 回选人",
-                 cx, cardY + 484);
+                 cx, cardY + cardH + 24);
     }
   } else {
     drawSelect(g);
@@ -6944,6 +7296,9 @@ Object.defineProperty(window.GROVE, "PLAYER_SPAWN", { get: () => PLAYER_SPAWN })
 Object.defineProperty(window.GROVE, "RAMPS", { get: () => RAMPS });
 Object.defineProperty(window.GROVE, "BOUNCERS", { get: () => BOUNCERS });
 Object.defineProperty(window.GROVE, "PORTALS", { get: () => PORTALS });
+// 结算卡的几何：按钮/文字都按它排，冒烟断言要拿它判"按钮有没有掉出卡片"，
+// 写死 544 那种事干过一次 —— 卡片一加高，断言就变成在验一个不存在的尺寸。
+window.GROVE.CARD = { y: CARD_Y, h: CARD_H, btnY: BTN_Y, btnH: BTN_H };
 window.GROVE.GROUND_Y = GROUND_Y;
 window.GROVE.WALL_L = WALL_L;
 window.GROVE.WALL_R = WALL_R;

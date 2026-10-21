@@ -36,3 +36,8 @@ client/shots/_old/
 
 # ---- 本地工具状态（WorkBuddy 工作区记忆/总览）----
 .workbuddy/
+
+# ---- 验证轮次产物（随时可重跑生成）----
+.playwright-mcp/
+client/prototype/_check2/
+client/shots/_*.png

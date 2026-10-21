@@ -148,6 +148,10 @@ def main():
     # ② 调试导出 -> export
     body = must(body, 'window.GROVE = {', 'export const GROVE: any = {')
     body = body.replace('Object.defineProperty(window.GROVE,', 'Object.defineProperty(GROVE,')
+    # 单个字段的写法有两类：`window.GROVE.X = X;`（下面这个循环）和
+    # 对象字面量 `window.GROVE.CARD = {...}`。后者不在循环里，
+    # 漏掉的话 Cocos 侧会去给一个不存在的 window.GROVE 赋值。
+    body = must(body, 'window.GROVE.CARD =', 'GROVE.CARD =')
     for k in ('GROUND_Y', 'WALL_L', 'WALL_R'):
         body = must(body, 'window.GROVE.%s = %s;' % (k, k), 'GROVE.%s = %s;' % (k, k))
 

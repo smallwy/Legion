@@ -46,6 +46,7 @@
 import {
     Node, UITransform, UIOpacity, Label, Sprite, Graphics, Color,
     EventTouch, Vec3, tween, director, Director,
+    assetManager, SceneAsset,
 } from 'cc';
 import { EDITOR } from 'cc/env';
 import { MAX_SQUAD, PETS, petGap, squadSize, unlockedPets } from './config/Roster';
@@ -1105,8 +1106,23 @@ class HomeController {
      */
     private launchBattle() {
         this.closeDepart(() => {
-            director.loadScene('Battle', (err) => {
-                if (err) console.error('[HomeRuntime] 进入战斗失败：', err);
+            /* 为什么不用 director.loadScene('Battle')：
+               本工程 settings 里没有 scenes 注册表（program.json / builder.json
+               都只有版本号），Cocos 预览只把"当前场景 Home"打进包，
+               loadScene 按名字解析不到 Battle → 报"找不到场景"。
+               这里直接按场景资产 uuid 拉取并 runScene，绕过名字注册表，
+               预览里一定能进。正式构建时仍建议把 Battle.scene 加进
+               构建面板的 Scenes 列表（标准做法）。 */
+            const BATTLE_UUID = 'b1a4d7e2-3c58-4f90-8a61-2e7b9c4d5f03';
+            assetManager.loadAny(BATTLE_UUID, (err: Error | null, asset: unknown) => {
+                if (!err && asset instanceof SceneAsset) {
+                    director.runScene((asset as SceneAsset).scene);
+                    return;
+                }
+                console.warn('[HomeRuntime] 按 uuid 载入战斗失败，回退 loadScene：', err);
+                director.loadScene('Battle', (e2) => {
+                    if (e2) console.error('[HomeRuntime] 进入战斗失败：', e2);
+                });
             });
         });
     }

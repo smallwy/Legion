@@ -53,6 +53,7 @@ HEADER = '''/* ⚠ 自动生成，勿手改 —— 源：client/prototype/grove.
      groveBoot(hero?, stage?)   开一局（不传就按存档推）
      groveTick(dt) / groveRender()
      groveSetExitHook(fn)       "收工 / ESC 退出"交给 Cocos 处理
+     groveSetArt(key, img)      注入美术图（pet-cat / head-cat / ui-coin …）
      GROVE                      调试导出（和浏览器里的 window.GROVE 同一份）
    ========================================================================= */
 '''
@@ -103,6 +104,12 @@ export function groveAttachCanvas(c: any): void {
 }
 export function groveTick(dt: number): void { tick(dt); }
 export function groveRender(): any { return render(); }
+
+/* 美术图注入。原型要能双击打开、零依赖，所以 grove.html 里一张图都不引；
+   进了 Cocos 由 GroveBattle 用 resources.load 拿到图，再从这个口子喂进来。
+   有图贴图、没图回退代码图形 —— 两边都不会坏。
+   键名：pet-<heroId> / head-<heroId> / ui-<name> */
+export { groveSetArt };
 
 /* 原型里鼠标事件直接挂在 canvas 上；进 Cocos 后画布是离屏的、不接 DOM 事件，
    事件源换成 GroveBattle 转发过来的指针坐标（已经是 960x600 画布坐标系）。 */

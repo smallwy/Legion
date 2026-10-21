@@ -40,11 +40,11 @@
  *   Shift 按住看预测线 · R 重打 · Esc 收工回主界面
  */
 import {
-    _decorator, Component, Node, Camera, Color, Layers,
-    director, assetManager, SceneAsset,
+    _decorator, Component, Node, Camera, Color,
+    director, assetManager, SceneAsset, resources, ImageAsset,
 } from 'cc';
 import {
-    groveAttachCanvas, groveBoot, groveRender, groveSetExitHook, groveTick,
+    groveAttachCanvas, groveBoot, groveRender, groveSetArt, groveSetExitHook, groveTick,
 } from './GroveRuntime';
 
 const { ccclass } = _decorator;
@@ -58,6 +58,27 @@ const HOME_UUID = 'ce855542-8bb9-44de-8e9d-20c436ed206f';
 
 /** DOM 叠加层的 z-index。Cocos 画布默认 0，取 10 足够压住。 */
 const STAGE_Z = '10';
+
+/** 六只宠物的 heroId（和 GroveRuntime 的 HEROES[].id 一一对应） */
+const HERO_IDS = ['cat', 'dog', 'ham', 'rab', 'ox', 'fox'];
+
+/**
+ * 美术图清单：注入键 → resources 下的路径。
+ *
+ * 图是 client/tools/gen_grove_art.py 从 ui/home/ 收缩出来的副本
+ * （立绘高 192、头像 96，合计 395KB）。
+ * 为什么不直接引用 ui/ 下的原图：那些文件主界面是**场景直连 spriteFrame**，
+ * 而动过的才放进 resources 才能用 resources.load 动态加载。
+ *
+ * 加载失败只 warning、不中断 —— 绘制侧有回退分支，没图就画代码图形。
+ */
+const ART_MANIFEST: ReadonlyArray<readonly [string, string]> = [
+    ...HERO_IDS.map((id) => ['pet-' + id, 'grove/pet-' + id] as const),
+    ...HERO_IDS.map((id) => ['head-' + id, 'grove/head-' + id] as const),
+    ['ui-pip', 'grove/ui-pip'],
+    ['ui-pip-on', 'grove/ui-pip-on'],
+    ['ui-coin', 'grove/ui-coin'],
+];
 
 @ccclass('GroveBattle')
 export class GroveBattle extends Component {
@@ -89,6 +110,7 @@ export class GroveBattle extends Component {
         /* 先绑画布再开局：绘制要 ctx，beginRun 会立刻画一帧。 */
         groveAttachCanvas(cv);
         groveSetExitHook(() => this._backHome());
+        this._loadArt();
         groveBoot();
 
         this._ready = true;
@@ -104,6 +126,60 @@ export class GroveBattle extends Component {
         // 和原型 frame() 同一个上限：切标签页回来不要一次跳半秒
         groveTick(Math.min(dt, 0.034));
         groveRender();
+    }
+
+    /* ------------------------------------------------------------------ 美术 */
+
+    /**
+     * 把美术图喂给运行时。
+     *
+     * 运行时是纯 canvas 2D，要的是"能被 drawImage 直接吃掉"的东西 ——
+     * HTMLImageElement / ImageBitmap / HTMLCanvasElement 都行，
+     * 所以从 ImageAsset 里把底层数据取出来，取不到就用 nativeUrl 再拉一次。
+     *
+     * 失败不抛、不中断：运行时那边 artOf() 会因为拿不到图而走代码图形。
+     */
+    private _loadArt(): void {
+        for (const [key, path] of ART_MANIFEST) {
+            resources.load(path, ImageAsset, (err: Error | null, asset: ImageAsset) => {
+                if (err || !asset) {
+                    console.warn('[GroveBattle] 美术图没加载上，回退代码图形：' + path, err);
+                    return;
+                }
+                const drawable = this._toDrawable(asset);
+                if (!drawable) {
+                    console.warn('[GroveBattle] 美术图取不到可绘制数据：' + path);
+                    return;
+                }
+                groveSetArt(key, drawable);
+            });
+        }
+    }
+
+    /**
+     * ImageAsset → 可绘制对象。
+     *
+     * 正常路径：Web 上 `.data` 就是解码好的 HTMLImageElement，直接能用。
+     * 兜底路径：某些平台上 `.data` 是 ArrayBuffer（压缩纹理），那就用
+     * `nativeUrl` 重新 new Image 拉一遍 —— 图本身就在包内，不会再走网络。
+     * 返回值可能还没解码完（width 为 0），运行时 artOf() 会跳过它，解码完自动生效。
+     */
+    private _toDrawable(asset: ImageAsset): unknown {
+        const raw = (asset as unknown as { data?: unknown; _data?: unknown }).data
+            ?? (asset as unknown as { _data?: unknown })._data;
+        if (raw && typeof (raw as { width?: number }).width === 'number'
+            && (raw as { width: number }).width > 0) {
+            return raw;
+        }
+
+        const url = (asset as unknown as { nativeUrl?: string; _nativeUrl?: string }).nativeUrl
+            ?? (asset as unknown as { _nativeUrl?: string })._nativeUrl;
+        if (url && typeof Image !== 'undefined') {
+            const img = new Image();
+            img.src = url;
+            return img;
+        }
+        return null;
     }
 
     /* ------------------------------------------------------------------ 骨架 */

@@ -38,6 +38,19 @@ function transpile(file) {
 fs.rmSync(OUT, { recursive: true, force: true });
 fs.mkdirSync(OUT, { recursive: true });
 
+/* ---- ⓪ 美术图（resources/grove 下的原样拷一份，给 resources 桩读） ---- */
+const ART_SRC = path.join(ROOT, 'assets/resources/grove');
+const ART_OUT = path.join(OUT, 'art');
+fs.mkdirSync(ART_OUT, { recursive: true });
+let artCount = 0;
+if (fs.existsSync(ART_SRC)) {
+    for (const f of fs.readdirSync(ART_SRC)) {
+        if (!f.endsWith('.png')) continue;
+        fs.copyFileSync(path.join(ART_SRC, f), path.join(ART_OUT, f));
+        artCount++;
+    }
+}
+
 /* ---- ① cc 桩 ---- */
 fs.writeFileSync(path.join(OUT, 'cc-stub.js'), `
 export const _decorator = { ccclass: () => (cls) => cls, property: () => () => {} };
@@ -79,6 +92,21 @@ export class Component { constructor() { this.node = new Node('Component'); } }
 
 export class SceneAsset { constructor() { this.scene = {}; } }
 
+export class ImageAsset {
+  constructor(o) { Object.assign(this, o || {}); }
+}
+
+/* resources.load 的桩：直接从 ./art/ 读同名 png，塞成 { data: img } ——
+   和 Cocos Web 上 ImageAsset.data 就是 HTMLImageElement 的行为对齐。 */
+export const resources = {
+  load(path, type, cb) {
+    const img = new Image();
+    img.onload = () => cb(null, { data: img });
+    img.onerror = () => cb(new Error('404 ' + path), null);
+    img.src = './art/' + path.split('/').pop() + '.png';
+  },
+};
+
 export const director = {
   runScene() { console.log('[stub] director.runScene'); },
   loadScene(n, cb) { console.log('[stub] director.loadScene', n); if (cb) cb(null); },
@@ -115,7 +143,7 @@ fs.writeFileSync(path.join(OUT, 'index.html'), `<!DOCTYPE html>
 <canvas id="GameCanvas"></canvas>
 <script type="module">
   import { GroveBattle } from './GroveBattle.js';
-  import { groveBoot } from './GroveRuntime.js';
+  import { groveBoot, GROVE } from './GroveRuntime.js';
 
   const q = new URLSearchParams(location.search);
   const frames = Number(q.get('frames') || 90);
@@ -124,8 +152,12 @@ fs.writeFileSync(path.join(OUT, 'index.html'), `<!DOCTYPE html>
   gb.onLoad();
 
   // ?stage=3 直接开第 4 关（长滑道），验关卡几何有没有正确带过来
+  // ?hero=4 换角色（cat0 dog1 ham2 rab3 ox4 fox5），验六张立绘都对得上
   const st = q.get('stage');
-  if (st !== null) groveBoot(0, Number(st));
+  const ho = q.get('hero');
+  if (st !== null || ho !== null) {
+    groveBoot(ho === null ? 0 : Number(ho), st === null ? 0 : Number(st));
+  }
 
   const stage = document.getElementById('grove-stage');
   if (!stage) console.error('[harness] 没找到 #grove-stage —— 组件没挂 DOM 层');
@@ -149,4 +181,5 @@ fs.writeFileSync(path.join(OUT, 'index.html'), `<!DOCTYPE html>
 `);
 
 console.log('已生成验证页：client/prototype/_check2/');
+console.log('  美术图 %d 张已就位', artCount);
 console.log('  访问 http://127.0.0.1:8899/_check2/?frames=90');

@@ -50,6 +50,35 @@
 要上原生 / 小游戏，得把 ctx 调用逐条换成 `Graphics` 重写渲染层（约 2000 行），
 挂载逻辑本身可以留用。
 
+### 美术图怎么接的（2026-10-21）
+
+战斗里原来只有代码画的简笔图形，`ui/home/` 那套美术资源一张没用上。现在：
+
+| 位置 | 用的图 |
+|---|---|
+| 我方单位（战斗 / 选人） | `ui/home/pets/*.png` 六张全身立绘 |
+| HUD 左上头像 | `ui/home/heads-circle/*.png` 六张圆头像 |
+| 关卡进度点 | `ui/home/pip.png` / `pip-on.png` |
+| 收成图标 | `ui/icons/coin.png` |
+
+**图不是直接引用的**：从 `ui/home/` 收缩一份副本到 `assets/resources/grove/`
+（`client/tools/gen_grove_art.py`：立绘高 192、头像 96，合计 395KB）。
+原图不动 —— 主界面是场景直连 spriteFrame，动它有断引用风险；而且战斗里角色只有 44px 高，
+用 640px 的图纯属浪费。
+
+链路：`GroveBattle._loadArt()` 用 `resources.load` 拿 `ImageAsset` → 取底层可绘制对象 →
+`groveSetArt(key, img)` 塞进运行时的 `ART` 表 → `drawPet` / `drawHUD` / `drawTrail`
+**有图贴图、没图回退代码图形**。两套并存，谁也不会坏，所以 `grove.html` 依然零依赖、双击能打开。
+
+立绘缩放的口径（改之前先看）：`dh = h × 1.35`。代码图形的总高不是 `h` ——
+身体占 `h`，耳朵还往上多出 15px，猫 `h=44` 实际总高约 59；立绘要按"总高"对才不发小。
+
+改美术（换图 / 加角色）：
+
+```bash
+python client/tools/gen_grove_art.py     # 重跑就行，文件名映射写在脚本顶部
+```
+
 ### 改玩法的正确姿势
 
 **别手改 `GroveRuntime.ts`**（重跑脚本会被整体覆盖）。改 `prototype/grove.html`，然后：
@@ -65,8 +94,9 @@ node   client/tools/ts-syntax-check.js         # 语法守门（需要 typescrip
 ```bash
 node client/tools/grove-dom-harness.js
 # 起个静态服务器指向 client/prototype，然后开：
-#   /_check2/?frames=90            第 1 关
-#   /_check2/?frames=90&stage=3    第 4 关长滑道
+#   /_check2/?frames=90                  第 1 关
+#   /_check2/?frames=90&stage=3          第 4 关长滑道
+#   /_check2/?frames=90&stage=3&hero=4   换角色（验六张立绘都接对了）
 ```
 
 它会用一套极简 `cc` 桩把 `GroveBattle` 在浏览器里真跑一遍（含 90 帧 tick + render），

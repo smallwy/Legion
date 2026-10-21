@@ -165,6 +165,36 @@ function hash(i) {
    不做伤害数字 —— 这是推球游戏，不是弹幕游戏。差异化只在"怎么打到"。
    ========================================================================== */
 
+/* ----------------------------------------------------------------------------
+   美术图（可选注入）
+   ----------------------------------------------------------------------------
+   grove.html 要能双击打开、零外部依赖，所以这里**不引用任何图片文件**。
+   图片只在 Cocos 里由 GroveBattle 通过 resources.load 加载后注进来：
+   有图就贴图，没图回退到下面的代码图形 —— 两套并存，谁也不会坏。
+
+   键名约定：pet-<heroId> / head-<heroId> / ui-<name>
+   （heroId 见 HEROES[].id：cat / dog / ham / rab / ox / fox）
+   -------------------------------------------------------------------------- */
+const ART = Object.create(null);
+
+/**
+ * 注入一张美术图。
+ * img 可以是 HTMLImageElement / ImageBitmap / HTMLCanvasElement —— 只要能被
+ * drawImage 直接吃掉。传 null 就是撤掉（回退代码图形）。
+ */
+function groveSetArt(key, img) {
+  if (img) ART[key] = img; else delete ART[key];
+}
+
+/** 取图；没注入或图还没解码完（宽高为 0）都返回 null，让调用方走回退分支。 */
+function artOf(key) {
+  if (!key) return null;
+  const a = ART[key];
+  if (!a) return null;
+  const w = a.width || a.naturalWidth || 0;
+  return w > 0 ? a : null;
+}
+
 const HEROES = [
   {
     id: "cat", name: "尖耳猫", tag: "溜溜球",
@@ -4072,6 +4102,12 @@ function drawPet(g, x, footY, w, h, H, face, o) {
   // （影子 0.18、受击闪白、眼睛高光），外面设一次 globalAlpha 会被它清掉。
   // 门口"影狐隐进阴影"就是踩过这个坑 —— 设了 0.2，画出来还是全不透明。
   const A = o.alpha === undefined ? 1 : o.alpha;
+
+  // 有美术立绘就贴图（只有进 Cocos 才有），否则走下面这一整套代码图形。
+  // 碰撞体始终是 w×h，贴图只改绘制，手感不变。
+  const art = artOf("pet-" + H.id);
+  if (art) { drawPetSprite(g, art, x, footY, w, h, face, A, o); return; }
+
   const sq = o.squash || 0;
   const bw = w * (1 + sq * 0.16);
   const bh = h * (1 - sq * 0.14);
@@ -4220,6 +4256,43 @@ function drawPet(g, x, footY, w, h, H, face, o) {
     g.fill();
     g.globalAlpha = 1 * A;
   }
+}
+
+/* ----------------------------------------------------------------------------
+   贴美术立绘（只有进 Cocos 注入了图才会走到这里，见文件顶部的 ART）
+
+   三件事和代码图形不一样，必须按图处理：
+     ① 宽高比：立绘是 409×640 这种竖长的，硬按 w 画会把猫压成方的 ——
+        所以按**高度**等比，宽度反推。
+     ② 落脚点：立绘的脚在图片底边，所以底边对齐 footY。
+     ③ 朝向：美术只画了一张（正面偏右），往左走靠 scale(-1,1) 镜像。
+
+   ×1.35 是量出来的：代码图形的总高不是 h —— 身体占 h，**耳朵还往上多出 15px**
+   （`ey = footY - bh` 再往上画）。猫 h=44，实际总高约 59。
+   立绘要按"总高"对，所以 dh 取 h×1.35；宽度反推回来正好 0.64×59 ≈ 38 = HEROES.w。
+   -------------------------------------------------------------------------- */
+function drawPetSprite(g, img, x, footY, w, h, face, A, o) {
+  // 影子：和代码图形同一套，贴地
+  g.globalAlpha = 0.18 * A;
+  g.fillStyle = "#16261C";
+  g.beginPath();
+  g.ellipse(x, footY + 2, w * 0.44, 5, 0, 0, 6.283);
+  g.fill();
+
+  const sq = o.squash || 0;
+  const dh = h * 1.35 * (1 - sq * 0.14);
+  const dw = dh * ((img.width || img.naturalWidth) / (img.height || img.naturalHeight)) * (1 + sq * 0.16);
+
+  g.globalAlpha = 1 * A;
+  g.save();
+  g.translate(x, footY);
+  if (face < 0) g.scale(-1, 1);
+  // 出手闪白：代码图形是盖一层白矩形；贴图改提亮度，只作用于不透明像素，
+  // 不会在角色周围留一个白框。浏览器不支持 filter 时赋值被忽略，不报错。
+  if (o.flash > 0) g.filter = "brightness(" + (1 + o.flash * 1.8).toFixed(2) + ")";
+  g.drawImage(img, -dw / 2, -dh, dw, dh);
+  g.restore();
+  g.globalAlpha = 1;
 }
 
 /* ----------------------------------------------------------------------------
@@ -5360,20 +5433,38 @@ function drawTrail(g) {
   g.fillText(wtxt, cx + 132, 22);
   g.textAlign = "center";
 
+  const pipOff = artOf("ui-pip");
+  const pipOn = artOf("ui-pip-on");
+
   for (let i = 0; i < n; i++) {
     const x = cx - total / 2 + i * gap;
     const y = 45;
     const done = i < S.stage;
     const cur = i === S.stage;
-    // 深色底圈：亮天空主题里，浅灰点在白云上根本看不见
-    g.beginPath();
-    g.arc(x, y, (cur ? 6 : 4.2) + 2, 0, 6.283);
-    g.fillStyle = "rgba(20,34,26,.38)";
-    g.fill();
-    g.beginPath();
-    g.arc(x, y, cur ? 6 : 4.2, 0, 6.283);
-    g.fillStyle = cur ? "#FFE066" : done ? "#B9F06A" : "rgba(255,255,255,.58)";
-    g.fill();
+
+    if (pipOff && pipOn) {
+      // 有点/亮点图就贴图。深色底圈必须留着 —— 亮天空主题里，
+      // 浅色方块糊在白云上就没了（原代码的圆点也是靠这个底圈才看得见）
+      const s = cur ? 16 : 11;
+      // 底圈跟着方块走（圆角矩形，不是圆）：形状不一致时读起来像"灰点 + 灰块"两层东西
+      rr(g, x - s / 2 - 1.6, y - s / 2 - 1.6, s + 3.2, s + 3.2, 4);
+      g.fillStyle = "rgba(20,34,26,.30)";
+      g.fill();
+      g.globalAlpha = cur ? 1 : done ? 0.95 : 0.72;
+      g.drawImage(done || cur ? pipOn : pipOff, x - s / 2, y - s / 2, s, s);
+      g.globalAlpha = 1;
+    } else {
+      // 深色底圈：亮天空主题里，浅灰点在白云上根本看不见
+      g.beginPath();
+      g.arc(x, y, (cur ? 6 : 4.2) + 2, 0, 6.283);
+      g.fillStyle = "rgba(20,34,26,.38)";
+      g.fill();
+      g.beginPath();
+      g.arc(x, y, cur ? 6 : 4.2, 0, 6.283);
+      g.fillStyle = cur ? "#FFE066" : done ? "#B9F06A" : "rgba(255,255,255,.58)";
+      g.fill();
+    }
+
     if (cur) {
       g.strokeStyle = "rgba(255,224,102,.55)";
       g.lineWidth = 2.4;
@@ -5466,20 +5557,25 @@ function drawHUD(g) {
   g.lineWidth = 1.5;
   g.stroke();
 
-  // 头像
+  // 头像：有美术圆头像就贴，没图就画代码脸
+  const av = artOf("head-" + H.id);
   g.save();
   g.beginPath();
   g.arc(48, 45, 22, 0, 6.283);
   g.clip();
-  g.fillStyle = H.c1;
-  g.fillRect(26, 23, 44, 44);
+  if (av) {
+    g.drawImage(av, 26, 23, 44, 44);
+  } else {
+    g.fillStyle = H.c1;
+    g.fillRect(26, 23, 44, 44);
+  }
   g.restore();
-  g.strokeStyle = H.c3;
+  g.strokeStyle = av ? "rgba(255,255,255,.55)" : H.c3;
   g.lineWidth = 2;
   g.beginPath();
   g.arc(48, 45, 22, 0, 6.283);
   g.stroke();
-  drawEyes(g, 48, 44, 7, 2.6, 1, false);
+  if (!av) drawEyes(g, 48, 44, 7, 2.6, 1, false);
 
   g.fillStyle = "#EAF6E2";
   g.font = "bold 16px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
@@ -5538,10 +5634,15 @@ function drawHUD(g) {
   g.fillText(pr.text, W - 250, 97);
 
   // 收成：同一块面板里，别飘到外面去
-  g.fillStyle = "#FFD86B";
-  g.beginPath();
-  g.arc(W - 243, 120, 7, 0, 6.283);
-  g.fill();
+  const coinArt = artOf("ui-coin");
+  if (coinArt) {
+    g.drawImage(coinArt, W - 251, 112, 16, 16);
+  } else {
+    g.fillStyle = "#FFD86B";
+    g.beginPath();
+    g.arc(W - 243, 120, 7, 0, 6.283);
+    g.fill();
+  }
   g.fillStyle = "#FFE9B0";
   g.font = "bold 15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
   g.fillText("收成 " + S.food, W - 228, 120);

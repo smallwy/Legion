@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, input, Input, EventKeyboard, KeyCode } from 'cc';
+import { _decorator, Component, Node, input, Input, EventKeyboard, KeyCode, director as ccDirector } from 'cc';
 import { BattleDirector } from './battle/BattleDirector';
 import { BossController } from './battle/BossController';
 import { AbilitySystem } from './battle/AbilitySystem';
@@ -10,6 +10,9 @@ import { ProjectileManager } from './battle/ProjectileManager';
 import { UpgradeSystem, expProgress } from './battle/UpgradeSystem';
 import { WaveManager } from './battle/WaveManager';
 import { BOSS, FIELD, FX, PLAYER, SATIETY } from './config/BattleConfig';
+import { powerScale, rolesFor, squadSize } from './config/Roster';
+import { loadSave, settleInto } from './config/SaveData';
+import type { SaveState } from './config/SaveData';
 import { clamp } from './core/MathUtil';
 import { SpriteAssets } from './view/SpriteAssets';
 import { BackgroundRenderer } from './view/BackgroundRenderer';
@@ -40,6 +43,15 @@ const BOSS_MIN_SPAWN_DIST = 300;
 @ccclass('GameBootstrap')
 export class GameBootstrap extends Component {
     private _sprites = new SpriteAssets();
+
+    /**
+     * 进场景时读一次的存档快照。
+     * 战斗内不再重读：一局打到一半外部改存档（多标签页 / 调试器）不该影响这一局。
+     * 结算时用 `settleInto` 在快照基础上写回，避免覆盖掉期间别的写入。
+     */
+    private _save: SaveState = loadSave();
+    /** 本局出战人数（结算面板与 HUD 都要显示，别每处各算一遍） */
+    private _squad = 1;
 
     private _player: PlayerController | null = null;
     private _director: BattleDirector | null = null;
@@ -100,14 +112,29 @@ export class GameBootstrap extends Component {
         const upgrades = new UpgradeSystem();
         const abilities = new AbilitySystem();
         abilities.enemies = enemies;
+
+        /* ---- 队伍规模：唯一真值来自存档（关卡进度 → 解锁数 → 出战数）----
+           改造前这里是硬编码 3 只、而家园只有 1 只砂糖 ——
+           玩家带 1 只出门、场上却站 3 个跟班，"我养的宠物和场上打的不是同一批"。
+           现在人数、槽位、技能、敌人配平全部由这一个数字推导。 */
+        const squad = squadSize(this._save.cleared);
+        const scale = powerScale(squad);
+        this._squad = squad;
+
         // CR-017：英雄不再发子弹，改为按槽位放技能（贯穿 / 落雷 / 冲击）
-        const heroes = new HeroSquad(root, player, enemies, this._sprites.pet);
+        const heroes = new HeroSquad(
+            root, player, enemies, this._sprites.pet,
+            rolesFor(squad),
+            // 开局饱食度来自存档 —— 家园那条 3 格 bar 和战斗 HUD 是同一个数
+            this._save.satiety,
+        );
         heroes.upgrades = upgrades;
         heroes.abilities = abilities;
 
-        const waves = new WaveManager(enemies, player);
+        // 敌人数量按队伍规模缩放（否则 1 只宠物要打为 3 人标定的 20 波）
+        const waves = new WaveManager(enemies, player, scale);
         // BOSS 复用甲虫贴图放大 4 倍（128px）；换正式美术时只改 BOSS.displaySize 与贴图
-        const boss = new BossController(root, player, this._sprites.tank);
+        const boss = new BossController(root, player, this._sprites.tank, scale);
         projectiles.boss = boss;
         // ★ 必须接：BOSS 不在 EnemyManager 里，英雄靠这条线才会对它开火
         heroes.boss = boss;
@@ -205,7 +232,13 @@ export class GameBootstrap extends Component {
 
         boss.onDefeated = () => director.notifyBossDefeated();
         director.onSettle = (stats) => {
-            if (this._panel) this._panel.show(stats);
+            /* 结算 = 战利品入池的**唯一**时机。放在这里而不是 SettlementPanel 里：
+               面板只管显示 —— 它被隐藏 / 复用 / 换皮都不该影响存档。
+               改造前这里只弹面板，`SettlementPanel` 自己写着"资源入池在家园接线，M2"，
+               于是打完一场家园三个数一个都不变，"出门"就失去了意义。 */
+            const { next, loot } = settleInto(this._save, stats, heroes.satiety);
+            this._save = next;
+            if (this._panel) this._panel.show(stats, loot, this._squad, next.cleared);
         };
 
         // 5) 渲染器（都挂 field，形成「背景 → 实体容器 → 特效层」三层）
@@ -257,6 +290,16 @@ export class GameBootstrap extends Component {
         this._hud = hud;
         this._panel = panel;
         this._upgradePanel = upgradePanel;
+
+        /* 结算面板的两条出路。之前只有"再来一局"，没有回家的路 ——
+           进战斗之后只能关掉程序，这是流程上的断头路。 */
+        panel.onAgain = () => this.restartBattle();
+        panel.onHome = () => {
+            ccDirector.loadScene('Home', (err) => {
+                if (err) console.error('[GameBootstrap] 返回家园失败：', err);
+            });
+        };
+
         this._ready = true;
 
         console.log('[GameBootstrap] 世界构建完成 · 占位精灵 ' +
@@ -393,7 +436,7 @@ export class GameBootstrap extends Component {
 
         switch (e.keyCode) {
             case KeyCode.KEY_E:
-            case KeyCode.ESC:
+            case KeyCode.ESCAPE:
                 director.withdraw();
                 break;
             case KeyCode.KEY_F:
@@ -402,6 +445,11 @@ export class GameBootstrap extends Component {
             case KeyCode.SPACE:
                 if (director.phase === 'settlement') {
                     this.restartBattle();
+                }
+                break;
+            case KeyCode.KEY_R:
+                if (director.phase === 'settlement') {
+                    ccDirector.loadScene('Home');
                 }
                 break;
             default:

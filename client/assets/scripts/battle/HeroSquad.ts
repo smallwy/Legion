@@ -1,8 +1,10 @@
 import { Node, Sprite, UITransform } from 'cc';
-import { ABILITY, HERO, HERO_ABILITIES, SATIETY } from '../config/BattleConfig';
+import { ABILITY, HERO, SATIETY } from '../config/BattleConfig';
 import type { AbilityKind } from '../config/BattleConfig';
+import { rolesFor } from '../config/Roster';
+import type { HeroRole } from '../config/Roster';
 import { Formation } from './Formation';
-import type { SlotPoint } from './Formation';
+import type { Slot, SlotPoint } from './Formation';
 import { castCycle } from './UpgradeSystem';
 import type { UpgradeStats, UpgradeSystem } from './UpgradeSystem';
 import type { AbilitySystem } from './AbilitySystem';
@@ -38,10 +40,12 @@ export interface Hero {
     powerMul: number;   // 「半饿最强」倍率（每帧由饱食度档位写入）
     baseScale: number;
     hasSprite: boolean;
-    /** 槽位序号（0=左后 1=右后 2=正后），决定它用哪个技能 */
+    /** 槽位序号（0 = 队形表里的第一个位置），只用于渲染排序与调试 */
     slot: number;
     /** 该槽位的技能形态（CR-017） */
     kind: AbilityKind;
+    /** 该英雄的队形槽位（局部坐标，跟着角色走而不是跟着索引走） */
+    pos: Slot;
 }
 
 /** 饱食度档位（HUD 与渲染都要读，所以导出） */
@@ -85,19 +89,35 @@ export class HeroSquad {
     feeds: number = 0;
 
     private _heroes: Hero[] = [];
+    private _roles: HeroRole[] = [];
     private _formation = new Formation();
     private _slot: SlotPoint = { x: 0, y: 0 };
+    /** 登记时去掉（`satiety` 要能被存档回写，见 `settleInto`） */
+    private _startSatiety: number;
 
+    /**
+     * @param roles 出战角色表 —— 由 `Roster.rolesFor(squadSize(cleared))` 给出。
+     *              这是**唯一**决定"场上几只、各自什么技能、站哪里"的输入。
+     *              `undefined` 时退化为满编 3 人（老调用方/离线测试不必改）。
+     * @param startSatiety 开局饱食度 —— 来自存档（家园那条 3 格 bar 就是它）。
+     */
     constructor(
         parent: Node,
         private _player: PlayerController,
         private _enemies: EnemyManager,
         heroSprite: SpriteEntry | null,
+        roles?: HeroRole[],
+        startSatiety?: number,
     ) {
+        this._roles = roles && roles.length > 0 ? roles.slice() : rolesFor(3);
+        this._startSatiety = startSatiety === undefined ? SATIETY.start : startSatiety;
+        this.satiety = Math.max(0, Math.min(SATIETY.max, this._startSatiety));
+
         // 先让队形锚在主角初始位（否则开局槽位会算到 (0,0) 原点）
         this._formation.reset(this._player.x, this._player.y);
 
-        for (let i = 0; i < HERO.count; i++) {
+        for (let i = 0; i < this._roles.length; i++) {
+            const role = this._roles[i];
             const node = new Node('Hero_' + i);
             parent.addChild(node);
             node.addComponent(UITransform);
@@ -113,7 +133,7 @@ export class HeroSquad {
             node.setScale(baseScale, baseScale, 1);
 
             // 初始直接落在槽位上，否则开局会从主角身上"弹"出去
-            this._formation.slotTarget(i, this._slot);
+            this._formation.slotTarget(role.slot, this._slot);
 
             this._heroes.push({
                 node,
@@ -130,7 +150,8 @@ export class HeroSquad {
                 baseScale,
                 hasSprite,
                 slot: i,
-                kind: HERO_ABILITIES[i % HERO_ABILITIES.length],
+                kind: role.kind,
+                pos: role.slot,
             });
             node.setPosition(this._slot.x, this._slot.y, 2);
         }
@@ -138,6 +159,11 @@ export class HeroSquad {
 
     get list(): Hero[] {
         return this._heroes;
+    }
+
+    /** 实际出战人数（= 已解锁宠物数，上限 `MAX_SQUAD`） */
+    get count(): number {
+        return this._heroes.length;
     }
 
     /** 当前档位（HUD 上色用） */
@@ -208,7 +234,7 @@ export class HeroSquad {
             const cycle = this._cycleOf(h, stats);
 
             // ---- 槽位弹性跟随（弹簧-阻尼：落到目标点后稳定，不来回震荡）----
-            this._formation.slotTarget(i, this._slot);
+            this._formation.slotTarget(h.pos, this._slot);
             h.vx += (this._slot.x - h.x) * HERO.followStiffness * dt;
             h.vy += (this._slot.y - h.y) * HERO.followStiffness * dt;
             const damp = Math.max(0, 1 - HERO.followDamping * dt);
@@ -385,7 +411,10 @@ export class HeroSquad {
 
     reset(): void {
         this._formation.reset(this._player.x, this._player.y);
-        this.satiety = SATIETY.start;
+        /* 重开一局 = 从**存档里的饱食度**重新出门，而不是无条件回满。
+           否则"再来一局"会变成一个自带免费回饱的按钮，
+           战斗中喂食这个决策在第二局就彻底失去意义。 */
+        this.satiety = Math.max(0, Math.min(SATIETY.max, this._startSatiety));
         this.feedCd = 0;
         this.stunT = 0;
         this.exciteT = 0;
@@ -393,7 +422,7 @@ export class HeroSquad {
         this._player.speedMul = 1;
         for (let i = 0; i < this._heroes.length; i++) {
             const h = this._heroes[i];
-            this._formation.slotTarget(i, this._slot);
+            this._formation.slotTarget(h.pos, this._slot);
             h.x = this._slot.x;
             h.y = this._slot.y;
             h.vx = 0;

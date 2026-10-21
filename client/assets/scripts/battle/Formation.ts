@@ -1,4 +1,4 @@
-import { HERO, HERO_SLOTS } from '../config/BattleConfig';
+import { HERO } from '../config/BattleConfig';
 
 /** 槽位世界坐标（调用方复用同一对象，避免每帧分配） */
 export interface SlotPoint {
@@ -6,11 +6,19 @@ export interface SlotPoint {
     y: number;
 }
 
+/** 队形槽位（局部坐标）：`[沿前进方向, 向右偏移]`，负值 f = 在主角身后 */
+export type Slot = readonly [number, number];
+
 /**
  * 队伍队形：把「主角位置 + 队伍朝向」映射成 N 个槽位的世界坐标（CR-014）。
  *
  * 为什么单独拆一个类：队形是**纯几何**，与英雄的施法状态机、索敌完全解耦。
- * 试玩后想换菱形阵列 / 楔形 / 横排，只改 `HERO_SLOTS`，不用碰 `HeroSquad`。
+ * 试玩后想换菱形阵列 / 楔形 / 横排，只改角色表里的槽位，不用碰 `HeroSquad`。
+ *
+ * ⚠️ 槽位由调用方传进来，不再从常量表里按索引取。
+ *    原来是 `HERO_SLOTS[i % HERO_SLOTS.length]`，隐含"槽位数 = 队伍人数"这条约定；
+ *    队伍人数改成随解锁变化后，这条约定必然被打破（1 只时它会被夹到左后槽位上，
+ *    读成"站偏了"）。现在槽位跟着角色走，人数与位置不可能对不上。
  *
  * 朝向策略（两个都是踩过的坑）：
  *  1. **只在你真的移动时更新朝向**（`turnDeadzone` 以下不动）。站着不动时若仍按
@@ -62,15 +70,16 @@ export class Formation {
     }
 
     /**
-     * 取第 i 个槽位的世界坐标（写入 out）。
+     * 取某个槽位的世界坐标（写入 out）。
      *
      * 局部坐标 `[f, r]`：f 沿**前进方向**，r 沿**右手方向**。
      * forward = (cos a, sin a)；right = (sin a, -cos a)（前进方向顺时针 90°）。
+     *
+     * @param slot 该槽位的局部坐标（由 `Roster.rolesFor()` 给出）
      */
-    slotTarget(i: number, out: SlotPoint): SlotPoint {
-        const s = HERO_SLOTS[i % HERO_SLOTS.length];
-        const f = s[0];
-        const r = s[1];
+    slotTarget(slot: Slot, out: SlotPoint): SlotPoint {
+        const f = slot[0];
+        const r = slot[1];
         const c = Math.cos(this._angle);
         const sn = Math.sin(this._angle);
         out.x = this._ax + c * f + sn * r;

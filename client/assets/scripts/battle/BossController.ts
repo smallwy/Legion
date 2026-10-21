@@ -45,8 +45,22 @@ export class BossController {
     onHit: ((x: number, y: number, dmg: number, dirX: number, dirY: number, crit: boolean) => void) | null = null;
 
     private _boss: Boss;
+    /**
+     * 本局 BOSS 血量（满编口径 × `Roster.powerScale(出战数)`）。
+     * 存成字段而不是每次现算：`spawn` 与构造两处都要用，算法只能有一份。
+     */
+    private _hp: number;
 
-    constructor(parent: Node, private _player: PlayerController, sprite: SpriteEntry | null) {
+    constructor(
+        parent: Node,
+        private _player: PlayerController,
+        sprite: SpriteEntry | null,
+        powerScale: number = 1,
+    ) {
+        /* 下限 1：系数算错成 0 会让 BOSS 一出来就死，而这种 bug 很难在
+           "看起来很热闹"的 BOSS 战里被肉眼发现。夹一下成本为零。 */
+        this._hp = Math.max(1, Math.round(BOSS.hp * Math.max(0.05, powerScale)));
+
         const node = new Node('Boss');
         parent.addChild(node);
         node.addComponent(UITransform);
@@ -69,8 +83,8 @@ export class BossController {
             y: 0,
             vx: 0,
             vy: 0,
-            hp: BOSS.hp,
-            maxHp: BOSS.hp,
+            hp: this._hp,
+            maxHp: this._hp,
             state: 'dormant',
             stateT: 0,
             cd: 0,
@@ -105,7 +119,7 @@ export class BossController {
         b.active = true;
         b.dying = 0;
         b.hitPunch = 0;
-        b.hp = BOSS.hp;
+        b.hp = this._hp;
         b.vx = 0;
         b.vy = 0;
         b.t = 0;

@@ -32,24 +32,15 @@ export const PLAYER = {
 } as const;
 
 /**
- * 队伍队形槽位（CR-014：**环绕 → 列队跟随**）
+ * 英雄（原「宠物」）：CR-009 三段施法链路 + CR-014 列队跟随
+ *  ★ 前摇 0.25 + 施法 0.1 + 后摇 0.3 = 0.65s/轮 = **1.54 次/秒**（CR-011 定案，原「2.2 次/秒」作废）。
  *
- * 局部坐标 `[f, r]`：f = 沿队伍前进方向的距离（负值 = 在主角身后），r = 向右的偏移。
- * 主角固定占 f=0 / r=0（队伍最前方），英雄依次排在身后 —— 这才是「佣兵团」的观感：
- * 你带头往前冲，几个小跟班在身后列队跟着。
- *
- * ⚠️ 槽位数量必须 = HERO.count。
+ * ⚠️ **队伍人数不在这里**。人数 = 已解锁宠物数，唯一真值在 `config/Roster.ts`
+ *    （`squadSize` / `rolesFor`）。槽位表也一起搬过去了，因为槽位跟"给谁哪个技能"
+ *    是同一件事，拆两个文件必然漂移。原来这里写死 `count: 3` + 3 个槽位，
+ *    导致家里只有 1 只砂糖、场上却站 3 个跟班。
  */
-export const HERO_SLOTS: ReadonlyArray<readonly [number, number]> = [
-    [-28, -24],   // 左后
-    [-28, 24],    // 右后
-    [-52, 0],     // 正后（最远，视觉上拉出一条纵列）
-];
-
-/** 英雄（原「宠物」）：CR-009 三段施法链路 + CR-014 列队跟随
- *  ★ 前摇 0.25 + 施法 0.1 + 后摇 0.3 = 0.65s/轮 = **1.54 次/秒**（CR-011 定案，原「2.2 次/秒」作废）。 */
 export const HERO = {
-    count: 3,              // 队伍人数（不含主角）；改这里必须同步 HERO_SLOTS
     // 跟随参数按「跟得上但不僵硬」调：稳态落后距离 ≈ 移速 × damping / stiffness
     // = 190 × 24 / 220 ≈ 21px（不到半个身位）。调硬会像贴在身上，调软队形会被甩散。
     followStiffness: 220,  // 弹性跟随刚度
@@ -125,7 +116,13 @@ export const ABILITY = {
     },
 } as const;
 
-/** 槽位 → 技能（改队伍构成时同步这里与 HERO_SLOTS） */
+/**
+ * 槽位 → 技能（**已迁到 `config/Roster.ts` 的 `HERO_ROLES`**，这里只留类型）。
+ *
+ * 之所以把顺序留在这里当类型真值：`AbilityKind` 被 HUD、AbilitySystem、
+ * UpgradeSystem 三处引用，挪走会制造一圈循环 import，而"有哪三种技能"
+ * 本身是战斗配置的一部分，不是队伍配置。
+ */
 export const HERO_ABILITIES = ['beam', 'bolt', 'nova'] as const;
 export type AbilityKind = typeof HERO_ABILITIES[number];
 
@@ -183,6 +180,10 @@ export const ENEMIES: { [k in EnemyType]: EnemyDef } = {
  *
  *  节奏：波次间隔 3s 喘息 → 本波敌人从玩家周围 spawnRadius 外环生成 → 清空后进入下一波。
  *  第 20 波为 BOSS 波（BOSS + 一波护卫）。
+ *
+ *  ⚠️ 下面的数字是**满编 3 只**的口径。实际数量还要乘 `Roster.powerScale(出战数)`
+ *  （1 只 = 1/3、2 只 = 2/3），否则只有一只砂糖时要打为三个人标定的量，
+ *  第 5 波就打不动。换算细节见 `config/Roster.ts` 的 `powerScale`。
  */
 export const WAVE = {
     total: 20,
@@ -208,6 +209,13 @@ export const WAVE = {
  */
 export const SATIETY = {
     max: 100,
+    /**
+     * 无存档时的开局值（同时也是 `SaveData.DEFAULT_SAVE.satiety`）。
+     *
+     * ⚠️ **真正的开局值来自存档**（`SaveData.SaveState.satiety`）：家园 GoCard 上
+     * 那条 3 格 bar、战斗 HUD 上那条彩条、这个常量，现在是**同一个 0~100 的数**。
+     * 改造前家园是个抽象"饱食 12/20"、战斗是 100 制，玩家读不出是不是一回事。
+     */
     start: 100,
     /**
      * △ **0.9 是随技能化（CR-017）重新标定的**，不是拍的：
@@ -255,7 +263,9 @@ export const LEVEL = {
 
 /** 最终 BOSS（CR-014 新增）：全部怪窝清空后，在**最后清空的那一窝**召唤。
  *  AOE 是它的主要威胁 —— 必须给足读条窗口，玩家靠走位离开红圈。
- *  displaySize = 32px 贴图 × 4（像素风整数倍铁律） */
+ *  displaySize = 32px 贴图 × 4（像素风整数倍铁律）
+ *
+ *  ⚠️ `hp` 是满编口径，实际按 `Roster.powerScale(出战数)` 缩放（见 `BossController`）。 */
 export const BOSS = {
     name: '腐甲巨虫',
     hp: 620,

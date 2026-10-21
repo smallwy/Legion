@@ -42,6 +42,12 @@ export class WaveManager {
     constructor(
         private _enemies: EnemyManager,
         private _player: PlayerController,
+        /**
+         * 队伍规模系数（`Roster.powerScale(出战数)`）。
+         * 1 只宠物 = 1/3、2 只 = 2/3、满编 = 1。
+         * 不传时按满编处理 —— 离线测试与老调用方不必改。
+         */
+        private _scale: number = 1,
     ) {}
 
     get wave(): number {
@@ -112,7 +118,13 @@ export class WaveManager {
     private startWave(wave: number): void {
         this._wave = wave;
         this._state = 'spawning';
-        this._waveSize = Math.round(WAVE.baseCount + WAVE.countPerWave * (wave - 1));
+        /* 数量 × 规模系数。**下限 1** 必须夹：1/3 缩放下第 1 波是 6 × 0.333 = 2，
+           看起来还算合理，但若有人把 baseCount 调到 2 就会出现 0.67 → round → 1，
+           再往下的波次一旦四舍五入到 0 就是"空波"，玩家会以为卡住了。 */
+        this._waveSize = Math.max(
+            1,
+            Math.round((WAVE.baseCount + WAVE.countPerWave * (wave - 1)) * this._scale),
+        );
         this._toSpawn = this._waveSize;
         this._spawnT = 0;
         // 每波换一个起始角，避免"每波都从同一个方向来"的机械感

@@ -16,6 +16,10 @@ native/
 node_modules/
 *.tsbuildinfo
 
+# tsc 编译到 tools/_rt-build 的产物 —— 由 tsconfig.homeruntime.build.json 重新生成，
+# 和 library/ 一样属于「可重建」，不入库（避免与 .ts 源文件出现两份真相）
+client/tools/_rt-build/
+
 # ---- 沙箱侧临时产物 ----
 client/tools/*.log
 /tmp/

@@ -4,6 +4,7 @@
   "uuid": "e6c72f46-96d4-4c75-99b9-febc9940c5bb",
   "version": "3.8.0",
   "creator": {
-    "version": "3.8.0"
-  }
+    "version": "3.8.8"
+  },
+  "description": "吧唧军团 PAWPACK —— Cocos Creator 3.8.8 前端工程（主界面 Home.scene）"
 }

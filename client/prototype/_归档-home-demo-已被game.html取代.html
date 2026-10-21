@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>吧唧军团 · 家园主界面交互 Demo</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#1a1210;
+    font-family:"Microsoft YaHei","PingFang SC","Hiragino Sans GB",sans-serif;
+    -webkit-font-smoothing:antialiased; }
+  #stage { position:absolute; width:1280px; height:720px; transform-origin:0 0;
+    overflow:hidden; background:#FFE6C6; }
+
+  /* ---------- L0 背景 ---------- */
+  #bg { position:absolute; left:0; top:-40px; width:1280px; height:853px;
+    pointer-events:none; user-select:none; }
+  /* 顶部/底部氛围雾（对应静帧里的两段渐变） */
+  .fog-top { position:absolute; left:0; top:0; width:1280px; height:70px; pointer-events:none;
+    background:linear-gradient(180deg, rgba(255,246,232,.46), rgba(255,246,232,0)); }
+  .fog-bot { position:absolute; left:0; bottom:0; width:1280px; height:152px; pointer-events:none;
+    background:linear-gradient(180deg, rgba(255,247,232,0) 0%, rgba(255,246,228,.50) 50%, rgba(255,244,222,.84) 100%); }
+
+  /* ---------- L1 宠物 ---------- */
+  #pets { position:absolute; inset:0; }
+  .pet { position:absolute; transform-origin:50% 100%; cursor:pointer; }
+  .pet img { position:absolute; pointer-events:none; user-select:none;
+    -webkit-user-drag:none; }
+  .pet .hit { position:absolute; inset:0; }
+  /* 悬停高亮环：脚下一圈暖光 */
+  .pet .halo { position:absolute; left:50%; bottom:-6px; width:100%; height:26px;
+    transform:translateX(-50%); border-radius:50%; opacity:0; pointer-events:none;
+    background:radial-gradient(closest-side, rgba(255,226,150,.85), rgba(255,226,150,0) 72%);
+    transition:opacity .18s ease; }
+  .pet:hover .halo { opacity:1; }
+  .pet:hover { filter:drop-shadow(0 0 10px rgba(255,230,150,.65)); }
+
+  /* 名字牌 */
+  .namecard { position:absolute; left:50%; transform:translateX(-50%) translateY(6px);
+    bottom:calc(100% + 6px); padding:5px 11px 6px; border-radius:12px; white-space:nowrap;
+    background:linear-gradient(180deg,#FFFEF8,#FAEEDA);
+    border:2.4px solid rgba(122,80,52,.78);
+    box-shadow:0 3px 0 rgba(74,44,24,.16), inset 0 2px 0 rgba(255,255,255,.6);
+    opacity:0; transition:opacity .16s ease, transform .16s ease; pointer-events:none; }
+  .pet:hover .namecard { opacity:1; transform:translateX(-50%) translateY(0); }
+  .namecard b { font-size:13px; color:#5A3826; }
+  .namecard i { font-style:normal; font-size:10px; color:#B07A28; margin-left:5px; letter-spacing:-1px; }
+  .namecard em { display:block; font-style:normal; font-size:9.5px; color:rgba(112,72,46,.72); margin-top:2px; }
+
+  /* ---------- 粒子层 ---------- */
+  #fx { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
+  .p { position:absolute; will-change:transform,opacity; font-weight:700;
+    text-shadow:0 1px 2px rgba(140,80,40,.35); }
+  .ripple { position:absolute; border-radius:50%; border:2.5px solid rgba(255,255,255,.92);
+    pointer-events:none; }
+  @keyframes rip { from { transform:scale(.25); opacity:.95; } to { transform:scale(2.4); opacity:0; } }
+  @keyframes popin { 0% { transform:scale(.4) translateY(6px); opacity:0; }
+    55% { transform:scale(1.14) translateY(-3px); opacity:1; }
+    100% { transform:scale(1) translateY(0); opacity:1; } }
+  .bubble { position:absolute; width:32px; height:32px; border-radius:50%;
+    background:#FFFCF4; border:2.6px solid rgba(120,78,50,.78);
+    display:flex; align-items:center; justify-content:center;
+    font-size:17px; font-weight:700; color:#E8563C;
+    box-shadow:0 3px 0 rgba(74,44,24,.16);
+    animation:popin .34s cubic-bezier(.34,1.6,.64,1) both; }
+  .bubble::after { content:""; position:absolute; left:50%; bottom:-8px; width:0; height:0;
+    margin-left:-4px; border-left:4px solid transparent; border-right:4px solid transparent;
+    border-top:7px solid rgba(120,78,50,.78); }
+  @keyframes toast { 0% { transform:translate(-50%,10px); opacity:0; }
+    18% { transform:translate(-50%,0); opacity:1; }
+    80% { transform:translate(-50%,0); opacity:1; }
+    100% { transform:translate(-50%,-8px); opacity:0; } }
+  .toast { position:absolute; left:50%; top:200px; padding:9px 20px; border-radius:999px;
+    background:linear-gradient(180deg,#FFFEF8,#FFE9B8); border:2.8px solid rgba(122,80,52,.8);
+    font-size:15px; font-weight:700; color:#7A3A18; white-space:nowrap;
+    box-shadow:0 5px 0 rgba(74,44,24,.18);
+    animation:toast 2.0s cubic-bezier(.2,.9,.3,1) both; }
+
+  /* ---------- L2 控件通用 ---------- */
+  .glass { position:absolute; border-radius:19px;
+    background:linear-gradient(180deg,#FFFEF8 0%,#FFFBF0 55%,#FAEEDA 100%);
+    border:2.6px solid rgba(122,80,52,.72);
+    box-shadow:0 4px 0 rgba(74,44,24,.17), inset 0 2px 0 rgba(255,255,255,.6),
+               inset 0 -3px 6px rgba(140,92,52,.10); }
+  .rnd { position:absolute; border-radius:999px; }
+  .lbl { font-size:9.5px; color:rgba(112,72,46,.70); letter-spacing:.5px; }
+  .val { font-size:17px; font-weight:700; color:#5A3826; }
+
+  /* ---------- 场景徽标 ---------- */
+  .badge { position:absolute; width:27px; height:27px; border-radius:50%;
+    background:linear-gradient(180deg,#FFFEF8,#FAEEDA);
+    border:2.4px solid rgba(110,70,44,.84);
+    box-shadow:0 3px 0 rgba(74,44,24,.20);
+    display:flex; align-items:center; justify-content:center;
+    font-size:13px; cursor:pointer; transition:transform .14s ease, box-shadow .14s ease; }
+  .badge:hover { transform:scale(1.16); box-shadow:0 4px 0 rgba(74,44,24,.24), 0 0 12px rgba(255,214,120,.9); }
+
+  /* ---------- HUD ---------- */
+  #logo { position:absolute; left:24px; top:14px; }
+  #logo .t { font-size:24px; font-weight:900; color:#fff; letter-spacing:2px;
+    text-shadow:0 0 3px rgba(120,66,44,.75), 1.6px 1.6px 0 rgba(120,66,44,.62); }
+  #logo .s { font-size:8.5px; font-weight:700; color:rgba(255,255,255,.96);
+    letter-spacing:3.2px; margin-top:-2px; text-shadow:0 1px 2px rgba(120,66,44,.5); }
+
+  /* ---------- Dock ---------- */
+  #dock { position:absolute; left:0; top:618px; width:1280px; height:92px; }
+  .pip { width:15px; height:15px; border-radius:4px; display:inline-block; margin-right:7px;
+    background:rgba(112,72,46,.09); border:1.6px solid rgba(112,72,46,.24); }
+  .pip.on { background:#8FE0B8; border-color:rgba(56,124,88,.82); }
+
+  /* 出门主按钮 */
+  #go { position:absolute; left:760px; top:12px; width:500px; height:68px;
+    border-radius:34px; cursor:pointer;
+    background:linear-gradient(180deg,#FFD97E 0%,#FFCE6E 46%,#E8A33C 100%);
+    border:3.2px solid rgba(120,64,20,.92);
+    box-shadow:0 6px 0 rgba(120,64,20,.55), 0 10px 0 rgba(74,44,24,.22),
+               inset 0 3.4px 0 rgba(255,255,255,.62);
+    transition:transform .1s ease, box-shadow .1s ease, filter .18s ease; overflow:hidden; }
+  #go:hover { filter:brightness(1.05); box-shadow:0 6px 0 rgba(120,64,20,.55),
+      0 10px 0 rgba(74,44,24,.22), inset 0 3.4px 0 rgba(255,255,255,.62),
+      0 0 26px rgba(255,206,110,.95); }
+  #go:active { transform:translateY(4px);
+    box-shadow:0 2px 0 rgba(120,64,20,.55), 0 4px 0 rgba(74,44,24,.22),
+               inset 0 3.4px 0 rgba(255,255,255,.62); }
+  /* 光扫：商业主按钮的呼吸感 */
+  #go::before { content:""; position:absolute; top:0; left:-140px; width:120px; height:100%;
+    background:linear-gradient(100deg, rgba(255,255,255,0), rgba(255,255,255,.62), rgba(255,255,255,0));
+    animation:sweep 3.4s ease-in-out infinite; }
+  @keyframes sweep { 0%,62% { left:-140px; } 100% { left:540px; } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <img id="bg" src="../shots/bg/home-bg@v1.png" alt="">
+
+  <div id="pets"></div>
+  <div id="fx"></div>
+
+  <!-- 场景入口徽标 -->
+  <div class="badge" style="left:287px; top:321px;"  title="工作台 · 做道具">🔨</div>
+  <div class="badge" style="left:532px; top:375px;"  title="宠物屋 · 图鉴与亲密度">🐾</div>
+  <div class="badge" style="left:689px; top:329px;"  title="灶台 · 喂饭">🍲</div>
+  <div class="badge" style="left:1087px; top:467px;" title="派遣 · 五只看家">✉</div>
+  <div class="badge" style="left:271px; top:189px;"  title="出门 · 选产地">⚑</div>
+
+  <div class="fog-top"></div>
+  <div class="fog-bot"></div>
+
+  <!-- HUD -->
+  <div id="logo">
+    <div class="t">吧唧军团</div>
+    <div class="s">M U N C H&nbsp;&nbsp;L E G I O N</div>
+  </div>
+
+  <div class="glass" style="left:470px; top:12px; width:300px; height:46px; border-radius:23px;">
+    <div style="position:absolute; left:20px; top:8px; font-size:12.5px; font-weight:700; color:#5A3826;">苔 原</div>
+    <div style="position:absolute; left:20px; top:24px;" class="lbl">3 / 8 关</div>
+    <div style="position:absolute; left:96px; top:15px;" id="pips"></div>
+    <div style="position:absolute; right:16px; top:16px; font-size:11px; font-weight:700; color:#8C4A18;">连锁 ×1.45</div>
+  </div>
+
+  <div class="glass" style="left:820px; top:16px; width:236px; height:30px; border-radius:15px;">
+    <div style="position:absolute; left:14px; top:5px; font-size:11.5px; font-weight:700; color:#7A3A18;">
+      <span style="color:#E8563C;">🐾</span> 年糕想出门了
+    </div>
+    <div style="position:absolute; right:13px; top:6px; font-size:12px; color:rgba(122,80,52,.8);">→</div>
+  </div>
+
+  <div class="glass rnd" style="left:1222px; top:14px; width:36px; height:36px;
+       display:flex; align-items:center; justify-content:center; font-size:15px; cursor:pointer;"
+       title="设置">⚙</div>
+
+  <!-- Dock -->
+  <div id="dock">
+    <!-- 资源 -->
+    <div class="glass" style="left:20px; top:15px; width:82px; height:62px;">
+      <div style="position:absolute; left:12px; top:12px; font-size:17px;">🍎</div>
+      <div class="val" style="position:absolute; right:10px; top:8px;">248</div>
+      <div class="lbl" style="position:absolute; right:10px; top:32px;">果子</div>
+    </div>
+    <div class="glass" style="left:108px; top:15px; width:82px; height:62px;">
+      <div style="position:absolute; left:12px; top:12px; font-size:17px;">🪵</div>
+      <div class="val" style="position:absolute; right:10px; top:8px;">36</div>
+      <div class="lbl" style="position:absolute; right:10px; top:32px;">材料</div>
+    </div>
+    <div class="glass" style="left:196px; top:15px; width:82px; height:62px;">
+      <div style="position:absolute; left:12px; top:12px; font-size:17px;">🎖</div>
+      <div class="val" style="position:absolute; right:10px; top:8px;">12</div>
+      <div class="lbl" style="position:absolute; right:10px; top:32px;">吧唧</div>
+    </div>
+
+    <!-- 出战卡 -->
+    <div class="glass" style="left:290px; top:15px; width:200px; height:62px;">
+      <div style="position:absolute; left:8px; top:7px; width:46px; height:46px; border-radius:50%;
+           overflow:hidden; border:2px solid rgba(122,80,52,.6); background:#FFF6E4;">
+        <img src="../shots/ai/head/nian-gao-dog-head@v1.png" style="width:100px; height:100px; margin:-27px 0 0 -27px;">
+      </div>
+      <div style="position:absolute; left:60px; top:7px; font-size:13.5px; font-weight:700; color:#5A3826;">年 糕
+        <span style="font-size:10px; color:#E8B31E;">★</span></div>
+      <div id="hearts" style="position:absolute; left:60px; top:27px; font-size:11px; letter-spacing:2px; color:#FF9EB6;">♥♥♥<span style="color:rgba(122,80,52,.16);">♥♥</span></div>
+      <div style="position:absolute; left:60px; top:44px; display:flex; gap:3px;">
+        <span style="width:20px;height:9px;border-radius:5px;background:#FFB56A;border:1.4px solid rgba(178,110,40,.8);"></span>
+        <span style="width:20px;height:9px;border-radius:5px;background:#FFB56A;border:1.4px solid rgba(178,110,40,.8);"></span>
+        <span style="width:20px;height:9px;border-radius:5px;background:#FFB56A;border:1.4px solid rgba(178,110,40,.8);"></span>
+        <span style="font-size:9px;font-weight:700;color:#8C4A18;margin-left:4px;">满饱</span>
+      </div>
+    </div>
+
+    <!-- 待命队 -->
+    <div id="bench"></div>
+
+    <!-- 出门 -->
+    <div id="go">
+      <div style="position:absolute; left:16px; top:0; width:120px; height:68px;
+           display:flex; align-items:center; justify-content:center;
+           font-size:27px; font-weight:900; color:#3E2312; letter-spacing:4px;">出 门</div>
+      <div style="position:absolute; left:152px; top:14px; width:2px; height:40px; background:rgba(120,64,20,.30);"></div>
+      <div style="position:absolute; left:172px; top:14px; font-size:14px; font-weight:700; color:#4A2C18;">带年糕 · 苔原 3 / 8</div>
+      <div style="position:absolute; left:172px; top:35px; font-size:10px; color:rgba(88,46,20,.82);">满饱 3 发 · 再推 1 关可收工</div>
+      <div style="position:absolute; right:26px; top:25px; width:0; height:0;
+           border-left:13px solid #FBE0A8; border-top:9px solid transparent; border-bottom:9px solid transparent;"></div>
+    </div>
+  </div>
+
+  <div id="hint" style="position:absolute; left:50%; top:560px; transform:translateX(-50%);
+       padding:8px 20px; border-radius:999px; background:rgba(255,252,244,.94);
+       border:2.4px solid rgba(122,80,52,.6); font-size:13px; color:#7A4420; font-weight:700;
+       box-shadow:0 4px 0 rgba(74,44,24,.14); transition:opacity .5s ease;">
+    点任意一只宠物试试 · 连摸 5 次有惊喜
+  </div>
+</div>
+
+<script>
+/* ============================================================================
+   吧唧军团 · 家园主界面交互 Demo
+   ----------------------------------------------------------------------------
+   这个文件存在的唯一理由：静态图证明不了"动作回馈"。
+   三层动画栈（规格见 docs/混合生产管线 v3.2 §11）：
+     L1 呼吸   常驻，永不打断，六只相位错开 300ms
+     L2 自主   6–14s 随机，每只三种动作
+     L3 点击   预判 90ms → 反应 320ms → 回落 280ms，配粒子与气泡
+   全部是程序变换，不加一张图 —— 这是"宠物是活物"唯一负担得起的做法。
+   ========================================================================== */
+
+const TAU = Math.PI * 2;
+const $ = (id) => document.getElementById(id);
+const stage = $('stage'), petsEl = $('pets'), fxEl = $('fx');
+
+/* ---------- 舞台自适应：等比缩放，永不裁切 ---------- */
+function fit() {
+  const k = Math.min(innerWidth / 1280, innerHeight / 720);
+  stage.style.transform = `scale(${k})`;
+  stage.style.left = Math.max(0, (innerWidth - 1280 * k) / 2) + 'px';
+  stage.style.top = Math.max(0, (innerHeight - 720 * k) / 2) + 'px';
+}
+addEventListener('resize', fit); fit();
+
+/* ---------- 六只的规格（和 home2-shot.js 的 LAYOUT 一一对应） ---------- */
+const PETS = [
+  { id:'nian-gao-dog', name:'年糕', star:1, hearts:3, cx:250,  footY:600, h:146, phase:0,
+    why:'最想做的事：出门', mood:['♥','♪','!','★'] },
+  { id:'xue-tuan-rab', name:'雪团', star:2, hearts:2, cx:450,  footY:596, h:126, phase:300,
+    why:'只敢待在门口',   mood:['♥','♪','!'] },
+  { id:'sugar-stand',  name:'砂糖', star:1, hearts:2, cx:490,  footY:156, h:82,  phase:600,
+    why:'最高点归它',     mood:['♥','♪','★'] },
+  { id:'tuan-zi-ham',  name:'团子', star:2, hearts:4, cx:716,  footY:598, h:136, phase:900,
+    why:'守着锅等开饭',   mood:['♥','♥','!'] },
+  { id:'dou-nai-ox',   name:'豆奶', star:3, hearts:3, cx:862,  footY:592, h:136, phase:1200,
+    why:'怕热，只趴垫子', mood:['♥','♪','★'] },
+  { id:'xing-xie-fox', name:'星屑', star:4, hearts:1, cx:1148, footY:596, h:112, phase:1500,
+    why:'刚到家，还不太靠近人', mood:['★','!','♥'] },
+];
+
+const loadImg = (src) => new Promise((res, rej) => {
+  const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src;
+});
+
+/* ---------- 构建 ---------- */
+let pets = [];
+let totalPats = 0;
+
+async function build() {
+  // HUD 八格
+  $('pips').innerHTML = Array.from({ length: 8 }, (_, i) =>
+    `<span class="pip${i < 3 ? ' on' : ''}"></span>`).join('');
+
+  // 待命队 5 格
+  const benchIds = ['tuan-zi-ham','xue-tuan-rab','dou-nai-ox','sugar-stand','xing-xie-fox'];
+  $('bench').innerHTML = benchIds.map((id, i) => {
+    const isNew = i === 4;
+    const left = 506 + i * 46;
+    return `<div class="glass" style="left:${left}px; top:15px; width:40px; height:62px; border-radius:13px;
+      ${isNew ? 'background:linear-gradient(180deg,#FFFCF0,#FFE9B8);border-color:rgba(200,150,40,.92);' : ''}">
+      <div style="position:absolute; left:5px; top:6px; width:30px; height:30px; border-radius:50%;
+        overflow:hidden; border:1.6px solid rgba(122,80,52,.44); background:#FFF6E4;">
+        <img src="../shots/ai/head/${id}-head@v1.png" style="width:66px;height:66px;margin:-18px 0 0 -18px;">
+      </div>
+      <div class="lbl" style="position:absolute; left:0; right:0; bottom:6px; text-align:center; font-size:8.5px;">待</div>
+      ${isNew ? `<div style="position:absolute; right:3px; top:3px; width:14px; height:11px; border-radius:5.5px;
+        background:#FFC84A; border:1.6px solid rgba(150,96,20,.88); font-size:7.5px; font-weight:700;
+        color:#5A3008; display:flex; align-items:center; justify-content:center;">新</div>` : ''}
+    </div>`;
+  }).join('');
+
+  // 六只
+  for (const p of PETS) {
+    const img = await loadImg(`../shots/ai/${p.id}@v1.png`);
+    const w = p.h * (img.naturalWidth / img.naturalHeight);
+    const bw = Math.max(w * 1.28, 100);          // 点击区下限 100（触屏 88 的 720p 换算）
+    const bh = Math.max(p.h * 1.02, 100);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'pet';
+    wrap.style.left = (p.cx - bw / 2) + 'px';
+    wrap.style.top = (p.footY - p.h) + 'px';
+    wrap.style.width = bw + 'px';
+    wrap.style.height = bh + 'px';
+    wrap.style.zIndex = 10 + Math.round(p.footY / 100);   // 后排小、前排大，靠 footY 排层
+
+    const im = document.createElement('img');
+    im.src = `../shots/ai/${p.id}@v1.png`;
+    im.style.width = w + 'px';
+    im.style.height = p.h + 'px';
+    im.style.left = ((bw - w) / 2) + 'px';
+    im.style.top = '0';
+
+    const halo = document.createElement('div'); halo.className = 'halo';
+    halo.style.width = (w * 0.92) + 'px';
+
+    const card = document.createElement('div');
+    card.className = 'namecard';
+    card.innerHTML = `<b>${p.name}</b><i>${'★'.repeat(p.star)}</i><em>${p.why}</em>`;
+
+    wrap.append(im, halo, card);
+    petsEl.appendChild(wrap);
+
+    const rec = { ...p, img: im, wrap, card, w, bw, bh,
+      jump: null, react: null, sway: null,
+      nextAt: performance.now() + 2600 + Math.random() * 7000 };
+    pets.push(rec);
+
+    wrap.addEventListener('pointerdown', (e) => {
+      const r = stage.getBoundingClientRect();
+      const k = r.width / 1280;
+      const x = (e.clientX - r.left) / k;
+      const y = (e.clientY - r.top) / k;
+      patPet(rec, x, y);
+    });
+  }
+
+  // 星屑入场：从右侧滑进来 + 金色爆发（"获得"这一刻）
+  const fox = pets.find(p => p.id === 'xing-xie-fox');
+  fox.wrap.animate(
+    [{ transform:'translateX(340px)', opacity:0 },
+     { transform:'translateX(-26px)', opacity:1, offset:.72 },
+     { transform:'translateX(8px)',   opacity:1, offset:.88 },
+     { transform:'translateX(0)',     opacity:1 }],
+    { duration:1050, delay:500, easing:'cubic-bezier(.22,1,.36,1)', fill:'backwards' });
+  setTimeout(() => {
+    burst(fox.cx, fox.footY - fox.h * 0.5, 22, 'gold');
+    toast('新伙伴 · 星屑 到家了');
+  }, 520);
+
+  requestAnimationFrame(loop);
+  setTimeout(() => { $('hint').style.opacity = 0; }, 5200);
+}
+
+/* ---------- 粒子 ---------- */
+const GLYPH = ['♥','♪','★','✿','♥'];
+const COLOR = { pink:['#FF9EB6','#FFB8CB','#F5768F'], gold:['#FFD86A','#FFE9A8','#F5B93C'] };
+
+function spawnGlyph(x, y, opt = {}) {
+  const el = document.createElement('div');
+  el.className = 'p';
+  el.textContent = opt.glyph || GLYPH[(Math.random() * GLYPH.length) | 0];
+  const pal = COLOR[opt.pal || 'pink'];
+  el.style.color = pal[(Math.random() * pal.length) | 0];
+  el.style.fontSize = (opt.size || 15) * (0.75 + Math.random() * 0.6) + 'px';
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
+  el.style.opacity = 1;
+  fxEl.appendChild(el);
+  const a = (opt.dir === undefined ? (-140 + Math.random() * 80) : opt.dir) * Math.PI / 180;
+  const sp = (opt.speed || 1) * (1.1 + Math.random() * 1.6);
+  return { el, x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+           life: 0, max: 900 + Math.random() * 450, rot: (Math.random() - .5) * 0.6, vr: (Math.random() - .5) * 3.2 };
+}
+
+let parts = [];
+function burst(x, y, n, pal) {
+  for (let i = 0; i < n; i++) parts.push(spawnGlyph(x + (Math.random() - .5) * 40, y + (Math.random() - .5) * 30, { pal, size: 16 }));
+}
+
+function ripple(x, y, size) {
+  const el = document.createElement('div');
+  el.className = 'ripple';
+  el.style.left = (x - size / 2) + 'px';
+  el.style.top = (y - size / 2) + 'px';
+  el.style.width = size + 'px';
+  el.style.height = size + 'px';
+  el.style.animation = 'rip .62s cubic-bezier(.2,.8,.3,1) forwards';
+  fxEl.appendChild(el);
+  setTimeout(() => el.remove(), 680);
+}
+
+function bubble(x, y, glyph) {
+  const el = document.createElement('div');
+  el.className = 'bubble';
+  el.textContent = glyph;
+  el.style.left = (x - 16) + 'px';
+  el.style.top = (y - 16) + 'px';
+  fxEl.appendChild(el);
+  setTimeout(() => el.remove(), 1180);
+}
+
+function toast(txt) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = txt;
+  fxEl.appendChild(el);
+  setTimeout(() => el.remove(), 2100);
+}
+
+/* ---------- 摸一下：三层动画栈里的 L3 ---------- */
+function patPet(p, x, y) {
+  const t = performance.now();
+  // 打断上一次反应，不打断呼吸
+  p.react = { t0: t, dur: 690, glyph: p.mood[(Math.random() * p.mood.length) | 0] };
+
+  ripple(p.cx, p.footY - 4, 84);
+
+  // 粒子：从头顶偏上散开
+  const hx = p.cx, hy = p.footY - p.h * 0.92;
+  for (let i = 0; i < 6; i++) parts.push(spawnGlyph(hx + (Math.random() - .5) * 34, hy, { size: 14 }));
+  parts.push(spawnGlyph(hx, hy - 8, { glyph: p.react.glyph, size: 19, speed: .5, dir: -90, pal: 'pink' }));
+
+  bubble(p.cx + p.bw * 0.34, p.footY - p.h * 0.72, p.react.glyph);
+
+  // 连摸 5 次：亲密度 +1，给一次明确的"获得感"
+  totalPats++;
+  if (totalPats % 5 === 0) {
+    for (let i = 0; i < 16; i++) parts.push(spawnGlyph(p.cx, p.footY - p.h * 0.8, { pal: 'gold', size: 20, speed: 1.6 }));
+    ripple(p.cx, p.footY - 4, 130);
+    toast('亲密度 +1 · 它记住了你');
+    const heartsEl = $('hearts');
+    if (heartsEl) heartsEl.innerHTML = '♥♥♥♥<span style="color:rgba(122,80,52,.16);">♥</span>';
+  }
+}
+
+/* ---------- 主循环 ---------- */
+let last = performance.now();
+function loop(t) {
+  const dt = Math.min(48, t - last); last = t;
+
+  for (const p of pets) {
+    let ty = 0, sx = 1, sy = 1, rot = 0;
+
+    /* L1 呼吸：常驻。相位错开 300ms，避免六只同时起伏读成"整块在动" */
+    const br = Math.sin((t - p.phase) / 2650 * TAU);
+    sy *= 1 + 0.016 * br;
+    sx *= 1 - 0.009 * br;
+    ty += -1.3 * Math.max(0, br);
+
+    /* L2 自主行为 */
+    if (!p.jump && !p.react && t > p.nextAt) {
+      const r = Math.random();
+      if (r < 0.46) p.jump = { t0: t, dur: 640 };
+      else if (r < 0.78) p.sway = { t0: t, dur: 1100, dir: Math.random() < .5 ? 1 : -1 };
+      else p.react = { t0: t, dur: 520, glyph: p.mood[0] };
+      p.nextAt = t + 6200 + Math.random() * 8200;
+    }
+
+    /* L2-a 蹦跳：squash → 抛物 → 落地 → 回弹
+       单帧立绘不能真走路（腿不动 = 滑步），所以移动一律用蹦的 */
+    if (p.jump) {
+      const u = (t - p.jump.t0) / p.jump.dur;
+      if (u >= 1) p.jump = null;
+      else if (u < 0.13) { const k = u / 0.13; sy *= 1 - 0.11 * k; sx *= 1 + 0.09 * k; }
+      else if (u < 0.72) {
+        const k = (u - 0.13) / 0.59;
+        ty += -34 * Math.sin(Math.PI * k);
+        sy *= 1.04; sx *= 0.97;
+      } else if (u < 0.82) { const k = (u - 0.72) / 0.10; sy *= 1 - 0.08 * k; sx *= 1 + 0.06 * k; }
+      else { const k = (u - 0.82) / 0.18; const e = Math.sin(Math.PI * k) * (1 - k); sy *= 1 + 0.05 * e; }
+    }
+
+    /* L2-b 摇摆：只转 ±0.035rad，超过这个角度脚底会明显离地 */
+    if (p.sway) {
+      const u = (t - p.sway.t0) / p.sway.dur;
+      if (u >= 1) p.sway = null;
+      else rot += Math.sin(u * TAU * 1.6) * 0.035 * p.sway.dir * (1 - u);
+    }
+
+    /* L3 点击反应：预判 90ms 收 → 反应 320ms 弹 → 回落 280ms */
+    if (p.react) {
+      const u = (t - p.react.t0) / p.react.dur;
+      if (u >= 1) p.react = null;
+      else if (u < 0.13) { const k = u / 0.13; const s = 1 - 0.07 * k; sx *= s; sy *= s; }
+      else if (u < 0.59) {
+        const k = (u - 0.13) / 0.46;
+        const e = 1 + 0.14 * Math.sin(Math.PI * k * 0.86) * (1 - k * 0.35);   // back.out 近似
+        sx *= e; sy *= (2 - e) * 0.995 + 0.005;
+        ty += -13 * Math.sin(Math.PI * k);
+      } else {
+        const k = (u - 0.59) / 0.41;
+        const e = 0.06 * Math.sin(Math.PI * k) * (1 - k);
+        sx *= 1 + e; sy *= 1 - e * 0.6;
+      }
+    }
+
+    p.wrap.style.transform =
+      `translateY(${ty.toFixed(2)}px) scale(${sx.toFixed(4)}, ${sy.toFixed(4)}) rotate(${rot.toFixed(4)}rad)`;
+  }
+
+  /* 粒子物理 */
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const q = parts[i];
+    q.life += dt;
+    if (q.life > q.max) { q.el.remove(); parts.splice(i, 1); continue; }
+    const u = q.life / q.max;
+    q.x += q.vx * dt * 0.055;
+    q.y += q.vy * dt * 0.055;
+    q.vy -= dt * 0.0016;                       // 轻微上浮
+    q.vx *= 1 - dt * 0.0012;
+    q.rot += q.vr * dt * 0.0016;
+    q.el.style.transform = `translate(${q.x.toFixed(1)}px, ${q.y.toFixed(1)}px) rotate(${q.rot.toFixed(3)}rad) scale(${(1 + u * .25).toFixed(2)})`;
+    q.el.style.opacity = (u < .18 ? u / .18 : 1 - (u - .18) / .82).toFixed(3);
+  }
+
+  requestAnimationFrame(loop);
+}
+
+build().catch(e => { console.error(e); });
+</script>
+</body>
+</html>

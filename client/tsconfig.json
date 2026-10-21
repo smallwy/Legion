@@ -1,0 +1,14 @@
+{
+  // Cocos Creator 工程 tsconfig。
+  // `./temp/tsconfig.cocos.json` 由编辑器首次打开工程时生成，含 assets/**/*.ts 的
+  // include 与引擎的 cc 类型声明。所以这里**不手写 include** —— 手写会和编辑器的
+  // 资源索引打架，表现为"编辑器里能跑、tsc 报错"。
+  //
+  // 注意：沙箱（无 GUI 编辑器）里 temp/ 不存在，别拿这个文件做 CI 检查。
+  "extends": "./temp/tsconfig.cocos.json",
+  "compilerOptions": {
+    "strict": true,
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false
+  }
+}

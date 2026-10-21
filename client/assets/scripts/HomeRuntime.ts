@@ -97,10 +97,11 @@ const PET_ROAM: Record<string, [number, number]> = {
  * -------------------------------------------------------------------------- */
 const BADGE_INFO: Record<string, string> = {
     '工作台': '工作台 · 升级装备与宠物配件（待实装）',
-    '图鉴': '图鉴 · 查看已收服的宠物（待实装）',
+    // 图鉴已经是真面板了（openCodex），这里留着只为兜底 —— 它不会再被读到
+    '图鉴': '图鉴 · 查看已收服的宠物',
     '灶台': '灶台 · 喂饭提升饱食与心情（待实装）',
     '派遣': '派遣 · 让宠物出门带资源回来（待实装）',
-    '去苔原': '苔原 · 下一关的入口（待实装）',
+    '去苔原': '苔原 · 下一关的入口（已由底部「出门」承担）',
 };
 
 /* 锁定槽位"还差几关"的判定已改到 `Roster.petGap()` —— 那张写死的表
@@ -260,6 +261,10 @@ class HomeController {
     private departOp: UIOpacity | null = null;
     private departScrim: Graphics | null = null;
 
+    /* 图鉴面板（右侧竖栏的「图鉴」入口打开） */
+    private codex: Node | null = null;
+    private codexOp: UIOpacity | null = null;
+
     /**
      * 存档快照。
      *
@@ -280,6 +285,10 @@ class HomeController {
         /* 归位要排在 bindBadges 之前：热区是按徽标当前尺寸算的，
            先把图标/文字摆正，再挂热区，热区和视觉才对得上。 */
         this.alignHud();
+        /* 系统入口在归位之后**统一搬成右侧一条竖栏**。
+           必须先 alignHud 后 layout：alignHud 会把 Cap 贴回 Badge 下方，
+           反过来做就又变成"牌子按旧坐标挂着"。 */
+        this.layoutRail();
         this.bindPets();
         /* 存档刷新必须排在 bindDock / bindHud 之前：
            它们绑的事件回调里会读 this.save（比如出战卡文案），
@@ -394,6 +403,75 @@ class HomeController {
         const title = hud.getChildByName('Logo-Title');
         const sub = hud.getChildByName('Logo-Sub');
         if (title && sub) sub.setPosition(title.position.x, sub.position.y, 0);
+    }
+
+    /* ----------------------------------------------------------------------
+     * 1c. 系统入口：从"散贴在地图上"收成一条竖栏
+     * -------------------------------------------------------------------- */
+
+    /**
+     * 把四个系统徽标搬成画面右侧一条等距竖栏。
+     *
+     * **为什么不再让它们散在场景里。**
+     * 这些徽标的坐标原本是照着"门口那块牌子 / 灶台 / 木桌在哪"手摆的，
+     * 于是同一行的三个（工作台 43 / 图鉴 31 / 灶台 53）顶边差 22px、
+     * 说明底板一宽一窄（48 和 37 两种）—— 单看每个都还行，并排一眼就是
+     * "贴纸没贴齐"。它们既想当场景物件、又想当 UI 入口，两个身份都不成立。
+     *
+     * 现在改成：**场景照旧是纯美术，入口统一进右栏**。竖栏的好处是
+     * 位置由公式算，永远是等距的；加一个入口不用再手摆坐标。
+     *
+     * 「去苔原」在这里被隐藏：底部 `Btn-Go`（出门）已经把这件事做了，
+     * 地图上再放一个是重复入口，玩家会不知道哪个才是"开始游戏"。
+     */
+    private layoutRail() {
+        const badges = this.canvas.getChildByName('Badges');
+        if (!badges) return;
+
+        /** 顺序即视觉顺序（从上往下）。不在表里的徽标一律隐藏。 */
+        const ORDER = ['图鉴', '工作台', '灶台', '派遣'];
+        /** 竖直中轴。距画布右边缘 97px，给设置按钮（右上）留出干净的角。 */
+        const RAIL_CX = 543;
+        /** 第一项顶边 / 相邻项顶边落差 */
+        const RAIL_TOP = 196;
+        const GAP = 94;
+        /** 与 alignHud 里同一个值 */
+        const CAP_GAP = 46;
+
+        for (const n of badges.children.slice()) {
+            if (!n.name.startsWith('Badge-') || n.name.indexOf('-hot') >= 0) continue;
+            if (ORDER.indexOf(n.name.slice(6)) < 0) n.active = false;
+        }
+
+        ORDER.forEach((key, i) => {
+            const b = badges.getChildByName(`Badge-${key}`);
+            const but = b && b.getComponent(UITransform);
+            if (!b || !but) return;
+            b.active = true;
+            const bw = but.contentSize.width;
+            const topY = RAIL_TOP - i * GAP;
+            b.setPosition(RAIL_CX - bw / 2, topY, 0);
+
+            const cap = badges.getChildByName(`Cap-${key}`);
+            const cut = cap && cap.getComponent(UITransform);
+            if (!cap || !cut) return;
+
+            /* 底板统一等宽。
+             * 场景里只有两种底板图（badge-cap-3 = 三字宽、badge-cap-2 = 两字宽），
+             * 按字数选图 → 一排牌子宽窄参差，这是"强行贴上去"最刺眼的一处。
+             * 底板图本身就是可拉伸的圆角胶囊，统一拉到 47 宽、文字重新居中即可。 */
+            const sp = cap.getComponent(Sprite);
+            if (sp) sp.sizeMode = Sprite.SizeMode.CUSTOM;
+            cut.setContentSize(47, cut.contentSize.height);
+            cap.setPosition(RAIL_CX - 47 / 2, topY - CAP_GAP, 0);
+
+            const txt = cap.getChildByName('txt');
+            const tut = txt && txt.getComponent(UITransform);
+            if (txt && tut) {
+                txt.setPosition((47 - tut.contentSize.width) / 2,
+                                -(cut.contentSize.height - tut.contentSize.height) / 2, 0);
+            }
+        });
     }
 
     /**
@@ -765,8 +843,17 @@ class HomeController {
             if (!n.name.startsWith('Badge-')) continue;
             if (n.name.indexOf('-hot') >= 0) continue;
             const key = n.name.slice(6);
-            const msg = BADGE_INFO[key] ?? `${key} · 待实装`;
+            if (!n.active) continue;
 
+            /* 图鉴是唯一一个**已经有真实内容**的入口（六只宠物的收集状态），
+               所以它开面板，不再弹"待实装"。其余三个还没有系统，先给 toast ——
+               给一个假面板比给一句"待实装"更伤信任。 */
+            if (key === '图鉴') {
+                this.makeHot(n, `${n.name}-hot`, HOT_MIN, HOT_MIN, () => this.openCodex(), 0.90);
+                continue;
+            }
+
+            const msg = BADGE_INFO[key] ?? `${key} · 待实装`;
             this.makeHot(n, `${n.name}-hot`, HOT_MIN, HOT_MIN, () => this.toast(msg), 0.90);
         }
     }
@@ -1184,9 +1271,129 @@ class HomeController {
         this.departScrim = sg;
     }
 
+    /* ----------------------------------------------------------------------
+     * 图鉴面板：右侧竖栏「图鉴」打开
+     * -------------------------------------------------------------------- */
+
+    private openCodex() {
+        this.ensureCodex();
+        if (!this.codex || !this.codexOp) return;
+        this.codex.active = true;
+        this.codexOp.opacity = 0;
+        tween(this.codexOp).to(0.20, { opacity: 255 }).start();
+    }
+
+    private closeCodex() {
+        if (!this.codex || !this.codexOp) return;
+        const c = this.codex;
+        const op = this.codexOp;
+        tween(op)
+            .to(0.16, { opacity: 0 })
+            .call(() => { c.active = false; })
+            .start();
+    }
+
+    /**
+     * 图鉴面板。**内容全部从存档现算**，和锁定槽、出发卡共用同一份
+     * `PETS` / `petGap()` —— 三处写三个解锁节奏，改一次必然漏两处。
+     *
+     * 头像不用贴图：六个头像分别绑在场景节点上（`ui/home/heads-circle/*`），
+     * 不在 `resources` 下，运行时 load 不到。这里用 Graphics 画圆 + 首字，
+     * 已收服的用暖黄、未收服用灰 —— 一眼分得清"有"和"没有"就够，
+     * 图鉴的职责是陈列状态，不是展示立绘（立绘在主界面场景里已经能看）。
+     */
+    private ensureCodex() {
+        if (this.codex) return;
+
+        const root = new Node('__Codex');
+        root.parent = this.canvas;
+        root.addComponent(UITransform).setContentSize(W, H);
+        root.setSiblingIndex(-1);
+        root.active = false;
+        this.codex = root;
+
+        /* 压暗 + 点击关闭。
+           这里用**半透明**的遮罩，不像出发卡那样整块盖住：图鉴是要"看后面的家"
+           的 —— 玩家刚在主界面点进来，画面还得认得出是自家院子。 */
+        const scrim = new Node('scrim');
+        scrim.parent = root;
+        scrim.addComponent(UITransform).setContentSize(W, H);
+        const sg = scrim.addComponent(Graphics);
+        sg.fillColor = new Color(38, 26, 20, 205);
+        sg.rect(-W / 2, -H / 2, W, H);
+        sg.fill();
+        scrim.on(Node.EventType.TOUCH_END, () => this.closeCodex());
+
+        const CW = 700, CH = 470;
+        const card = new Node('card');
+        card.parent = root;
+        card.addComponent(UITransform).setContentSize(CW, CH);
+        const g = card.addComponent(Graphics);
+        g.fillColor = CARD_FILL;
+        g.roundRect(-CW / 2, -CH / 2, CW, CH, 26);
+        g.fill();
+        g.lineWidth = 3;
+        g.strokeColor = CARD_LINE;
+        g.roundRect(-CW / 2, -CH / 2, CW, CH, 26);
+        g.stroke();
+        /* 卡面吃掉点击，别透到遮罩上把面板关掉 */
+        card.on(Node.EventType.TOUCH_END, (e: EventTouch) => { e.propagationStopped = true; });
+
+        const cleared = this.save.cleared;
+        const owned = PETS.filter((p) => cleared >= p.at).length;
+
+        mkLabel(card, 'title', '图鉴', 34, INK, 400, 48).node.setPosition(0, 190, 0);
+        mkLabel(card, 'sub', `已收服 ${owned} / ${PETS.length}`, 18, INK_SOFT, 400, 28)
+            .node.setPosition(0, 154, 0);
+
+        /* 3 列 × 2 行。列宽 200、行高 160 —— 六个格子占满 600×320，
+           四周留 50 的内边距，卡片边框不会被格子压到。 */
+        const COL_X = [-200, 0, 200];
+        const ROW_Y = [40, -140];
+
+        PETS.forEach((p, i) => {
+            const cx0 = COL_X[i % 3];
+            const cy0 = ROW_Y[Math.floor(i / 3)];
+            const got = cleared >= p.at;
+            const gap = petGap(cleared, p.id);
+
+            const cell = new Node(`cell-${p.id}`);
+            cell.parent = card;
+            cell.addComponent(UITransform).setContentSize(190, 150);
+            cell.setPosition(cx0, cy0, 0);
+            const cg = cell.addComponent(Graphics);
+
+            /* 圆底：已收服暖黄、未收服灰。半径 42，直径 84 —— 
+               手指点不到不是问题（这一格不可点），但要一眼看清"有没有"。 */
+            cg.fillColor = got ? new Color(246, 206, 128, 255) : new Color(206, 198, 186, 255);
+            cg.circle(0, 34, 42);
+            cg.fill();
+            cg.lineWidth = 3;
+            cg.strokeColor = got ? new Color(176, 122, 60, 255) : new Color(158, 148, 136, 255);
+            cg.circle(0, 34, 42);
+            cg.stroke();
+
+            /* 圆里放名字首字 / 问号。用 Label 而不是画图形：
+               中文首字只有 Label 能保证对齐。 */
+            mkLabel(cell, 'mark', got ? p.name.slice(0, 1) : '?', 34,
+                    got ? new Color(92, 60, 24, 255) : new Color(120, 112, 104, 255), 80, 44)
+                .node.setPosition(0, 34, 0);
+
+            mkLabel(cell, 'name', got ? p.name : '未收服', 19,
+                    got ? INK : INK_SOFT, 180, 26).node.setPosition(0, -28, 0);
+
+            mkLabel(cell, 'state', got ? '已收服' : `还差 ${gap} 关`, 14,
+                    got ? new Color(63, 125, 36, 255) : INK_SOFT, 180, 22)
+                .node.setPosition(0, -54, 0);
+        });
+
+        mkLabel(card, 'tip', '点空白处关闭', 14, INK_SOFT, 400, 22).node.setPosition(0, -206, 0);
+
+        this.codexOp = root.addComponent(UIOpacity);
+    }
+
     /** 出门入口。这就是「点了要有反应」的落点。 */
-    private openDepart() {
-        this.ensureDepart();
+    private openDepart() {        this.ensureDepart();
         if (!this.depart || !this.departOp) return;
         this.depart.active = true;
         this.departOp.opacity = 0;

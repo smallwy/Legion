@@ -4331,7 +4331,15 @@ function drawPetSprite(g, img, x, footY, w, h, face, A, o) {
   g.globalAlpha = 1 * A;
   g.save();
   g.translate(x, footY);
-  if (face < 0) g.scale(-1, 1);
+  /* 翻转判据是 **face > 0**，不是 face < 0。
+   *
+   * 立绘原图（pet-*.png）是朝**左**的：尾巴在画面左侧、身体朝左前侧。
+   * 上一版写 `face < 0` 翻转，于是向右走/向右施法时贴的是原图 = 朝左，
+   * 向左时反而被翻成朝右 —— 正好全反。玩家看到的就是"右施法、脸朝左"。
+   *
+   * 这条约束的前提是**六张立绘都朝左**。以后美术换图，先确认朝向再动这里，
+   * 混着来会出现"猫朝右、狗朝左"这种一队人方向不一致的情况。 */
+  if (face > 0) g.scale(-1, 1);
   // 出手闪白：代码图形是盖一层白矩形；贴图改提亮度，只作用于不透明像素，
   // 不会在角色周围留一个白框。浏览器不支持 filter 时赋值被忽略，不报错。
   //
@@ -5648,9 +5656,15 @@ function panelBg(g, key, x, y, w, h, ds, fallbackFill, fallbackRadius) {
     g.fill();
   }
 
-  g.strokeStyle = img ? "rgba(92,60,34,.40)" : "rgba(255,255,255,.14)";
-  g.lineWidth = img ? 2.2 : 1.5;
-  rr(g, x + 1.1, y + 1.1, w - 2.2, h - 2.2, Math.max(6, r - 1));
+  /* 描边按概念图重定过：`#754E2D`、3.4px。
+   *
+   * 上一版是 2.2px / rgba(92,60,34,.40) —— 半透明的细线。在奶白底上还看得见，
+   * 一落到绿草地/暖黄天空上就糊进背景，"牌子"退化成"控件"。
+   * 概念稿（concept/Game_UI_kit_sheet_*.png）里的面板边是**实色深棕 + 3~4px**，
+   * 尺寸比 1:100 左右 —— 960 宽的画面正好对应 3.4px。 */
+  g.strokeStyle = img ? "#754E2D" : "rgba(255,255,255,.14)";
+  g.lineWidth = img ? 3.4 : 1.5;
+  rr(g, x + 1.7, y + 1.7, w - 3.4, h - 3.4, Math.max(6, r - 1.7));
   g.stroke();
   return okArt;
 }
@@ -6488,8 +6502,8 @@ function tick(dt) {
 
 /* 结算卡片与两个按钮的几何。**绘制和点击判定共用这一份** ——
  * 门口那六只踩过一次"画一遍算一遍坐标、判定再算一遍"的坑，改布局必错开。 */
-const CARD_Y = 75, CARD_H = 450;
-const BTN_Y = CARD_Y + 352, BTN_W = 190, BTN_H = 40, BTN_GAP = 24;
+const CARD_Y = 40, CARD_H = 520;
+const BTN_Y = CARD_Y + 444, BTN_W = 210, BTN_H = 44, BTN_GAP = 28;
 function settleBtns() {
   const cx = W / 2;
   return {
@@ -6834,17 +6848,17 @@ function render() {
       g.fillRect(0, 0, W, H);
 
       const cardY = CARD_Y, cardH = CARD_H;
-      const creamCard = panelBg(g, "ui-res", cx - 230, cardY, 460, cardH, 46,
+      const creamCard = panelBg(g, "ui-res", cx - 310, cardY, 620, cardH, 56,
                                 "rgba(20,34,28,.97)", 22);
       if (!creamCard) {
         // 代码底：描边 + 顶部彩条。有美术卡的时候这两样都不要 ——
         // 奶白卡自己有一圈棕描边，再压一条亮绿/亮红彩条会像贴纸。
         g.strokeStyle = ok ? "rgba(185,240,106,.34)" : "rgba(255,158,142,.32)";
         g.lineWidth = 2;
-        rr(g, cx - 230, cardY, 460, cardH, 20);
+        rr(g, cx - 310, cardY, 620, cardH, 24);
         g.stroke();
         g.fillStyle = ok ? "#B9F06A" : "#FF9E8E";
-        rr(g, cx - 230, cardY, 460, 6, 3);
+        rr(g, cx - 310, cardY, 620, 6, 3);
         g.fill();
       }
 
@@ -6857,15 +6871,15 @@ function render() {
          否则按钮会压在边框上（上一版就是按钮骑在圆角上，读起来像"卡片裂了"）。 */
       g.fillStyle = K.ink3;
       g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-      g.fillText("第 " + (S.stage + 1) + " / " + LEVELS.length + " 关   ·   " + st.sub, cx, cardY + 34);
+      g.fillText("第 " + (S.stage + 1) + " / " + LEVELS.length + " 关   ·   " + st.sub, cx, cardY + 36);
 
       g.fillStyle = K.ink;
-      g.font = "bold 22px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-      g.fillText(st.name + "   ·   " + curGoal().name, cx, cardY + 58);
+      g.font = "bold 25px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+      g.fillText(st.name + "   ·   " + curGoal().name, cx, cardY + 66);
 
       g.fillStyle = ok ? K.good : K.bad;
       g.font = "bold 16px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-      g.fillText(ok ? "过关" : "没做到", cx, cardY + 82);
+      g.fillText(ok ? "过关" : "没做到", cx, cardY + 96);
 
       // 评价：只在达标时给。失败了不给评级 —— 评级是奖励，不是羞辱
       if (ok) {
@@ -6884,28 +6898,28 @@ function render() {
           for (let i = 0; i < 3; i++) {
             const sx = mid + (i - 1) * 34;
             g.globalAlpha = i < nStar ? 1 : 0.20;
-            g.drawImage(starArt, sx - 16, cardY + 102, 32, 32);
+            g.drawImage(starArt, sx - 16, cardY + 122, 32, 32);
           }
           g.globalAlpha = 1;
           g.fillStyle = rcol;
           g.font = "bold 22px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-          g.fillText(rk, cx + 52, cardY + 118);
+          g.fillText(rk, cx + 52, cardY + 142);
         } else {
           g.fillStyle = rcol;
           g.font = "bold 52px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-          g.fillText(rk, cx, cardY + 118);
+          g.fillText(rk, cx, cardY + 142);
         }
       } else {
         g.fillStyle = K.cream ? "#A2492F" : "#FFD3C8";
         g.font = "15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText(S.failWhy || "饿晕了…", cx, cardY + 122);
+        g.fillText(S.failWhy || "饿晕了…", cx, cardY + 134);
       }
 
       // 数据：两行，第一行是"送走多少"，第二行是"目标那条线打没打到"
       g.fillStyle = K.ink;
       g.font = "bold 15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
       g.fillText("送走 " + S.killed + " / " + S.total + " 只   ·   用时 " + S.playT.toFixed(1) + "s",
-                 cx, cardY + 152);
+                 cx, cardY + 198);
 
       let goalLine = "";
       if (st.goal === "limit") goalLine = "用球 " + S.stat.made + " / " + st.ballLimit + " 颗";
@@ -6917,7 +6931,7 @@ function render() {
       if (goalLine) {
         g.fillStyle = K.ink2;
         g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText(goalLine, cx, cardY + 172);
+        g.fillText(goalLine, cx, cardY + 222);
       }
 
 
@@ -6925,8 +6939,8 @@ function render() {
       g.strokeStyle = K.cream ? "rgba(120,92,64,.26)" : "rgba(255,255,255,.10)";
       g.lineWidth = 1;
       g.beginPath();
-      g.moveTo(cx - 184, cardY + 194);
-      g.lineTo(cx + 184, cardY + 194);
+      g.moveTo(cx - 250, cardY + 172);
+      g.lineTo(cx + 250, cardY + 172);
       g.stroke();
 
       /* ---- 它说 ---- 
@@ -6935,7 +6949,7 @@ function render() {
       const said = finishSay(ok);
       g.fillStyle = K.cream ? "#8A5716" : "rgba(255,233,176,.92)";
       g.font = "bold 15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-      g.fillText(HEROES[S.heroIdx].name + "：「" + said + "」", cx, cardY + 214);
+      g.fillText(HEROES[S.heroIdx].name + "：「" + said + "」", cx, cardY + 280);
 
       /* ---- 这一趟的账 ---- 
          倍率只有收工才结算，所以这里必须把"现在走能拿多少"写清楚 ——
@@ -6945,13 +6959,13 @@ function render() {
       g.fillStyle = K.ink2;
       g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
       g.fillText("这一趟走了 " + S.trip.stages + " 关   ·   攒下 " + S.trip.loot + " 果   ×   " +
-                S.trip.multi.toFixed(2) + "   =   " + gain, cx, cardY + 236);
+                S.trip.multi.toFixed(2) + "   =   " + gain, cx, cardY + 306);
 
       // 肚子：一条会缩的条 + 一个口语化的档位词。
       // **不给数字** —— 玩家要判断的是"还撑不撑得住"，不是精确到 84 还是 68。
       // 标签放在条的上方左对齐（放左边会孤零零挂在条外面，像没摆好的图片）
       {
-        const bw = 168, bx = cx - bw / 2, by = cardY + 260;
+        const bw = 220, bx = cx - bw / 2, by = cardY + 336;
         g.fillStyle = K.ink3;
         g.font = "11px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
         g.textAlign = "left";
@@ -6985,83 +6999,84 @@ function render() {
         const nx = LEVELS[S.stage + 1];
         g.fillStyle = K.ink;
         g.font = "bold 18px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText((S.stage + 2) + ". " + nx.name + "   ·   " + nx.sub, cx, cardY + 316);
+        g.fillText((S.stage + 2) + ". " + nx.name + "   ·   " + nx.sub, cx, cardY + 394);
       } else if (ok && last) {
         g.fillStyle = K.cream ? "#C0871A" : "#FFE58A";
         g.font = "bold 19px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText("八个场地全清干净了", cx, cardY + 316);
+        g.fillText("八个场地全清干净了", cx, cardY + 394);
         g.fillStyle = K.ink2;
         g.font = "12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText("这一趟走到底了 —— 收工之后可以换一只再来", cx, cardY + 334);
+        g.fillText("这一趟走到底了 —— 收工之后可以换一只再来", cx, cardY + 416);
       } else {
         g.fillStyle = K.cream ? "#A2492F" : "#FFD3C8";
         g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText("换个思路，先卷一个再推   ·   或者今天就到这儿", cx, cardY + 322);
+        g.fillText("换个思路，先卷一个再推   ·   或者今天就到这儿", cx, cardY + 416);
       }
 
       /* ---- 两个按钮：继续（贪） / 收工（稳） ----
          默认高亮"继续"，因为默认应该是贪 —— 玩家没选的时候，让游戏推着他往前走。
          但两个都得看得见、都得好按，不然"贪"就不是选择，是唯一路径。 */
       const hov = S.hoverBtn === undefined ? -1 : S.hoverBtn;
-      const btnArt = artOf("ui-btn");
-      const drawBtn = (r, hi, main, sub, accent) => {
-        if (btnArt) {
-          // 美术底：招牌黄按钮。**只在被指着的时候上色**，
-          // 另一个压暗压到 0.55 —— 两个一样亮的黄按钮会互相抢，
-          // "贪还是稳"就变成"两个都行"，这个选择也就不存在了。
-          g.globalAlpha = hi ? 1 : 0.55;
-          drawNine(g, btnArt, r.x, r.y, r.w, r.h, 40);
-          g.globalAlpha = 1;
-          // 指着的那个再加一圈光，鼠标不移上去也认得出默认项
-          if (hi) {
-            g.strokeStyle = "rgba(255,244,200,.75)";
-            g.lineWidth = 2;
-            rr(g, r.x - 2, r.y - 2, r.w + 4, r.h + 4, 13);
-            g.stroke();
-          }
-          g.fillStyle = hi ? "#5A3A16" : "rgba(90,58,22,.62)";
-          g.font = "bold 15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-          g.fillText(main, r.x + r.w / 2, r.y + 15);
-          g.fillStyle = hi ? "rgba(90,58,22,.74)" : "rgba(90,58,22,.40)";
-          g.font = "10px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-          g.fillText(sub, r.x + r.w / 2, r.y + 30);
-          return;
-        }
-        g.fillStyle = hi ? accent.fill : "rgba(255,255,255,.055)";
-        rr(g, r.x, r.y, r.w, r.h, 12); g.fill();
-        g.strokeStyle = hi ? accent.line : "rgba(255,255,255,.16)";
-        g.lineWidth = hi ? 2 : 1.4;
-        rr(g, r.x, r.y, r.w, r.h, 12); g.stroke();
-        g.globalAlpha = hi ? 1 : 0.74;
-        g.fillStyle = accent.text;
-        g.font = "bold 15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText(main, r.x + r.w / 2, r.y + 16);
-        g.globalAlpha = hi ? 0.70 : 0.46;
-        g.fillStyle = accent.text;
+      /* 按钮用**代码画**，不贴 ui-btn。
+       *
+       * ui-btn 的源图（btn-go.png 615×96）是一张"出门"专用稿：
+       * 右端带 ▶ 箭头、左段有一条竖分隔线。缩到 210×44 之后箭头被压成
+       * 一个小三角、分隔线变成一道划痕 —— 看着像图片没切好。
+       * 通用按钮要的是"形状 + 描边"，装饰只会添乱。
+       *
+       * 主次不靠"压暗到看不见"来区分（上一版次按钮 alpha 0.55 + 文字 .40，
+       * 在奶白卡上基本读不出"收工回家"四个字）。改成**底色不同**：
+       * 主按钮暖黄实心，次按钮奶白空心，两个都清楚，选择才成立。 */
+      const drawBtn = (r, hi, main, sub, solid) => {
+        const rad = r.h / 2;
+        // 贴纸三件套：投影 → 底 → 深棕描边（和面板同一套语言）
+        g.fillStyle = "rgba(92,58,28,.22)";
+        rr(g, r.x, r.y + 3, r.w, r.h, rad);
+        g.fill();
+
+        g.fillStyle = solid ? (hi ? "#F0BC4E" : "#E5C98C") : (hi ? "#FFFBF0" : "#F2E9D6");
+        rr(g, r.x, r.y, r.w, r.h, rad);
+        g.fill();
+
+        // 上半部一条浅色高光，把"凸起"这件事说清楚
+        g.fillStyle = solid ? "rgba(255,236,168,.55)" : "rgba(255,255,255,.75)";
+        rr(g, r.x + 5, r.y + 3, r.w - 10, r.h * 0.38, rad * 0.7);
+        g.fill();
+
+        g.strokeStyle = hi ? "#6B4A24" : "rgba(107,74,36,.62)";
+        g.lineWidth = hi ? 2.6 : 2;
+        rr(g, r.x, r.y, r.w, r.h, rad);
+        g.stroke();
+
+        g.textAlign = "center";
+        g.fillStyle = hi ? "#4A2F10" : "rgba(74,47,16,.78)";
+        g.font = "bold 16px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+        g.fillText(main, r.x + r.w / 2, r.y + 17);
+        g.fillStyle = hi ? "rgba(74,47,16,.72)" : "rgba(74,47,16,.52)";
         g.font = "10px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-        g.fillText(sub, r.x + r.w / 2, r.y + 31);
-        g.globalAlpha = 1;
+        g.fillText(sub, r.x + r.w / 2, r.y + 33);
       };
-      const GRN = { fill: "rgba(185,240,106,.16)", line: "rgba(185,240,106,.86)", text: "#EAFBD2" };
-      const AMB = { fill: "rgba(255,216,107,.15)", line: "rgba(255,216,107,.80)", text: "#FFF3C8" };
       // 默认高亮"继续"：玩家没选的时候，让游戏推着他往里走。但"收工"必须同样好按，
       // 不然"贪"就不是一个选择，而是唯一路径 —— 那样这条机制等于不存在。
       const hiCont = hov === 0 || (hov !== 1);
 
       if (ok && !last) {
         drawBtn(B.cont, hiCont, "继续深入",
-                "倍率变 " + nextMulti.toFixed(2) + (bellyTier() === 0 ? "  ·  它又饿了" : ""), GRN);
+                "倍率变 " + nextMulti.toFixed(2) + (bellyTier() === 0 ? "  ·  它又饿了" : ""), true);
       } else if (ok && last) {
-        drawBtn(B.cont, hiCont, "全部通关", "点这里收工", GRN);
+        drawBtn(B.cont, hiCont, "全部通关", "点这里收工", true);
       } else {
-        drawBtn(B.cont, hiCont, "重打本关", "R 也行", GRN);
+        drawBtn(B.cont, hiCont, "重打本关", "R 也行", true);
       }
-      drawBtn(B.home, hov === 1, "收工回家", "+ " + gain + " 果  ·  吃饱", AMB);
+      drawBtn(B.home, hov === 1, "收工回家", "+ " + gain + " 果  ·  吃饱", false);
 
       // 提示行
       // 它是"整个画面"的热键，不是卡片内容 —— 放卡片下面。
       // 塞在卡里会骑在下边框的圆角上，读起来像"卡片裂了一条缝"。
       // 颜色也不能沿用卡片内的深棕：现在是压在压暗层上，深棕等于没写。
+      // textAlign 必须显式设回 center：上面肚子标签那段把它改成了 left，
+      // 之后一直没还原 —— 提示行用 cx 定位就会从中间往右写出去。
+      g.textAlign = "center";
       g.fillStyle = "rgba(255,248,232,.66)";
       g.font = "bold 12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
       g.fillText(ok && !last ? "回车 / 点击  继续   ·   E  收工回家   ·   ESC 回选人"
@@ -7141,11 +7156,13 @@ cv.addEventListener("mousedown", (ev) => {
     if (i >= 0) pickHero(i);
     return;
   }
-  // 结算界面：右半 = 收工，左半 = 继续 / 重打
+  // 结算界面：只有真的点在按钮上才算数。
+  // 上一版是"命中 home 就收工，否则一律 nextLevel" —— 点在卡片外的草地上
+  // 也会直接进下一关，玩家会以为"这面板自己跳走了"。
   if (S.phase === "clear" || S.phase === "fail") {
     const B = settleBtns();
     if (inRect(loc, B.home)) { goHome(false); return; }
-    nextLevel();
+    if (inRect(loc, B.cont)) { nextLevel(); return; }
   }
 });
 

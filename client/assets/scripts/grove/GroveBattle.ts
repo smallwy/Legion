@@ -44,7 +44,8 @@ import {
     director, assetManager, SceneAsset, resources, ImageAsset,
 } from 'cc';
 import {
-    groveAttachCanvas, groveBoot, groveRender, groveSetArt, groveSetExitHook, groveTick,
+    groveAttachCanvas, groveBoot, grovePointer, groveRender, groveSetArt,
+    groveSetExitHook, groveTick,
 } from './GroveRuntime';
 
 const { ccclass } = _decorator;
@@ -251,6 +252,45 @@ export class GroveBattle extends Component {
         stage.appendChild(cv);
         doc.body.appendChild(stage);
         this._stage = stage;
+
+        this._bindPointer(cv);
+    }
+
+    /**
+     * 鼠标 / 触摸 → 运行时的 `grovePointer`。
+     *
+     * **这条线之前是断的。** 原型里是 `cv.addEventListener('mousedown', ...)`，
+     * 抽取成运行时的时候那两行被换成了具名函数 `onCanvasMove/onCanvasDown`，
+     * 事件绑定本身没有生成 —— 而 GroveBattle 也从没调用 grovePointer。
+     * 结果：键盘全通、鼠标全哑 —— 结算界的两个按钮点了没反应，选人界面点不动。
+     * 键盘能玩，所以这个洞一直没暴露出来，直到玩家真的去点"收工回家"。
+     *
+     * 坐标必须自己换算：canvas 固有尺寸 960×600，被 max-width/height 收缩后
+     * 显示尺寸会小一圈，直接拿 offsetX 得到的是**显示像素**，不是世界坐标。
+     * 用 getBoundingClientRect 的宽高做比例换算，顺带把 DPR 的影响抵消掉。
+     */
+    private _bindPointer(cv: HTMLCanvasElement): void {
+        const toWorld = (ev: MouseEvent | PointerEvent): { x: number; y: number } => {
+            const r = cv.getBoundingClientRect();
+            if (!r.width || !r.height) return { x: -1, y: -1 };
+            return {
+                x: (ev.clientX - r.left) * (W / r.width),
+                y: (ev.clientY - r.top) * (H / r.height),
+            };
+        };
+
+        cv.addEventListener('pointermove', (ev) => {
+            const p = toWorld(ev);
+            grovePointer('move', p.x, p.y);
+        });
+
+        // pointerdown 同时覆盖鼠标和触摸。不用 click —— click 要等 up，
+        // 结算界"点了就有反应"比"点了要等抬手指"更符合预期。
+        cv.addEventListener('pointerdown', (ev) => {
+            ev.preventDefault();
+            const p = toWorld(ev);
+            grovePointer('down', p.x, p.y);
+        });
     }
 
     private _unmountStage(): void {

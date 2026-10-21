@@ -152,6 +152,40 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await sleep(240);
   await shot("grove-16-波次预告.png");
 
+  // 19. BOSS 产卵：肚子鼓起来，两边各钻出一只幼虫
+  await page.evaluate(() => {
+    const P = window.GROVE, S = P.S;
+    P._start(0, 7);
+    S.foes.length = 0;
+    S.balls.length = 0;
+    S.texts.length = 0;
+    S.wave = P.WAVES.length - 1;
+    S.p.x = 150; S.p.y = 556;
+    const b = P.foeFromSpec({ foe: "boss", x: 500, y: 556, lv: 3 }, false);
+    b.coat = 3; b.slamT = 999; b.scatterT = 999; b.spawnT = 0.02;
+    S.foes.push(b);
+  });
+  await sleep(760);
+  await page.evaluate(() => { window.GROVE.S.texts.length = 0; });
+  await sleep(60);
+  await shot("grove-19-BOSS产卵.png");
+
+  // 20. BOSS 散射：五发扇形粘液弹正在飞
+  await page.evaluate(() => {
+    const P = window.GROVE, S = P.S;
+    P._start(0, 7);
+    S.foes.length = 0;
+    S.balls.length = 0;
+    S.texts.length = 0;
+    S.wave = P.WAVES.length - 1;
+    S.p.x = 230; S.p.y = 556;
+    const b = P.foeFromSpec({ foe: "boss", x: 760, y: 556, lv: 3 }, false);
+    b.coat = 4; b.slamT = 999; b.spawnT = 999; b.scatterT = 0.02;
+    S.foes.push(b);
+  });
+  await sleep(620);
+  await shot("grove-20-BOSS散射.png");
+
   // 17. 宝箱：连着几个人一起烧掉才掉，所以直接摆一颗在火坑边上
   await page.evaluate(() => {
     const P = window.GROVE, S = P.S;

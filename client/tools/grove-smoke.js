@@ -1173,7 +1173,7 @@ console.log("\n=== 19. 第五轮：球的一次性 / 宝箱 / 飞刀 / 分身 ==
     ok(monotonic && !crossedBack, "飞刀是直线丢出去的（不是绕着自己转）");
   }
 
-  /* ---- 影分身是召唤物，不是子弹 ---- */
+  /* ---- 影狐是两发子弹，不是站桩召唤 ---- */
   {
     const sb = boot();
     const P = sb.GROVE, S = P.S;
@@ -1182,19 +1182,52 @@ console.log("\n=== 19. 第五轮：球的一次性 / 宝箱 / 飞刀 / 分身 ==
     S.shots.length = 0;
     S.p.x = 400; S.p.y = 462; S.p.face = 1;
     P.HEROES[5].fire(S.p);
-    const summons = S.shots.filter(s => s.kind === "summon");
-    eq(summons.length, 2, "召出两个分身");
-    const f = S.foes[0];
-    const c0 = f.coat;
-    // 分身自己站上去不该糊人。把它这一侧的吐弹按住，否则测到的是"影弹打到了"
-    summons[0].fireT = 999;
-    summons[0].x = f.x; summons[0].y = f.y;
+    eq(S.shots.length, 2, "影狐一次窜出两道影子");
+    ok(S.shots.every(s => s.kind === "shadow"), "两发都是影弹");
+    const x0 = S.shots.map(s => s.x);
+    for (let k = 0; k < 6; k++) P.tick(1 / 60);
+    eq(S.shots.filter((s, i) => s.x > x0[i] + 20).length, 2, "两发都真的飞出去了");
+    const dy = S.shots.length >= 2 ? Math.abs(S.shots[1].y - S.shots[0].y) : 99;
+    ok(dy > 8, "两发上下分叉（近身两发全吃，远了只中一发）", "dy=" + dy.toFixed(1));
+  }
+
+  /* ---- 六个人的技能都是"飞出去的子弹"，只是样子不同 ---- */
+  for (let hi = 0; hi < 6; hi++) {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(hi, 0);
+    S.foes.forEach(f => { f.x = 5000; });
+    S.shots.length = 0;
+    S.p.x = 300; S.p.y = 462; S.p.face = 1;
+    P.HEROES[hi].fire(S.p);
+    const shots = S.shots.slice();
+    ok(shots.length > 0, P.HEROES[hi].name + " 放得出来东西", "n=" + shots.length);
+    const before = shots.map(s => ({ x: s.x, y: s.y }));
+    for (let k = 0; k < 6; k++) P.tick(1 / 60);
+    let moved = 0;
+    for (let i = 0; i < shots.length; i++) {
+      const s = shots[i];
+      if (Math.abs(s.x - before[i].x) + Math.abs(s.y - before[i].y) > 8) moved++;
+    }
+    eq(moved, shots.length, P.HEROES[hi].name + " 打出去的东西全部离手飞行");
+  }
+
+  /* ---- 音波是飞出去的弹，且越飞越宽 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(1, 0);
+    S.foes.forEach(f => { f.x = 5000; });
+    S.shots.length = 0;
+    S.p.x = 300; S.p.y = 462; S.p.face = 1;
+    P.HEROES[1].fire(S.p);
+    const w = S.shots[0];
+    const r0 = w.r, x0 = w.x;
     for (let k = 0; k < 10; k++) P.tick(1 / 60);
-    ok(summons[0].kind === "summon" && f.coat === c0, "分身本体不碰人（它只是站位）");
-    // 但会吐影弹
-    summons[0].fireT = 0.02;
-    for (let k = 0; k < 60; k++) P.tick(1 / 60);
-    ok(f.coat > c0 || f.dead, "分身会自己吐影弹打到人", "coat=" + f.coat);
+    ok(w.x > x0 + 30, "音波在往前飞（不是贴在人身上的光环）", "dx=" + (w.x - x0).toFixed(1));
+    ok(w.r > r0 + 8, "音波一路撑开", "r " + r0 + " -> " + w.r.toFixed(1));
   }
 }
 
@@ -1225,26 +1258,33 @@ console.log("\n=== 20. 第六轮：坡、下穿、波次、BOSS ===");
     ok(S.p.y < midY - 30, "往坡上走会一路变高", "y=" + S.p.y.toFixed(0));
   }
 
-  /* ---- ↓ 能从上层的台面穿下去 ---- */
+  /* ---- ↓ 一次只穿一层 ---- */
   {
     const sb = boot();
     const P = sb.GROVE, S = P.S;
     seed(S);
     P._start(0, 0);
     S.foes.forEach(f => { f.x = 2000; });
-    // 站在 350 层中间（离两端都远）
-    S.p.x = 500; S.p.y = 350; S.p.vy = 0; S.p.onGround = true;
-    S.p.ground = P.PLATS.find(q => q.y === 350 && 500 > q.x && 500 < q.x + q.w) || null;
-    const y0 = S.p.y;
-    for (let k = 0; k < 6; k++) { S.keys.down = true; P.tick(1 / 60); }
-    ok(S.p.y > y0 + 30 || !S.p.onGround, "按 ↓ 会从台面穿下去",
-       "y " + y0.toFixed(0) + " -> " + S.p.y.toFixed(0));
+    // 站在最高那层（248），屁股底下依次是 350 / 462 / 地面
+    S.p.x = 500; S.p.y = 248; S.p.vy = 0; S.p.onGround = true;
+    S.p.ground = P.PLATS.find(q => q.y === 248 && 500 > q.x && 500 < q.x + q.w) || null;
+    ok(!!S.p.ground, "站上了 248 层");
+
     for (let k = 0; k < 90; k++) { S.keys.down = true; P.tick(1 / 60); }
+    const y1 = S.p.y;
+    ok(y1 > 340 && y1 < 356, "按住 ↓ 只穿一层，落到 350（不是一路掉到地面）", "y=" + y1.toFixed(0));
+
+    // 松开再按，才继续往下 —— 否则玩家没法"一层一层下"
     S.keys.down = false;
-    ok(S.p.y >= 455, "一直按着 ↓ 会一直掉到下一层", "y=" + S.p.y.toFixed(0));
+    for (let k = 0; k < 4; k++) P.tick(1 / 60);
+    for (let k = 0; k < 90; k++) { S.keys.down = true; P.tick(1 / 60); }
+    const y2 = S.p.y;
+    ok(y2 > 450 && y2 <= 462, "松开再按一次，才落到 462", "y=" + y2.toFixed(0));
+    S.keys.down = false;
 
     // 地面是 ground，按 ↓ 不该穿到世界外
     S.p.x = 700; S.p.y = 556; S.p.onGround = true;
+    S.p.dropLock = false; S.p.dropT = 0; S.p.dropPlat = null;
     for (let k = 0; k < 30; k++) { S.keys.down = true; P.tick(1 / 60); }
     S.keys.down = false;
     ok(S.p.y <= 560, "站在地面上按 ↓ 不会掉出去", "y=" + S.p.y.toFixed(0));
@@ -1421,6 +1461,132 @@ console.log("\n=== 20. 第六轮：坡、下穿、波次、BOSS ===");
         }
       }
     }
+  }
+}
+
+console.log("\n=== 21. 第七轮：技能子弹化 / 坡材质 / BOSS 繁殖与散射 ===");
+{
+  /* ---- BOSS 会产卵 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 7);
+    S.foes.length = 0;
+    S.p.x = 120; S.p.y = 556;
+    const boss = P.foeFromSpec({ foe: "boss", x: 700, y: 556, lv: 5 }, false);
+    boss.spawnT = 0.05;
+    boss.stun = 999;                       // 别让 BOSS 走开，不然幼虫会追着它跑
+    S.foes.push(boss);
+    let t = 0;
+    while (t < 1.5) { P.tick(1 / 60); t += 1 / 60; }
+    const ls = S.foes.filter(f => f.larva && !f.dead);
+    eq(ls.length, 2, "BOSS 产卵：一次两只幼虫");
+    ok(ls.every(l => l.y <= 560), "幼虫落在地上，没有卡在半空");
+  }
+
+  /* ---- 幼虫往 BOSS 爬，到了被吃掉，BOSS 补一层壳 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 7);
+    S.foes.length = 0;
+    S.p.x = 120; S.p.y = 556;
+    const boss = P.foeFromSpec({ foe: "boss", x: 700, y: 556, lv: 5 }, false);
+    boss.slamT = 99; boss.scatterT = 99; boss.spawnT = 99;   // 只测归巢
+    boss.stun = 999;                                        // BOSS 站定，别走开
+    S.foes.push(boss);                                      // 不 push 的话幼虫找不到它
+    // 先糊 3 层（每层间隔要大于抗性 0.5s）
+    for (let i = 0; i < 3; i++) { P.coatFoe(boss, 1); for (let k = 0; k < 40; k++) P.tick(1 / 60); }
+    const c0 = boss.coat;
+    ok(c0 >= 3, "BOSS 先被糊了 3 层", "coat=" + c0);
+
+    const l = P.foeFromSpec({ foe: "larva", x: 660, y: 556 }, false);
+    l.y = 556; l.onGround = true;
+    S.foes.push(l);
+    let t = 0;
+    while (t < 5 && !l.dead) { P.tick(1 / 60); t += 1 / 60; }
+    ok(l.dead, "幼虫爬到 BOSS 身边就被吃掉");
+    ok(boss.coat < c0, "BOSS 吃掉幼虫补回一层壳", "coat " + c0 + " -> " + boss.coat);
+  }
+
+  /* ---- 回血有硬上限（不然永远打不完） ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 7);
+    S.foes.length = 0;
+    S.p.x = 120; S.p.y = 556;
+    const boss = P.foeFromSpec({ foe: "boss", x: 700, y: 556, lv: 5 }, false);
+    boss.slamT = 99; boss.scatterT = 99; boss.spawnT = 99;
+    boss.stun = 999;
+    S.foes.push(boss);
+    for (let i = 0; i < 4; i++) { P.coatFoe(boss, 1); for (let k = 0; k < 40; k++) P.tick(1 / 60); }
+    boss.fed = 3;
+    const c0 = boss.coat;
+    const l = P.foeFromSpec({ foe: "larva", x: 660, y: 556 }, false);
+    l.y = 556; l.onGround = true;
+    S.foes.push(l);
+    let t = 0;
+    while (t < 5 && !l.dead) { P.tick(1 / 60); t += 1 / 60; }
+    eq(boss.coat, c0, "吃满 3 只之后不再回血");
+  }
+
+  /* ---- 扇形散射：五发、朝玩家张开 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 7);
+    S.foes.length = 0;
+    S.foeShots.length = 0;
+    S.p.x = 300; S.p.y = 556;
+    const boss = P.foeFromSpec({ foe: "boss", x: 700, y: 556, lv: 5 }, false);
+    boss.scatterT = 0.05;
+    boss.stun = 999;
+    S.foes.push(boss);
+    let t = 0;
+    while (t < 1.5) { P.tick(1 / 60); t += 1 / 60; }
+    ok(S.foeShots.length >= 2, "BOSS 喷出扇形弹幕", "n=" + S.foeShots.length);
+    // 五发的方向要真的分开：取最左和最右两发的速度夹角
+    const vx = S.foeShots.map(q => Math.atan2(q.vy, q.vx));
+    const spread = Math.max.apply(null, vx) - Math.min.apply(null, vx);
+    ok(spread > 0.6, "五发是扇形张开的（不是一条直线）", "spread=" + spread.toFixed(2) + "rad");
+  }
+
+  /* ---- 粘液弹会被平台挡住（躲板子下面是解法） ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 7);
+    S.foes.length = 0;
+    S.foeShots.length = 0;
+    S.p.x = 120; S.p.y = 556;
+    const plat = P.PLATS.find(q => q.kind !== "ground");
+    S.foeShots.push({ x: plat.x + plat.w / 2, y: plat.y - 60, vx: 0, vy: 60,
+                      r: 9.5, life: 2.4, t: 0, dead: false });
+    let t = 0;
+    while (t < 1.2) { P.tick(1 / 60); t += 1 / 60; }
+    eq(S.foeShots.length, 0, "粘液弹落到平台上就消失（能靠地形躲）");
+  }
+
+  /* ---- 粘液弹打中玩家会扣血 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 7);
+    S.foes.length = 0;
+    S.foeShots.length = 0;
+    S.p.x = 500; S.p.y = 556; S.p.hp = 3; S.p.invT = 0;
+    S.foeShots.push({ x: 498, y: 512, vx: 0, vy: 20,
+                      r: 9.5, life: 2.4, t: 0, dead: false });
+    let t = 0, hp0 = S.p.hp;
+    while (t < 0.6) { P.tick(1 / 60); t += 1 / 60; }
+    ok(S.p.hp < hp0, "粘液弹打中玩家扣血", "hp " + hp0 + " -> " + S.p.hp);
   }
 }
 

@@ -164,12 +164,15 @@ const HEROES = [
     w: 46, h: 46, spd: 300, jump: 800,
     atkCd: 0.46, dashCd: 0.55, dashPow: 660,
     ears: "dog",
-    desc: "原地吼一圈，射程短但范围宽。被围住的时候一个喇叭全震开。",
+    desc: "吼出一道会越撑越宽的音波。射程短，但它一路变宽，正对着放很难躲。",
     fire(u) {
+      // 上一版是 vx=0 的原地扩张 —— 那不是子弹，是贴在人身上的光环：
+      // 站位即判定，玩家只能站着放，别的技能都要"预判弹道"而这个不用。
+      // 改成真的有速度、有射程、会撑开的弹，六个人的手感才在同一套规则上。
       spawnShot({
-        x: u.x + u.face * 20, y: u.y - 26,
-        vx: 0, vy: 0, r: 26, life: 0.30,
-        kind: "wave", dir: u.face, u: u, grow: 330,
+        x: u.x + u.face * 22, y: u.y - 26,
+        vx: u.face * 520, vy: 0, r: 18, life: 0.52,
+        kind: "wave", dir: u.face, grow: 130, maxR: 46,
         color: "#FFF0C8", pierce: true,
       });
     },
@@ -229,16 +232,16 @@ const HEROES = [
     w: 42, h: 44, spd: 360, jump: 820,
     atkCd: 0.78, dashCd: 0.50, dashPow: 700,
     ears: "fox",
-    desc: "召出两个分身站在左右，替你往那边丢影弹。分身不走，你自己去找角度。",
+    desc: "一次窜出两道影子，一上一下分开飞。近身两发全吃，远了只有一发能碰上。",
     fire(u) {
-      // 召唤：不是子弹，是两个"站位"。分身自己不伤害，靠它定时吐出的影弹。
-      for (const sd of [-1, 1]) {
+      // 上一版是"召两个站桩分身替你吐弹"。站桩的东西不是子弹 ——
+      // 玩家按一下，屏幕上多了一个持续输出的塔，那是放置类，不是动作类。
+      // 改成两发：齐胸一发、偏下一发。轨迹分叉 → 近距离两发都中，远了只中一发。
+      for (const [dy, vy, c] of [[-30, -40, "#DCD0FF"], [-14, 90, "#A98CFF"]]) {
         spawnShot({
-          x: u.x + sd * 68, y: u.y - 10,
-          vx: 0, vy: 0, r: 20, life: 3.4,
-          kind: "summon", dir: sd, face: u.face,
-          fireT: 0.12, interval: 0.42, shots: 0,
-          color: "#B49CFF",
+          x: u.x + u.face * 20, y: u.y + dy,
+          vx: u.face * 780, vy, r: 12, life: 0.40,
+          kind: "shadow", dir: u.face, pierce: true, color: c,
         });
       }
     },
@@ -254,9 +257,14 @@ const HEROES = [
    ========================================================================== */
 
 const FOES = {
-  bug:  { name: "刺毛虫", c1: "#8FC96A", c2: "#4E7A38", w: 34, h: 28, spd: 58, kind: "walk", sc: 1 },
-  crow: { name: "乌 鸦", c1: "#9B8FE0", c2: "#5E5399", w: 36, h: 32, spd: 92, kind: "fly",  sc: 1 },
-  boar: { name: "小野猪", c1: "#D98A5B", c2: "#8E5634", w: 56, h: 40, spd: 74, kind: "charge", sc: 1 },
+  // c1 主体 / c2 亮面 / c3 暗部（腿、尾、耳朵）。三档色是 Q 版的关键：
+  // 只有一档色的角色在缩到 34px 时会变成一个纯色块。
+  bug:  { name: "刺毛虫", c1: "#8FD45E", c2: "#B6EE7E", c3: "#4E8A3A", w: 34, h: 28, spd: 58, kind: "walk", sc: 1 },
+  crow: { name: "乌 鸦", c1: "#A98CF0", c2: "#CDB8FF", c3: "#6B54A8", w: 36, h: 32, spd: 92, kind: "fly",  sc: 1 },
+  boar: { name: "小野猪", c1: "#E8A06A", c2: "#FFD2A8", c3: "#B06A3E", w: 56, h: 40, spd: 74, kind: "charge", sc: 1 },
+  // 幼虫：BOSS 产出来的。它不打玩家 —— 它往 BOSS 身边爬，到了就被吃掉。
+  // 这才是"繁殖"真正给玩家的压力：你得决定先去拦虫，还是继续打壳。
+  larva: { name: "幼 虫", c1: "#CDE888", c2: "#EFFBB8", c3: "#7F9A44", w: 26, h: 22, spd: 104, kind: "walk", sc: 1 },
 };
 
 /* ============================================================================
@@ -492,6 +500,7 @@ const LEVELS = [
         { foe: "bug",  x: 550, y: 350 },
         { foe: "boar", x: 650, y: 350 },
         { foe: "bug",  x: 500, y: 248 },
+        { foe: "crow", x: 720, y: 300, fly: 1 },
       ],
       [{ foe: "boss", x: 750, y: GROUND_Y, lv: 2 }],
     ],
@@ -517,7 +526,7 @@ const LEVELS = [
     ],
     ramps: [
       { x: 240, w: 210, yL: 462, yR: GROUND_Y },   // 下坡：462 → 地面
-      { x: 470, w: 230, yL: GROUND_Y, yR: 462 },   // 上坡：地面 → 462
+      { x: 450, w: 250, yL: GROUND_Y, yR: 462 },   // 上坡：地面 → 462（谷底与左坡在 450 相接）
     ],
     pits: [
       { x: WALL_L, y: GROUND_Y, w: 84,  kind: "mud"  },
@@ -633,6 +642,7 @@ const LEVELS = [
         { foe: "bug",  x: 120, y: 350 },
         { foe: "bug",  x: 700, y: 350 },
         { foe: "bug",  x: 740, y: 248 },
+        { foe: "crow", x: 420, y: 300, fly: 1 },
       ],
       [{ foe: "boss", x: 460, y: GROUND_Y, lv: 3 }],
     ],
@@ -727,6 +737,7 @@ const LEVELS = [
         { foe: "bug",  x: 720, y: 248 },
         { foe: "bug",  x: 820, y: 248 },
         { foe: "bug",  x: 760, y: 156 },
+        { foe: "crow", x: 500, y: 300, fly: 1 },
       ],
       [{ foe: "boss", x: 340, y: GROUND_Y, lv: 5 }],
     ],
@@ -862,6 +873,7 @@ const S = {
   waveT: 0,             // 这一波已经打了多久
   waveGap: 0,           // >0 = 下一波正在预告（倒计时）
   shocks: [],           // BOSS 砸地产生的贴地冲击波
+  foeShots: [],         // BOSS 扇形喷出来的粘液弹
   failWhy: "",          // 失败原因，结算面板要说清楚是哪一条没做到
   aim: false,           // 按住 Shift：强制显示所有球的预测线
 
@@ -977,12 +989,17 @@ function stepBody(b, dt) {
   b.ground = null;
   if (b.vy >= 0) {
     let best = null;
-    // 下穿窗口：按住 ↓ 的那 0.26 秒里，所有"台面"都不算落脚点，只留地面。
-    // 没有这一条，站在 300px 宽的台面中间就下不去 —— 整关被平台切成孤岛，
-    // 玩家只能走到台面边缘才行，而有些台面一直顶到墙，等于没有边。
-    const dropping = b.dropT > 0;
+    // 下穿：只放过"脚下那一块"，落到下一层就停。
+    // 上一版是"窗口内所有台面都不算落脚点"，于是按住 ↓ 会一路穿到地面 ——
+    // 玩家要的是"下一层"，不是"跳楼"。窗口只用来兜住"刚起跳那几帧"，
+    // 真正的范围由 dropPlat（脚下这一块）限死，层距再小也不会多穿一层。
+    // skyDrop 是给 BOSS 天降用的：它要从天上直接落到地面，中途所有台面都不接。
+    const dropping = b.dropT > 0 && (b.dropPlat || b.skyDrop);
     for (const p of PLATS) {
-      if (dropping && p.kind !== "ground") continue;
+      if (dropping) {
+        if (b.skyDrop) { if (p.kind !== "ground") continue; }
+        else if (p === b.dropPlat) continue;
+      }
       if (b.x + b.w / 2 < p.x || b.x - b.w / 2 > p.x + p.w) continue;
       // 单向平台：只有"上一帧还在顶面之上"的那一块算数，
       // 这样从下面跳上去能穿过去，不会一头撞死在板底
@@ -1068,9 +1085,17 @@ function foeFromSpec(sp, fromSky) {
     // 落地 1.2 秒就砸第一次（不是 2.6）：2.6 秒的空窗里玩家已经把它糊成球了，
     // "举起来"这一下全程没机会播。
     slamT: isBoss ? 1.2 : 2.6, slamming: 0,
+    // 繁殖 / 散射两条计时。三条动作（砸地 6.5s、散射 5.5s、产卵 7.5s）
+    // 特意错开，玩家的"跳 / 走位 / 攻击"三个动作才能轮流用上，
+    // 挤在同一秒就成了"同时干三件事"，那是难度不是设计。
+    scatterT: isBoss ? 3.4 : 0, spitting: 0,
+    spawnT: isBoss ? 4.4 : 0, breeding: 0,
+    spawned: 0, fed: 0,
+    larva: sp.foe === "larva",
     // 空中登场：一路穿平台直落地面。不设这个的话，BOSS 会被 156 层的塔尖
     // 接住 —— 每关的塔尖位置都不一样，它就会"卡在半空"，玩家够不着。
     dropT: fromSky ? 99 : 0,
+    skyDrop: !!fromSky,
   };
 }
 
@@ -1097,6 +1122,7 @@ function setupLevel() {
   S.waveT = 0;
   S.waveGap = 0;
   S.shocks = [];
+  S.foeShots = [];
   S.total = 0;
   for (const wv of WAVES) S.total += wv.length;
   spawnWave(0);
@@ -1221,8 +1247,14 @@ function updatePlayer(dt) {
   // 有些台面一直顶到墙，等于连边都没有 —— 玩家会被困在上层。
   // 按住 ↓ 直接穿下去，是平台跳跃里最省事的一条解法（不用教）。
   p.dropT = Math.max(0, (p.dropT || 0) - dt);
-  if (S.keys.down && p.onGround && p.ground && p.ground.kind !== "ground" && p.dropT <= 0) {
+  // 松开 ↓ 才允许下一次下穿。没有这把锁，按住 ↓ 会一层接一层地穿下去 ——
+  // 玩家按的是"下去一层"，看到的是"直接掉到底"，中间那几层他根本没做选择。
+  if (!S.keys.down) p.dropLock = false;
+  if (S.keys.down && !p.dropLock && p.onGround && p.ground &&
+      p.ground.kind !== "ground" && p.dropT <= 0) {
+    p.dropLock = true;
     p.dropT = 0.26;
+    p.dropPlat = p.ground;
     p.y += 8;
     p.vy = 120;
     p.onGround = false;
@@ -1423,6 +1455,41 @@ function updateFoe(f, dt) {
     return;
   }
 
+  // ---- 幼虫：目标不是玩家，是 BOSS。爬到了就被吃掉，BOSS 补一层壳
+  if (f.larva) {
+    const boss = S.foes.find(q => q.isBoss && !q.dead);
+    f.bornT = (f.bornT || 0) + dt;
+    if (!boss || f.bornT > 14) {
+      // 没有 BOSS 了 / 爬了 14 秒还没到 —— 自己散掉，别在场上堆着
+      if (f.bornT > 14) f.dead = true;
+      f.vx = f.dir * f.def.spd * 0.5;
+    } else if ((f.wanderT || 0) > 0) {
+      // 刚孵出来：先朝外爬一小段。这一段是给玩家的反应时间，
+      // 也是"虫群散开"的画面 —— 一出壳就直扑 BOSS 的话，玩家只看到一串加号。
+      f.wanderT -= dt;
+      f.face = f.dir;
+      f.vx = f.face * f.def.spd * 0.72;
+    } else {
+      const dx = boss.x - f.x;
+      f.dir = sign(dx);
+      f.face = f.dir;
+      f.vx = f.face * f.def.spd * 1.15;
+      // 到嘴：横向贴住 + 同一层 + 出了孵化保护期
+      // 差一层就够不着：幼虫在上层平台、BOSS 在地面时，它得先走到边缘掉下去。
+      // 上一版给了它"跳"，结果它在平台上原地蹦，永远绕不到 BOSS 那一侧。
+      if ((f.bornT || 0) > 0.8 &&
+          Math.abs(dx) < boss.w * 0.5 + 12 && Math.abs(f.y - boss.y) < 70) {
+        f.dead = true;
+        feedBoss(boss, f);
+        return;
+      }
+    }
+    stepBody(f, dt);
+    if (f.hitWall) f.dir = -f.hitWall;
+    if (f.y > H + 100) f.dead = true;
+    return;
+  }
+
   if (f.kind === "charge") {
     const p = S.p;
     f.chargeT -= dt;
@@ -1487,14 +1554,11 @@ function updateBoss(f, dt) {
   if (f.coat >= (f.cm || 3)) return;
   const p = S.p;
 
-  // ---- 砸地：抬手 0.8 秒（给玩家反应），落地生波
   f.slamT -= dt;
-  if (f.slamT <= 0 && f.onGround && f.slamming <= 0) {
-    f.slamT = 6.5;
-    f.slamming = 1.15;
-    addText(f.x, f.y - f.h - 30, "举起来了", "#FFB08A", 20);
-    S.shake = Math.max(S.shake, 4);
-  }
+  f.scatterT -= dt;
+  f.spawnT -= dt;
+
+  /* ---- 砸地（最高优先级：手已经举起来了就必须砸完） ---- */
   if (f.slamming > 0) {
     f.slamming -= dt;
     f.vx = 0;
@@ -1509,7 +1573,69 @@ function updateBoss(f, dt) {
       S.shocks.push({ x: f.x, y: f.y, t: 0, life: 0.62, dir: -1 });
       addText(f.x, f.y - f.h - 26, "轰!", "#FF9A6B", 26);
     }
-    if (f.slamming <= 0) f._slammed = false;
+    if (f.slamming <= 0) { f._slammed = false; f.slamT = 6.5; }
+    stepBody(f, dt);
+    return;
+  }
+
+  /* ---- 产卵：肚子鼓一下，两侧各钻出一只幼虫 ---- */
+  if (f.breeding > 0) {
+    f.breeding -= dt;
+    f.vx = 0;
+    if (f.breeding <= 0.36 && !f._born) {
+      f._born = true;
+      for (const sd of [-1, 1]) {
+        // 出生点必须**离嘴够远**：BOSS 半宽 54，吃得着的范围是 66px。
+        // 原来从 ±50 处钻出来，一出生就落在嘴里，两只幼虫当场被吃掉 ——
+        // 玩家连看见的机会都没有，"繁殖"就成了"BOSS 免费回血"。
+        const lx = clamp(f.x + sd * (f.w * 0.5 + 56), WALL_L + 20, WALL_R - 20);
+        const l = foeFromSpec({ foe: "larva", x: lx, y: f.y - 4 }, false);
+        l.y = f.y; l.vy = -220; l.onGround = false;
+        // 孵化后先朝外爬 1.2 秒再回头归巢。这 1.2 秒是留给玩家的：
+        // 没有它，幼虫从 88px 外爬回来只要 0.2 秒，你根本来不及拦。
+        l.wanderT = 1.2;
+        l.dir = sd;
+        S.foes.push(l);
+        for (let k = 0; k < 8; k++) addFrag(lx + rand(-9, 9), f.y - 10, 5, "#D8F09A");
+      }
+      addText(f.x, f.y - f.h - 26, "钻出两只幼虫", "#D8F09A", 19);
+      S.shake = Math.max(S.shake, 6);
+    }
+    if (f.breeding <= 0) { f._born = false; f.spawnT = 7.5; }
+    stepBody(f, dt);
+    return;
+  }
+
+  /* ---- 散射：抬头吸气，然后朝玩家喷一个五发扇形 ---- */
+  if (f.spitting > 0) {
+    f.spitting -= dt;
+    f.vx = 0;
+    if (f.spitting <= 0.30 && !f._spat) { f._spat = true; spitFan(f); }
+    if (f.spitting <= 0) { f._spat = false; f.scatterT = 5.5; }
+    stepBody(f, dt);
+    return;
+  }
+
+  /* ---- 触发：一帧只开一个。三个动作叠在同一秒，"跳 / 走位 / 攻击"
+         就变成"同时干三件"，那是难度，不是设计。 ---- */
+  const larvas = S.foes.filter(q => q.larva && !q.dead).length;
+  if (f.spawnT <= 0 && larvas < 3 && (f.spawned || 0) < 5) {
+    f.spawned = (f.spawned || 0) + 1;
+    f.breeding = 0.9;
+    addText(f.x, f.y - f.h - 30, "产卵…", "#FFD86B", 20);
+    stepBody(f, dt);
+    return;
+  }
+  if (f.scatterT <= 0) {
+    f.spitting = 0.72;
+    addText(f.x, f.y - f.h - 30, "吸气…", "#C7E86B", 20);
+    stepBody(f, dt);
+    return;
+  }
+  if (f.slamT <= 0) {
+    f.slamming = 1.15;
+    addText(f.x, f.y - f.h - 30, "举起来了", "#FFB08A", 20);
+    S.shake = Math.max(S.shake, 4);
     stepBody(f, dt);
     return;
   }
@@ -1521,6 +1647,83 @@ function updateBoss(f, dt) {
 
   // 掉进坑里（不该发生，但兜一下）
   if (f.y > H + 120) f.dead = true;
+}
+
+/** 五发扇形。目的是逼玩家**走位**——砸地逼他跳，扇形逼他换位置，
+ *  两件事合起来才叫"这个 BOSS 要看"。 */
+function spitFan(f) {
+  const p = S.p;
+  const muzzleY = f.y - f.h * 0.64;
+  let base = f.face > 0 ? 0 : Math.PI;
+  if (p && !p.dead) {
+    base = Math.atan2((p.y - p.h * 0.5) - muzzleY, p.x - f.x);
+  }
+  const N = 5, half = 0.50;
+  for (let i = 0; i < N; i++) {
+    const a = base + ((i / (N - 1)) - 0.5) * half * 2;
+    S.foeShots.push({
+      x: f.x + Math.cos(a) * (f.w * 0.40),
+      y: muzzleY + Math.sin(a) * 12,
+      // 弹道要"平"：上一版初速 330、重力 300，从 BOSS 胸口射出来 1 秒就砸进土里，
+      // 玩家站在 400px 外根本等不到弹幕，这条机制等于不存在。
+      vx: Math.cos(a) * 380,
+      vy: Math.sin(a) * 380 - 70,
+      r: 9.5, life: 2.4, t: 0, dead: false,
+    });
+  }
+  S.shake = Math.max(S.shake, 8);
+  addText(f.x, muzzleY - 30, "噗!", "#C7E86B", 24);
+}
+
+/** BOSS 吃掉自己的幼虫 → 补回一层壳。
+ *  硬上限 3 层：不设上限的话，玩得越久它越硬，玩家会陷进"打洞-补洞"的死循环。
+ *  场上最多 3 只幼虫、每 7.5 秒一对、总共只产 5 对 —— 这四条一起兜住时长。 */
+function feedBoss(boss, larva) {
+  boss.fed = (boss.fed || 0) + 1;
+  for (let i = 0; i < 10; i++) addFrag(boss.x + rand(-22, 22), boss.y - boss.h * 0.55, 6, "#9BE06A");
+  if (boss.coat >= 2 && boss.fed <= 3) {
+    boss.coat -= 1;
+    addText(boss.x, boss.y - boss.h - 18, "嚼掉幼虫 · 壳 +1", "#FFD86B", 20);
+    S.shake = Math.max(S.shake, 6);
+  } else if (boss.coat < 2) {
+    addText(boss.x, boss.y - boss.h - 18, "壳快没了，吃不回来", "#C8C0A8", 17);
+  } else {
+    addText(boss.x, boss.y - boss.h - 18, "嚼了嚼", "#C8C0A8", 17);
+  }
+}
+
+/** BOSS 的粘液弹：有重力、会被地形挡住。
+ *  "躲到板子下面"是它唯一的解法 —— 这是范围散射给玩家的那个决策。 */
+function updateFoeShots(dt) {
+  const p = S.p;
+  for (const s of S.foeShots) {
+    s.life -= dt;
+    s.t += dt;
+    const prevY = s.y;
+    s.vy += 150 * dt;
+    s.x += s.vx * dt;
+    s.y += s.vy * dt;
+    if (s.life <= 0) { s.dead = true; continue; }
+    if (s.x < WALL_L - 30 || s.x > WALL_R + 30 || s.y > GROUND_Y + 12) { s.dead = true; continue; }
+    // 只判"从上方落到台面"，不判"球心进了平台的包围盒"。
+    // 上一版用包围盒，BOSS 胸口正好和头顶那块板同高，五行弹一出口就被吃掉 ——
+    // 一条"范围散射"变成了"BOSS 朝空气撒了一把"。
+    if (s.vy > 0) {
+      for (const q of PLATS) {
+        if (s.x < q.x - s.r || s.x > q.x + q.w + s.r) continue;
+        if (prevY + s.r <= q.y + 6 && s.y + s.r >= q.y) { s.dead = true; break; }
+      }
+    }
+    if (s.dead) continue;
+    if (p && !p.dead) {
+      const dx = Math.abs(s.x - p.x), dy = Math.abs(s.y - (p.y - p.h * 0.5));
+      if (dx < s.r + p.w * 0.38 && dy < s.r + p.h * 0.42) {
+        hurtPlayer(s.x, "被喷到了");
+        s.dead = true;
+      }
+    }
+  }
+  if (S.foeShots.length) S.foeShots = S.foeShots.filter(s => !s.dead);
 }
 
 /** 玩家受伤只有这一条路 —— 碰敌人、踩火、被冲击波打，都走这里 */
@@ -2273,12 +2476,11 @@ function updateShots(dt) {
       s.spin += dt * 30;
       if (s.life <= 0) s.dead = true;
     }
-    /* ---- 音波：原地扩张的一圈。判定跟着人，不跟着波前 ---- */
+    /* ---- 音波：一颗会撑开来的弹。往前飞，波前一路变宽 ---- */
     else if (s.kind === "wave") {
-      const u = (s.u && !s.u.dead) ? s.u : p;
-      s.r += (s.grow || 320) * dt;
-      s.x = u.x;
-      s.y = u.y - 26;
+      s.x += s.vx * dt;
+      s.r = Math.min(s.maxR || 46, s.r + (s.grow || 130) * dt);
+      if (s.x < WALL_L - 40 || s.x > WALL_R + 40) { s.dead = true; continue; }
     }
     /* ---- 飞刀：丢出去，直线带一点下坠，高速自旋，能穿两个人 ---- */
     else if (s.kind === "knife") {
@@ -2287,28 +2489,6 @@ function updateShots(dt) {
       s.y += s.vy * dt;
       s.spin += dt * 26;
       if (s.x < WALL_L - 30 || s.x > WALL_R + 30 || s.y > GROUND_Y + 40) s.dead = true;
-    }
-    /* ---- 影分身：站在那儿不动，自己按节拍丢影弹 ---- */
-    else if (s.kind === "summon") {
-      s.fireT -= dt;
-      if (s.fireT <= 0 && s.life > 0.25) {
-        s.fireT = s.interval || 0.42;
-        // 优先打自己这一侧最近的敌人；一个都没有就朝自己那一侧平推
-        let tgt = null, bd = 1e9;
-        for (const f of S.foes) {
-          if (f.dead || f.coat >= (f.cm || 3)) continue;
-          const d = Math.abs(f.x - s.x) + Math.abs((f.y - f.h / 2) - s.y);
-          if (d < bd) { bd = d; tgt = f; }
-        }
-        s.dir = tgt ? sign(tgt.x - s.x) : s.dir;
-        s.shots = (s.shots || 0) + 1;
-        spawned.push({
-          x: s.x + s.dir * 16, y: s.y - 14,
-          vx: s.dir * 720, vy: 0, r: 11, life: 0.62, maxLife: 0.62,
-          kind: "shadow", dir: s.dir, pierce: true, color: "#C9B8FF",
-          hit: [], spin: 0, t: 0, born: 1,
-        });
-      }
     }
     /* ---- 坚果：抛物线落地，之后贴地滚。撞墙弹一次 ---- */
     else if (s.kind === "nut") {
@@ -2366,26 +2546,16 @@ function updateShots(dt) {
       if (s.x < WALL_L - 40 || s.x > WALL_R + 40 || s.y < -100) { s.dead = true; continue; }
     }
 
-    /* ---- 分身不碰人：它只是站着，伤害全交给它吐的影弹 ---- */
-    if (s.kind === "summon") continue;
-
     /* ---- 命中判定 ---- */
     for (const f of S.foes) {
       if (f.dead || f.coat >= (f.cm || 3)) continue;
       if (s.hit.indexOf(f) >= 0) continue;
 
-      let got = false;
-      if (s.kind === "wave") {
-        // 扇形：只打面向方向、且在扩张环以内的
-        const dx = (f.x - s.x) * s.dir;
-        const dy = Math.abs((f.y - f.h / 2) - s.y);
-        got = dx > -34 && dx < s.r + f.w / 2 && dy < s.r * 0.85 + f.h / 2;
-      } else {
-        const dx = Math.abs(s.x - f.x);
-        const dy = Math.abs(s.y - (f.y - f.h / 2));
-        got = dx < s.r + f.w / 2 && dy < s.r + f.h / 2;
-      }
-      if (!got) continue;
+      // 判定只有一种：圆。以前音波走"扇形"特判（因为它没有位置，挂在人身上），
+      // 现在它自己有位置了，扇形那套就成了唯一一条走不到的分支。
+      const dx = Math.abs(s.x - f.x);
+      const dy = Math.abs(s.y - (f.y - f.h / 2));
+      if (dx >= s.r + f.w / 2 || dy >= s.r + f.h / 2) continue;
 
       coatFoe(f, 1);
       s.hit.push(f);
@@ -2395,7 +2565,7 @@ function updateShots(dt) {
     if (s.dead) continue;
 
     /* ---- 木桩挡弹丸（坚果和溜溜球不挡：一个是滚过去的，一个是飞过去的） ---- */
-    if (s.kind !== "nut" && s.kind !== "yoyo" && s.kind !== "summon") {
+    if (s.kind !== "nut" && s.kind !== "yoyo" && s.kind !== "wave") {
       for (const st of S.stumps) {
         if (st.hp <= 0) continue;
         if (Math.abs(s.x - st.x) < st.w / 2 + s.r && s.y > st.y - st.h) {
@@ -2957,49 +3127,110 @@ function drawPit(g, pit) {
 /* ---------- 斜坡 ---------- */
 function drawRamp(g, r) {
   const x1 = r.x, x2 = r.x + r.w;
-  // 坡身是 26px 粗的描边，中心线离地至少 13px 才不会被草皮切一半。
-  // 不夹这一下，落到地面的坡看起来像"插进土里"，读不出这是一条能走的斜道。
-  const capY = GROUND_Y - 14;
-  const y1 = Math.min(r.yL + 6, capY), y2 = Math.min(r.yR + 4, capY);
+  // 落脚面就是 yL..yR 这条线 —— 坡的**顶面**必须压在这条线上。
+  // 差几像素的话，人踩的地方和画出来的地方对不上，走上去像在空气上滑。
+  // 顶面**就是**落脚面。之前写了 +6 / +4，结果坡顶比平台顶低 6px，
+  // 平台和坡之间出现一道小台阶 —— 人走上去会"咯"一下。
+  const y1 = r.yL, y2 = r.yR;
+  const TK = 26;                                 // 和浮空台一样的厚度（h+6）
+  const ang = Math.atan2(y2 - y1, x2 - x1);
+  const len = Math.hypot(x2 - x1, y2 - y1);
+  const cx = (x1 + x2) / 2;
+  const cy = (y1 + y2) / 2 + TK / 2;             // 中心线往下压半个厚度
 
   g.save();
-  g.lineCap = "butt";
-  // 坡身：先铺一层深色当描边，再叠亮面 —— 只画一道渐变的话，
-  // 远看就是一根斜木棍，读不出"这是能走的坡"。
+  g.translate(cx, cy);
+  g.rotate(ang);
+
+  // 往接缝里多伸一截。平台是后画的，会盖住这一截，接缝就读成"坡嵌进台面"。
+  // **只伸接平台的那一端**：落到地面的那端如果也伸，V 谷的两条坡会在谷底
+  // 交叉成一个尖（第 4 关实测），又变回"两根木头对拼"。
+  const overTop = 24;
+  // 落到地面的那一端也往下伸 20px，伸进草里 —— 不伸的话，坡的圆头正好停在
+  // 地面线上，会看到一段深色斜边"切"在草上。伸进去之后由坡脚的草皮盖住。
+  const overBot = Math.max(y1, y2) > GROUND_Y - 24 ? 20 : 24;
+  const overA = y1 < y2 ? overTop : overBot;     // x1 那一端的延伸
+  const overB = y1 < y2 ? overBot : overTop;     // x2 那一端的延伸
+  const L = len + overA + overB;
+  const hx = L / 2;
+  // 矩形是按"两端各多 (overA+overB)/2"画的，要变成"x1 端多 overA、x2 端多 overB"，
+  // 得往 x1 那一侧挪 (overA-overB)/2。符号反了的话，本该伸进平台的那截会甩到
+  // 低端去 —— 第 4 关 V 谷中间那个交叉的尖就是这么来的。
+  const shift = (overB - overA) / 2;
+  g.translate(shift, 0);
+
+  // ---- 以下与 drawPlat 的浮空台逐行对齐：底厚边 / 主体渐变 / 2.6 描边 / 顶面高光 / 砖缝
+  g.fillStyle = TH.wood2;
+  rr(g, -hx - 2, -TK / 2 + 3, L + 4, TK + 9, 9);
+  g.fill();
+
+  const wg = g.createLinearGradient(0, -TK / 2, 0, TK / 2 + 8);
+  wg.addColorStop(0, TH.wood3);
+  wg.addColorStop(0.32, TH.wood);
+  wg.addColorStop(1, TH.wood2);
+  g.fillStyle = wg;
+  rr(g, -hx, -TK / 2, L, TK + 6, 9);
+  g.fill();
+
   g.strokeStyle = COL.outline;
-  g.lineWidth = 26;
-  g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+  g.lineWidth = 2.6;
+  rr(g, -hx, -TK / 2, L, TK + 6, 9);
+  g.stroke();
 
-  const grad = g.createLinearGradient(x1, y1, x2, y2);
-  grad.addColorStop(0, "#8A6242");
-  grad.addColorStop(1, "#B98A5C");
-  g.strokeStyle = grad;
-  g.lineWidth = 20;
-  g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+  g.fillStyle = "rgba(255,255,255,.55)";
+  rr(g, -hx + 5, -TK / 2 + 3, Math.max(0, L - 10), 4, 2);
+  g.fill();
 
-  // 顶面高光：走在这条线上的是球，给它一条亮边
-  g.strokeStyle = "rgba(255,240,200,.55)";
-  g.lineWidth = 3;
-  g.beginPath(); g.moveTo(x1, y1 - 9); g.lineTo(x2, y2 - 9); g.stroke();
-
-  // 枕木：一条条斜纹，让"这是坡"一眼看得出来
-  g.strokeStyle = "rgba(48,32,20,.55)";
-  g.lineWidth = 3;
-  for (let i = 0; i <= 7; i++) {
-    const t = i / 7;
-    const px = x1 + (x2 - x1) * t, py = y1 + (y2 - y1) * t;
-    g.beginPath(); g.moveTo(px - 7, py - 9); g.lineTo(px + 7, py + 9); g.stroke();
+  g.strokeStyle = "rgba(60,36,20,.24)";
+  g.lineWidth = 1.4;
+  for (let x = -hx + 30; x < hx - 14; x += 52) {
+    g.beginPath();
+    g.moveTo(x, -TK / 2 + 9);
+    g.lineTo(x, TK / 2 + 2);
+    g.stroke();
   }
 
-  // 上行箭头：指向高的那一端。坡也可能是往下走的，写死指右端会反。
+  // 顺坡的浅色箭纹：是坡面纹理，不是提示牌。
+  // 上一版那个实心黄三角钉在坡顶，读起来像施工围挡。
+  g.strokeStyle = "rgba(255,248,214,.30)";
+  g.lineWidth = 3;
+  g.lineCap = "round";
+  g.lineJoin = "round";
+  const climb = r.yR < r.yL ? 1 : -1;            // 指向高的那一端
+  for (let i = 0; i < 2; i++) {
+    const bx = climb * (14 + i * 24);
+    g.beginPath();
+    g.moveTo(bx - 7, 8);
+    g.lineTo(bx, 2);
+    g.lineTo(bx + 7, 8);
+    g.stroke();
+  }
 
-  g.fillStyle = "rgba(255,238,170,.75)";
-  const upRight = y2 < y1;
-  const ax = upRight ? x2 - 16 : x1 + 16, ay = (upRight ? y2 : y1) - 6;
-  g.beginPath();
-  g.moveTo(ax, ay - 12); g.lineTo(ax - 9, ay + 2); g.lineTo(ax + 9, ay + 2);
-  g.closePath(); g.fill();
   g.restore();
+
+  // 坡脚落在地面上：把坡穿到地下的那一截用**原样的地面**盖回去。
+  // 上一版是手抄一遍 drawPlat 的画法，结果草齿的相位对不上、草尖也没了，
+  // 坡脚一圈能看出一道"补丁"。这里直接调 drawPlat + clip —— 一个像素都不会差。
+  const lowY = Math.max(y1, y2);
+  if (lowY > GROUND_Y - 40) {
+    const ex = y1 > y2 ? x1 : x2;
+    // 要盖住的不是一个点：坡厚 26，水平方向还要再铺开 26/sin(坡角) ≈ 46px。
+    // 只盖 ±60 的话，坡的下沿会露出一截斜尖扎在土里。
+    const L0 = ex - 120, R0 = ex + 120;
+    const gp = PLATS.find(q => q.kind === "ground");
+    if (gp) {
+      g.save();
+      g.beginPath();
+      g.rect(L0, GROUND_Y - 26, R0 - L0, 130);
+      g.clip();
+      drawPlat(g, gp);
+      // 坡脚正好压在坑上时，上面这一下会把坑一起盖掉 —— 补回来
+      for (const pit of PITS) {
+        if (pit.x + pit.w > L0 && pit.x < R0) drawPit(g, pit);
+      }
+      g.restore();
+    }
+  }
 }
 
 /* ---------- 弹簧菇 ---------- */
@@ -3368,7 +3599,11 @@ function drawBoss(g, f) {
   const squash = f.hitT > 0 ? f.hitT / 0.20 : 0;
   const br = 1 + Math.sin(f.bob * 1.6) * 0.018;
   // 砸地抬手：整个身体先往上抬一点，再砸下来
-  const lift = f.slamming > 0.35 ? -20 * Math.sin((1.15 - f.slamming) * 2.0) : 0;
+  const lift = f.slamming > 0.35 ? -22 * Math.sin((1.15 - f.slamming) * 2.0) : 0;
+  // 产卵：肚子鼓；吸气：整个身子缩一下。两个动作方向相反，玩家一眼分得清
+  const breed = f.breeding > 0 ? Math.sin((0.9 - f.breeding) * 3.6) : 0;
+  const suck = f.spitting > 0 ? Math.sin((0.72 - f.spitting) * 4.4) : 0;
+  const OUT = COL.outline;
 
   g.globalAlpha = 0.22;
   g.fillStyle = "#1A1224";
@@ -3377,73 +3612,158 @@ function drawBoss(g, f) {
 
   g.save();
   g.translate(cx, cy + lift);
-  g.scale((1 + squash * 0.14) * br, (1 - squash * 0.12) * br);
+  g.scale((1 + squash * 0.14 + breed * 0.07) * br, (1 - squash * 0.12 - suck * 0.05) * br);
+  g.save();
+  // 只画朝右的版本，靠镜像翻面
+  g.scale(f.face, 1);
 
-  // 脚
-  g.fillStyle = "#6E2E22";
-  for (const s of [-1, 1]) {
-    rr(g, s * bw * 0.26 - 13, bh * 0.30, 26, 20, 8);
-    g.fill();
+  /* ---- 六条腿：先粗深色当描边，再细亮色当腿本身 ----
+     单画一条线的话，在红棕身体上会糊成"一坨影子" */
+  // 腿必须**伸到身体轮廓外面**才看得见。缩在身下的话，
+  // 无论画多粗都会被鞘翅整个盖住 —— 那就变成了"一个没有腿的球"。
+  const gait = Math.sin(f.bob * 4.2) * 4;
+  const legs = [];
+  for (let i = 0; i < 3; i++) {
+    const lx = -bw * 0.26 + i * bw * 0.23;
+    const ph = i % 2 ? gait : -gait;
+    for (const sd of [-1, 1]) {
+      legs.push([lx, bh * 0.12, lx + sd * 30 + ph, bh * 0.30, lx + sd * 34 + ph, bh * 0.50]);
+    }
+  }
+  for (const [x0, y0, qx, qy, x2, y2] of legs) {
+    g.strokeStyle = "#3A1A12"; g.lineWidth = 10; g.lineCap = "round";
+    g.beginPath(); g.moveTo(x0, y0); g.quadraticCurveTo(qx, qy, x2, y2); g.stroke();
+  }
+  for (const [x0, y0, qx, qy, x2, y2] of legs) {
+    g.strokeStyle = "#8E3A2A"; g.lineWidth = 4.5;
+    g.beginPath(); g.moveTo(x0, y0); g.quadraticCurveTo(qx, qy, x2, y2); g.stroke();
   }
 
-  // 角（先画在身体后面）
-  g.fillStyle = "#F2DFA8";
-  for (const s of [-1, 1]) {
+  /* ---- 触角：两根带球的须，虫子的第一识别特征 ---- */
+  g.strokeStyle = "#3A1A12";
+  g.lineWidth = 5;
+  g.lineCap = "round";
+  for (const sd of [-1, 1]) {
+    const ex = bw * 0.42 + sd * 16, ey = -bh * 0.54;
     g.beginPath();
-    g.moveTo(s * bw * 0.26, -bh * 0.32);
-    g.quadraticCurveTo(s * bw * 0.48, -bh * 0.70, s * bw * 0.30, -bh * 0.88);
-    g.quadraticCurveTo(s * bw * 0.32, -bh * 0.58, s * bw * 0.14, -bh * 0.40);
-    g.closePath();
-    g.fill();
-    g.strokeStyle = COL.outline; g.lineWidth = 2.4; g.stroke();
+    g.moveTo(bw * 0.16 + sd * 6, -bh * 0.34);
+    g.quadraticCurveTo(bw * 0.28 + sd * 14, -bh * 0.60, ex, ey);
+    g.stroke();
+    g.fillStyle = "#F2DFA8";
+    g.beginPath(); g.arc(ex, ey, 5.5, 0, 6.283); g.fill();
+    g.strokeStyle = OUT; g.lineWidth = 2; g.stroke();
+    g.lineWidth = 5;
   }
 
-  // 身体
-  const body = g.createLinearGradient(0, -bh * 0.5, 0, bh * 0.5);
-  body.addColorStop(0, "#D4664A");
+  /* ---- 鞘翅（身体） ---- */
+  const body = g.createLinearGradient(0, -bh * 0.50, 0, bh * 0.46);
+  body.addColorStop(0, "#F0906A");
+  body.addColorStop(0.42, "#D4664A");
   body.addColorStop(1, "#8E3A2A");
   g.fillStyle = body;
-  g.beginPath(); g.ellipse(0, 0, bw * 0.5, bh * 0.5, 0, 0, 6.283); g.fill();
-  g.strokeStyle = COL.outline; g.lineWidth = 3.4; g.stroke();
+  g.beginPath(); g.ellipse(0, -bh * 0.02, bw * 0.48, bh * 0.44, 0, 0, 6.283); g.fill();
+  g.strokeStyle = OUT; g.lineWidth = 3.6; g.stroke();
 
-  // 肚子
-  g.fillStyle = "rgba(232,214,255,.26)";
-  g.beginPath(); g.ellipse(0, bh * 0.15, bw * 0.29, bh * 0.24, 0, 0, 6.283); g.fill();
+  // 背脊中缝：一块圆的红身体和"甲虫"的区别就在这条线
+  g.strokeStyle = "rgba(64,22,14,.50)";
+  g.lineWidth = 3;
+  g.beginPath();
+  g.moveTo(bw * 0.04, -bh * 0.42);
+  g.quadraticCurveTo(bw * 0.10, -bh * 0.02, bw * 0.03, bh * 0.40);
+  g.stroke();
 
-  // 眼睛
-  for (const s of [-1, 1]) {
-    g.fillStyle = "#FFF8E8";
-    g.beginPath(); g.ellipse(s * bw * 0.16, -bh * 0.10, 12, 13, 0, 0, 6.283); g.fill();
-    g.strokeStyle = COL.outline; g.lineWidth = 2; g.stroke();
-    g.fillStyle = "#2A1210";
-    g.beginPath(); g.arc(s * bw * 0.16 + f.face * 3, -bh * 0.08, 6, 0, 6.283); g.fill();
+  // 鞘翅上的斑点
+  g.fillStyle = "#7A2A1E";
+  for (const [sx, sy, r] of [[-bw * 0.22, -bh * 0.24, 0.095],
+                             [-bw * 0.34, -bh * 0.10, 0.062],
+                             [-bw * 0.10, bh * 0.02, 0.055]]) {
+    g.beginPath();
+    g.ellipse(sx, sy, bw * r, bw * r * 0.86, 0, 0, 6.283);
+    g.fill();
   }
+  // 背部高光：一个亮弧，读起来是"壳"，不是"皮"
+  g.strokeStyle = "rgba(255,224,200,.42)";
+  g.lineWidth = 5;
+  g.lineCap = "round";
+  g.beginPath();
+  g.arc(0, -bh * 0.06, bw * 0.34, -2.5, -1.1);
+  g.stroke();
 
-  // 嘴：被砸地时张开
-  const roar = f.slamming > 0 ? 0.6 : 0;
+  /* ---- 头 ---- */
+  const hx = bw * 0.36, hy = bh * 0.10;
+  g.fillStyle = "#C2563E";
+  g.beginPath(); g.ellipse(hx, hy, bw * 0.20, bh * 0.19, 0, 0, 6.283); g.fill();
+  g.strokeStyle = OUT; g.lineWidth = 3.2; g.stroke();
+
+  // 嘴：吐弹时张开（配合 f.spitting）
+  const jaw = f.spitting > 0 ? 1 : 0;
   g.fillStyle = "#3A1410";
   g.beginPath();
-  g.ellipse(0, bh * 0.15, bw * 0.15, 5 + roar * 8, 0, 0, 6.283);
+  g.ellipse(hx + bw * 0.10, hy + bh * 0.05, bw * 0.06, bh * (0.03 + jaw * 0.05), 0, 0, 6.283);
   g.fill();
-  g.strokeStyle = COL.outline; g.lineWidth = 2; g.stroke();
 
-  // 苔藓层：糊了几层就贴几块，颜色递进 —— 这是唯一的"进度"反馈。
-  // 只贴下半个身子：绕一圈贴会把眼睛和嘴糊住，玩家就读不出"它举起来了"，
-  // 砸地那一下的抬手是他唯一需要读的动作。
+  // 大颚：两片象牙色的钩子
+  // 大颚：两片象牙色的钳子。要粗、要外张 —— 它是这张脸上唯一的"凶"信号，
+  // 画细了就成了两根牙签。
+  g.fillStyle = "#F7EAC0";
+  g.strokeStyle = OUT;
+  g.lineWidth = 3.4;
+  g.lineJoin = "round";
+  for (const sd of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(hx + bw * 0.06, hy + sd * 6);
+    g.quadraticCurveTo(hx + bw * 0.34, hy + sd * 10, hx + bw * 0.30, hy + sd * 26);
+    g.quadraticCurveTo(hx + bw * 0.22, hy + sd * 14, hx + bw * 0.02, hy + sd * 13);
+    g.closePath();
+    g.fill();
+    g.stroke();
+  }
+
+  drawCuteEyes(g, hx - bw * 0.02, hy - bh * 0.03, 7.5, 8.5, false);
+
+  /* ---- 苔藓层：糊了几层就贴几块，颜色递进 —— 这是唯一的"进度"反馈。
+     只贴下半身：贴到脸上会把眼睛和嘴糊住，玩家就读不出"它举起来了"，
+     砸地那一下的抬手是他唯一需要读的动作。 ---- */
   const cm = f.cm || 3;
   for (let i = 0; i < f.coat; i++) {
-    const t = f.coat === 1 ? 0.5 : i / (f.coat - 1);
-    const a = Math.PI * (0.18 + 0.64 * t);
-    const ring = 0.30 + (i % 2) * 0.11;          // 交替贴两圈，贴满时裹住整个下半身
-    const rx = Math.cos(a) * bw * ring, ry = Math.sin(a) * bh * ring;
-    g.globalAlpha = 0.8;
+    const tt = f.coat === 1 ? 0.5 : i / (f.coat - 1);
+    // 只贴**后半身**（左下 → 左上）。原来从 0.14π 开始贴，第一块正落在头的下面，
+    // 读起来像"嘴里吐出来的绿球"，而且把大颚挡住了。
+    // 打散：整齐排成一列会变成"背上一串葡萄"，看不出是"壳被糊住了"
+    const ang = Math.PI * (0.56 + 0.68 * tt) + Math.sin(i * 3.7) * 0.22;
+    const ring = 0.56 + ((i * 7) % 3) * 0.15;
+    const mx = Math.cos(ang) * bw * 0.46 * ring;
+    const my = bh * 0.02 + Math.sin(ang) * bh * 0.44 * ring;
+    const sr = 12 + ((i * 5) % 3) * 3;
+    g.globalAlpha = 0.85;
     g.fillStyle = i % 2 ? "#8FD35A" : "#6FBF46";
-    g.beginPath(); g.ellipse(rx, ry, 14, 11, a, 0, 6.283); g.fill();
-    g.strokeStyle = COL.outline; g.lineWidth = 1.4; g.stroke();
+    g.beginPath(); g.ellipse(mx, my, sr + 3, sr, ang, 0, 6.283); g.fill();
+    g.strokeStyle = OUT; g.lineWidth = 1.6; g.stroke();
     g.globalAlpha = 1;
   }
 
   g.restore();
+  g.restore();
+}
+
+/** BOSS 的粘液弹：拖尾 + 高光。飞得快，没有拖尾就是"飘着的绿点" */
+function drawFoeShots(g) {
+  for (const s of S.foeShots) {
+    const k = clamp(s.life / 2.4, 0, 1);
+    g.globalAlpha = 0.30 * k;
+    g.fillStyle = "#9BD24E";
+    for (let i = 1; i <= 3; i++) {
+      g.beginPath();
+      g.arc(s.x - s.vx * 0.010 * i, s.y - s.vy * 0.010 * i, s.r * (1 - i * 0.24), 0, 6.283);
+      g.fill();
+    }
+    g.globalAlpha = 1;
+    g.fillStyle = "#C7E86B";
+    g.beginPath(); g.arc(s.x, s.y, s.r, 0, 6.283); g.fill();
+    g.strokeStyle = COL.outline; g.lineWidth = 2.2; g.stroke();
+    g.fillStyle = "rgba(255,255,255,.85)";
+    g.beginPath(); g.arc(s.x - s.r * 0.3, s.y - s.r * 0.34, s.r * 0.30, 0, 6.283); g.fill();
+  }
 }
 
 function drawShocks(g) {
@@ -3470,12 +3790,295 @@ function drawShocks(g) {
   g.globalAlpha = 1;
 }
 
+/** Q 版脸。卡通和"小圆脸"的分界线就是有没有眼白 —— 没有眼白的敌人
+ *  只是"带眼睛的圆"，看不出它在看哪儿，也读不出情绪。 */
+function drawCuteEyes(g, x, y, r, gap, blink) {
+  for (const s of [-1, 1]) {
+    if (blink) {
+      g.strokeStyle = COL.ink;
+      g.lineWidth = 2.0;
+      g.lineCap = "round";
+      g.beginPath();
+      g.arc(x + s * gap, y, r * 0.9, 0.34, Math.PI - 0.34);
+      g.stroke();
+      continue;
+    }
+    g.fillStyle = "#FFFFFF";
+    g.beginPath(); g.ellipse(x + s * gap, y, r, r * 1.12, 0, 0, 6.283); g.fill();
+    g.strokeStyle = COL.outline; g.lineWidth = 1.5; g.stroke();
+    g.fillStyle = COL.ink;
+    g.beginPath(); g.arc(x + s * gap + r * 0.26, y + r * 0.10, r * 0.54, 0, 6.283); g.fill();
+    g.fillStyle = "rgba(255,255,255,.96)";
+    g.beginPath(); g.arc(x + s * gap + r * 0.12, y - r * 0.36, r * 0.21, 0, 6.283); g.fill();
+  }
+  // 腮红：这两个点一加，整张脸就从"玩具"变成"活的"
+  g.globalAlpha = 0.42;
+  g.fillStyle = "#FF8FA0";
+  for (const s of [-1, 1]) {
+    g.beginPath();
+    g.ellipse(x + s * (gap + r * 1.3), y + r * 1.5, r * 0.62, r * 0.4, 0, 0, 6.283);
+    g.fill();
+  }
+  g.globalAlpha = 1;
+}
+
+/** 刺毛虫：三节身体 + 触角 + 六条小短腿。毛虫的读法是"分节"，不是"绿圆球" */
+function drawWorm(g, f, bw, bh, t) {
+  const d = f.def;
+  // 三节要**都露出来**：头节画大了会把中节整个盖住，看起来就是"两个球"。
+  // 所以头节只比中节大一点，节间距留够。
+  const seg = [
+    { x: -bw * 0.36, rx: 0.17, ry: 0.30, c: d.c3 },
+    { x: -bw * 0.06, rx: 0.21, ry: 0.38, c: d.c1 },
+    { x: bw * 0.27,  rx: 0.28, ry: 0.46, c: d.c1 },
+  ];
+
+  // 腿：左右各三条，交替摆 —— 没有腿的毛虫读起来像一坨面团
+  g.strokeStyle = d.c3;
+  g.lineWidth = 3.0;
+  g.lineCap = "round";
+  for (let i = 0; i < 3; i++) {
+    for (const sd of [-1, 1]) {
+      const sw = Math.sin(t * 9 + i * 1.5 + (sd > 0 ? 1.7 : 0)) * 2.6;
+      g.beginPath();
+      g.moveTo(seg[i].x + sd * 2, bh * 0.18);
+      g.lineTo(seg[i].x + sd * 2 + sw, bh * 0.50);
+      g.stroke();
+    }
+  }
+
+  // 身体：尾 → 头，一节比一节大
+  for (let i = 0; i < seg.length; i++) {
+    const q = seg[i];
+    g.fillStyle = q.c;
+    g.beginPath();
+    g.ellipse(q.x, 0, bw * q.rx, bh * q.ry, 0, 0, 6.283);
+    g.fill();
+    g.strokeStyle = COL.outline;
+    g.lineWidth = 2.4;
+    g.stroke();
+    // 背上的斑点
+    g.globalAlpha = 0.5;
+    g.fillStyle = "#2F6B2A";
+    g.beginPath();
+    g.ellipse(q.x - bw * 0.06, -bh * 0.16 * q.ry * 2, bw * 0.045, bh * 0.05, 0, 0, 6.283);
+    g.ellipse(q.x + bw * 0.06, -bh * 0.10 * q.ry * 2, bw * 0.035, bh * 0.04, 0, 0, 6.283);
+    g.fill();
+    g.globalAlpha = 1;
+  }
+
+  // 触角：两根带小球的触须，虫子的第一识别特征
+  const hx = bw * 0.30, hy = -bh * 0.44;
+  g.strokeStyle = COL.outline;
+  g.lineWidth = 2.0;
+  g.lineCap = "round";
+  for (const sd of [-1, 1]) {
+    const ex = hx + sd * 9, ey = hy - bh * 0.34;
+    g.beginPath();
+    g.moveTo(hx + sd * 3, hy + 3);
+    g.quadraticCurveTo(hx + sd * 12, hy - bh * 0.16, ex, ey);
+    g.stroke();
+    g.fillStyle = "#FFD34E";
+    g.beginPath(); g.arc(ex, ey, 3.4, 0, 6.283); g.fill();
+    g.strokeStyle = COL.outline; g.lineWidth = 1.2; g.stroke();
+    g.lineWidth = 2.0;
+  }
+
+  drawCuteEyes(g, hx + 1, -bh * 0.02, 4.5, 4.7, false);
+  g.strokeStyle = COL.outline;
+  g.lineWidth = 1.6;
+  g.lineCap = "round";
+  g.beginPath();
+  g.arc(hx + 2, bh * 0.16, 3.2, 0.25, Math.PI - 0.35);
+  g.stroke();
+}
+
+/** 幼虫：两节小胖虫，只会往 BOSS 身边爬。它得比刺毛虫更小更傻，
+ *  否则玩家会把它当成"又一波怪"，而不是"Boss 的口粮" */
+function drawLarva(g, f, bw, bh, t) {
+  const d = f.def;
+  const wig = Math.sin(t * 15);
+
+  g.strokeStyle = d.c3;
+  g.lineWidth = 2.6;
+  g.lineCap = "round";
+  for (const bx of [-bw * 0.10, bw * 0.14]) {
+    for (const sd of [-1, 1]) {
+      const sw = Math.sin(t * 15 + bx) * 2;
+      g.beginPath();
+      g.moveTo(bx, bh * 0.16);
+      g.lineTo(bx + sw, bh * 0.50);
+      g.stroke();
+    }
+  }
+
+  // 尾节（左）+ 头节（右）
+  for (const [bx, r, col] of [[-bw * 0.20, 0.32, d.c3], [bw * 0.16, 0.44, d.c1]]) {
+    g.fillStyle = col;
+    g.beginPath();
+    g.ellipse(bx, wig * (bx > 0 ? 1.4 : -1.4), bw * r, bh * 0.44, 0, 0, 6.283);
+    g.fill();
+    g.strokeStyle = COL.outline;
+    g.lineWidth = 2.2;
+    g.stroke();
+  }
+  // 一根小触角：和刺毛虫的两根区分开
+  g.strokeStyle = COL.outline;
+  g.lineWidth = 1.8;
+  g.beginPath();
+  g.moveTo(bw * 0.22, -bh * 0.36);
+  g.quadraticCurveTo(bw * 0.30, -bh * 0.62, bw * 0.40, -bh * 0.56);
+  g.stroke();
+
+  drawCuteEyes(g, bw * 0.20, -bh * 0.02, 3.4, 3.6, false);
+}
+
+/** 乌鸦：圆胖身子 + 扇翅膀 + 呆毛。飞行敌人要"看得出来在飞"，靠翅膀和尾羽 */
+function drawCrow(g, f, bw, bh, t) {
+  const d = f.def;
+  const flap = Math.sin(t * 12);
+
+  // 尾羽
+  g.fillStyle = d.c3;
+  g.strokeStyle = COL.outline;
+  g.lineWidth = 2.0;
+  for (const i of [-1, 0, 1]) {
+    g.beginPath();
+    g.moveTo(-bw * 0.24, 0);
+    g.lineTo(-bw * 0.64, i * 7 - 3 + flap * 2);
+    g.lineTo(-bw * 0.26, bh * 0.20);
+    g.closePath();
+    g.fill();
+    g.stroke();
+  }
+
+  // 身体
+  g.fillStyle = d.c1;
+  g.beginPath(); g.ellipse(0, bh * 0.04, bw * 0.40, bh * 0.40, 0, 0, 6.283); g.fill();
+  g.strokeStyle = COL.outline; g.lineWidth = 2.4; g.stroke();
+  // 肚皮
+  g.fillStyle = d.c2;
+  g.beginPath(); g.ellipse(bw * 0.04, bh * 0.16, bw * 0.26, bh * 0.22, 0, 0, 6.283); g.fill();
+
+  // 头
+  const hx = bw * 0.20, hy = -bh * 0.30;
+  g.fillStyle = d.c1;
+  g.beginPath(); g.ellipse(hx, hy, bw * 0.27, bh * 0.27, 0, 0, 6.283); g.fill();
+  g.strokeStyle = COL.outline; g.lineWidth = 2.4; g.stroke();
+
+  // 呆毛
+  g.strokeStyle = COL.outline; g.lineWidth = 2.2; g.lineCap = "round";
+  for (const sd of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(hx - sd * 3, hy - bh * 0.22);
+    g.quadraticCurveTo(hx - sd * 6, hy - bh * 0.48, hx - sd * 1, hy - bh * 0.52);
+    g.stroke();
+  }
+
+  // 喙
+  g.fillStyle = "#FFB443";
+  g.beginPath();
+  g.moveTo(hx + bw * 0.20, hy + 1);
+  g.lineTo(hx + bw * 0.44, hy + 5);
+  g.lineTo(hx + bw * 0.20, hy + 9);
+  g.closePath();
+  g.fill();
+  g.strokeStyle = COL.outline; g.lineWidth = 1.8; g.stroke();
+
+  // 翅膀：贴着身体两侧扇，扇的是"扁椭圆"，不是圆
+  const wf = 0.55 + flap * 0.45;
+  for (const sd of [-1, 1]) {
+    g.fillStyle = sd > 0 ? d.c2 : d.c3;
+    g.beginPath();
+    g.ellipse(-bw * 0.06, bh * 0.02 + sd * 2, bw * 0.24 * wf, bh * 0.34, sd * 0.5, 0, 6.283);
+    g.fill();
+    g.strokeStyle = COL.outline; g.lineWidth = 2.0; g.stroke();
+  }
+
+  drawCuteEyes(g, hx + 1, hy - 1, 4.4, 4.8, false);
+}
+
+/** 小野猪：圆身子 + 大猪鼻 + 獠牙 + 卷尾巴。猪鼻是唯一识别点，画小了就认不出 */
+function drawBoar(g, f, bw, bh, t) {
+  const d = f.def;
+
+  // 腿
+  g.strokeStyle = d.c3;
+  g.lineWidth = 5.4;
+  g.lineCap = "round";
+  for (const [bx, ph] of [[-bw * 0.26, 0], [-bw * 0.06, 1.6], [bw * 0.14, 0], [bw * 0.32, 1.6]]) {
+    const sw = Math.sin(t * 10 + ph) * 3.2;
+    g.beginPath();
+    g.moveTo(bx, bh * 0.22);
+    g.lineTo(bx + sw, bh * 0.50);
+    g.stroke();
+  }
+
+  // 卷尾巴
+  g.strokeStyle = COL.outline;
+  g.lineWidth = 2.2;
+  g.beginPath();
+  g.arc(-bw * 0.44, -bh * 0.06, 5.5, 0.9, 5.0);
+  g.stroke();
+
+  // 耳朵
+  g.fillStyle = d.c3;
+  g.strokeStyle = COL.outline;
+  g.lineWidth = 2.0;
+  for (const sd of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(bw * 0.12 + sd * 6, -bh * 0.32);
+    g.lineTo(bw * 0.20 + sd * 10, -bh * 0.58);
+    g.lineTo(bw * 0.30 + sd * 6, -bh * 0.26);
+    g.closePath();
+    g.fill();
+    g.stroke();
+  }
+
+  // 身体
+  g.fillStyle = d.c1;
+  g.beginPath(); g.ellipse(0, bh * 0.02, bw * 0.48, bh * 0.44, 0, 0, 6.283); g.fill();
+  g.strokeStyle = COL.outline; g.lineWidth = 2.6; g.stroke();
+  // 浅色肚皮
+  g.fillStyle = d.c2;
+  g.beginPath(); g.ellipse(bw * 0.02, bh * 0.18, bw * 0.30, bh * 0.20, 0, 0, 6.283); g.fill();
+
+  // 猪鼻：粉色大椭圆 + 两个鼻孔
+  const nx = bw * 0.40, ny = bh * 0.08;
+  g.fillStyle = "#F8A0B0";
+  g.beginPath(); g.ellipse(nx, ny, bw * 0.13, bh * 0.14, 0, 0, 6.283); g.fill();
+  g.strokeStyle = COL.outline; g.lineWidth = 1.8; g.stroke();
+  g.fillStyle = "#8E4658";
+  for (const sd of [-1, 1]) {
+    g.beginPath();
+    g.ellipse(nx + sd * bw * 0.045, ny, bw * 0.020, bh * 0.045, 0, 0, 6.283);
+    g.fill();
+  }
+
+  // 獠牙：两颗小白牙从鼻子下面翘出来
+  g.fillStyle = "#FFF8EA";
+  g.strokeStyle = COL.outline;
+  g.lineWidth = 1.4;
+  for (const sd of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(bw * 0.30 + sd * 5, bh * 0.22);
+    g.quadraticCurveTo(bw * 0.36 + sd * 7, bh * 0.30, bw * 0.30 + sd * 3, bh * 0.36);
+    g.lineTo(bw * 0.26 + sd * 5, bh * 0.24);
+    g.closePath();
+    g.fill();
+    g.stroke();
+  }
+
+  drawCuteEyes(g, bw * 0.20, -bh * 0.16, 5.0, 5.6, false);
+}
+
 function drawFoe(g, f) {
   if (f.isBoss) { drawBoss(g, f); return; }
   const d = f.def;
   const cx = f.x, cy = f.y - f.h / 2;
   const bw = f.w, bh = f.h;
   const squash = f.hitT > 0 ? f.hitT / 0.20 : 0;
+  const t = S.t + (f.bob || 0);
 
   // 影子
   if (!f.fly) {
@@ -3490,63 +4093,16 @@ function drawFoe(g, f) {
   const sx = 1 + squash * 0.18, sy = 1 - squash * 0.16;
 
   g.save();
-  g.translate(cx, cy + (f.fly ? Math.sin(f.bob) * 2 : 0));
+  g.translate(cx, cy + (f.fly ? Math.sin(f.bob) * 2.5 : 0));
   g.scale(sx, sy);
-  g.translate(-cx, -cy);
-
-  // 身体
-  g.fillStyle = d.c1;
-  g.beginPath();
-  g.ellipse(cx, cy, bw * 0.5, bh * 0.5, 0, 0, 6.283);
-  g.fill();
-  g.strokeStyle = COL.outline;
-  g.lineWidth = 2.2;
-  g.stroke();
-
-  // 花纹
-  g.fillStyle = d.c2;
-  if (f.kind === "fly") {
-    // 翅膀
-    const flap = Math.sin(f.bob * 2.4) * 0.4;
-    for (const s of [-1, 1]) {
-      g.beginPath();
-      g.ellipse(cx + s * bw * 0.46, cy - 2, bw * 0.28, bh * 0.20, s * (0.5 + flap), 0, 6.283);
-      g.fill();
-    }
-    // 喙
-    g.fillStyle = "#F2C04A";
-    g.beginPath();
-    g.moveTo(cx + f.face * bw * 0.46, cy);
-    g.lineTo(cx + f.face * bw * 0.72, cy + 2);
-    g.lineTo(cx + f.face * bw * 0.46, cy + 6);
-    g.closePath();
-    g.fill();
-  } else if (f.kind === "charge") {
-    // 獠牙
-    g.fillStyle = "#FFF4E2";
-    for (const s of [-1, 1]) {
-      g.beginPath();
-      g.moveTo(cx + s * bw * 0.22, cy + bh * 0.24);
-      g.lineTo(cx + s * bw * 0.30, cy + bh * 0.46);
-      g.lineTo(cx + s * bw * 0.14, cy + bh * 0.30);
-      g.closePath();
-      g.fill();
-    }
-  } else {
-    // 刺毛
-    for (let i = 0; i < 5; i++) {
-      const a = Math.PI + (i / 4) * Math.PI;
-      g.beginPath();
-      g.moveTo(cx + Math.cos(a) * bw * 0.44, cy + Math.sin(a) * bh * 0.44);
-      g.lineTo(cx + Math.cos(a) * bw * 0.62, cy + Math.sin(a) * bh * 0.62);
-      g.lineTo(cx + Math.cos(a + 0.28) * bw * 0.44, cy + Math.sin(a + 0.28) * bh * 0.44);
-      g.closePath();
-      g.fill();
-    }
-  }
-
-  drawEyes(g, cx + f.face * 1.5, cy - 2, bw * 0.14, 2.8, f.face, false);
-
+  // 只画朝右的版本，靠镜像翻面 —— 三套造型各自处理左右会把代码写成三份
+  g.save();
+  g.scale(f.face, 1);
+  if (f.larva) drawLarva(g, f, bw, bh, t);
+  else if (f.kind === "fly") drawCrow(g, f, bw, bh, t);
+  else if (f.kind === "charge") drawBoar(g, f, bw, bh, t);
+  else drawWorm(g, f, bw, bh, t);
+  g.restore();
   g.restore();
 
   // ---- 包裹层：这是这个游戏里唯一的"血条"，必须一眼数得清
@@ -3562,7 +4118,6 @@ function drawFoe(g, f) {
       g.stroke();
     }
     g.globalAlpha = 1;
-    // 裹了两层：冒绿光，提示"撞一下就成球"
     if (f.coat === 2) {
       g.globalAlpha = 0.28 + Math.sin(S.t * 8) * 0.14;
       g.fillStyle = "#B9F06A";
@@ -3851,20 +4406,28 @@ function drawShot(g, s) {
     return;
   }
 
-  /* ---- 音波：三层弧，向外推，同时向内收窄 ---- */
+  /* ---- 音波：一团往前推的弧。外圈张得越开，读起来才是"锥"不是"圈" ---- */
   if (s.kind === "wave") {
-    g.globalAlpha = clamp(k * 1.2, 0, 1);
-    g.strokeStyle = s.color;
+    const dir = s.dir || 1;
+    const fade = clamp(k * 1.6, 0, 1);
     g.lineCap = "round";
     for (let i = 0; i < 3; i++) {
-      const rr2 = s.r * (0.62 + i * 0.24);
-      g.lineWidth = 6 - i * 1.6;
-      g.globalAlpha = clamp(k * 1.2, 0, 1) * (0.9 - i * 0.22);
+      const rr2 = s.r * (0.46 + i * 0.26);
+      const wide = 0.52 + i * 0.16;
+      g.lineWidth = 6.4 - i * 1.5;
+      g.globalAlpha = fade * (0.95 - i * 0.24);
+      g.strokeStyle = s.color;
       g.beginPath();
-      if (s.dir > 0) g.arc(s.x, s.y, rr2, -0.95, 0.95);
-      else g.arc(s.x, s.y, rr2, Math.PI - 0.95, Math.PI + 0.95);
+      if (dir > 0) g.arc(s.x, s.y, rr2, -wide, wide);
+      else g.arc(s.x, s.y, rr2, Math.PI - wide, Math.PI + wide);
       g.stroke();
     }
+    // 波心一点白：没有它，三圈弧在浅色背景上会糊成一片
+    g.globalAlpha = fade * 0.85;
+    g.fillStyle = "#FFFFFF";
+    g.beginPath();
+    g.arc(s.x - dir * s.r * 0.18, s.y, 4.6, 0, 6.283);
+    g.fill();
     g.globalAlpha = 1;
     return;
   }
@@ -3915,105 +4478,6 @@ function drawShot(g, s) {
     g.lineWidth = 1.8;
     g.stroke();
     g.restore();
-    return;
-  }
-
-  /* ---- 影分身：站在那儿的狐影。要"清晰"，靠的是描边和眼睛，不是透明度 ---- */
-  if (s.kind === "summon") {
-    const kk = clamp(s.life / s.maxLife, 0, 1);
-    const al = 0.62 + 0.34 * kk;
-    const dir = s.dir || 1;
-    const br = 1 + 0.045 * Math.sin((s.t || 0) * 7);
-
-    // 地面投影：没有它就不知道分身站在哪一层
-    g.globalAlpha = 0.26 * kk;
-    g.fillStyle = "#2A1E4A";
-    g.beginPath();
-    g.ellipse(s.x, s.y + 2, 21, 6, 0, 0, 6.283);
-    g.fill();
-
-    // 两层残影往身后错开：一眼能看出"这是个会动的分身"，而不是一个紫球
-    for (let t = 2; t >= 1; t--) {
-      g.save();
-      g.translate(s.x - dir * t * 13, s.y - 27 * br);
-      g.scale(dir * br, br);
-      g.globalAlpha = al * (t === 2 ? 0.10 : 0.20);
-      g.fillStyle = "#8E76D8";
-      g.beginPath(); g.ellipse(0, 0, 21, 18, 0, 0, 6.283); g.fill();
-      g.beginPath(); g.moveTo(12, -7); g.lineTo(34, 2); g.lineTo(11, 9); g.closePath(); g.fill();
-      g.restore();
-    }
-
-    g.save();
-    g.translate(s.x, s.y - 28 * br);
-    g.scale(dir * br, br);
-
-    g.globalAlpha = al;
-    // 尾巴先画（在身体后面），甩起来才有动势
-    g.strokeStyle = "#7B62C8";
-    g.lineWidth = 9;
-    g.lineCap = "round";
-    g.beginPath();
-    g.moveTo(-18, 3);
-    g.quadraticCurveTo(-38, -6, -31, -28);
-    g.stroke();
-
-    // 身体
-    g.fillStyle = "#7B62C8";
-    g.beginPath();
-    g.ellipse(0, 0, 21, 18, 0, 0, 6.283);
-    g.fill();
-    // 尖吻
-    g.beginPath();
-    g.moveTo(12, -7); g.lineTo(35, 2); g.lineTo(11, 9);
-    g.closePath();
-    g.fill();
-    // 两只尖耳
-    for (const sd of [-1, 1]) {
-      g.beginPath();
-      g.moveTo(sd * 10 - 4, -12);
-      g.lineTo(sd * 13 - 1, -35);
-      g.lineTo(sd * 19 + 5, -14);
-      g.closePath();
-      g.fill();
-    }
-    // 胸口一块亮色（正面朝向的提示）
-    g.globalAlpha = al * 0.5;
-    g.fillStyle = "#D9CCFF";
-    g.beginPath();
-    g.ellipse(9, 4, 8, 11, 0, 0, 6.283);
-    g.fill();
-
-    // 白描边 —— 这是"看得清"的全部原因
-    g.globalAlpha = al;
-    g.strokeStyle = "rgba(246,242,255,.95)";
-    g.lineWidth = 2.6;
-    g.beginPath();
-    g.ellipse(0, 0, 21, 18, 0, 0, 6.283);
-    g.stroke();
-    g.beginPath();
-    g.moveTo(12, -7); g.lineTo(35, 2); g.lineTo(11, 9);
-    g.closePath();
-    g.stroke();
-    for (const sd of [-1, 1]) {
-      g.beginPath();
-      g.moveTo(sd * 10 - 4, -12);
-      g.lineTo(sd * 13 - 1, -35);
-      g.lineTo(sd * 19 + 5, -14);
-      g.closePath();
-      g.stroke();
-    }
-
-    // 眼睛：两个亮点，方向感全靠这个
-    g.globalAlpha = 1;
-    g.fillStyle = "#FFF3A8";
-    g.beginPath();
-    g.arc(10, -3, 3.1, 0, 6.283);
-    g.arc(19, -1, 3.1, 0, 6.283);
-    g.fill();
-
-    g.restore();
-    g.globalAlpha = 1;
     return;
   }
 
@@ -4532,6 +4996,7 @@ function tick(dt) {
     updateShots(dt);
     updateBalls(dt);
     updateShocks(dt);
+    updateFoeShots(dt);
 
     // 清掉死亡的敌人
     let w = 0;
@@ -4654,6 +5119,8 @@ function render() {
     for (const u of units) u.d();
 
     for (const s of S.shots) drawShot(g, s);
+    // 敌方弹幕画在单位之上：它比角色快得多，压在角色下面会"从身体里冒出来"
+    drawFoeShots(g);
 
     // 地上的掉落物。每一种长得不一样 —— "惊喜感"的一半来自"一眼认出这是什么"
     for (const d of S.drops) {

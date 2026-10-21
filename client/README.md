@@ -25,17 +25,30 @@
 | 文件 | 角色 |
 |---|---|
 | `assets/scripts/grove/GroveRuntime.ts` | **自动生成**：从 grove.html 抽出的引擎无关运行时 |
-| `assets/scripts/grove/GroveBattle.ts` | Cocos 组件：正交相机 + 离屏 canvas + 每帧贴成纹理 |
+| `assets/scripts/grove/GroveBattle.ts` | Cocos 组件：离屏 canvas + DOM 叠加层 |
 | `assets/scripts/BattleBoot.ts` | 战斗场景挂载点，`MODE` 一行切「推球 / 割草」 |
 
 `GroveBattle` 只做三件事：
-① 建一台正交相机（`orthoHeight = 300`，视野高度正好 600 单位，对上原型的 960×600）；
-② 开一块离屏 canvas 交给 `GroveRuntime` 原样绘制；
-③ 每帧用 `Texture2D.uploadData(canvas)` 把画布推上 GPU，贴在一个全屏 Sprite 上。
+① 开一块 960×600 的离屏 canvas 交给 `GroveRuntime` 原样绘制；
+② 把这块 canvas 作为 **DOM 层**铺在 Cocos 画布上面（`position:fixed` 全屏 + 按比例居中）；
+③ 每帧 `groveTick()` + `groveRender()`。
 
-**代价（说清楚）**：这条路径依赖 `document.createElement('canvas')`，**只有 Web 平台能跑**。
-要上原生 / 小游戏，得把 ctx 调用逐条换成 `Graphics`，或改成
-`getImageData() + uploadData(ArrayBufferView)`。
+#### 为什么是 DOM 叠加，不是 `Sprite + Texture2D.uploadData`
+
+第一版走的是「离屏 canvas → `Texture2D.uploadData` → 全屏 Sprite」，**进 Cocos 后纯黑**，
+但脚本日志全打出来了（说明没崩，是画不出来）。对着 Engine 3.8.8 源码查出两条硬约束，两条都不满足：
+
+| 约束 | 源码依据 | 本项目现状 |
+|---|---|---|
+| 2D 对象必须在 `RenderRoot2D`（Canvas）下 | `render-root-2d.ts`：*"所有的 2D渲染对象需在 RenderRoot 节点下才可以被渲染"* | `Battle.scene` 里 **0 个 Canvas** |
+| 相机默认看不见 `UI_2D` 层 | `camera.ts`：`visibility = CAMERA_DEFAULT_MASK` = `Layers.makeMaskExclude([UI_2D, GIZMOS, EDITOR, ...])` | 自己 new 的相机默认排除 UI_2D |
+
+所以改成 DOM 叠加：画面和原型**像素级一致**（同一个 canvas、同一套绘制代码），
+也没有纹理上传的模糊。场景里仍留一台只清屏的相机，避免渲染器刷 `no camera`。
+
+**代价（说清楚）**：这条路径依赖 `document`，**只有 Web 平台能跑**。
+要上原生 / 小游戏，得把 ctx 调用逐条换成 `Graphics` 重写渲染层（约 2000 行），
+挂载逻辑本身可以留用。
 
 ### 改玩法的正确姿势
 
@@ -46,6 +59,18 @@ python client/tools/extract_grove_runtime.py   # 重新抽取
 node   client/tools/grove-runtime-check.js     # 八关各跑 600 帧 + render，抽取一坏就红
 node   client/tools/ts-syntax-check.js         # 语法守门（需要 typescript）
 ```
+
+改完 `GroveBattle.ts` 想验证「画面到底挂上去没有」（黑屏事故后加的那道门）：
+
+```bash
+node client/tools/grove-dom-harness.js
+# 起个静态服务器指向 client/prototype，然后开：
+#   /_check2/?frames=90            第 1 关
+#   /_check2/?frames=90&stage=3    第 4 关长滑道
+```
+
+它会用一套极简 `cc` 桩把 `GroveBattle` 在浏览器里真跑一遍（含 90 帧 tick + render），
+画面出来才算过。**语法能过、运行时能跑，都不等于画面能出来** —— 黑屏就是这么漏过去的。
 
 ### 想切回割草切片
 

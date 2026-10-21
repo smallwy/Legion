@@ -3,35 +3,48 @@
  * ============================================================================
  *
  * 为什么是这个形状：
- *   推球玩法（物理/关卡/坡/波次/BOSS/冰壳）在 client/prototype/grove.html 里
+ *   推球玩法（物理/关卡/坡/波次/BOSS/冰壳/球）在 client/prototype/grove.html 里
  *   已经调了八轮，那 6800 行是唯一跑通过的手感来源。
  *   把规则重写成 Cocos 组件 = 把八轮调参全部作废。
  *
  *   所以这里不重写玩法，只做三件事：
- *     ① 建一台正交相机（视野高度 600 单位，对上原型的 960x600 坐标系）
- *     ② 开一块离屏 canvas 交给 GroveRuntime 原样绘制
- *     ③ 每帧把 canvas 传成 Cocos 纹理，贴在一个全屏 Sprite 上
+ *     ① 开一块 960x600 的离屏 canvas 交给 GroveRuntime 原样绘制
+ *     ② 把这块 canvas 作为 DOM 层铺在 Cocos 画布上面
+ *     ③ 每帧 groveTick + groveRender
  *
- * 代价（如实说）：
- *   - 每帧一次 960x600 的纹理上传，桌面端约 1~3ms，可以接受；
- *   - 这条路径依赖 document.createElement('canvas')，**只有 Web 平台能跑**
- *     （Cocos 原生平台没有 DOM）。要上原生，得把 ctx 调用逐条换成 Graphics，
- *     或者改成 getImageData + uploadData(ArrayBufferView)。
- *   - 玩法改在 grove.html，改完跑：
- *       python client/tools/extract_grove_runtime.py
- *       node   client/tools/grove-runtime-check.js
+ * 【为什么不用 Sprite 贴纹理 —— 2026-10-21 黑屏事故复盘】
+ *   第一版走的是「离屏 canvas → Texture2D.uploadData → 全屏 Sprite」。
+ *   进 Cocos 后纯黑，但脚本日志全打出来了（说明没崩，是画不出来）。
+ *   对着 Engine 3.8.8 源码查出两条硬约束，两条都不满足：
+ *     ① `RenderRoot2D` 源码原话："所有的 2D 渲染对象需在 RenderRoot 节点下才可以被渲染"。
+ *        而 Battle.scene 里 **一个 Canvas / RenderRoot2D 都没有**（只有 Scene + BattleRoot），
+ *        Sprite 挂在没有渲染根的节点上 → batcher2D 根本不收集它。
+ *     ② 相机默认 `visibility = CAMERA_DEFAULT_MASK`，而它是
+ *        `Layers.makeMaskExclude([UI_2D, GIZMOS, EDITOR, ...])` —— **排除 UI_2D**。
+ *        自己 new 的相机默认看不见 UI_2D 层的东西。
+ *   要么补 Canvas + 改相机可见层 + 处理 Canvas 抢管 orthoHeight 那一串，
+ *   要么换条不碰 2D 管线的路。选后者：DOM 叠加。
  *
- * 键位和原型完全一致：
+ *   代价（如实说）：
+ *   - 只有 Web 平台能跑（依赖 document）。原生/小游戏得把 ctx 调用换成 Graphics。
+ *   - 它不是"Cocos 渲染出来的"，是叠在 Cocos 画布上的一层 DOM。
+ *     好处是画面和原型**像素级一致**（同一个 canvas、同一套绘制代码），没有纹理上传的模糊。
+ *   - 以后真要上原生，那是重写渲染层（~2000 行 ctx 调用），本文件的挂载逻辑照样能用。
+ *
+ *   玩法改在 grove.html，改完跑：
+ *     python client/tools/extract_grove_runtime.py
+ *     node   client/tools/grove-runtime-check.js
+ *
+ * 键位和原型完全一致（键盘监听在 GroveRuntime 内部的 window 上，和原型同一份代码）：
  *   ←→/AD 移动 · 空格/W/↑ 跳 · J 喷裹 · K 撞飞 · 走进球里顶它 推球
  *   Shift 按住看预测线 · R 重打 · Esc 收工回主界面
  */
 import {
-    _decorator, Component, Node, Sprite, SpriteFrame, Texture2D, ImageAsset,
-    UITransform, Camera, Color, director, assetManager, SceneAsset,
-    input, Input, EventTouch,
+    _decorator, Component, Node, Camera, Color, Layers,
+    director, assetManager, SceneAsset,
 } from 'cc';
 import {
-    groveAttachCanvas, groveBoot, grovePointer, groveRender, groveSetExitHook, groveTick,
+    groveAttachCanvas, groveBoot, groveRender, groveSetExitHook, groveTick,
 } from './GroveRuntime';
 
 const { ccclass } = _decorator;
@@ -43,37 +56,34 @@ const H = 600;
 /** Home 场景的资产 uuid（取自 Home.scene.meta），"收工"回主界面用 */
 const HOME_UUID = 'ce855542-8bb9-44de-8e9d-20c436ed206f';
 
+/** DOM 叠加层的 z-index。Cocos 画布默认 0，取 10 足够压住。 */
+const STAGE_Z = '10';
+
 @ccclass('GroveBattle')
 export class GroveBattle extends Component {
     private _cv: HTMLCanvasElement | null = null;
-    private _img: ImageAsset | null = null;
-    private _tex: Texture2D | null = null;
-    private _screen: Node | null = null;
-
-    /** 当前画面缩放（屏幕比 16:10 窄时按宽度缩，别把左右裁掉） */
-    private _scale = 1;
-    /** uploadData 是否可用；不可用就退回"重建 ImageAsset"（慢但能跑） */
-    private _canUpload = true;
-    /** 是否已经成功接管（没接管时 update 直接返回，别空转） */
+    /** 承载画布的 DOM 容器；收工/销毁时整块摘掉 */
+    private _stage: HTMLDivElement | null = null;
     private _ready = false;
 
     onLoad(): void {
-        if (typeof document === 'undefined' || !document.createElement) {
+        if (typeof document === 'undefined' || !document.createElement || !document.body) {
             console.error(
-                '[GroveBattle] 当前平台没有离屏 canvas（原生平台无 DOM）。\n' +
-                '推球目前只接了 Web 路径，请在浏览器里预览。',
+                '[GroveBattle] 当前平台没有 DOM（原生/小游戏）。\n' +
+                '推球目前只接了 Web 路径，请在浏览器预览里玩。',
             );
             return;
         }
 
-        this._buildCamera();
+        // 场景里一个相机都没有的话，渲染器每帧会刷 "no camera"。
+        // 这台只负责清屏，不渲染任何东西（真正的画面在 DOM 层）。
+        this._buildClearCamera();
 
         const cv = document.createElement('canvas');
         cv.width = W;
         cv.height = H;
 
-        if (!this._buildScreen(cv)) return;
-
+        this._mountStage(cv);
         this._cv = cv;
 
         /* 先绑画布再开局：绘制要 ctx，beginRun 会立刻画一帧。 */
@@ -81,31 +91,30 @@ export class GroveBattle extends Component {
         groveSetExitHook(() => this._backHome());
         groveBoot();
 
-        this._bindTouch();
-        this._fit(true);
         this._ready = true;
 
         console.log(
-            '[GroveBattle] 推球已接管战斗场景 —— ' +
+            '[GroveBattle] 推球已接管战斗场景（DOM 叠加层）—— ' +
             '←→ 移动 / 空格 跳 / J 喷裹 / K 撞飞 / 走进球里顶它推球 / Shift 看预测线 / Esc 收工',
         );
     }
 
     update(dt: number): void {
-        if (!this._ready || !this._cv) return;
-
+        if (!this._ready) return;
         // 和原型 frame() 同一个上限：切标签页回来不要一次跳半秒
         groveTick(Math.min(dt, 0.034));
         groveRender();
-        this._upload();
-        this._fit(false);
     }
 
     /* ------------------------------------------------------------------ 骨架 */
 
-    /** 正交相机，视野高度 = 600 世界单位 → 画布 1 像素 = 1 世界单位 */
-    private _buildCamera(): void {
-        const camNode = new Node('GroveCamera');
+    /**
+     * 只清屏的相机。
+     * 故意不建 Canvas/Sprite：Battle.scene 没有 RenderRoot2D，
+     * 走 Cocos 2D 管线要额外补一堆东西，得不偿失（见文件头复盘）。
+     */
+    private _buildClearCamera(): void {
+        const camNode = new Node('GroveClearCamera');
         this.node.addChild(camNode);
         const cam = camNode.addComponent(Camera);
         cam.projection = Camera.ProjectionType.ORTHO;
@@ -113,128 +122,54 @@ export class GroveBattle extends Component {
         cam.near = 1;
         cam.far = 2000;
         cam.clearFlags = Camera.ClearFlag.SOLID_COLOR;
-        // 深墨绿：留边时读作画框，而不是"没画满"
+        // 深墨绿：和原型留边色一致，露出来时读作画框
         cam.clearColor = new Color(14, 24, 18, 255);
         camNode.setPosition(0, 0, 1000);
     }
 
-    /** 全屏 Sprite，纹理源就是那块离屏画布。成功返回 true。 */
-    private _buildScreen(cv: HTMLCanvasElement): boolean {
-        const img = new ImageAsset({
-            _data: cv,
-            width: W,
-            height: H,
-            format: Texture2D.PixelFormat.RGBA8888,
-            _compressed: false,
-        } as unknown as any);
-
-        const tex = new Texture2D();
-        tex.image = img;
-        tex.setFilters(Texture2D.Filter.LINEAR, Texture2D.Filter.LINEAR);
-        // 动态纹理绝不能进合图：进了之后每帧上传画的是合图里的旧图
-        (tex as unknown as { packable: boolean }).packable = false;
-
-        const sf = new SpriteFrame();
-        sf.texture = tex;
-
-        const node = new Node('GroveScreen');
-        this.node.addChild(node);
-        const ut = node.addComponent(UITransform);
-        ut.setContentSize(W, H);
-
-        const sp = node.addComponent(Sprite);
-        sp.sizeMode = Sprite.SizeMode.CUSTOM;
-        sp.trim = false;
-        sp.spriteFrame = sf;
-
-        this._img = img;
-        this._tex = tex;
-        this._screen = node;
-        return true;
-    }
-
-    /* ------------------------------------------------------------------ 每帧 */
-
     /**
-     * 把画布内容推上 GPU。
+     * 把画布铺在 Cocos 画布上面。
      *
-     * 首选 Texture2D.uploadData(canvas)：直接 texSubImage2D，不重建资源。
-     * 万一某个后端不支持，退回 ImageAsset.reset(v) + texture.image = img
-     * —— 会重建一次 GPU 纹理，慢，但画面不会停。
+     * 尺寸交给浏览器算：canvas 的固有尺寸是 960x600，配 max-width/max-height 100%
+     * 之后浏览器会按比例收缩（替换元素规则），永远不会裁掉左右或上下，
+     * 窗口比例不对时两侧/上下留深色边 —— 和原型里 fit() 的行为一致。
      */
-    private _upload(): void {
-        const cv = this._cv;
-        const tex = this._tex;
-        if (!cv || !tex) return;
+    private _mountStage(cv: HTMLCanvasElement): void {
+        const doc = document;
 
-        if (this._canUpload) {
-            try {
-                (tex as unknown as { uploadData: (s: unknown, l: number, i: number) => void })
-                    .uploadData(cv, 0, 0);
-                return;
-            } catch (e) {
-                this._canUpload = false;
-                console.warn('[GroveBattle] uploadData 不可用，降级为重建 ImageAsset', e);
-            }
-        }
+        const stage = doc.createElement('div');
+        stage.id = 'grove-stage';
+        const s = stage.style;
+        s.position = 'fixed';
+        s.left = '0';
+        s.top = '0';
+        s.width = '100%';
+        s.height = '100%';
+        s.display = 'flex';
+        s.alignItems = 'center';
+        s.justifyContent = 'center';
+        s.background = '#0E1812';
+        s.zIndex = STAGE_Z;
+        s.overflow = 'hidden';
+        // 别让浏览器把拖动/长按手势当成滚动
+        (s as unknown as { touchAction: string }).touchAction = 'none';
 
-        const img = this._img;
-        if (!img) return;
-        (img as unknown as { reset: (v: unknown) => void }).reset(cv);
-        tex.image = img;
+        cv.style.display = 'block';
+        cv.style.maxWidth = '100%';
+        cv.style.maxHeight = '100%';
+        cv.style.width = 'auto';
+        cv.style.height = 'auto';
+
+        stage.appendChild(cv);
+        doc.body.appendChild(stage);
+        this._stage = stage;
     }
 
-    /**
-     * 适配屏幕。
-     *
-     * 相机视野高度固定 600，所以：
-     *   可见宽度 = 600 * (屏宽/屏高)   世界单位
-     * 画布要完整落在里面：960*s ≤ 600*va 且 600*s ≤ 600
-     *   → s = min(1, 0.625 * va)
-     * 16:10 及以上 s=1 铺满高度；更窄的窗口按宽度缩、上下留边。
-     */
-    private _fit(force: boolean): void {
-        const node = this._screen;
-        if (!node) return;
-
-        const vw = typeof window !== 'undefined' ? window.innerWidth : W;
-        const vh = typeof window !== 'undefined' ? window.innerHeight : H;
-        const va = vw / Math.max(1, vh);
-        const s = Math.min(1, (H / W) * va);
-
-        if (!force && Math.abs(s - this._scale) < 0.001) return;
-        this._scale = s;
-        node.setScale(s, s, 1);
-    }
-
-    /* ------------------------------------------------------------------ 输入 */
-
-    /**
-     * 键盘由 GroveRuntime 自己在 window 上监听（和原型同一份代码，手感一致）。
-     * 这里只补触摸：原型的"点结算面板 / 点选人"走的是 canvas 鼠标事件，
-     * 离屏画布收不到，得把 Cocos 的触点换算回 960x600 画布坐标再转发。
-     */
-    private _bindTouch(): void {
-        const toCanvas = (ev: EventTouch): { x: number; y: number } | null => {
-            const vw = typeof window !== 'undefined' ? window.innerWidth : W;
-            const vh = typeof window !== 'undefined' ? window.innerHeight : H;
-            const p = ev.getLocation();                 // 屏幕像素，左下原点
-            const halfH = H / 2;                        // 可见高度世界单位 / 2
-            const wx = (p.x / Math.max(1, vw) - 0.5) * (H * vw / Math.max(1, vh));
-            const wy = (p.y / Math.max(1, vh) - 0.5) * H;
-            const s = this._scale || 1;
-            return { x: W / 2 + wx / s, y: halfH - wy / s };
-        };
-
-        input.on(Input.EventType.TOUCH_START, (ev: EventTouch) => {
-            const p = toCanvas(ev);
-            if (p) grovePointer('down', p.x, p.y);
-        }, this);
-
-        input.on(Input.EventType.TOUCH_MOVE, (ev: EventTouch) => {
-            const p = toCanvas(ev);
-            if (p) grovePointer('move', p.x, p.y);
-        }, this);
+    private _unmountStage(): void {
+        const stage = this._stage;
+        if (!stage) return;
+        this._stage = null;
+        if (stage.parentNode) stage.parentNode.removeChild(stage);
     }
 
     /* ------------------------------------------------------------------ 退出 */
@@ -281,7 +216,10 @@ export class GroveBattle extends Component {
 
     /** "收工"回主界面。和 HomeRuntime 进战斗用同一套 uuid 加载方式。 */
     private _backHome(): void {
+        this._ready = false;
+        this._unmountStage();
         this._syncProgressToHome();
+
         assetManager.loadAny(HOME_UUID, (err: Error | null, asset: unknown) => {
             if (!err && asset instanceof SceneAsset) {
                 director.runScene((asset as SceneAsset).scene);
@@ -297,9 +235,7 @@ export class GroveBattle extends Component {
     onDestroy(): void {
         this._ready = false;
         groveSetExitHook(null);
-        // 按 target 一次性解绑，省得为两个 handler 存字段
-        (input as unknown as { targetOff: (t: unknown) => void }).targetOff(this);
-        if (this._tex) { this._tex.destroy(); this._tex = null; }
-        if (this._img) { this._img.destroy(); this._img = null; }
+        this._unmountStage();
+        this._cv = null;
     }
 }

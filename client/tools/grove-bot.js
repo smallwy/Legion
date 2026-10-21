@@ -110,6 +110,32 @@ function pickPushDir(P, S, b) {
  * @param S  P.S
  * @param mem 跨帧记忆（fallDir / stuck），每关新建一份
  */
+/** 脚下这块往哪一端走才能下到更低的一层。返回 x；不确定就返回 null。
+ *
+ *  坡是后加的，之前"目标在下面"只找 layerExits（平台的缺口）。
+ *  站在坡上时根本没有缺口 —— 坡是一整条连续的斜面，
+ *  于是机器人只会朝目标的 x 走，目标又在它正下方跟着走，
+ *  两边一起原地摆（缓坡：BOSS 站在坡下，机器人 240 秒没动过 30px）。
+ *
+ *  坡必须往**低的那一端**走才是下坡。往高的那端走是上坡，
+ *  走到底只会站到上一层平台上 —— 越走越远。
+ */
+function downExit(P, p) {
+  const g = p.ground;
+  if (!g) return null;
+  if (g.kind === "ramp") {
+    const r = (P.RAMPS || []).find(q => Math.abs(q.x - g.x) < 2 && Math.abs(q.w - g.w) < 2);
+    if (!r) return null;
+    return r.yR > r.yL ? g.x + g.w + 2 : g.x - 2;
+  }
+  const leftWall = g.x <= P.WALL_L + 1;
+  const rightWall = g.x + g.w >= P.WALL_R - 1;
+  if (leftWall && rightWall) return null;      // 两边都是墙，这一层没有出口
+  if (leftWall) return g.x + g.w + 2;
+  if (rightWall) return g.x - 2;
+  return null;                                  // 两边都能掉：交给调用方按目标选
+}
+
 function botStep(P, S, mem) {
   mem = mem || {};
   const p = S.p;
@@ -195,14 +221,14 @@ function _decide(P, S, mem) {
     // 不同层 -> 先换到球那一层
     if (Math.abs(dyB) >= 50) {
       if (dyB > 50) {
-        // 球在下面：走到平台边缘掉下去。贴墙的那条边掉不下去（墙比边缘更靠外）。
+        // 球在下面：走到这块地面的下坡端 / 缺口端掉下去。
+        // 站在坡上时"往近的那端"是错的 —— 近的那端可能是上坡。
         if (p.onGround && p.ground) {
           const g = p.ground;
+          const de = downExit(P, p);
           const toL = p.x - g.x, toR = (g.x + g.w) - p.x;
-          const leftWall = g.x <= P.WALL_L + 1;
-          const rightWall = g.x + g.w >= P.WALL_R - 1;
-          if (leftWall && !rightWall) S.keys.right = true;
-          else if (rightWall && !leftWall) S.keys.left = true;
+          if (de != null && de > p.x + 4) S.keys.right = true;
+          else if (de != null && de < p.x - 4) S.keys.left = true;
           else if (toL < toR) S.keys.left = true;
           else S.keys.right = true;
         } else if (nb.x > p.x + 10) S.keys.right = true;
@@ -256,8 +282,13 @@ function _decide(P, S, mem) {
       // 目标在下面：走到这一层的出口掉下去。
       // 不能朝目标的 x 走 —— 目标在另一层，朝它走只会在缺口上方左右横跳。
       if (p.onGround && p.ground) {
-        const outs = layerExits(P, p.y);
-        const ex = outs ? nearest(p.x, outs) : null;
+        // 站在坡上时**不查 layerExits**：坡的 y 是个连续值，随便就会撞进
+        // 某个平台层的 ±14 窗口里，然后机器人往那个层的缺口走 ——
+        // 而那个缺口在坡的上方（缓坡实测：462 层离坡面只有 7px，
+        // 机器人一路往左上坡、再折返下坡，在 470~503 之间摆了 200 秒）。
+        const onRamp = p.ground.kind === "ramp";
+        const outs = onRamp ? null : layerExits(P, p.y);
+        const ex = outs ? nearest(p.x, outs) : downExit(P, p);
         if (ex != null) {
           if (ex > p.x + 6) { S.keys.right = true; mem.fallDir = 1; }
           else if (ex < p.x - 6) { S.keys.left = true; mem.fallDir = -1; }

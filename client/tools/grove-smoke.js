@@ -515,7 +515,9 @@ console.log("\n=== 11. 八关几何：每关都得能下到地面、推得到营
     ok(P.PITS.some(p => p.kind === "fire"), R.name + "：有火坑");
     ok(P.PITS.some(p => p.kind === "mud"), R.name + "：有泥坑");
     ok(P.CAMP && P.CAMP.w > 0, R.name + "：有营地");
-    if (R.id !== "entry") ok(S.stumps.length > 0, R.name + "：有木桩");
+    // 教学关不放桩（出生点就在旁边，所有弹丸出门第一帧就被它吃掉）；
+    // 缓坡也不放 —— 它是一条通往营地的长滑道，桩子摆哪儿都在球的必经路上。
+    if (R.id !== "entry" && R.id !== "slope") ok(S.stumps.length > 0, R.name + "：有木桩");
 
     const shaft = shaftOf(P, 350, 462);
     ok(shaft && shaft.w >= 55, R.name + "：竖井够宽（球能穿过）",
@@ -630,23 +632,31 @@ console.log("\n=== 12. 目标：限球 / 连锁 / 落袋 ===");
   const sb = boot();
   const P = sb.GROVE, S = P.S;
   seed(S);
-  const ci = P.LEVELS.findIndex(s => s.goal === "chain");
-  ok(ci >= 0, "关卡线里至少有一关是连锁关");
+  // 挑"最宽的那块浮空台所在的那一屏连锁关"。
+  // 写死缓坡不行：它现在是一条长滑道，最宽的台面只有 154 —— 摆不下一颗球加两只人。
+  const cands = [];
+  P.LEVELS.forEach((st, i) => {
+    if (st.goal !== "chain") return;
+    const sg = st.plats.filter(q => q.kind !== "ground").sort((a, b) => b.w - a.w)[0];
+    if (sg) cands.push({ i, seg: sg });
+  });
+  cands.sort((a, b) => b.seg.w - a.seg.w);
+  ok(cands.length > 0, "关卡线里至少有一关是连锁关");
+  const ci = cands[0].i;
   P._start(0, ci);
   eq(P.curStage().goal, "chain", "选中的是连锁关");
 
-  const segs = P.PLATS.filter(q => Math.abs(q.y - 462) < 6).sort((a, b) => b.w - a.w);
-  const seg = segs[0];
-  ok(seg && seg.w > 220, "这一屏有一条够长的 462 球道", seg ? "w=" + seg.w : "没有");
+  const seg = cands[0].seg;
+  ok(seg.w > 220, "这一屏有一条够长的球道", "w=" + seg.w + " @y" + seg.y);
 
   const a = S.foes[0];
   P.coatFoe(a, 3);
   const b = S.balls[0];
-  b.x = seg.x + 40; b.y = 462; b.onGround = true; b.vx = 700;
+  b.x = seg.x + 20; b.y = seg.y; b.onGround = true; b.vx = 700;
 
   const targets = S.foes.filter(f => !f.dead).slice(0, 2);
-  targets[0].x = seg.x + 100; targets[0].y = 462; targets[0].coat = 2;
-  targets[1].x = seg.x + 160; targets[1].y = 462; targets[1].coat = 2;
+  targets[0].x = seg.x + 80; targets[0].y = seg.y; targets[0].coat = 2;
+  targets[1].x = seg.x + 140; targets[1].y = seg.y; targets[1].coat = 2;
   for (let k = 0; k < 40; k++) P.tick(1 / 60);
 
   ok(S.stat.maxHolds >= 2, "maxHolds 记到了 2 只", "max=" + S.stat.maxHolds);
@@ -729,11 +739,12 @@ console.log("\n=== 14. 预瞄线：画出来的必须和实际一致 ===");
   eq(R.end, "camp", "向右推：预测会进营地");
   eq(L.end, "fire", "向左推：预测会进火坑");
 
-  // 木桩挡路也要预测得出来（第 4 关的木桩在 300）
-  P._start(0, 3);
+  // 木桩挡路也要预测得出来（第 3 关的木桩在地面 180）
+  // 缓坡那关改成长滑道之后地面上没有木桩了，所以换成断崖来测这一条。
+  P._start(0, 2);
   P.coatFoe(S.foes[0], 3);
   const b2 = S.balls[0];
-  b2.x = 380; b2.y = 556; b2.vx = 0; b2.vy = 0; b2.onGround = true;
+  b2.x = 260; b2.y = 556; b2.vx = 0; b2.vy = 0; b2.onGround = true;
   eq(P.predictBall(b2, -1).end, "stump", "向左推：预测会撞木桩");
 
   // 真的推一次，看和预测是否一致 —— 这一条是整条预瞄线存在的理由
@@ -804,25 +815,38 @@ console.log("\n=== 15. 球不减速 / 四种场景件 / 撞击掉落 ===");
   ok(S.balls.indexOf(b) >= 0, "球从水面上滚过去不会沉（只有砸进去才沉）", "x=" + b.x.toFixed(0));
 }
 {
-  // ③ 斜坡：能把球从地面抬到 462 层
+  // ③ 长滑道：从顶层推下去的球一路滑到地面，而且越滑越快
+  //    —— 这一关就是为"站在最高层往下推"做的，所以这条断言必须硬。
   const sb = boot();
   const P = sb.GROVE, S = P.S;
   seed(S);
-  P._start(0, 3);                            // 缓坡
-  ok(P.RAMPS.length > 0, "缓坡这关配了斜坡");
+  P._start(0, 3);                            // 缓坡（长滑道）
+  ok(P.RAMPS.length === 1, "缓坡是一条通到底的长坡（中间没有断口）", "n=" + P.RAMPS.length);
+  const r = P.RAMPS[0];
+  ok(r.w >= 380, "长坡够长（中间不能断）", "w=" + r.w);
   for (const ff of S.foes) ff.x = 4000;
   const f = S.foes[0]; f.x = 170;
   P.coatFoe(f, 3);
   const b = S.balls[0];
-  b.x = P.RAMPS[0].x + 14; b.y = 556; b.vx = 640; b.vy = 0; b.onGround = true;
-  let hi = b.y;
-  for (let i = 0; i < 90; i++) { P.tick(1 / 60); hi = Math.min(hi, b.y); }
-  ok(hi <= 470, "斜坡把球抬到了 462 层", "最高 y=" + hi.toFixed(0));
-  // 预测要从坡底重新起算 —— 上面那颗球已经爬到顶了，从顶上再预测当然不会再往上
-  b.x = P.RAMPS[0].x + 14; b.y = 556; b.vx = 0; b.vy = 0; b.onGround = true;
+  b.x = r.x + 12; b.y = r.yL; b.vx = 380; b.vy = 0; b.onGround = true;
+  const v0 = Math.abs(b.vx);
+  let vmax = 0, maxGap = 0, lastY = b.y;
+  for (let i = 0; i < 150 && !b.dead; i++) {
+    P.tick(1 / 60);
+    const rp = P.rampAt(b.x);
+    if (rp) maxGap = Math.max(maxGap, rp.y - b.y);   // 球离坡面有多高
+    vmax = Math.max(vmax, Math.abs(b.vx));
+    lastY = b.y;
+  }
+  ok(maxGap < 60, "球贴着一路滚，没有从坡上飘出去", "最大离面 " + maxGap.toFixed(0) + "px");
+  ok(lastY > 500, "球会一路滑到坡底", "y=" + lastY.toFixed(0));
+  ok(vmax > v0 + 60, "下坡会加速", v0.toFixed(0) + " -> " + vmax.toFixed(0));
+
+  // 预瞄线（按住 Shift 才画）也得能从顶上一路画到底
+  b.x = r.x + 12; b.y = r.yL; b.vx = 0; b.vy = 0; b.onGround = true;
   const pr = P.predictBall(b, 1);
-  ok(pr.pts.some(q => q.y < 470), "预瞄线也画到了上层（不是画到坡底就断）",
-    "最低点 y=" + Math.min.apply(null, pr.pts.map(q => q.y)).toFixed(0));
+  ok(pr.pts.some(q => q.y > 520), "预测线一路画到了坡底（不是画到半坡就断）",
+    "最低点 y=" + Math.max.apply(null, pr.pts.map(q => q.y)).toFixed(0));
 }
 {
   // ④ 弹簧菇：球滚过去被弹起
@@ -1072,13 +1096,13 @@ console.log("\n=== 18. 六把武器 ===");
     const P = sb.GROVE, S = P.S;
     seed(S);
     P._start(h, 0);
-    // 抛物弹（萝卜炮）本来就不打贴脸：它要飞出去再落下来。
-    // 所以这一个用中距离，别的用贴脸 —— 测的是"打得到"，不是"所有武器同一种射程"。
-    // 萝卜炮要单独给场地：它是一颗抛物线，最高点 457，会被 462 层平台接住。
-    // 所以测的是"炸得到那一层的人"—— 把敌人放到 462 层上，这才是它的实战位置。
+    // 六把武器现在**全部是横向施法**（用户明确要求）。
+    // 以前萝卜炮是 45 度上抛，测它得专门把敌人摆到上层平台 ——
+    // 而实战里敌人多半和你同高，于是"只有它能打到楼上"的代价变成了"平时打不中"。
+    // 现在统一按"同一水平线上、220px 外"测。
     const gap = h === 3 ? 220 : 46;
     const f = S.foes[0];
-    f.x = S.p.x + gap; f.y = h === 3 ? 462 : S.p.y; f.coat = 0; f.dead = false;
+    f.x = S.p.x + gap; f.y = S.p.y; f.coat = 0; f.dead = false;
     // 定住它：测的是"弹道打不打得到"，不是"追不追得上巡逻的虫子"
     f.def = Object.assign({}, f.def, { spd: 0 });
     P.HEROES[h].fire(S.p);
@@ -1251,11 +1275,14 @@ console.log("\n=== 20. 第六轮：坡、下穿、波次、BOSS ===");
        "人站在坡上会被坡托住（不会穿到地面）",
        "y=" + S.p.y.toFixed(0) + " 期望 " + midY.toFixed(0));
 
-    // 顺着坡走上去能到坡顶那层
+    // 顺着坡走上去能到坡顶那层。
+    // 记**过程中最高的位置**，不是最后一帧：长滑道的坡顶接一块只有 120 宽的台面，
+    // 走满 90 帧的话人会一路走过台面边缘再掉下去 —— 那测的就不是"能不能上去"了。
     S.p.x = mid; S.p.y = midY; S.p.vy = 0; S.p.onGround = true;
-    for (let k = 0; k < 90; k++) { S.keys.left = true; P.tick(1 / 60); }
+    let hiY = midY;
+    for (let k = 0; k < 90; k++) { S.keys.left = true; P.tick(1 / 60); hiY = Math.min(hiY, S.p.y); }
     S.keys.left = false;
-    ok(S.p.y < midY - 30, "往坡上走会一路变高", "y=" + S.p.y.toFixed(0));
+    ok(hiY < midY - 60, "往坡上走会一路变高", "最高 y=" + hiY.toFixed(0) + "（起点 " + midY.toFixed(0) + "）");
   }
 
   /* ---- ↓ 一次只穿一层 ---- */
@@ -1587,6 +1614,127 @@ console.log("\n=== 21. 第七轮：技能子弹化 / 坡材质 / BOSS 繁殖与�
     let t = 0, hp0 = S.p.hp;
     while (t < 0.6) { P.tick(1 / 60); t += 1 / 60; }
     ok(S.p.hp < hp0, "粘液弹打中玩家扣血", "hp " + hp0 + " -> " + S.p.hp);
+  }
+}
+
+console.log("\n=== 22. 第八轮：冰壳 / 球撞球 / 助跑推 / 横向施法 ===");
+{
+
+  /* ---- 技能打中球：冰壳 +1，上限 3 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(1, 0);
+    S.foes.forEach(f => { f.x = 4000; });
+    const f = S.foes[0]; f.x = 3800; P.coatFoe(f, 3);
+    const b = S.balls[0];
+    b.x = 350; b.y = 462; b.vx = 0; b.vy = 0; b.onGround = true;
+    S.p.x = 300; S.p.y = 462; S.p.face = 1;
+    eq(b.frost, 0, "刚造出来的球没有冰壳");
+    // 短尾犬的音波是直飞的，打的就是正前方
+    for (let shot = 0; shot < 5; shot++) {
+      P.HEROES[1].fire(S.p);
+      for (let k = 0; k < 12; k++) P.tick(1 / 60);
+    }
+    eq(b.frost, 3, "打 5 枪，冰壳封顶在 3 层");
+    ok(b.air > 0.95 || b.air >= 1, "打冰壳会回气", "air=" + b.air.toFixed(2));
+  }
+
+  /* ---- 冰壳 3 层：一撞就把人整只卷走，用完清零 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 0);
+    S.foes.forEach(f => { f.x = 4000; });
+    const f = S.foes[0]; f.x = 3800; P.coatFoe(f, 3);
+    const b = S.balls[0];
+    b.x = 300; b.y = 462; b.vx = 0; b.vy = 0; b.onGround = true; b.frost = 3;
+    const victim = S.foes.find(q => !q.dead && q.x !== 3800);
+    victim.x = 400; victim.y = 462; victim.coat = 0;
+    victim.def = Object.assign({}, victim.def, { spd: 0 });
+    b.vx = 700;
+    for (let k = 0; k < 20; k++) P.tick(1 / 60);
+    ok(victim.dead, "冰壳 3 层的球一撞就整只卷走（不用先糊两层）");
+    eq(b.frost, 0, "冰壳是一次性的：撞完就碎");
+    ok(b.holds >= 2, "球里多了一只", "holds=" + b.holds);
+  }
+
+  /* ---- 球撞球：连带一起滚 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 0);
+    S.foes.forEach(f => { f.x = 4000; });
+    S.foes[0].x = 3800; P.coatFoe(S.foes[0], 3);
+    S.foes[1].x = 3850; P.coatFoe(S.foes[1], 3);
+    const [a, c] = S.balls;
+    ok(S.balls.length >= 2, "场上有两颗球", "n=" + S.balls.length);
+    a.x = 300; a.y = 462; a.vx = 700; a.vy = 0; a.onGround = true;
+    c.x = 380; c.y = 462; c.vx = 0;   c.vy = 0; c.onGround = true;
+    for (let k = 0; k < 12; k++) P.tick(1 / 60);
+    ok(c.vx > 400, "被撞的那颗球被带起来了", "vx=" + c.vx.toFixed(0));
+    ok(Math.sign(c.vx) === Math.sign(a.vx), "两颗球同向滚（不是互相弹开）");
+    ok(!c.dead || c.pushed, "被带起来的球也算推出去的（不会永远留在场上）");
+  }
+
+  /* ---- 助跑：跑得越远，推得越狠 ---- */
+  {
+    function pushPow(runD) {
+      const sb = boot();
+      const P = sb.GROVE, S = P.S;
+      seed(S);
+      P._start(0, 0);
+      S.foes.forEach(f => { f.x = 4000; });
+      const f = S.foes[0]; f.x = 3800; P.coatFoe(f, 3);
+      const b = S.balls[0];
+      b.x = 435; b.y = 462; b.vx = 0; b.vy = 0; b.onGround = true;
+      S.p.x = 400; S.p.y = 462; S.p.vx = 0; S.p.face = 1; S.p.runD = runD;
+      P.tick(1 / 60);
+      return Math.abs(b.vx);
+    }
+    const near = pushPow(0);
+    const far = pushPow(420);
+    ok(near > 400, "站着推也推得动", "vx=" + near.toFixed(0));
+    ok(far > near + 200, "助跑 420px 再推，力道明显更大",
+      near.toFixed(0) + " -> " + far.toFixed(0));
+  }
+
+  /* ---- 六把武器全部横向施法 ---- */
+  {
+    const sb0 = boot();
+    const P0 = sb0.GROVE;
+    for (let h = 0; h < P0.HEROES.length; h++) {
+      const sb = boot();
+      const P = sb.GROVE, S = P.S;
+      seed(S);
+      P._start(h, 0);
+      S.foes.forEach(f => { f.x = 4000; });
+      S.shots.length = 0;
+      S.p.face = 1;
+      P.HEROES[h].fire(S.p);
+      const s = S.shots[0];
+      const y0 = s.y;
+      for (let k = 0; k < 15; k++) P.tick(1 / 60);   // 0.25 秒
+      // 溜溜球是"伸出去再拉回来"，看它的最远点
+      const drift = Math.abs(s.y - y0);
+      ok(drift < 42, P.HEROES[h].name + " 的「" + P.HEROES[h].tag + "」是横向施法",
+        "0.25s 内竖直位移 " + drift.toFixed(0) + "px");
+      ok(Math.abs(s.vx) > Math.abs(s.vy) * 2 || s.kind === "yoyo",
+        P.HEROES[h].name + " 的速度以横向为主",
+        "vx=" + Math.round(s.vx) + " vy=" + Math.round(s.vy));
+    }
+  }
+
+  /* ---- 预瞄线默认不画 ---- */
+  {
+    const sb = boot();
+    const P = sb.GROVE, S = P.S;
+    seed(S);
+    P._start(0, 0);
+    eq(S.aim, false, "预瞄线默认是关的（球滚动的轨迹不显示）");
   }
 }
 

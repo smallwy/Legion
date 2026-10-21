@@ -199,13 +199,18 @@ const HEROES = [
     w: 38, h: 46, spd: 340, jump: 880,
     atkCd: 0.56, dashCd: 0.65, dashPow: 600,
     ears: "rab",
-    desc: "抛一颗萝卜出去，落地炸一片。唯一能打到高台背面和对面楼上。",
+    desc: "横着把萝卜射出去，碰到东西就炸开一片。射程最远的一把，但要算好提前量。",
     fire(u) {
+      // 上一版是 45 度上抛（vy -440 / 重力 1400）。放在平地上，
+      // 萝卜飞出去 300px 就砸进土里，而敌人多半站在同一个高度 ——
+      // 于是"能打到高台背面"的代价变成了"平时根本打不中"。
+      // 用户的原话是"所有的技能都应该是横向施法"：
+      // 现在它贴着胸口高度平射，落地/碰到人才炸，靠 AOE 而不是靠落点。
       spawnShot({
-        x: u.x + u.face * 14, y: u.y - 30,
-        vx: u.face * 520, vy: -440,
-        r: 11, life: 2.0, kind: "lob", color: "#F2903F",
-        grav: 1400, aoe: 84, spin: 0,
+        x: u.x + u.face * 16, y: u.y - 28,
+        vx: u.face * 620, vy: 0,
+        r: 12, life: 1.3, kind: "lob", color: "#F2903F",
+        grav: 120, aoe: 84, spin: 0,
       });
     },
   },
@@ -217,11 +222,14 @@ const HEROES = [
     ears: "ox",
     desc: "一把刀丢出去，转着飞，能穿透两个人。丢出去就没了，得等它飞完。",
     fire(u) {
+      // 下坠从 700 压到 320、初始上扬从 -70 收到 -30：
+      // 0.58 秒的飞行里总共只掉 36px，读起来是一条平直的线。
+      // 玩家瞄谁就该打到谁 —— 弹道带弧度的时候，明明对着人也会擦着脚过去。
       spawnShot({
         x: u.x + u.face * 18, y: u.y - 26,
-        vx: u.face * 900, vy: -70,
+        vx: u.face * 900, vy: -30,
         r: 13, life: 0.58, kind: "knife", dir: u.face,
-        spin: 0, grav: 700, pierce: true, hitMax: 2,
+        spin: 0, grav: 320, pierce: true, hitMax: 2,
         color: "#DDE8F2",
       });
     },
@@ -236,8 +244,9 @@ const HEROES = [
     fire(u) {
       // 上一版是"召两个站桩分身替你吐弹"。站桩的东西不是子弹 ——
       // 玩家按一下，屏幕上多了一个持续输出的塔，那是放置类，不是动作类。
-      // 改成两发：齐胸一发、偏下一发。轨迹分叉 → 近距离两发都中，远了只中一发。
-      for (const [dy, vy, c] of [[-30, -40, "#DCD0FF"], [-14, 90, "#A98CFF"]]) {
+      // 改成两发：齐胸一发、稍低一发。垂直差从 ±65 收到 ±35 ——
+      // 原来第二发掉得太快，中距离以外基本是打地面。
+      for (const [dy, vy, c] of [[-26, -22, "#DCD0FF"], [-10, 46, "#A98CFF"]]) {
         spawnShot({
           x: u.x + u.face * 20, y: u.y + dy,
           vx: u.face * 780, vy, r: 12, life: 0.40,
@@ -508,46 +517,66 @@ const LEVELS = [
   },
 
   /* ---------------- 4 ----------------
-     V 谷。一条长下坡接一条长上坡，中间只有 20px 平地。
-     球滚下来会冲过谷底再爬上对面 —— 坡是"动量"，不是装饰。 */
+     长滑道。一条 520 长的坡从 248 一路弯到地面，坡上站着一整排敌人。
+
+     这一关是专门为"站在最高层往下推一颗球"做的（用户点名要的空间）：
+     先把球打三枪冻实（冰壳 3 层 = 一撞就整只卷走），
+     再从 248 的台子边缘推下去 —— 球顺着坡自己加速，
+     一路把人卷进球里，到坡底已经不剩谁，最后一头滚进营地。
+
+     它同时是**冰壳**和**球撞球**的教学关：不打冰也能过，
+     但只会看见球滚过去、每人糊一层、然后球滚没了。 */
   {
-    id: "slope", name: "缓坡", sub: "V 谷 · 两条长坡对接",
-    note: "一条 210 的下坡接一条 230 的上坡。球冲下来会自己爬上对面，人也能走",
+    id: "slope", name: "缓坡", sub: "长滑道 · 顶层推球",
+    note: "一条 520 长的坡从 248 弯到地面。先把球打成冰壳，再从顶层推下去，一颗球能卷走一整排",
     theme: "slope",
     goal: "chain", chain: 3, par: { time: 80, made: 9 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-      { x: WALL_L, y: 462, w: 214, h: 20, kind: "ledge" },   // 26..240
-      { x: 340,    y: 462, w: 360, h: 20, kind: "ledge" },   // 340..700
-      { x: 800,    y: 462, w: 134, h: 20, kind: "ledge" },   // 800..934
-      { x: WALL_L, y: 350, w: 214, h: 20, kind: "ledge" },   // 26..240
-      { x: 320,    y: 350, w: 360, h: 20, kind: "ledge" },   // 320..680
-      { x: 380,    y: 248, w: 260, h: 20, kind: "ledge" },   // 380..640
+      // 左侧两级台阶，**错开放**：462 在左、350 在右，中间在 180 处只隔一道边。
+      // 上一版两块台面都从 26 起、上下完全重叠 —— 站在 350 上想去 462 只能按 ↓，
+      // 机器人直接卡在那儿原地抖（240 秒超时）。错开之后"走出去就掉到下一级"，
+      // 不需要任何特殊操作，人和机器人都读得懂。
+      { x: WALL_L, y: 462, w: 154, h: 20, kind: "ledge" },   // 26..180
+      // 和下面那级**叠 30px**（150..300）。刚好接边的话，站在边上跳是跳不上去的：
+      // 垂直起跳必须落在同一条 x 上，差一像素就落空 —— 机器人就是这么卡住的。
+      { x: 150,   y: 350, w: 150, h: 20, kind: "ledge" },   // 150..300 ← 顶层，球从这里推下去
     ],
     ramps: [
-      { x: 240, w: 210, yL: 462, yR: GROUND_Y },   // 下坡：462 → 地面
-      { x: 450, w: 250, yL: GROUND_Y, yR: 462 },   // 上坡：地面 → 462（谷底与左坡在 450 相接）
+      // 300..700，从 350 一口气弯到地面。**中间不留任何平台**：
+      // 断一次，球就得重新推一次，"一路卷到底"的成就感就没了。
+      // 但也不能一路铺到营地：上一版铺到 820，坡底下就变成一条**只能从一头进的洞**，
+      // BOSS 站进去以后玩家只能站在坡上朝它干瞪眼（机器人当场卡死 240 秒）。
+      // 收到 700：右边留 150px 空地给最后一波，球滑到底还能自己滚进营地。
+      { x: 300, w: 400, yL: 350, yR: GROUND_Y },
     ],
     pits: [
-      { x: WALL_L, y: GROUND_Y, w: 84,  kind: "mud"  },
-      { x: 700,    y: GROUND_Y, w: 90,  kind: "fire" },   // 上坡尽头掉下去就是火
+      { x: 200, y: GROUND_Y, w: 80,  kind: "mud"  },   // 挡在地面和台阶之间，逼你走台阶
+      { x: 480, y: GROUND_Y, w: 90,  kind: "fire" },   // 坡下的火：球要是漏出坡面就烧了
     ],
-    stumps: [{ x: 150, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    // **这一关不放木桩，是故意的。**
+    // 木桩是"球撞上去会弹"的东西，而这一关的全部设计就是那条一路通到营地的滑道：
+    // 坡脚往右只剩 150px 空地，桩子摆哪儿都在球的必经路上（实测：摆在 730，
+    // 球滑到底撞桩弹回来，落袋直接断）。可破坏件不是每关都必须有的零件。
+    stumps: [],
     camp: { x: 852, y: GROUND_Y, w: 82 },
     waves: [
       [
-        { foe: "bug",  x: 100, y: 462 },
-        { foe: "bug",  x: 200, y: 462 },
-        { foe: "bug",  x: 400, y: 462 },
-        { foe: "bug",  x: 550, y: 462 },
+        // 沿坡排成一条线 —— 这一波就是"给你一颗球滚到底"的靶子
+        { foe: "bug",  x: 340, y: 361 },
+        { foe: "bug",  x: 400, y: 389 },
+        { foe: "bug",  x: 470, y: 433 },
+        { foe: "bug",  x: 540, y: 480 },
+        { foe: "bug",  x: 250, y: 350 },
       ],
       [
-        { foe: "bug",  x: 650, y: 462 },
-        { foe: "bug",  x: 450, y: 350 },
-        { foe: "bug",  x: 600, y: 350 },
-        { foe: "bug",  x: 550, y: 248 },
+        { foe: "boar", x: 600, y: 516 },
+        { foe: "bug",  x: 660, y: 545 },
+        { foe: "bug",  x: 380, y: 379 },
+        { foe: "bug",  x: 100, y: 462 },
+        { foe: "bug",  x: 220, y: 350 },
       ],
-      [{ foe: "boss", x: 300, y: GROUND_Y, lv: 2 }],
+      [{ foe: "boss", x: 805, y: GROUND_Y, lv: 2 }],
     ],
     spawn: { x: 90, y: GROUND_Y },
   },
@@ -821,13 +850,64 @@ function loadLevel(i) {
   PLAYER_SPAWN = L.spawn;
 }
 
+/* ---- 坡面剖面 --------------------------------------------------------------
+   坡不是"一根斜着的方木"，是**一段弯下去的路面**。
+
+   上一版画的是"旋转过的圆角矩形、厚度垂直于坡面"。这带来三个问题，
+   单看每一个都小，叠起来就变成用户嘴里那句"像是个木头接上去的"：
+     ① 厚度垂直于坡面 → 接平台那一端，台面下方鼓出一个楔形；
+     ② 两端是斜切面（旋转过的圆角）→ 和水平的台面顶面之间有一道折角；
+     ③ 砖缝垂直于坡面 → 像梯子横档，不像一条路。
+
+   现在换成"路面剖面"：一条顶面曲线，**沿竖直方向**量厚度，
+   两端切线缓入缓出贴近水平，砖缝照旧竖直。这样它读起来是
+   "台面在尽头弯了下去"，而不是"有人把木头架在台子边上"。
+
+   物理和绘制共用这一个函数，所以永远不会有"人和画面对不上"的问题。
+   -------------------------------------------------------------------------- */
+
+// 缓入缓出的强度。0 = 纯直线（端头有折角）；1 = 纯 smoothstep（中段会陡很多）。
+// 0.62 是量出来的：±17° 的端头折角读起来是"路拱"，再大就成"跳台"了。
+const RAMP_EASE = 0.62;
+
+/** s ∈ [0,1] → 缓动后的进度。端点导数是 1-RAMP_EASE，中段略大于 1。 */
+function rampProfile(s) {
+  const e = 3 * s * s - 2 * s * s * s;
+  return s + (e - s) * RAMP_EASE;
+}
+/** 上式的导数。用来算某一点的坡度。 */
+function rampProfileD(s) {
+  return 1 + (6 * s - 6 * s * s - 1) * RAMP_EASE;
+}
+/** 坡在某个 x 处的顶面高度（超出范围按两端水平夹住）。 */
+function rampSurfY(r, x) {
+  const s = clamp((x - r.x) / r.w, 0, 1);
+  return r.yL + (r.yR - r.yL) * rampProfile(s);
+}
+
+/** 球/人是否"贴"在这条坡面上。
+ *
+ *  只看两件事：离坡面够近，或者这一帧从坡面上方穿了进来。
+ *
+ *  上一版只看 `y >= rp.y - 6` —— 那读作"在坡面下方不超过 6px"，
+ *  但**地面上的东西永远满足它**：第 3 关那条悬空滑梯挂在 350→462，
+ *  从底下路过的球会被一把抓到 350，瞬移 200px。人也是一样。
+ *  这条判据是本轮加缓动剖面时暴露出来的，但 bug 一直都在。 */
+function onRampSurface(y, rp, prevY, tol) {
+  const T = tol === undefined ? 20 : tol;
+  if (Math.abs(y - rp.y) <= T) return true;
+  return prevY <= rp.y && y >= rp.y;     // 高速下落：这一帧跨过了坡面
+}
+
 /** 斜坡在某个 x 处的表面高度；不在任何斜坡上返回 null */
 function rampAt(x) {
   for (const r of RAMPS) {
     if (x < r.x || x > r.x + r.w) continue;
-    const t = (x - r.x) / r.w;
-    return { y: r.yL + (r.yR - r.yL) * t, slope: (r.yL - r.yR) / r.w,
-             x0: r.x, w: r.w };
+    const s = (x - r.x) / r.w;
+    // slope 沿用原口径：向右下降为正（= -dy/dx）。
+    // 球的 `vx -= GRAV * slope * 0.45 * dt` 靠这个符号决定"下坡加速"。
+    const slope = (r.yL - r.yR) * rampProfileD(s) / r.w;
+    return { y: rampSurfY(r, x), slope, x0: r.x, w: r.w, r };
   }
   return null;
 }
@@ -1023,8 +1103,11 @@ function stepBody(b, dt) {
     // 结果玩家走上去直接穿到地面 —— 看得见坡、踩不上去，地图就成了假的。
     if (!dropping) {
       const rp = rampAt(b.x);
-      if (rp && b.y >= rp.y - 10 && b.vy >= -40) {
-        if (!best || rp.y < best.y) {
+      if (rp && b.vy >= -40 && onRampSurface(b.y, rp, prevY, 16)) {
+        // 坡面是斜的，"离得最近"不能按 y 比 —— 按 |y - 坡面| 比，
+        // 否则站在地面上、头顶有一条悬空滑梯时，平台会被那条滑梯顶掉。
+        const dy = Math.abs(rp.y - b.y);
+        if (!best || dy < Math.abs(best.y - b.y)) {
           best = { x: rp.x0, y: rp.y, w: rp.w, kind: "ramp" };
         }
       }
@@ -1242,6 +1325,19 @@ function updatePlayer(dt) {
     }
   }
 
+  // ---- 助跑距离：推球的力度按"这一趟朝这个方向跑了多远"算
+  // 只算**当前方向**上的连续位移 —— 来回横跳不会攒出大力气，
+  // 否则玩家会在原地左右左右刷满再推，那就成了"摇杆搓招"，不是"助跑"。
+  const rdir = sign(p.vx) || p.face;
+  // 只在"第一次有方向"之后才开始比较，否则开局那一帧会把 runD 清成 0
+  if (p.runDir !== undefined && rdir !== p.runDir) p.runD = 0;
+  p.runDir = rdir;
+  if (p.onGround && Math.abs(p.vx) > 80) {
+    p.runD = Math.min(420, (p.runD || 0) + Math.abs(p.vx) * dt);
+  } else if (Math.abs(p.vx) < 80) {
+    p.runD = Math.max(0, (p.runD || 0) - 420 * dt);
+  }
+
   // ---- 从台上下来（↓）
   // 平台是单向的：能跳上去、能站在上面，但**走不到边就下不来**。
   // 有些台面一直顶到墙，等于连边都没有 —— 玩家会被困在上层。
@@ -1250,8 +1346,13 @@ function updatePlayer(dt) {
   // 松开 ↓ 才允许下一次下穿。没有这把锁，按住 ↓ 会一层接一层地穿下去 ——
   // 玩家按的是"下去一层"，看到的是"直接掉到底"，中间那几层他根本没做选择。
   if (!S.keys.down) p.dropLock = false;
+  // `Math.abs(p.y - p.ground.y) < 6` 这一条是"脚下那块的顶面就是我现在站的高度"。
+  // 少了它，只要 p.ground 是上一帧留下的旧值（比如刚从 462 掉到地面），
+  // 按住 ↓ 就会把 y 往下推 8px —— 而地面恰好就在 0px 处，
+  // 8px 一推就落到地面以下，落地判定（prevY <= p.y + 2）再也接不住。
   if (S.keys.down && !p.dropLock && p.onGround && p.ground &&
-      p.ground.kind !== "ground" && p.dropT <= 0) {
+      p.ground.kind !== "ground" && p.dropT <= 0 &&
+      Math.abs(p.y - p.ground.y) < 6) {
     p.dropLock = true;
     p.dropT = 0.26;
     p.dropPlat = p.ground;
@@ -1315,20 +1416,31 @@ function updatePlayer(dt) {
   }
 
   // ---- 走位推球：贴近球就推走（和原版一样，不需要新按键）
+  // **推多远，看你跑了多远。**
+  // 用户原话："站的越远推球，球的推力越大"。站着不动推是 620，
+  // 退后跑满 380px 再推能到 1180 —— 于是"先退开、再冲过去"变成
+  // 一个有代价的好习惯：退开的那两秒，敌人也在往你身上走。
+  const runUp = Math.min(1, (p.runD || 0) / 380);
+  const pushPow = 620 * (1 + 0.95 * runUp);
   for (const b of S.balls) {
     if (b.dead) continue;
     if (Math.abs(b.x - p.x) < b.r + p.w / 2 - 4 &&
         b.y > p.y - p.h - b.r * 2 && b.y < p.y + 20) {
       const pushDir = (b.x - p.x) !== 0 ? sign(b.x - p.x) : p.face;
       if (Math.abs(b.vx) < 140) {
-        b.vx = pushDir * 620;
+        b.vx = pushDir * pushPow;
         b.vy = Math.min(b.vy, -40);
         // 推出去 = 一次性。见 updateBalls 里 "推出后必消失" 那条。
         b.pushed = true;
         b.relT = 0;
         b.wallHits = 0;
-        S.shake = Math.max(S.shake, 5);
-        addText(b.x, b.y - b.r * 2 - 12, "推!", "#CFE9FF", 18);
+        p.runD = 0;
+        S.shake = Math.max(S.shake, 5 + runUp * 5);
+        addText(b.x, b.y - b.r * 2 - 12,
+                runUp > 0.75 ? "蓄力推!" : "推!",
+                runUp > 0.75 ? "#FFD86B" : "#CFE9FF",
+                runUp > 0.75 ? 21 : 18);
+        if (runUp > 0.4) for (let i = 0; i < 6; i++) addFrag(b.x, b.y - b.r, 5, "#EAF7C0");
       }
     }
   }
@@ -1864,6 +1976,10 @@ function makeBallFrom(f, vx, vy) {
     // 气：这一版的核心压力。球会一直漏，漏到 0 就崩开。
     // 卷人回气，所以"铺场再引爆"是有回报的，但回报有上限。
     air: 1,
+    // 冰壳：自己的技能打到球上叠的层数。
+    // 有了它，"手上的枪"和"场上的球"才第一次连起来 ——
+    // 以前对着自己的球开枪，子弹直接穿过去，像是两套不相干的系统。
+    frost: 0, frostCd: 0,
     onGround: false, ground: null,
     t: 0, spin: 0, dead: false,
     boss: isBoss, bossLv: f.lv || 1,
@@ -1990,7 +2106,7 @@ function updateBalls(dt) {
     // 所以坡度只是一个 y = f(x) 的约束，不需要额外的碰撞体。
     // 速度变化用重力沿坡面的分量：上坡掉速、下坡加速 —— 这是物理，不是摩擦。
     const rp = rampAt(b.x);
-    if (rp && b.y >= rp.y - 6 && b.vy >= -40) {
+    if (rp && b.vy >= -40 && onRampSurface(b.y, rp, prevY, 20)) {
       b.y = rp.y;
       b.vy = 0;
       b.onGround = true;
@@ -2051,7 +2167,8 @@ function updateBalls(dt) {
         // BOSS 把球弹回来 —— 玩家可以站在旁边连续推同一颗球砸它，
         // 不用每次重新糊一颗。限球关才打得动。
         if (f.isBoss) {
-          coatFoe(f, b.mud ? 2 : 1, null);
+          coatFoe(f, (b.mud ? 2 : 1) + (b.frost || 0), null);
+          if (b.frost > 0) { b.frost = 0; addText(b.x, b.y - b.r * 2 - 8, "冰壳碎了", "#BFE8FF", 15); }
           const dr = b.x < f.x ? -1 : 1;
           b.x = f.x + dr * (f.w / 2 + b.r + 2);
           b.vx = dr * Math.max(380, Math.abs(b.vx) * 0.85);
@@ -2063,7 +2180,15 @@ function updateBalls(dt) {
           continue;
         }
 
-        coatFoe(f, b.mud ? 2 : 1, b);
+        // 冰壳是"一次性的弹药"：这一撞多吃几层，吃完全掉。
+        // 不消耗的话，打三枪就能白嫖一整局，推球这件事就没有代价了。
+        const frost = b.frost || 0;
+        coatFoe(f, (b.mud ? 2 : 1) + frost, b);
+        if (frost > 0) {
+          b.frost = 0;
+          addText(b.x, b.y - b.r * 2 - 8, "冰壳碎了", "#BFE8FF", 15);
+          for (let i = 0; i < 7; i++) addFrag(b.x, b.y - b.r, 4, "#CFEFFF");
+        }
         // 撞人不减速（阻尼那一节已经删了），只把球轻轻顶偏一点点，
         // 否则球会"穿过"一排敌人而不产生任何节奏变化。
         b.vx *= 0.995;
@@ -2078,6 +2203,51 @@ function updateBalls(dt) {
     // 气到很低就开始抖 —— 视觉上给"快崩了"的信号，不用玩家盯血条
     b.x = clamp(b.x, WALL_L + b.r, WALL_R - b.r);
 
+  }
+
+  // ---- 球撞球：连带一起滚
+  // 上一版两颗球互相穿透、各走各的 —— 场上两颗球像活在不同局里。
+  // 现在撞上就把速度交给对方，两颗以同一个速度一起往前滚：
+  // 一颗慢球可以被快球"带起来"，一路串成一条。
+  for (let i = 0; i < S.balls.length; i++) {
+    const a = S.balls[i];
+    if (a.dead) continue;
+    for (let j = i + 1; j < S.balls.length; j++) {
+      const b = S.balls[j];
+      if (b.dead) continue;
+      const dx = b.x - a.x;
+      const dy = (b.y - b.r) - (a.y - a.r);
+      const sum = a.r + b.r;
+      if (dx * dx + dy * dy > sum * sum) continue;
+      // 只处理"正在靠近"的一对。两颗已经同速贴在一起的时候，
+      // 每帧都结算一次会让它们像黏住一样抖。
+      if (dx * (b.vx - a.vx) >= 0) continue;
+
+      // 谁快听谁的：方向取快那颗的方向，速度取它的 96%（一撞掉 4%）
+      const lead = Math.abs(a.vx) >= Math.abs(b.vx) ? a : b;
+      const trail = lead === a ? b : a;
+      const dir = sign(lead.vx) || 1;
+      const sp = Math.abs(lead.vx) * 0.96;
+      if (sp < 60) continue;
+
+      // 分开，别让它们叠在一起
+      const need = sum - Math.abs(dx) + 1;
+      const sd = sign(dx) || dir;
+      a.x -= sd * need * 0.5;
+      b.x += sd * need * 0.5;
+
+      lead.vx = dir * sp;
+      trail.vx = dir * sp;
+      // 被带起来的那颗也要算"推出去的"：不然它永远不消失，
+      // 底层会留一颗不知道从哪来的球。
+      for (const q of [a, b]) {
+        q.pushed = true;
+        q.relT = 0;
+        q.wallHits = Math.min(q.wallHits || 0, 1);
+      }
+      addText((a.x + b.x) / 2, Math.min(a.y, b.y) - a.r * 2 - 12, "连滚!", "#FFE58A", 17);
+      S.shake = Math.max(S.shake, 5);
+    }
   }
 
   // 清掉死球
@@ -2169,7 +2339,7 @@ function predictBall(b, dir) {
 
     // 斜坡：和 updateBalls 同一套公式
     const rp = rampAt(x);
-    if (rp && y >= rp.y - 6 && vy >= -40) {
+    if (rp && vy >= -40 && onRampSurface(y, rp, prevY, 20)) {
       y = rp.y; vy = 0; onGround = true;
       vx -= GRAV * rp.slope * 0.45 * AIM_DT;
     }
@@ -2532,9 +2702,13 @@ function updateShots(dt) {
       s.spin = (s.spin || 0) + dt * 9;
 
       if (s.kind === "lob") {
+        // 只认"这一帧从台面上方落下来"。
+        // 上一版只判 `s.y + s.r >= q.y`，那对**头顶上的平台**永远成立 ——
+        // 平射出去的萝卜出门第一帧就炸在自己头顶那块板下面。
+        const prevBottom = s.y + s.r - s.vy * dt;
         for (const q of PLATS) {
           if (s.x < q.x || s.x > q.x + q.w) continue;
-          if (s.y + s.r >= q.y && s.vy > 0) { explodeShot(s); s.dead = true; break; }
+          if (prevBottom <= q.y + 4 && s.y + s.r >= q.y) { explodeShot(s); s.dead = true; break; }
         }
         if (s.dead) continue;
       }
@@ -2557,12 +2731,47 @@ function updateShots(dt) {
       const dy = Math.abs(s.y - (f.y - f.h / 2));
       if (dx >= s.r + f.w / 2 || dy >= s.r + f.h / 2) continue;
 
+      // 萝卜炮：碰到人就炸，不再"穿过去等落地"。
+      // 它是唯一一把 AOE，AOE 的判定点必须在**命中那一刻**，
+      // 而不是在它落地那一刻 —— 否则平射出去的萝卜只会炸到地面。
+      if (s.kind === "lob") {
+        explodeShot(s);
+        s.dead = true;
+        break;
+      }
+
       coatFoe(f, 1);
       s.hit.push(f);
       if (!s.pierce) { s.dead = true; break; }
       if (s.hitMax && s.hit.length >= s.hitMax) { s.dead = true; break; }
     }
     if (s.dead) continue;
+
+    /* ---- 打自己的球 = 给它冻上一层 ----
+       球是场上唯一"友方但可被击中"的东西。以前子弹从球身上直接穿过去，
+       手上的枪和场上的球像是两套不相干的系统。
+       现在打一枪，球多一层冰壳（上限 3）：
+         · 撞人时一次多糊一层，用掉就掉 —— 冰壳 3 层 = 一撞就整只卷走
+         · 回一点气，所以"先打再推"不是纯亏
+       子弹**不消耗**：球是个大目标，判它把子弹吃掉只会让人不敢开枪。 */
+    for (const b of S.balls) {
+      if (b.dead) continue;
+      if ((b.frostCd || 0) > S.t) continue;
+      const bdx = Math.abs(s.x - b.x);
+      const bdy = Math.abs(s.y - (b.y - b.r));
+      if (bdx >= s.r + b.r || bdy >= s.r + b.r) continue;
+
+      b.frostCd = S.t + 0.12;
+      const was = b.frost || 0;
+      b.frost = Math.min(3, was + 1);
+      b.air = Math.min(1, b.air + 0.10);
+      for (let i = 0; i < 5; i++) addFrag(b.x, b.y - b.r, 4, "#CFEFFF");
+      if (b.frost > was && was < 3) {
+        addText(b.x, b.y - b.r * 2 - 10,
+                b.frost >= 3 ? "冻实了!" : "冰壳 +1", "#BFE8FF", b.frost >= 3 ? 18 : 15);
+        S.shake = Math.max(S.shake, b.frost >= 3 ? 5 : 2);
+      }
+    }
 
     /* ---- 木桩挡弹丸（坚果和溜溜球不挡：一个是滚过去的，一个是飞过去的） ---- */
     if (s.kind !== "nut" && s.kind !== "yoyo" && s.kind !== "wave") {
@@ -3126,111 +3335,88 @@ function drawPit(g, pit) {
 
 /* ---------- 斜坡 ---------- */
 function drawRamp(g, r) {
+  // ---- 一根"弯下去的路面"
+  // 顶面 = rampSurfY（和物理共用的那条曲线），厚度**沿竖直方向**量。
+  // 上一版是旋转过的圆角矩形：厚度垂直于坡面，接平台那一端在台面下方
+  // 鼓出一个楔形，两端还是斜切面 —— 所以读起来像"架上去的木头"。
+  const TK = 26;                 // 和浮空台一样厚（h 20 + 6）
+  const N = 26;                  // 采样点。8px 一个，肉眼已经看不出是折线
   const x1 = r.x, x2 = r.x + r.w;
-  // 落脚面就是 yL..yR 这条线 —— 坡的**顶面**必须压在这条线上。
-  // 差几像素的话，人踩的地方和画出来的地方对不上，走上去像在空气上滑。
-  // 顶面**就是**落脚面。之前写了 +6 / +4，结果坡顶比平台顶低 6px，
-  // 平台和坡之间出现一道小台阶 —— 人走上去会"咯"一下。
-  const y1 = r.yL, y2 = r.yR;
-  const TK = 26;                                 // 和浮空台一样的厚度（h+6）
-  const ang = Math.atan2(y2 - y1, x2 - x1);
-  const len = Math.hypot(x2 - x1, y2 - y1);
-  const cx = (x1 + x2) / 2;
-  const cy = (y1 + y2) / 2 + TK / 2;             // 中心线往下压半个厚度
 
-  g.save();
-  g.translate(cx, cy);
-  g.rotate(ang);
+  // 接平台的那一端水平往外伸一截，塞到台面底下（平台后画，会盖住）。
+  // 因为端头切线本来就被缓动压平了，这一截就是"台面自己延长出去"，
+  // 不会在接缝处留下折角。**只伸高端** —— 低端伸出去会悬空，
+  // 球在肉眼看到的坡上却踩不到东西。
+  const highLeft = r.yL <= r.yR;
+  const EXT = 26;
+  const xa = highLeft ? x1 - EXT : x1;
+  const xb = highLeft ? x2 : x2 + EXT;
 
-  // 往接缝里多伸一截。平台是后画的，会盖住这一截，接缝就读成"坡嵌进台面"。
-  // **只伸接平台的那一端**：落到地面的那端如果也伸，V 谷的两条坡会在谷底
-  // 交叉成一个尖（第 4 关实测），又变回"两根木头对拼"。
-  const overTop = 24;
-  // 落到地面的那一端也往下伸 20px，伸进草里 —— 不伸的话，坡的圆头正好停在
-  // 地面线上，会看到一段深色斜边"切"在草上。伸进去之后由坡脚的草皮盖住。
-  const overBot = Math.max(y1, y2) > GROUND_Y - 24 ? 20 : 24;
-  const overA = y1 < y2 ? overTop : overBot;     // x1 那一端的延伸
-  const overB = y1 < y2 ? overBot : overTop;     // x2 那一端的延伸
-  const L = len + overA + overB;
-  const hx = L / 2;
-  // 矩形是按"两端各多 (overA+overB)/2"画的，要变成"x1 端多 overA、x2 端多 overB"，
-  // 得往 x1 那一侧挪 (overA-overB)/2。符号反了的话，本该伸进平台的那截会甩到
-  // 低端去 —— 第 4 关 V 谷中间那个交叉的尖就是这么来的。
-  const shift = (overB - overA) / 2;
-  g.translate(shift, 0);
+  const yAt = (x) => rampSurfY(r, x);
+  const xAt = (i) => xa + (xb - xa) * (i / N);
 
-  // ---- 以下与 drawPlat 的浮空台逐行对齐：底厚边 / 主体渐变 / 2.6 描边 / 顶面高光 / 砖缝
-  g.fillStyle = TH.wood2;
-  rr(g, -hx - 2, -TK / 2 + 3, L + 4, TK + 9, 9);
-  g.fill();
+  // 整个坡的竖向范围（渐变要用）
+  const yA = yAt(xa), yB = yAt(xb);
+  const yTop = Math.min(yA, yB);
+  const yBot = Math.max(yA, yB) + TK;
 
-  const wg = g.createLinearGradient(0, -TK / 2, 0, TK / 2 + 8);
+  const traceTop = (dy) => {
+    g.beginPath();
+    for (let i = 0; i <= N; i++) {
+      const x = xAt(i), y = yAt(x) + dy;
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+  };
+
+  // ---- 主体：上沿顺着曲线走，右端竖直落到下沿，下沿原路返回
+  g.beginPath();
+  for (let i = 0; i <= N; i++) {
+    const x = xAt(i), y = yAt(x);
+    if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.lineTo(xb, yB + TK);
+  for (let i = N; i >= 0; i--) {
+    const x = xAt(i), y = yAt(x);
+    g.lineTo(x, y + TK);
+  }
+  g.closePath();
+
+  // 渐变方向按屏幕 y 走 —— 和浮空台同一个方向（上亮下暗），
+  // 两块拼在一起才不会像两种材质。
+  const wg = g.createLinearGradient(0, yTop, 0, yBot);
   wg.addColorStop(0, TH.wood3);
   wg.addColorStop(0.32, TH.wood);
   wg.addColorStop(1, TH.wood2);
   g.fillStyle = wg;
-  rr(g, -hx, -TK / 2, L, TK + 6, 9);
   g.fill();
 
   g.strokeStyle = COL.outline;
   g.lineWidth = 2.6;
-  rr(g, -hx, -TK / 2, L, TK + 6, 9);
+  g.lineJoin = "round";
   g.stroke();
 
-  g.fillStyle = "rgba(255,255,255,.55)";
-  rr(g, -hx + 5, -TK / 2 + 3, Math.max(0, L - 10), 4, 2);
-  g.fill();
+  // ---- 顶面高光：和浮空台同一条 4px 白带，压在顶面下 3px
+  g.strokeStyle = "rgba(255,255,255,.55)";
+  g.lineWidth = 4;
+  g.lineCap = "round";
+  traceTop(5);
+  g.stroke();
 
+  // ---- 砖缝：**竖直**的短线，间距和浮空台一样是 44。
+  // 上一版是垂直于坡面的斜缝，读起来像梯子横档 —— 一条路不长成那样。
   g.strokeStyle = "rgba(60,36,20,.24)";
   g.lineWidth = 1.4;
-  for (let x = -hx + 30; x < hx - 14; x += 52) {
+  for (let x = x1 + 22; x < x2 - 8; x += 44) {
+    const y = yAt(x);
     g.beginPath();
-    g.moveTo(x, -TK / 2 + 9);
-    g.lineTo(x, TK / 2 + 2);
+    g.moveTo(x, y + 10);
+    g.lineTo(x, y + TK - 3);
     g.stroke();
   }
 
-  // 顺坡的浅色箭纹：是坡面纹理，不是提示牌。
-  // 上一版那个实心黄三角钉在坡顶，读起来像施工围挡。
-  g.strokeStyle = "rgba(255,248,214,.30)";
-  g.lineWidth = 3;
-  g.lineCap = "round";
-  g.lineJoin = "round";
-  const climb = r.yR < r.yL ? 1 : -1;            // 指向高的那一端
-  for (let i = 0; i < 2; i++) {
-    const bx = climb * (14 + i * 24);
-    g.beginPath();
-    g.moveTo(bx - 7, 8);
-    g.lineTo(bx, 2);
-    g.lineTo(bx + 7, 8);
-    g.stroke();
-  }
-
-  g.restore();
-
-  // 坡脚落在地面上：把坡穿到地下的那一截用**原样的地面**盖回去。
-  // 上一版是手抄一遍 drawPlat 的画法，结果草齿的相位对不上、草尖也没了，
-  // 坡脚一圈能看出一道"补丁"。这里直接调 drawPlat + clip —— 一个像素都不会差。
-  const lowY = Math.max(y1, y2);
-  if (lowY > GROUND_Y - 40) {
-    const ex = y1 > y2 ? x1 : x2;
-    // 要盖住的不是一个点：坡厚 26，水平方向还要再铺开 26/sin(坡角) ≈ 46px。
-    // 只盖 ±60 的话，坡的下沿会露出一截斜尖扎在土里。
-    const L0 = ex - 120, R0 = ex + 120;
-    const gp = PLATS.find(q => q.kind === "ground");
-    if (gp) {
-      g.save();
-      g.beginPath();
-      g.rect(L0, GROUND_Y - 26, R0 - L0, 130);
-      g.clip();
-      drawPlat(g, gp);
-      // 坡脚正好压在坑上时，上面这一下会把坑一起盖掉 —— 补回来
-      for (const pit of PITS) {
-        if (pit.x + pit.w > L0 && pit.x < R0) drawPit(g, pit);
-      }
-      g.restore();
-    }
-  }
+  // ---- 低端如果落在土里，坡脚会被地面盖住；落在空中（第 3 关的悬空滑梯）
+  // 就留一个竖直端面，读作"桥到头了"。都不需要额外补丁：
+  // 地面平台在坡之后画，草皮本来就压在坡脚上。
 }
 
 /* ---------- 弹簧菇 ---------- */
@@ -3421,9 +3607,14 @@ function drawCamp(g) {
 
 function drawLevel() {
   const g = ctx;
+  // 顺序有讲究，三层各管一件事：
+  //   ① 坡先画 → ② 地面盖上去（坡脚正好被草皮吃掉，不留一个"悬空的断头"）
+  //   → ③ 浮空台最后画（坡顶那 26px 伸进台面里，被台面盖住 = 读成"路从台面延伸下来"）
+  // 上一版是"地面 → 坡 → 台面"：坡脚压在草上，露出一截朝下的方头，
+  // 看上去就是"木头架完没收拾"。把地面挪到坡后面就干净了。
+  for (const r of RAMPS) drawRamp(g, r);
   for (const p of PLATS) if (p.kind === "ground") drawPlat(g, p);
   for (const pit of PITS) drawPit(g, pit);
-  for (const r of RAMPS) drawRamp(g, r);      // 坡压在台面下面，接缝才自然
   drawCamp(g);
   for (const p of PLATS) if (p.kind !== "ground") drawPlat(g, p);
   for (const b of BOUNCERS) drawBouncer(g, b);
@@ -4167,6 +4358,43 @@ function drawBall(g, b) {
   g.fill();
   g.globalAlpha = 1;
 
+  // 冰壳：层数越多，外圈越白越厚，还长出几根冰刺。
+  // 这是"这颗球现在一撞就整只卷走"的**唯一**读数 ——
+  // 不做成数字，因为战斗中没人会去读数字。
+  if (b.frost > 0) {
+    g.globalAlpha = 0.16 + 0.13 * b.frost;
+    g.fillStyle = "#DFF6FF";
+    g.beginPath();
+    g.arc(cx, cy, r, 0, 6.283);
+    g.fill();
+    g.globalAlpha = 1;
+
+    g.strokeStyle = "rgba(226,248,255,.92)";
+    g.lineWidth = 2 + b.frost;
+    g.lineCap = "round";
+    for (let i = 0; i < b.frost * 2 + 1; i++) {
+      const a0 = b.spin * 0.6 + i * 1.9;
+      g.beginPath();
+      g.arc(cx, cy, r - 2, a0, a0 + 0.5);
+      g.stroke();
+    }
+
+    for (let i = 0; i < b.frost; i++) {
+      const a = b.spin + i * 2.1;
+      const px = cx + Math.cos(a) * (r - 1), py = cy + Math.sin(a) * (r - 1);
+      g.fillStyle = "#EAFBFF";
+      g.beginPath();
+      g.moveTo(px + Math.cos(a) * 8, py + Math.sin(a) * 8);
+      g.lineTo(px + Math.cos(a + 1.9) * 7, py + Math.sin(a + 1.9) * 7);
+      g.lineTo(px + Math.cos(a - 1.9) * 7, py + Math.sin(a - 1.9) * 7);
+      g.closePath();
+      g.fill();
+      g.strokeStyle = "rgba(120,170,200,.75)";
+      g.lineWidth = 1.2;
+      g.stroke();
+    }
+  }
+
   // 缠绕的苔绳：跟着 spin 转，读得出"在滚"
   g.save();
   g.translate(cx, cy);
@@ -4354,13 +4582,14 @@ function drawAim(g) {
     g.restore();
   }
 
+  // 轨迹默认**不画**。用户原话："球滚动的轨迹不用显示出来了"。
+  // 常驻的预测线会把画面变成一张工程图，而且看久了玩家就不再看球本身。
+  // 想算的时候按住 Shift —— 它退回到"可选辅助"的位置。
+  if (!S.aim) return;
+
   for (const b of S.balls) {
     if (b.dead) continue;
-    // 球停下来 = 玩家正在做决定。这一刻给信息，比让人试错便宜得多。
-    // 滚动中默认不画（画面会很脏），按住 Shift 才全显示。
-    const still = b.onGround && Math.abs(b.vx) < 140;
-    if (!still && !S.aim) continue;
-    const dirs = still ? [-1, 1] : [sign(b.vx)];
+    const dirs = b.onGround && Math.abs(b.vx) < 140 ? [-1, 1] : [sign(b.vx) || 1];
     for (const d of dirs) drawAimLine(g, b, aimFor(b, d), d);
   }
 }

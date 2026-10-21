@@ -58,13 +58,17 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     S.p.x = 250; S.p.y = 462;
   });
   await sleep(320);
+  // 预瞄线现在是"按住 Shift 才看"，所以截图要把它显式打开
+  await page.evaluate(() => { window.GROVE.S.aim = true; });
+  await sleep(180);
   await shot("grove-03-预瞄线.png");
+  await page.evaluate(() => { window.GROVE.S.aim = false; });
 
   // 4~11. 八关各一张
   const levels = [
     [1, "grove-04-第2关-泥沼.png", 460, 462],
     [2, "grove-05-第3关-断崖.png", 300, 462],
-    [3, "grove-06-第4关-缓坡.png", 440, 462],
+    [3, "grove-06-第4关-缓坡.png", 250, 350],
     [4, "grove-07-第5关-弹跳林.png", 380, 462],
     [5, "grove-08-第6关-深井.png", 200, 462],
     [6, "grove-09-第7关-阶梯塔.png", 400, 462],
@@ -105,6 +109,40 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     await sleep(wait * 1000);
     await shot(name);
   }
+
+  // 冰壳球：打三枪之后球是白蓝色、外圈三根冰刺
+  await page.evaluate(() => {
+    const P = window.GROVE, S = P.S;
+    P._start(0, 3);
+    S.texts.length = 0;
+    S.p.x = 200; S.p.y = 350; S.p.face = 1;
+    const f = S.foes.find(x => !x.dead);
+    if (f) {
+      window.GROVE.coatFoe(f, 3);
+      const b = S.balls[0];
+      if (b) { b.x = 250; b.y = 350; b.vx = 0; b.vy = 0; b.onGround = true; b.frost = 3; }
+    }
+  });
+  await sleep(360);
+  await shot("grove-21-冰壳球.png");
+
+  // 球撞球：一颗快球撞上一颗停着的球，两颗一起往右滚
+  await page.evaluate(() => {
+    const P = window.GROVE, S = P.S;
+    P._start(0, 0);
+    S.texts.length = 0;
+    S.balls.length = 0;
+    const f1 = S.foes[0], f2 = S.foes[1];
+    window.GROVE.coatFoe(f1, 3);
+    window.GROVE.coatFoe(f2, 3);
+    const [a, c] = S.balls;
+    if (a && c) {
+      a.x = 240; a.y = 462; a.vx = 700; a.vy = 0; a.onGround = true;
+      c.x = 330; c.y = 462; c.vx = 0;   c.vy = 0; c.onGround = true;
+    }
+  });
+  await sleep(150);
+  await shot("grove-22-球撞球连滚.png");
 
   // 14. BOSS：第 8 关的最后一波，lv5
   await page.evaluate(() => {

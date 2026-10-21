@@ -13,6 +13,54 @@
 
 ---
 
+## ★ 战斗场景跑的是「推球」（2026-10-21）
+
+主界面点「出发」→ 进 `Battle.scene` → 挂的是 **`GroveBattle`（雪人兄弟式推球）**，
+不是割草切片了。
+
+### 怎么做到的
+
+推球的玩法与绘制都在 `prototype/grove.html`（6800 行，调了八轮）。这里**不重写它**：
+
+| 文件 | 角色 |
+|---|---|
+| `assets/scripts/grove/GroveRuntime.ts` | **自动生成**：从 grove.html 抽出的引擎无关运行时 |
+| `assets/scripts/grove/GroveBattle.ts` | Cocos 组件：正交相机 + 离屏 canvas + 每帧贴成纹理 |
+| `assets/scripts/BattleBoot.ts` | 战斗场景挂载点，`MODE` 一行切「推球 / 割草」 |
+
+`GroveBattle` 只做三件事：
+① 建一台正交相机（`orthoHeight = 300`，视野高度正好 600 单位，对上原型的 960×600）；
+② 开一块离屏 canvas 交给 `GroveRuntime` 原样绘制；
+③ 每帧用 `Texture2D.uploadData(canvas)` 把画布推上 GPU，贴在一个全屏 Sprite 上。
+
+**代价（说清楚）**：这条路径依赖 `document.createElement('canvas')`，**只有 Web 平台能跑**。
+要上原生 / 小游戏，得把 ctx 调用逐条换成 `Graphics`，或改成
+`getImageData() + uploadData(ArrayBufferView)`。
+
+### 改玩法的正确姿势
+
+**别手改 `GroveRuntime.ts`**（重跑脚本会被整体覆盖）。改 `prototype/grove.html`，然后：
+
+```bash
+python client/tools/extract_grove_runtime.py   # 重新抽取
+node   client/tools/grove-runtime-check.js     # 八关各跑 600 帧 + render，抽取一坏就红
+node   client/tools/ts-syntax-check.js         # 语法守门（需要 typescript）
+```
+
+### 想切回割草切片
+
+`assets/scripts/BattleBoot.ts` 第一行的 `MODE` 改成 `'mow'`。两套代码都还在，谁也没被删。
+
+### 键位（和原型完全一致）
+
+`←→` / `AD` 移动 · `空格` / `W` / `↑` 跳 · `J` 喷裹 · `K` 撞飞 ·
+**走进球里顶它** 推球（不是按键，退开助跑跑满 380px 力道 ×1.95）·
+`Shift` 按住看预测线 · `R` 重打本关 · `Esc` 收工回主界面
+
+> 键盘焦点必须在预览页面上：先点一下画面。
+
+---
+
 ## 零、先玩哪个？（三个原型并存）
 
 > 单文件、零依赖、双击即玩。**归档不是删除，三个都留着对比手感。**

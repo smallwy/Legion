@@ -1,0 +1,189 @@
+# -*- coding: utf-8 -*-
+"""
+把 prototype/grove.html 的 <script> 抽成 Cocos 可 import 的 TS 运行时。
+
+    python client/tools/extract_grove_runtime.py
+
+源改了以后重跑本脚本，**别手改生成物**（GroveRuntime.ts 会被整体覆盖）。
+
+只做三件事，玩法代码一行不动：
+  ① 去掉"自己取 canvas / 自己起 rAF"（进 Cocos 后由 GroveBattle 组件驱动）
+  ② window.GROVE 调试导出 -> export（顺带让 Cocos 侧能 import）
+  ③ "收工回 game.html" -> 退出钩子（Cocos 里回的是 Home 场景）
+
+为什么要抽而不是重写：原型 6800 行里约 2000 行是 ctx 绘制、
+3500 行是推球/坡/波次/BOSS 的规则。规则一行都不能重写 ——
+重写就等于把八轮调出来的手感全部作废。
+"""
+
+import io
+import os
+import re
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SRC = os.path.join(ROOT, 'prototype', 'grove.html')
+OUT = os.path.join(ROOT, 'assets', 'scripts', 'grove', 'GroveRuntime.ts')
+
+
+def must(s, old, new, n=1):
+    """替换 n 次；次数不对就直接失败 —— 静默半替换会生成一个更难查的怪物。"""
+    c = s.count(old)
+    if c != n:
+        raise SystemExit('锚点命中 %d 次（期望 %d）：%r' % (c, n, old[:90]))
+    return s.replace(old, new, n)
+
+
+def cut(s, start, end):
+    """删掉 [start, end] 这整段（含两端）。"""
+    i = s.index(start)
+    j = s.index(end, i) + len(end)
+    return s[:i] + s[j:]
+
+
+HEADER = '''/* ⚠ 自动生成，勿手改 —— 源：client/prototype/grove.html
+   重新生成：python client/tools/extract_grove_runtime.py
+
+   这是推球玩法的**引擎无关运行时**（物理 / 关卡 / 波次 / BOSS / 冰壳 / 球）。
+   绘制同样原样保留：一套 Canvas 2D 代码（960x600），由 GroveBattle 组件
+   喂一块离屏画布，再把画布贴成 Cocos 纹理。
+
+   导出：
+     groveAttachCanvas(canvas)  绑定画布
+     groveBoot(hero?, stage?)   开一局（不传就按存档推）
+     groveTick(dt) / groveRender()
+     groveSetExitHook(fn)       "收工 / ESC 退出"交给 Cocos 处理
+     GROVE                      调试导出（和浏览器里的 window.GROVE 同一份）
+   ========================================================================= */
+'''
+
+BOOT = '''/* ---------- Cocos 侧入口 ----------
+   原型靠 URL 参数（?from=home&hero=N&stage=K）从 game.html 进来；
+   Cocos 里没有 URL，改成显式传参。不传就按存档推。 */
+export function groveBoot(hero?: number, stage?: number): void {
+  loadProgress();
+  resetRun();
+
+  if (typeof hero === "number" && hero >= 0 && hero < HEROES.length) S.heroIdx = hero;
+
+  // 起始关跟着主界面的"第一个没通的关"走 —— 两边用同一份 cleared，不会打架
+  const s: any = readHomeSave();
+  const done = new Set(Array.isArray(s.cleared) ? s.cleared : []);
+  let st = 0;
+  for (let i = 0; i < LEVELS.length; i++) { if (!done.has(i)) { st = i; break; } }
+  if (typeof stage === "number" && stage >= 0 && stage < LEVELS.length) st = stage;
+  S.progress = st;
+  beginRun(st);
+}
+
+'''
+
+EXIT_HOOK = '''const FROM_HOME = URLP.get("from") === "home";
+
+/* "收工回主界面"这件事在浏览器和 Cocos 里落点不同：
+   浏览器跳 game.html，Cocos 切 Home 场景。所以只留一个钩子。 */
+let exitHook: ((kind: string) => void) | null = null;
+export function groveSetExitHook(fn: ((kind: string) => void) | null): void {
+  exitHook = fn;
+}
+function groveExit(kind: string): boolean {
+  if (exitHook) { exitHook(kind); return true; }
+  if (FROM_HOME) { location.href = "game.html"; return true; }
+  return false;
+}'''
+
+TAIL = '''
+
+/* ---------- Cocos 侧 API ----------
+   原型里"取 canvas"和"起 requestAnimationFrame"是启动段的活；
+   进了 Cocos 这两件事由 GroveBattle 组件接管，所以在这里开两个小口子。 */
+export function groveAttachCanvas(c: any): void {
+  cv = c;
+  ctx = c.getContext("2d");
+}
+export function groveTick(dt: number): void { tick(dt); }
+export function groveRender(): any { return render(); }
+
+/* 原型里鼠标事件直接挂在 canvas 上；进 Cocos 后画布是离屏的、不接 DOM 事件，
+   事件源换成 GroveBattle 转发过来的指针坐标（已经是 960x600 画布坐标系）。 */
+export function grovePointer(kind: "move" | "down", x: number, y: number): void {
+  if (kind === "move") onCanvasMove({ x, y });
+  else onCanvasDown({ x, y });
+}
+'''
+
+
+def main():
+    html = io.open(SRC, encoding='utf-8').read()
+    lines = html.split('\n')
+    a = next(i for i, l in enumerate(lines) if l.strip() == '<script>')
+    b = next(i for i, l in enumerate(lines) if l.strip() == '</script>')
+    body = '\n'.join(lines[a + 1:b])
+
+    # ① 画布改由外部注入
+    body = must(
+        body,
+        'const cv = document.getElementById("cv");\nconst ctx = cv.getContext("2d");',
+        'let cv: any = null;\nlet ctx: any = null;',
+    )
+
+    # ① fit()（DOM 缩放）整段删掉 —— Cocos 侧按相机正交高度自己适配
+    body = cut(body, 'function fit() {', 'fit();\n')
+
+    # ① 主循环整段删掉 —— 由 GroveBattle.update() 驱动
+    body = cut(body, 'let lastT = 0;', 'requestAnimationFrame(frame);\n}')
+
+    # ① 启动段（loadProgress/resetRun + 从 URL 进来 + rAF 兜底）换成显式入口
+    i = body.index('loadProgress();\nresetRun();')
+    j = body.index('/* ---------- 调试导出 ---------- */')
+    body = body[:i] + BOOT + body[j:]
+
+    # ② 调试导出 -> export
+    body = must(body, 'window.GROVE = {', 'export const GROVE: any = {')
+    body = body.replace('Object.defineProperty(window.GROVE,', 'Object.defineProperty(GROVE,')
+    for k in ('GROUND_Y', 'WALL_L', 'WALL_R'):
+        body = must(body, 'window.GROVE.%s = %s;' % (k, k), 'GROVE.%s = %s;' % (k, k))
+
+    # ③ 回主界面 -> 钩子
+    body = must(
+        body,
+        '    if (FROM_HOME) { location.href = "game.html"; return; }',
+        '    if (groveExit("esc")) return;',
+    )
+    body = must(
+        body,
+        '  if (FROM_HOME) { location.href = "game.html"; }',
+        '  groveExit("done");',
+    )
+    body = must(
+        body,
+        'const FROM_HOME = URLP.get("from") === "home";',
+        EXIT_HOOK,
+    )
+
+    # ④ 鼠标监听原本**在模块顶层**直接挂在 canvas 上 —— 进 Cocos 后画布是离屏的，
+    #    而且那时 cv 还是 null，顶层执行会直接抛错、整个模块加载失败（表现就是黑屏）。
+    #    改成具名函数，事件源由 GroveBattle 转发（grovePointer）。
+    i = body.index('cv.addEventListener("mousemove", (ev) => {')
+    j = body.index('});', body.index('cv.addEventListener("mousedown"')) + 3
+    seg = body[i:j]
+    seg = seg.replace('cv.addEventListener("mousemove", (ev) => {', 'function onCanvasMove(loc: any): void {')
+    seg = seg.replace('cv.addEventListener("mousedown", (ev) => {', 'function onCanvasDown(loc: any): void {')
+    seg = seg.replace('  const loc = toLocal(ev);\n', '')
+    seg = re.sub(r'^\}\);', '}', seg, flags=re.M)
+    if 'cv.addEventListener' in seg:
+        raise SystemExit('鼠标监听没切干净：' + seg[:200])
+    body = body[:i] + seg + body[j:]
+
+    out = HEADER + '\n' + body.rstrip() + TAIL
+
+    os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    io.open(OUT, 'w', encoding='utf-8', newline='').write(out)
+
+    print('生成 %s' % OUT)
+    print('  源 script 行数 %d -> 输出 %d 行 / %d 字节'
+          % (b - a - 1, out.count('\n') + 1, len(out.encode('utf-8'))))
+
+
+if __name__ == '__main__':
+    main()

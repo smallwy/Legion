@@ -719,7 +719,7 @@ const LEVELS = [
     goal: "collect", collect: 12, par: { time: 60, made: 9 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-      { x: WALL_L, y: 462, w: 274, h: 20, kind: "ledge" },   // 26..300
+      { x: 96, y: 462, w: 204, h: 20, kind: "ledge" },   // 96..300，左端留口，球不会顶死在墙角
       { x: 590,    y: 462, w: 230, h: 20, kind: "ledge" },   // 590..820
       { x: WALL_L, y: 350, w: 264, h: 20, kind: "ledge" },   // 26..290
       { x: 640,    y: 350, w: 180, h: 20, kind: "ledge" },   // 640..820
@@ -747,8 +747,8 @@ const LEVELS = [
     camp: { x: 852, y: GROUND_Y, w: 82 },
     waves: [
       [
-        { foe: "bug",  x: 100, y: 462 },
-        { foe: "bug",  x: 190, y: 462 },
+        { foe: "bug",  x: 140, y: 462 },
+        { foe: "bug",  x: 200, y: 462 },
         { foe: "bug",  x: 270, y: 462 },
         { foe: "bug",  x: 150, y: 350 },
       ],
@@ -1433,10 +1433,13 @@ function stepBody(b, dt) {
   if (b.x + b.w / 2 > WALL_R) { b.x = WALL_R - b.w / 2; b.vx = 0; b.hitWall = 1; }
 
   // 木桩是实心墙，横向挡人。已经被球撞碎的（hp<=0）自动让路。
+  // 只挡桩身那一段（桩顶到桩底）。少了下沿的话，立在 350 层的桩
+  // 会变成一根通到地面的空气柱，人站在下一层同一条竖线上走不过去。
   for (const s of S.stumps) {
     if (s.hp <= 0) continue;
     const top = s.y - s.h;
     if (b.y <= top + 4) continue;           // 站在木桩顶上，不挡
+    if (b.y - b.h >= s.y - 2) continue;     // 整个人在桩底下面，是下一层的事
     const l = s.x - s.w / 2, r = s.x + s.w / 2;
     if (b.x + b.w / 2 > l && b.x - b.w / 2 < r) {
       if (b.vx > 0) { b.x = l - b.w / 2; b.hitWall = 1; }
@@ -2588,6 +2591,7 @@ function updateBalls(dt) {
       // 写成 b.y - b.r（球顶）的话，条件刚好反过来 ——
       // 球永远撞不到木桩，而玩家看起来只是"木桩没有反应"。
       if (b.y <= top + 2) continue;
+      if (b.y - b.h >= s.y - 2) continue;   // 球在桩底下面一层，撞的不是这根桩
       const l = s.x - s.w / 2, r = s.x + s.w / 2;
       if (b.x + b.r > l && b.x - b.r < r) {
         if (b.vx > 0) { b.x = l - b.r; } else if (b.vx < 0) { b.x = r + b.r; }
@@ -2773,7 +2777,13 @@ function updateBalls(dt) {
       // 谁快听谁的：方向取快那颗的方向，速度取它的 96%（一撞掉 4%）
       const lead = Math.abs(a.vx) >= Math.abs(b.vx) ? a : b;
       const trail = lead === a ? b : a;
-      const dir = sign(lead.vx) || 1;
+      let dir = sign(lead.vx) || 1;
+      /* 贴着墙还往墙里带，两颗球会在角上互相弹、看起来一直在左边打转。
+         已经靠墙了，就改成顺着墙往外滚。 */
+      const hugL = a.x - a.r < WALL_L + 8 || b.x - b.r < WALL_L + 8;
+      const hugR = a.x + a.r > WALL_R - 8 || b.x + b.r > WALL_R - 8;
+      if (hugL && dir < 0) dir = 1;
+      if (hugR && dir > 0) dir = -1;
       const sp = Math.abs(lead.vx) * 0.96;
       if (sp < 60) continue;
 
@@ -2876,6 +2886,7 @@ function predictBall(b, dir) {
       if (s.hp <= 0) continue;
       const top = s.y - s.h;
       if (y <= top + 2) continue;
+      if (y - r * 2 >= s.y - 2) continue;   // 和 updateBalls 同一条：下层的球不撞上层的桩
       if (x + r > s.x - s.w / 2 && x - r < s.x + s.w / 2) { stump = s; break; }
     }
     if (stump) { marks.push({ x, y: y - r, kind: "stump" }); end = "stump"; break; }
@@ -2992,7 +3003,7 @@ function ballTerrain(b, fallVy) {  // 火坑：烧掉，收成翻倍，但球没
       S.food += gain;
       S.killed += b.holds;
       addText(b.x, pit.y - 70, "烧掉了 +" + gain, "#FFB05C", 22);
-      dropChest(b.x + 26, pit.y - 52, b.holds);
+      dropChest(b.x, pit.y - 36, b.holds);
       for (let i = 0; i < 26; i++) addFrag(b.x, pit.y - 12, 8, i % 2 ? "#FF9A3C" : "#FFD86B");
       S.shake = Math.max(S.shake, 10);
       S.flash = 0.18;
@@ -3043,7 +3054,7 @@ function ballTerrain(b, fallVy) {  // 火坑：烧掉，收成翻倍，但球没
     S.food += gain;
     S.killed += b.holds;
     addText(b.x, CAMP.y - 80, "落袋 +" + gain, "#FFD86B", 22);
-    dropChest(b.x - 26, CAMP.y - 56, b.holds);
+    dropChest(CAMP.x - 18, CAMP.y - 36, b.holds);
     for (let i = 0; i < 16; i++) addFrag(b.x, CAMP.y - 40, 7, "#FFD86B");
     S.shake = Math.max(S.shake, 6);
   }
@@ -3123,13 +3134,30 @@ const DROP_KINDS = {
  *   单杀 14% / 两只 38% / 三只 62% / 四只以上封顶 85%
  * 这就是「卷」的第三层回报 —— 第一层省球，第二层稀有掉落，第三层宝箱。
  */
+/** 掉落落在坑外的实地上。火坑正中、墙缝里都不算能捡的地方。 */
+function landBeside(x, y) {
+  let spot = x;
+  for (const pit of PITS) {
+    if (spot <= pit.x + 4 || spot >= pit.x + pit.w - 4) continue;
+    if (y < pit.y - 140) continue;
+    const left = pit.x - 28;
+    const right = pit.x + pit.w + 28;
+    const solid = (px) => PLATS.some((p) => px >= p.x + 16 && px <= p.x + p.w - 16 && Math.abs(p.y - pit.y) < 28);
+    if (solid(right)) spot = right;
+    else if (solid(left)) spot = left;
+    else spot = right;
+  }
+  return clamp(spot, 64, 896);
+}
+
 function dropChest(x, y, holds) {
   const p = Math.min(0.85, 0.14 + (holds - 1) * 0.24);
   if (S.rng() > p) return false;
+  const lx = landBeside(x, y);
   S.drops.push({
-    kind: "chest", x, y,
-    vx: rand(-110, 110), vy: rand(-430, -280),
-    taken: false, t: 0, spin: rand(0, 6.28), holds: holds || 1,
+    kind: "chest", x: lx, y: y - 8,
+    vx: (lx - x) * 1.4, vy: -220,
+    taken: false, t: 0, spin: 0, holds: holds || 1,
   });
   addText(x, y - 30, "宝箱!", "#FFD65C", 21);
   S.shake = Math.max(S.shake, 5);
@@ -3150,9 +3178,10 @@ function dropFrom(x, y, boost) {
   else if (r < 62)              kind = "berry";
   else                          kind = "fruit";
 
+  const lx = landBeside(x, y);
   S.drops.push({
-    kind, x, y,
-    vx: rand(-160, 160), vy: rand(-400, -230),
+    kind, x: lx, y: y - 6,
+    vx: clamp(lx - x, -70, 70), vy: -260,
     taken: false, t: 0, spin: rand(0, 6.28),
   });
 }
@@ -3334,7 +3363,7 @@ function updateShots(dt) {
     if (s.kind !== "nut" && s.kind !== "yoyo" && s.kind !== "wave") {
       for (const st of S.stumps) {
         if (st.hp <= 0) continue;
-        if (Math.abs(s.x - st.x) < st.w / 2 + s.r && s.y > st.y - st.h) {
+        if (Math.abs(s.x - st.x) < st.w / 2 + s.r && s.y > st.y - st.h && s.y < st.y) {
           s.dead = true;
           addFrag(s.x, s.y, 4, "#C8A070");
           break;
@@ -4597,9 +4626,9 @@ function qflame(g, cx, by, h, w, ph) {
      单频 = 匀速呼吸，一眼看出是循环；两条 = 看十秒能数出周期；
      三条才像"没规律"。幅度递减，高频只负责让轮廓起毛刺。 */
   const wob = (k) =>
-      Math.sin(t * 7.3 + ph * 3.1 + k) * 0.052 +
-      Math.sin(t * 11.9 + ph * 2.1 + k * 1.7) * 0.030 +
-      Math.sin(t * 17.7 + ph * 5.3 + k * 2.3) * 0.016;
+      Math.sin(t * 7.3 + ph * 3.1 + k) * 0.11 +
+      Math.sin(t * 11.9 + ph * 2.1 + k * 1.7) * 0.06 +
+      Math.sin(t * 17.7 + ph * 5.3 + k * 2.3) * 0.03;
 
   /* 每一层用**自己的相位**，这是这一版和上一版最根本的差别。
      上一版三层共用同一组 flick / ww / tipX，等于等比缩放 ——
@@ -4610,7 +4639,8 @@ function qflame(g, cx, by, h, w, ph) {
      只在峰值附近几十度内冲上去。所以三次里大概有两次"几乎不动"、
      一次突然拉高 22%。用普通正弦做不出来：那是匀速升降，
      看起来像弹簧在拉。真火就是"长时间安静 + 偶尔窜一下"。 */
-  const surge = 1 + Math.pow(Math.max(0, Math.sin(t * 1.55 + ph * 2.3)), 6) * 0.20;
+  const surge = (1 + Math.sin(t * 5.6 + ph) * 0.07)
+      * (1 + Math.pow(Math.max(0, Math.sin(t * 1.55 + ph * 2.3)), 6) * 0.28);
 
   const path = (k, raise, lp) => {
     const f = wob(lp);
@@ -4619,7 +4649,8 @@ function qflame(g, cx, by, h, w, ph) {
        窜火那一刻会变成一个又高又胖的橙团 —— 那是气球，不是火。 */
     const W = w * k * (1 - f * 0.55) / Math.sqrt(surge);
     // 顶端横摆：两侧控制点各用不同相位，火焰才会"扭"；同相位就只是整体左右平移
-    const tx = cx + Math.sin(t * 5.4 + ph * 2.2 + lp * 1.4) * W * 0.13;
+    const tx = cx + Math.sin(t * 3.2 + ph) * w * 0.22
+        + Math.sin(t * 5.4 + ph * 2.2 + lp * 1.4) * W * 0.28;
     const lx = Math.sin(t * 8.6 + ph + lp) * W * 0.11;
     const rx = Math.sin(t * 8.6 + ph + lp + 2.2) * W * 0.11;
     const b = by - raise * H;
@@ -4926,9 +4957,9 @@ function drawPit(g, pit) {
        旧版 7 根 22px 火苗、实体只有 5px 宽 —— 缩到手机上不足 3px，
        读作"一排橙色竖线"。Q 版靠轮廓识别，必须画大。
        中间那团高 50（坑口到焰尖），另外两团 34 / 30，错落才不像三根蜡烛。 */
-    qflame(g, cx - w * 0.30, BOT - 1, 26, 19, 0.0);
-    qflame(g, cx + w * 0.31, BOT - 1, 23, 17, 1.9);
-    qflame(g, cx, BOT - 3, 42, 30, 0.8);
+    qflame(g, cx - w * 0.30, BOT - 1, 36, 22, 0.0);
+    qflame(g, cx + w * 0.31, BOT - 1, 32, 20, 1.9);
+    qflame(g, cx, BOT - 3, 54, 34, 0.8);
 
     /* 火星：8 颗，每颗带一条**短拖尾**。
        拖尾是"它在动"的直接证据 —— 单颗圆点无论飘多快，静帧上都是个点；
@@ -8155,15 +8186,10 @@ function render() {
       }
 
       /* ---- 施法动作 ----
-         立绘是静态站姿（还有一半是正脸），光靠"闪白"根本读不出在出手。
-         这里用**以脚为轴的切变**做前倾/后坐：
-           0 → 0.28  后坐蓄力（往后仰，越仰越慢）
-           0.28 → 1  前冲（整个人朝施法方向甩出去，再落回站姿）
-         切变比旋转好：旋转会把脚也转走，人就浮起来了；
-         切变脚在原地不动，只有上身往前压 —— 那才像"使劲"。
+         立绘是静态站姿。脚钉在地上，上身只轻轻前倾，出手靠手上的光来读。
+         整个人朝前甩出去会像被弹了一下，和"放个技能"对不上。
 
-         代码图形版和贴图版都走这一层（包在 drawPet 外面），
-         所以以后换了美术也不用再改一次动作。 */
+         切变比旋转好：旋转会把脚也转走。系数留得很小，只让肩膀动。 */
       const ck = p.castAnim > 0 ? 1 - p.castAnim / CAST_T : -1;
       let lean = 0;
       if (ck >= 0) {
@@ -8185,8 +8211,8 @@ function render() {
          * 向右施法时上半身往右压（对），向左施法时身体虽然整体左移了，
          * 上半身却还是被往右推：读起来就是"人往左冲、脸朝右看"。
          */
-        g.translate(p.x + dir * lean * p.w * 0.50, p.y);
-        g.transform(1, 0, -lean * 0.56 * dir, 1, 0, 0);
+        g.translate(p.x + dir * lean * p.w * 0.12, p.y);
+        g.transform(1, 0, -lean * 0.18 * dir, 1, 0, 0);
         g.translate(-p.x, -p.y);
       }
       // 朝向也走 dir：施法这 0.26 秒里，脸的朝向和身体的倾斜必须是同一个数，
@@ -8194,7 +8220,7 @@ function render() {
       const stepping = p.onGround && p.dashT <= 0 && Math.abs(p.vx) > 40;
       drawPet(g, p.x, p.y, p.w, p.h, H, dir, {
         // 前冲段再压一点：形变比位移更容易读成"发力"，而且不用改立绘
-        squash: (p.onGround ? 0 : (p.vy < 0 ? -0.16 : 0.12)) + Math.max(0, lean) * 0.18,
+        squash: (p.onGround ? 0 : (p.vy < 0 ? -0.16 : 0.12)) + Math.max(0, lean) * 0.06,
         flash: p.castAnim > 0 && ck > 0.24 && ck < 0.6 ? 0.42 : 0,
         belly: 0.15 + 0.85 * clamp(S.belly / 100, 0, 1),
         mood: bellyTier() === 0 ? 1 : bellyTier() === 1 ? 0.22 : 0,
@@ -8316,51 +8342,42 @@ function render() {
       // 宝箱：金色箱子 + 深色包边 + 中间的锁扣，比其它掉落大一圈。
       // 大一圈是必要的 —— 它需要"被一眼看见"，而不是"被捡到的时候才发现"。
       if (d.kind === "chest") {
-        const bw = 26, bh = 20;
-        g.globalAlpha = 0.5 + 0.2 * Math.sin((d.t || 0) * 5);
-        g.fillStyle = "#FFF3C0";
+        const bw = 30, bh = 18;
+        const lid = 3 + Math.sin((d.t || 0) * 3.2) * 1.6;
+        g.fillStyle = "rgba(58, 36, 18, .28)";
         g.beginPath();
-        g.arc(d.x, dy + 2, 26, 0, 6.283);
+        g.ellipse(d.x, dy + 16, 16, 4, 0, 0, 6.283);
         g.fill();
-        g.globalAlpha = 1;
-
-        // 箱体
-        g.fillStyle = "#C9882E";
-        rr(g, d.x - bw / 2, dy - 4, bw, bh, 4);
+        g.fillStyle = "#C4843A";
+        rr(g, d.x - bw / 2, dy - 2, bw, bh, 4);
         g.fill();
-        g.strokeStyle = COL.outline;
-        g.lineWidth = 2.4;
+        g.strokeStyle = "#5C3A16";
+        g.lineWidth = 2.2;
         g.stroke();
-        // 箱盖（半圆顶）
-        g.fillStyle = K.color;
+        g.fillStyle = "#E8B45A";
         g.beginPath();
-        g.moveTo(d.x - bw / 2, dy - 3);
-        g.quadraticCurveTo(d.x, dy - 20, d.x + bw / 2, dy - 3);
+        g.moveTo(d.x - bw / 2 + 1, dy - 1);
+        g.quadraticCurveTo(d.x, dy - 16 - lid, d.x + bw / 2 - 1, dy - 1);
         g.closePath();
         g.fill();
         g.stroke();
-        // 两道包边
-        g.strokeStyle = "#8A5A16";
-        g.lineWidth = 2.2;
-        for (const ox of [-7, 7]) {
-          g.beginPath();
-          g.moveTo(d.x + ox, dy - 12);
-          g.lineTo(d.x + ox, dy + bh - 5);
-          g.stroke();
-        }
-        // 锁扣
-        g.fillStyle = "#FFE98A";
-        rr(g, d.x - 4, dy - 6, 8, 8, 2);
-        g.fill();
-        g.strokeStyle = COL.outline;
-        g.lineWidth = 1.8;
-        g.stroke();
-        // 顶盖高光
-        g.strokeStyle = "rgba(255,255,255,.8)";
+        g.strokeStyle = "#8A5A20";
         g.lineWidth = 2;
         g.beginPath();
-        g.arc(d.x, dy - 3, bw * 0.34, -2.5, -1.2);
+        g.moveTo(d.x, dy - 12 - lid * 0.4);
+        g.lineTo(d.x, dy + bh - 6);
         g.stroke();
+        g.fillStyle = "#FFE9A0";
+        rr(g, d.x - 4, dy + 2, 8, 8, 2);
+        g.fill();
+        g.strokeStyle = "#5C3A16";
+        g.lineWidth = 1.4;
+        g.stroke();
+        g.fillStyle = "#FFF6C8";
+        g.beginPath();
+        g.arc(d.x - 8, dy - 8 - lid, 3.2, 0, 6.283);
+        g.arc(d.x + 7, dy - 6 - lid, 2.4, 0, 6.283);
+        g.fill();
         continue;
       }
 

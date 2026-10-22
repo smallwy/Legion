@@ -214,7 +214,7 @@ ok(r1.next.logs === before.logs + r1.loot.logs, '材料累加进池');
 ok(r1.next.coins === before.coins + r1.loot.coins, '吧唧累加进池');
 ok(r1.next.cleared === before.cleared + 1, '通关推进 1 关', `cleared = ${r1.next.cleared}`);
 ok(r1.next.runs === before.runs + 1, '出门场次 +1');
-ok(r1.next.satiety === REST_SATIETY, '回家必吃一顿 → 饱食度回满', `satiety = ${r1.next.satiety}`);
+ok(r1.next.satiety === 19, '回家带回战斗结束时的饱食（去灶台吃，不再自动吃饱）', `satiety = ${r1.next.satiety}`);
 ok(r1.next.active === before.active, '结算不改动出战宠物');
 
 /* 关键：写进去了没有？读回来必须和返回值一致 —— 否则"战斗里说 +16、回家没变" */
@@ -225,8 +225,10 @@ ok(JSON.stringify(reread) === JSON.stringify(r1.next), '结算后确实落盘（
 /* 撤离 / HP 归零不推进关卡 */
 const w1 = settleInto(before, Object.assign({}, FULL, { endReason: 'withdraw' }), 40);
 ok(w1.next.cleared === before.cleared, '主动撤离不推进关卡', `cleared = ${w1.next.cleared}`);
+ok(w1.next.satiety === 40, '撤离也按结束时的饱食回写', `satiety = ${w1.next.satiety}`);
 const h1 = settleInto(before, Object.assign({}, FULL, { endReason: 'hp0' }), 0);
 ok(h1.next.cleared === before.cleared, 'HP 归零不推进关卡（红线②没有游戏结束）');
+ok(h1.next.satiety === 0, '空肚子回家就是 0', `satiety = ${h1.next.satiety}`);
 
 /* 关卡上限：打十场也只到 8 */
 let s = Object.assign({}, DEFAULT_SAVE);

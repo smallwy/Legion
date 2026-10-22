@@ -447,9 +447,17 @@ const MAX_BALLS = 2;
 
 const THEMES = {
   tundra: {
-    sky1: "#5FC6E8", sky2: "#C8F2FF", cloud: "#FFFFFF",
-    hill1: "#7FD3B0", hill2: "#A8E6C4",
-    grass: "#57B85E", grass2: "#8BDD7E",
+    /* 第 1 关的配色直接取自 docs 里那张战斗场景概念图（暖金逆光的森林）。
+       换掉原来的清透蓝之后，第一眼看到的关卡就是概念图的样子 ——
+       之前是"概念图一套、实际画面另一套"，玩家第一屏就在判断"这不是我要的"。
+
+       蓝→金不是随手换色：概念图的光源是**右上低角度斜阳**，
+       天空从顶部的暖金一路淡到地平线的暖白，地面是偏黄的中绿。
+       换成这套之后，平台木色（#C98A50）反而和天空成了同族，
+       不再是"蓝天底下一排木头"。 */
+    sky1: "#F7B44C", sky2: "#FFDFA6", cloud: "#FFF6E6",
+    hill1: "#C9A86C", hill2: "#E2C58E",
+    grass: "#8FB055", grass2: "#AECB6C",
     dirt: "#8A5B3A", dirt2: "#5E3C26",
     wood: "#C98A50", wood2: "#8B5A32", wood3: "#EFC089",
     accent: "#FFE066",
@@ -471,9 +479,16 @@ const THEMES = {
     accent: "#FFD9F0",
   },
   slope: {
+    /* 暖橙关最容易整屏糊成一块。原来 sky / hill / grass / wood 四层全是橙，
+       只有明度差别，一压暗草地之后连明度差也没了 —— 拍出来是"橙色渐变板"。
+       解法是把**色相**拆开，不是继续调明度：
+         · 远处山 → 灰紫（大气透视本来就让远山偏冷，不是偏暖）
+         · 草地   → 橄榄（橙里带绿，和木平台区分开）
+         · 木平台 → 保留橙棕（这一层必须暖，它是画面里"人造物"的唯一色）
+       三档色相分开之后，暖金天空反而把层次衬出来了。 */
     sky1: "#FF9A5C", sky2: "#FFDDB0", cloud: "#FFF3E2",
-    hill1: "#E08A5E", hill2: "#F2B48A",
-    grass: "#D9764A", grass2: "#F2A06A",
+    hill1: "#A87A96", hill2: "#CBAAA4",
+    grass: "#B8874A", grass2: "#D2A868",
     dirt: "#8C4F32", dirt2: "#5E3320",
     wood: "#C4703E", wood2: "#8A4A26", wood3: "#EEA06E",
     accent: "#FFE9A8",
@@ -526,7 +541,12 @@ const THEMES = {
      · 远的往天空里混得多（更亮更淡），近的混得少（更实）—— 明度上再分一次。
    -------------------------------------------------------------------------- */
 
-const GRASS_DIM = 0.86;
+/* 草地整体压暗的系数。
+   0.86 → 0.80 是在换成暖金天空之后调的：亮黄绿的草地 + 暖金天空，
+   两者明度太接近，平台的投影读不出来，整屏像"一张金绿色的纸"。
+   压到 0.80 之后草退到中景，木平台和角色的明度才跳出来。
+   **只压 grass / grass2** —— 压暗 sky / wood 会把纵深反着压平。 */
+const GRASS_DIM = 0.80;
 
 function hexDim(hex, k) {
   const n = parseInt(hex.slice(1), 16);
@@ -555,6 +575,10 @@ function rgbaOf(hex, a) {
 
 /* 远景的统一冷调。偏青蓝，但不能太蓝（太蓝会像阴天，和"Q 版亮天空"冲突）。 */
 const COOL = "#5F86A8";
+
+/** 前景剪影用的墨绿。**刻意保留一点绿**，纯黑("#000")会在低亮屏幕上糊成一块洞；
+ *  带一点点绿，它仍然是"叶子"，只是逆光。 */
+const INK_LEAF = "#14241A";
 
 for (const _tk of Object.keys(THEMES)) {
   const T = THEMES[_tk];
@@ -593,15 +617,27 @@ for (const _tk of Object.keys(THEMES)) {
    * 混 0.30 的叶绿之后，暖色关里它是橄榄绿：仍然在这个关的色域里（不跳），
    * 但有"活的东西"这个读法。晚上、紫夜关同理，只会更沉，不会更艳。 */
   const LEAF = "#6FB33F";
-  T.treeNear = hexDim(hexMix(hexMix(T.grass2, LEAF, 0.30), "#FFFFFF", 0.08), 0.97);
+  /* 树要**压暗**（0.74），不能跟草地一样亮。
+     0.97 的时候近景树和草地同明度，只在轮廓上分开 ——
+     换成暖金天空之后更糟：树冠在天空前是一团发亮的浅黄绿，
+     读作"天上挂了两个浅色球"。概念图里近景树是深色剪影，
+     亮的那一侧靠边缘的暖光，不靠整体提亮。 */
+  T.treeNear = hexDim(hexMix(hexMix(T.grass2, LEAF, 0.30), "#FFFFFF", 0.05), 0.74);
   T.treeFar = hexMix(T.treeNear, T.hillFar, 0.28);
   T.trunkNear = hexDim(T.wood2, 0.86);
   T.trunkFar = hexMix(T.trunkNear, T.hillFar, 0.45);
 
-  /* 前景灌木：比草地再暗一档半，并且往冷里偏（蓝绿）。
-     只压暗不偏色的话，它和"草地暗部"同色，读作地上的影子，
-     读不出"挡在镜头前面"这层意思。 */
-  T.shrub = hexDim(hexMix(T.grass, COOL, 0.40), 0.54);
+  /* 前景灌木：**压到接近剪影**，不只是"暗一档"。
+     0.54 出来的是"深绿灌木"—— 它和草地暗部同族，读作"地上长得比较深的草"，
+     撑着画面的力气不够。概念图里这一层几乎是黑的（#1E2A1A 级别），
+     才把视线从画面边缘推进中场。
+
+     混的色也不能是 COOL（偏青蓝）：青蓝前景压在绿草上会发灰，
+     读作"没上色的草"。改混近黑的墨绿 INK_LEAF，压完是暖调的暗，
+     和暖金天空、橙木平台在同一色温上。 */
+  T.shrub = hexDim(hexMix(T.grass, INK_LEAF, 0.66), 0.52);
+  /* 剪影也要有受光边，否则整丛是死板的一块。顶部顺着光来的方向亮一点。 */
+  T.shrubLit = hexMix(T.shrub, "#FFE9B8", 0.22);
 }
 
 const THEME_ORDER = ["tundra", "swamp", "cliff", "slope", "bouncy", "well", "stairs", "tower"];
@@ -1329,7 +1365,22 @@ window.addEventListener("keydown", (ev) => {
 window.addEventListener("keyup", (ev) => {
   const k = KEYMAP[ev.code];
   if (k === "aim") S.aim = false;
-  if (k && S.phase === "play") { S.keys[k] = false; ev.preventDefault(); }
+  /* 松键**无条件**清，不看 phase。
+     原来要求 phase === "play" 才清：在 clear / select 里松开 J，
+     keys.atk 就一直挂着 true，回到 play 的第一帧立刻"自己喷了一发"，
+     而且按着不放的效果会永远粘住。清键是收尾动作，收尾不该有前置条件。 */
+  if (k) {
+    S.keys[k] = false;
+    if (S.phase === "play") ev.preventDefault();
+  }
+});
+
+/* 窗口失焦：把按键表整个清空。
+   不挡的话，按住 → 切标签页 → 松开（keyup 打给了别的窗口）→ 回来，
+   角色会自己一直往那个方向跑。这是浏览器里最经典的粘键。 */
+window.addEventListener("blur", () => {
+  for (const k of Object.keys(S.keys)) S.keys[k] = false;
+  S.aim = false;
 });
 
 /* ============================================================================
@@ -1758,7 +1809,12 @@ function updatePlayer(dt) {
   // 玩家会以为"按键没反应"。节流交给 atkCd，本来就是干这个的。
   // castDir 单独记一份：施法动作要朝"这一下打出去的方向"倾，
   // 而不是施法过程中玩家又转身跟着转（那会变成原地抽搐）。
-  if (S.keys.atk && p.atkT <= 0) {
+  /* **按住 (keys) 和点一下 (press) 都要能喷。**
+     原来只读 keys —— 按住连发是对的，但它把"边沿"这条路整个掐了。
+     代价是任何一次 keys 没送达（焦点丢、桥接层被拦、模拟输入只置 press）
+     就等于施法彻底失效，而且症状是"能走能跳就是喷不出来"，
+     玩家会以为是键位坏了，不是代码坏了。两条都收，成本为零。 */
+  if ((S.keys.atk || S.press.atk) && p.atkT <= 0) {
     p.atkT = H.atkCd;
     p.castAnim = CAST_T;
     p.castDir = p.face;
@@ -3350,17 +3406,51 @@ function drawSky(g) {
   g.fillStyle = sky;
   g.fillRect(0, 0, W, 340);
 
-  // Q 版太阳：一个圆 + 一圈更亮的晕，不做光芒射线（射线会像儿童简笔画）
-  const sunX = 790, sunY = 88;
-  const halo = g.createRadialGradient(sunX, sunY, 10, sunX, sunY, 150);
-  halo.addColorStop(0, "rgba(255,252,214,.55)");
-  halo.addColorStop(1, "rgba(255,252,214,0)");
+  /* 太阳：三层光。
+     原来只有"一个圆 + 150 半径的小晕"—— 那读作"天上贴了个黄点"，
+     画面整体还是平光，物体之间全靠描边分开。
+
+     第一版把大晕写成 `rgba(255,244,196,.40)`（**接近白**），结果整片天空
+     被提亮又掉饱和，出来是"沙漠灰"，不是概念图的金橙 —— 往白里混就是降饱和，
+     这一层不能当"光"用，只能当"亮"用。
+     大晕必须是**饱和橙**（#FFC96A）：色相推暖、明度只提一点点。 */
+  const sunX = 700, sunY = 74;
+  const wide = g.createRadialGradient(sunX, sunY, 20, sunX, sunY, 520);
+  wide.addColorStop(0, "rgba(255,201,106,.34)");
+  wide.addColorStop(0.45, "rgba(255,186,92,.13)");
+  wide.addColorStop(1, "rgba(255,186,92,0)");
+  g.fillStyle = wide;
+  g.fillRect(0, 0, W, 420);
+
+  const halo = g.createRadialGradient(sunX, sunY, 10, sunX, sunY, 140);
+  halo.addColorStop(0, "rgba(255,253,226,.72)");
+  halo.addColorStop(1, "rgba(255,250,214,0)");
   g.fillStyle = halo;
-  g.fillRect(sunX - 160, sunY - 160, 320, 320);
-  g.fillStyle = "rgba(255,250,205,.92)";
+  g.fillRect(sunX - 150, sunY - 150, 300, 300);
+
+  g.fillStyle = "rgba(255,252,226,.96)";
   g.beginPath();
-  g.arc(sunX, sunY, 34, 0, 6.283);
+  g.arc(sunX, sunY, 38, 0, 6.283);
   g.fill();
+}
+
+/* 一道从太阳斜打下来的光柱。
+   只画一次、alpha 0.07，作用是把"光源在上方"这件事写进画面：
+   没有它的时候，暖光只是"底色变黄了"，有了之后才读作"有光照进来"。
+   角度固定 62°（不是 45°）—— 45° 会正好压在画面中轴上，
+   变成一条把画面劈成两半的斜线；62° 靠右，只在右半屏扫过。 */
+function drawSunShaft(g) {
+  g.save();
+  g.globalAlpha = 0.07;
+  g.fillStyle = "#FFF6D2";
+  g.beginPath();
+  g.moveTo(700, 60);
+  g.lineTo(760, 60);
+  g.lineTo(300, H);
+  g.lineTo(-40, H);
+  g.closePath();
+  g.fill();
+  g.restore();
 }
 
 /** 一朵 Q 版云：三个圆叠一个平底，全部同一色，只有底部一条淡阴影 */
@@ -3462,13 +3552,18 @@ function drawTree(g, x, baseY, sc, back) {
     g.stroke();
 
     /* 受光面：一块**不描边**的浅色团。只有填充没有边线，所以不会又把树冠
-       切成两半 —— 有边线就退化成原来那三个圆的问题。 */
-    g.fillStyle = "rgba(226,255,222,.30)";
-    blobPath(g, x - r * 0.24, cy - r * 0.30, r * 0.52, seed + 1.9);
+       切成两半 —— 有边线就退化成原来那三个圆的问题。
+
+       **受光色必须是暖的。** 原来写 `rgba(226,255,222,.30)`（冷白绿），
+       在蓝天版本里看着像"叶面反光"，换到暖金天空之后立刻露馅：
+       树冠读作"天上挂了一个浅米绿的球"，和周围一个色温都没有。
+       光是橙色天空来的，高光就得偏暖 —— 这一点跟"前景受光边不用纯白"是同一条。 */
+    g.fillStyle = "rgba(255,238,178,.24)";
+    blobPath(g, x - r * 0.24, cy - r * 0.30, r * 0.42, seed + 1.9);
     g.fill();
-    g.fillStyle = "rgba(240,255,236,.42)";
+    g.fillStyle = "rgba(255,246,206,.34)";
     g.beginPath();
-    g.arc(x - r * 0.30, cy - r * 0.42, r * 0.19, 0, 6.283);
+    g.arc(x - r * 0.30, cy - r * 0.42, r * 0.16, 0, 6.283);
     g.fill();
   }
   g.restore();
@@ -3481,9 +3576,11 @@ function drawForest(world) {
   drawSky(g);
 
   // 云：远慢近快，三朵。位置用 hash 固定，不用随机 —— 每帧随机会闪。
+  // x=690 那朵原来正好压在太阳上（太阳默认 700,74），整颗太阳被吃掉，
+  // 只剩一圈光晕 —— 于是"有光没太阳"。向左让出 110。
   drawCloud(g, 160 + Math.sin(S.t * 0.10) * 14, 66, 1.0, 0.92);
   drawCloud(g, 470 + Math.sin(S.t * 0.14 + 2) * 18, 44, 0.74, 0.80);
-  drawCloud(g, 690 + Math.sin(S.t * 0.08 + 4) * 10, 104, 0.62, 0.62);
+  drawCloud(g, 560 + Math.sin(S.t * 0.08 + 4) * 10, 104, 0.62, 0.62);
   drawCloud(g, 300 + Math.sin(S.t * 0.12 + 1) * 12, 122, 0.48, 0.45);
 
   // 远山三层：最远一道近白的雾（只有轮廓）→ 远山 → 近山。
@@ -3491,6 +3588,9 @@ function drawForest(world) {
   drawHills(g, 296, 104, rgbaOf("#FFFFFF", 0.20), 3, 224);
   drawHills(g, 310, 72, TH.hillFar, 7, 178);
   drawHills(g, 324, 46, TH.hillNear, 11, 134);
+
+  // 光柱压在山之上、地表之下：光是在空气里走的，被山挡住就成了贴纸。
+  drawSunShaft(g);
 
   // 地平线雾带：山脚到草地之间 54px 的天空色残余。
   // 没有这一层，草地是"一刀切"压在山脚上的，读作两块色板拼接。
@@ -3532,11 +3632,13 @@ function drawForest(world) {
     drawTree(g, x, 308 + hash(i * 5.3) * 12, sc, true);
   }
 
-  // 两侧近景树：压住画面边缘，让视线收在中间
-  drawTree(g, 10, 470, 1.9, false);
-  drawTree(g, W - 12, 470, 1.9, false);
-  drawTree(g, 46, 440, 1.3, false);
-  drawTree(g, W - 48, 440, 1.3, false);
+  /* 两侧近景树：**一侧一棵**。
+     原来是 "1.9 + 1.3" 两棵并排 —— 两个 blob 各自描边，描边在中间交叉，
+     拍出来读作"两个球叠在一起"，是全场最像"没画完"的地方。
+     blobPath 只能描自己的整圈，没有"只描并集外轮廓"的 API（canvas 不给），
+     所以并排的两棵树要么合并成一个 blob，要么就别并排。选后者。 */
+  drawTree(g, 6, 470, 1.9, false);
+  drawTree(g, W - 8, 470, 1.9, false);
 
   // 空气里的浮尘：小圆点，向上飘。数量少、对比低
   for (let i = 0; i < 16; i++) {
@@ -3551,9 +3653,10 @@ function drawForest(world) {
     g.globalAlpha = 1;
   }
 
-  // 顶部不再压树冠，只留一条极淡的暖色渐晕，防止天空顶部过曝
+  // 顶部渐晕：只收掉过曝，不染色。0.22 的时候顶部被漂成灰白，
+  // 整片天空的最高点反而比中段暗 —— 读作"天上盖了块脏玻璃"。
   const top = g.createLinearGradient(0, 0, 0, 40);
-  top.addColorStop(0, "rgba(255,255,255,.22)");
+  top.addColorStop(0, "rgba(255,255,255,.10)");
   top.addColorStop(1, "rgba(255,255,255,0)");
   g.fillStyle = top;
   g.fillRect(0, 0, W, 40);
@@ -4329,35 +4432,55 @@ function drawLevel() {
  */
 function drawForeground(g) {
   const base = TH.shrub || TH.grass;
+  const lit = TH.shrubLit || base;
   const DEAD = GROUND_Y - 4;       // 552：盖住草皮鼓包，只淹掉球底 4px
-  const N = 9;
+  /* 11 丛 × 5 片 = 55 片。13 × 7 = 91 片拍出来是"底部铺了一整条草甸"，
+     球滚过去读作在草丛里穿行，而不是"球从草后面滚过"。
+     前景的作用是**压住画框下沿**，不是再造一层地面。 */
+  const N = 11;
 
   for (let i = 0; i < N; i++) {
-    /* 三个随机量彼此独立：半径、横向抖动、顶端高度。
-       只抖半径不抖顶端，顶缘会连成一条平滑的波浪 —— 那读作"花边"，
-       不读作"几丛草"。这三条必须同时松开。 */
-    const r = 16 + hash(i * 3.7) * 20;                      // 16 ~ 36
-    const x = -24 + i * (W + 48) / (N - 1) + (hash(i * 4.7) - 0.5) * 58;
-    const top = DEAD + hash(i * 5.3) * 16;                  // 552 ~ 568，参差
-    const cy = top + r * 0.72;                              // 顶端 = top，天然守死线
+    const t = i / (N - 1);
 
-    g.fillStyle = base;
-    g.beginPath();
-    g.arc(x - r * 0.56, cy + r * 0.40, r * 0.62, 0, 6.283);
-    g.arc(x + r * 0.58, cy + r * 0.38, r * 0.58, 0, 6.283);
-    g.arc(x, cy, r * 0.72, 0, 6.283);
-    g.rect(x - r, cy, r * 2, H - cy + 10);
-    g.fill();
+    /* **中间保留，只是不抬高。**
+       完全不画的版本拍出来是"两侧各剩三根杂草"—— 中段地面空得像没做前景。
+       概念图里中段那一层低矮的暗草是有的，只是永远不越过球的下沿，
+       所以它只吃地面、不吃球道。这里靠"中间 lift = 0 → top 就是 552 死线"实现。 */
 
-    // 顶缘一道淡高光：纯剪影会读成"没画完的黑色块"，
-    // 一条 1.8px 的受光边就把这一丛变成有体积的球
-    g.strokeStyle = "rgba(255,255,255,.13)";
-    g.lineWidth = 1.8;
-    g.beginPath();
-    g.arc(x - r * 0.56, cy + r * 0.40, r * 0.62, Math.PI * 1.06, Math.PI * 1.92);
-    g.arc(x, cy, r * 0.72, Math.PI * 1.06, Math.PI * 1.92);
-    g.arc(x + r * 0.58, cy + r * 0.38, r * 0.58, Math.PI * 1.06, Math.PI * 1.92);
-    g.stroke();
+    /* 两侧抬高的上限是 **46**，不是"想抬多高抬多高"。
+       前景在 drawLevel 之后画，抬过头会直接盖住 462 层台面 ——
+       玩家会看到"一块草遮住一段能站的地方"，那是可读性事故，不是构图。
+       能抬的极限由 462 层底边 495 反推：顶到 506 还留 11px 余量。 */
+    const edge = Math.abs(t - 0.5) * 2;
+    const lift = Math.pow(edge, 1.5) * 46;
+
+    /* 一丛 = 一束草叶，不是三个圆叠一个柱。
+       上一版是 `arc + arc + arc + rect`，剪影读作"三个黑球堆在一条黑带上"，
+       概念图里的前景是**叶片状**的 —— 有个尖，而且几片的高度彼此错开。
+       这里用二次曲线画 6 片叶子，每片独立的长度和倾角。 */
+    const r = 22 + hash(i * 3.7) * 16 + edge * 12;
+    const x = -30 + t * (W + 60) + (hash(i * 4.7) - 0.5) * 40;
+    const top = DEAD - lift + hash(i * 5.3) * 16;
+    const bottom = H + 6;                                   // 叶根压到屏幕外
+    const hh = bottom - top;                                // 簇高：48 ~ 94
+
+    for (let k = 0; k < 5; k++) {
+      const u = k / 4 - 0.5;                                // -0.5 ~ 0.5
+      const ang = u * 1.55;
+      const len = hh * (0.70 + hash(i * 9.1 + k * 2.3) * 0.30);
+      const tipX = x + Math.sin(ang) * len * 0.66;
+      const tipY = bottom - len;
+      const rootX = x + u * r * 1.20;
+      /* 受光：靠外、靠高的那几片用 lit 色。
+         一丛里全同色 = 一块黑剪影，加两片亮一点的才读得出"这丛有几片叶子"。 */
+      g.fillStyle = hash(i * 4.1 + k * 1.9) > 0.58 ? lit : base;
+      g.beginPath();
+      g.moveTo(rootX - r * 0.16, bottom);
+      g.quadraticCurveTo(x + Math.sin(ang) * len * 0.30 - 7, bottom - len * 0.52, tipX, tipY);
+      g.quadraticCurveTo(x + Math.sin(ang) * len * 0.30 + 7, bottom - len * 0.52, rootX + r * 0.16, bottom);
+      g.closePath();
+      g.fill();
+    }
   }
 
   // 再压一道从底边往上 34px 的暗角，把"镜头下沿"收住。
@@ -4580,9 +4703,7 @@ function drawPet(g, x, footY, w, h, H, face, o) {
      ② 落脚点：立绘的脚在图片底边，所以底边对齐 footY。
      ③ 朝向：美术只画了一张（正面偏右），往左走靠 scale(-1,1) 镜像。
 
-   ×1.35 是量出来的：代码图形的总高不是 h —— 身体占 h，**耳朵还往上多出 15px**
-   （`ey = footY - bh` 再往上画）。猫 h=44，实际总高约 59。
-   立绘要按"总高"对，所以 dh 取 h×1.35；宽度反推回来正好 0.64×59 ≈ 38 = HEROES.w。
+   ×1.82 是量出来的（见下方 PET_VIS_K）：概念图里猫体高 ≈ 平台厚 2.6 倍、屏高 12.3%。
    -------------------------------------------------------------------------- */
 /** 立绘的"体高 / 图高"。
  *
@@ -4593,6 +4714,20 @@ function drawPet(g, x, footY, w, h, H, face, o) {
  *  改美术管道就要同步改 —— 不然六只的角色会集体变大或变小，
  *  而且因为六只一起变，单看画面很难发现，只有跟小怪并排才露馅。 */
 const PET_BODY_K = 0.656;
+
+/** 视觉体高 / 碰撞高。
+ *
+ *  **这个数是场景比例的唯一旋钮，改它等于改"宠物在画面里多大"。**
+ *
+ *  参考坐标是 `client/concept/pets/` 那批概念图：猫的体高 ≈ 平台厚度的 2.6 倍，
+ *  ≈ 屏幕高度的 12.3%，猫宽 ≈ 单块平台宽度的 34%。
+ *  1.35 时画出来是平台厚的 1.79 倍 / 屏高 9.8% / 平台宽 22% ——
+ *  三档全部偏小，站上去读作"一只贴在平台边上的小宠物"，不是"这一段的主角"。
+ *  而且球直径 88 比宠物还高，推球时球把人整个盖住，看不出是谁在推。
+ *
+ *  1.82 对应 2.4 倍 / 13.3% / 30%，三档同时落进概念图区间。
+ *  上限卡在 1.9：再大视觉宽就会超过碰撞宽 2.4 倍，玩家会站在空气上。 */
+const PET_VIS_K = 1.82;
 
 function drawPetSprite(g, img, x, footY, w, h, face, A, o) {
   // 影子：和代码图形同一套，贴地
@@ -4609,7 +4744,7 @@ function drawPetSprite(g, img, x, footY, w, h, face, A, o) {
    * 顶上那 220 是耳朵和留给耳朵的留白。直接 `h * 1.35` 等于按图高缩，
    * 画出来身体只有该有的 65.6% —— 换图那天六只集体缩水三分之一，
    * 站在小怪旁边像只幼崽。 */
-  const dh = h * 1.35 / PET_BODY_K * (1 - sq * 0.14);
+  const dh = h * PET_VIS_K / PET_BODY_K * (1 - sq * 0.14);
   const dw = dh * ((img.width || img.naturalWidth) / (img.height || img.naturalHeight)) * (1 + sq * 0.16);
 
   g.globalAlpha = 1 * A;

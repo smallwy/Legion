@@ -1140,7 +1140,17 @@ console.log("\n=== 19. 第五轮：球的一次性 / 宝箱 / 飞刀 / 分身 ==
     ok(b.dead, "推出去的球一定会消失（不会永远溜达）", "活了 " + (alive / 60).toFixed(2) + "s");
 
     // 没推过的球不受这条约束 —— 玩家还能走上去推它
-    const f2 = S.foes.find(x => !x.dead);
+    /* 这里必须**自己造一只**，不能 `S.foes.find(x => !x.dead)` 拿现成的。
+       原来靠第 1 关 P1 剩的那一只，第 1 关改成"一排 5 只挨着摆"之后，
+       推出去的球会一路把整排卷完 —— 走到这一步场上已经没有活人了，
+       于是整段断言被 if (f2) 静默跳过（实测项数 367 → 366，就是这条没了）。
+       **测试不许依赖关卡的具体敌人数量**：借来的前提一变，断言会无声消失。 */
+    let f2 = S.foes.find((x) => !x.dead);
+    if (!f2) {
+      f2 = P.foeFromSpec({ foe: "bug", x: 300, y: 462, lv: 1 }, false);
+      f2.vx = 0; f2.vy = 0; f2.stun = 999;
+      S.foes.push(f2);
+    }
     if (f2) {
       P.coatFoe(f2, 3);
       const b2 = S.balls.find(x => x !== b && !x.dead);

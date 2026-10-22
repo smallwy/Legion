@@ -34,8 +34,12 @@ let bad = 0;
 
 function line(label, v, limit = 0.75) {
   const bad0 = Math.abs(v) > limit;
-  if (bad0) bad++;
-  rows.push([label, v.toFixed(2), bad0 ? '  ✗' : '  ✓']);
+  /* ⚠ 「(改前)」那几行是**改之前的实测值**，本来就应该不过关 ——
+     它们是留档用的对照，不是待修项。以前一并计进 bad，
+     于是这个脚本永远报"不过关 19 项"，绿灯永远亮不起来，等于没有闸门。 */
+  const isBefore = label.indexOf('改前') >= 0;
+  if (bad0 && !isBefore) bad++;
+  rows.push([label, v.toFixed(2), bad0 ? (isBefore ? '  ✗(改前)' : '  ✗') : '  ✓']);
 }
 
 /* ---- 徽标：图标 / 底板 / 文字 ---- */
@@ -94,8 +98,8 @@ if (tip) {
   const avg = after.reduce((a, b) => a + b.y, 0) / after.length;
   for (const a of after) line(`提示条 · ${a.nm} y(改后)`, a.y - avg);
   const spread = Math.max(...before) - Math.min(...before);
-  rows.push(['提示条 · 改前三者落差', spread.toFixed(2), spread > 0.75 ? '  ✗' : '  ✓']);
-  if (spread > 0.75) bad++;
+  /* 对照项：记录改之前三者落差 2.56px，不计入不过关 */
+  rows.push(['提示条 · 改前三者落差', spread.toFixed(2), '  ✗(改前)']);
 }
 
 /* ---- 进度卡：关卡名 / 连锁 与进度点同一中线 ---- */
@@ -125,12 +129,14 @@ if (btn) {
   }
 }
 
-/* ---- Logo 左边缘 ---- */
+/* ---- Logo 左边缘：这是真项，不是对照项 ----
+   Logo-Sub 比 Logo-Title 右 2px，两行字共用一条左边线，2px 在 720p 上是看得见的。 */
 const t1 = child(hud, 'Logo-Title'), s1 = child(hud, 'Logo-Sub');
 if (t1 && s1) {
-  rows.push(['Logo · 左边缘(改前)', (s1._lpos.x - t1._lpos.x).toFixed(2),
-    Math.abs(s1._lpos.x - t1._lpos.x) > 0.2 ? '  ✗' : '  ✓']);
-  if (Math.abs(s1._lpos.x - t1._lpos.x) > 0.2) bad++;
+  const d = s1._lpos.x - t1._lpos.x;
+  const bad0 = Math.abs(d) > 0.2;
+  if (bad0) bad++;
+  rows.push(['Logo · 左边缘', d.toFixed(2), bad0 ? '  ✗' : '  ✓']);
 }
 
 const pad = (s, n) => String(s).padEnd(n);

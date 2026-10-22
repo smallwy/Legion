@@ -153,6 +153,12 @@ class UITransform {
         if (typeof w === 'object') this.contentSize = { width: w.width, height: w.height };
         else this.contentSize = { width: w, height: h };
     }
+    setAnchorPoint(x, y) {
+        if (typeof x === 'object') this._anchorPoint = { x: x.x, y: x.y };
+        else this._anchorPoint = { x, y };
+    }
+    get width() { return this.contentSize.width; }
+    get height() { return this.contentSize.height; }
     /** 测试里 Canvas 位于原点，世界坐标即本地坐标 */
     convertToNodeSpaceAR(v) { return new Vec3(v.x, v.y, v.z || 0); }
 }
@@ -185,6 +191,11 @@ class Graphics {
     }
     rect(x, y, w, h) { this.paths.push(['rect', x, y, w, h]); }
     roundRect(x, y, w, h, r) { this.paths.push(['roundRect', x, y, w, h, r]); }
+    circle(cx, cy, r) { this.paths.push(['circle', cx, cy, r]); }
+    ellipse(cx, cy, rx, ry) { this.paths.push(['ellipse', cx, cy, rx, ry]); }
+    moveTo(x, y) { this.paths.push(['moveTo', x, y]); }
+    lineTo(x, y) { this.paths.push(['lineTo', x, y]); }
+    close() { this.paths.push(['close']); }
     fill() { this.paths.push(['fill']); }
     stroke() { this.paths.push(['stroke']); }
     clear() { this.paths.length = 0; }
@@ -248,10 +259,28 @@ const Director = {
     EVENT_BEFORE_UPDATE: 'before-update',
 };
 
+/* ---- game / assetManager / SceneAsset ----
+   这三个是 HomeRuntime 的「设置」和「进战斗」两条路要用的。
+   最初没 mock，于是 `applyPrefs()` 一跑就 TypeError，
+   整份 _rt-check 连断言都进不去 —— 而它报的是引擎 API 不存在，
+   看起来像脚本写错，实际是替身缺件。补上之后才不会一直误判。 */
+const game = { frameRate: 60 };
+
+class SceneAsset {
+    constructor() { this.scene = null; }
+}
+
+/* 默认走「载入失败」分支：离线环境没有真实资源包，
+   能验证的重点是"失败后会回退、不会崩"。 */
+const assetManager = {
+    loadAny(uuid, cb) { cb(new Error('mock: 无资源包'), null); },
+};
+
 /* EDITOR 用 getter 读全局开关，这样同一个 mock 可以分别模拟「运行时」和「编辑器」 */
 const exportsObj = {
     Node, Scene, UITransform, UIOpacity, Label, Sprite, Graphics,
     Color, Vec3, EventTouch, tween, director, Director,
+    game, assetManager, SceneAsset,
 };
 Object.defineProperty(exportsObj, 'EDITOR', {
     get() { return globalThis.__MOCK_EDITOR === true; },

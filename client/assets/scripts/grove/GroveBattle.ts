@@ -48,6 +48,8 @@ import {
     groveAttachCanvas, groveBoot, grovePointer, groveRender, groveSetArt,
     groveSetExitHook, groveTick, GROVE,
 } from './GroveRuntime';
+import { loadSave, saveSave } from '../config/SaveData';
+import { applyRunReward, payoutFromRun } from '../config/HomeBiz';
 
 const { ccclass } = _decorator;
 
@@ -117,6 +119,8 @@ export class GroveBattle extends Component {
     /** 承载画布的 DOM 容器；收工/销毁时整块摘掉 */
     private _stage: HTMLDivElement | null = null;
     private _ready = false;
+    /** 收工只入账一次。钩子和销毁都可能再进来 */
+    private _paid = false;
 
     onLoad(): void {
         if (typeof document === 'undefined' || !document.createElement || !document.body) {
@@ -140,7 +144,7 @@ export class GroveBattle extends Component {
 
         /* 先绑画布再开局：绘制要 ctx，beginRun 会立刻画一帧。 */
         groveAttachCanvas(cv);
-        groveSetExitHook(() => this._backHome());
+        groveSetExitHook((kind) => this._backHome(kind));
         this._loadArt();
         groveBoot();
 
@@ -424,10 +428,29 @@ export class GroveBattle extends Component {
         }
     }
 
+    /** 把这一趟的果子 / 材料 / 吧唧写进家园存档。回到主界面再报一句。 */
+    private _bankRun(kind: string): void {
+        const s = GROVE.S;
+        const home = s.home || {};
+        const trip = s.trip || {};
+        const payout = payoutFromRun({
+            kind,
+            lastLoot: home.lastLoot || 0,
+            lastStages: home.lastStages || 0,
+            tripLoot: trip.loot || 0,
+            tripStages: trip.stages || 0,
+            food: s.food || 0,
+        });
+        saveSave(applyRunReward(loadSave(), payout));
+    }
+
     /** "收工"回主界面。和 HomeRuntime 进战斗用同一套 uuid 加载方式。 */
-    private _backHome(): void {
+    private _backHome(kind?: string): void {
+        if (this._paid) return;
+        this._paid = true;
         this._ready = false;
         this._unmountStage();
+        this._bankRun(kind || 'done');
         this._syncProgressToHome();
 
         assetManager.loadAny(HOME_UUID, (err: Error | null, asset: unknown) => {

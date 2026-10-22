@@ -5,7 +5,7 @@
  * 编译后直接跑 HomeRuntime，然后用「派发触摸事件 + 推进帧」的方式断言：
  *
  *   1. 脚本能接管场景（说明顶层自启动这条路通）
- *   2. 宠物真的在动，且始终待在自己的领地里
+ *   2. 宠物站在原地呼吸，不横移、不蹦跳
  *   3. 每个入口都注册了点击监听（这是「点了有反应」的充要条件）
  *   4. 点出门 → 出发卡出现；点徽标 → 提示出现且有正确文案
  *
@@ -108,40 +108,26 @@ const petsRoot = canvas.getChildByName('Pets');
 const sugar = petsRoot && petsRoot.getChildByName('砂糖');
 ok(!!sugar, '找到宠物节点 Pets/砂糖');
 
-/* --- 5.1 宠物会动 --- */
-const ROAM_L = 120 - 640;   // 设计坐标 120
-const ROAM_R = 392 - 640;
-
+/* --- 5.1 宠物站着：没有行走帧，位移会被读成滑或者跳 --- */
 const x0 = sugar.position.x;
 let minX = Infinity, maxX = -Infinity;
-let movedFrames = 0;
-let prevX = x0;
 
-/* 推进 20 秒，采样位移 */
+/* 推进 20 秒。x 必须钉在出生点，允许浮点噪声，不允许溜达。 */
 for (let i = 0; i < 1200; i++) {
     fakeNow += 1000 / 60;
     director.emit(Director.EVENT_BEFORE_UPDATE);
     const x = sugar.position.x;
     minX = Math.min(minX, x);
     maxX = Math.max(maxX, x);
-    if (Math.abs(x - prevX) > 0.01) movedFrames++;
-    prevX = x;
 }
 
 const travel = maxX - minX;
-ok(travel > 20, '宠物在领地里走动', `20 秒内跨度 ${travel.toFixed(1)}px`);
-ok(movedFrames > 120, '走动是连续的（不是瞬移）', `${movedFrames} 帧有位移`);
-ok(minX >= ROAM_L - 0.6 && maxX <= ROAM_R + 0.6, '走动不越出自己的领地',
-    `实测 ${minX.toFixed(1)}~${maxX.toFixed(1)}，领地 ${ROAM_L}~${ROAM_R}`);
+ok(travel < 1, '宠物站在原地（不横移）', `20 秒内跨度 ${travel.toFixed(2)}px`);
+ok(Math.abs(sugar.position.x - x0) < 1, '脚还在出生的那个点',
+    `x ${sugar.position.x.toFixed(1)}，出生 ${x0.toFixed(1)}`);
 
-/* --- 5.1b 是「走」不是「跳」：全程不许出现腾空 ---
- *
- * 之前那版是蹦跳：峰值 9~18px，肉眼一眼就是撒欢。用户明确否掉了。
- * 现在的走法只有 1.2px 碎步起伏 + 1.5px 呼吸，所以最大离地高度必须很小；
- * 阈值给 4px，是"碎步 + 呼吸 + 数值误差"的上限 —— 一旦谁又把跳加回来，这里立刻红。
- */
+/* --- 5.1b 也不上下窜。呼吸是 ±1.5px 的慢正弦，蹦跳是 0.4 秒内抬 9px 以上。 --- */
 let prevY = sugar.position.y;
-const y0 = prevY;
 let maxStep = 0;
 const trace = [];
 for (let i = 0; i < 1800; i++) {
@@ -154,39 +140,31 @@ for (let i = 0; i < 1800; i++) {
 }
 const bandMin = Math.min(...trace);
 const bandMax = Math.max(...trace);
-
-/* 去掉"走近/走远"这条慢趋势，只看抖动幅度。
- * 一次蹦跳会让 y 在 0.4 秒内抬起 9~18px，去趋势后仍是一个 9px 以上的鼓包；
- * 走路的碎步只有 1~2px，加上深度位移的残留也就在 5px 上下。
- * 窗口给 ±1 秒（60 帧）：再短会把"一段正常的前后走动"当成抖动来罚。
- * 阈值 8 是蹦跳的最低值（9px）与走路实测（≤5.3px）之间的分界。 */
-let maxDev = 0;
-const WIN = 60;
-for (let i = 0; i < trace.length; i++) {
-    const a = Math.max(0, i - WIN);
-    const b = Math.min(trace.length, i + WIN);
-    let sum = 0;
-    for (let j = a; j < b; j++) sum += trace[j];
-    maxDev = Math.max(maxDev, Math.abs(trace[i] - sum / (b - a)));
-}
-ok(maxDev < 8, '走路是贴地的（去掉前后走动后，抖动幅度不像蹦跳）',
-    `去趋势最大起伏 ${maxDev.toFixed(2)}px（阈值 8；蹦跳那版是 9~18px）`);
-ok(maxStep < 1.2, '没有蹬地那一下（单帧位移）',
+ok(bandMax - bandMin < 4, '没有蹦跳（整段高度差极小）',
+    `高度差 ${(bandMax - bandMin).toFixed(2)}px（蹦跳那版是 9~28px）`);
+/* ⚠ 这条以前断言的是"站着也有呼吸"（1.5px 正弦）。
+   用户否掉了：「宠物在场景晃动不要了」。锚点在脚底 (0.5,0)，
+   任何竖直位移都读成**脚离地**，因为没有影子跟着动。
+   现在断言反过来：静止就必须真的是 0。 */
+ok(bandMax - bandMin === 0, '静止时完全不晃（脚不离地）',
+    `高度差 ${(bandMax - bandMin).toFixed(2)}px（应为 0）`);
+ok(maxStep < 0.4, '没有蹬地那一下（单帧位移）',
     `单帧最大 ${maxStep.toFixed(3)}px（蹦跳 1.5+）`);
-ok(bandMax - bandMin > 6, '会在场景里前后走（深度方向也动）',
-    `深度位移 ${(bandMin - y0).toFixed(1)}~${(bandMax - y0).toFixed(1)}px`);
-ok(bandMax - bandMin < 34, '走动不离开草地这条带（深度有夹紧）',
-    `总高度差 ${(bandMax - bandMin).toFixed(1)}px（上限 34）`);
 
-/* --- 5.2 呼吸：静止时 y 也在变 --- */
+/* --- 5.2 静止时 y 必须恒定，scale 也必须恒定 --- */
 const ys = [];
+const sxs = [];
 for (let i = 0; i < 600; i++) {
     fakeNow += 1000 / 60;
     director.emit(Director.EVENT_BEFORE_UPDATE);
     ys.push(sugar.position.y);
+    sxs.push(sugar.scale.x);
 }
 const yMin = Math.min(...ys), yMax = Math.max(...ys);
-ok(yMax - yMin > 0.5, '宠物有呼吸起伏', `y 幅度 ${(yMax - yMin).toFixed(2)}px`);
+ok(yMax - yMin === 0, '宠物静止时 y 恒定', `y 幅度 ${(yMax - yMin).toFixed(2)}px`);
+ok(Math.max(...sxs) - Math.min(...sxs) < 1e-6,
+    '宠物静止时 scale 恒定（没有"呼吸缩放"）',
+    `scale 幅度 ${(Math.max(...sxs) - Math.min(...sxs)).toFixed(6)}`);
 
 /* --- 5.3 每个入口都注册了点击 --- */
 function collectClickable(root, acc = []) {
@@ -238,21 +216,40 @@ if (goInCard) {
     ok(director._loaded === 'Battle', '点「出发」真的切到战斗场景', `loadScene = ${director._loaded}`);
 }
 
-/* --- 5.5 点徽标 → 提示出现 --- */
+/* --- 5.5 点徽标 → 面板出现 ---
+   ⚠ 这里原来断言的是"出现 __Toast 提示条"。徽标后来升级成了真面板
+   （工作台 → openBench、图鉴 → openCodex），提示条只剩兜底路径，
+   断言于是永远失败 —— 改的时候顺手把断言改成对**当前设计**的描述，
+   否则这条测试会一直红着，红久了就没人看了。 */
 const hotWt = canvas.getChildByName('Badges').getChildByName('Badge-工作台-hot');
 hotWt.emitTouch(Node.EventType.TOUCH_END);
-const toastNode = canvas.getChildByName('__Toast');
-ok(!!toastNode, '点徽标后出现提示条');
-const toastLblNode = toastNode && toastNode.getChildByName('msg');
-const toastComp = toastLblNode && toastLblNode.getComponent(cc.Label);
-const toastText = toastComp ? toastComp.string : '';
-ok(toastText.indexOf('工作台') >= 0, '提示文案指向被点的入口', toastText || '(无)');
+const sheetNode = canvas.getChildByName('__Sheet');
+ok(!!sheetNode, '点徽标后打开了面板（__Sheet）');
+const sheetTitle = sheetNode && sheetNode.getChildByName('card')
+    && sheetNode.getChildByName('card').getChildByName('title');
+const sheetTitleComp = sheetTitle && sheetTitle.getComponent(cc.Label);
+ok(!!sheetTitleComp && sheetTitleComp.string === '工作台',
+    '面板标题指向被点的入口', sheetTitleComp ? sheetTitleComp.string : '(无)');
 
 for (let i = 0; i < 12; i++) {
     fakeNow += 1000 / 60;
     director.emit(Director.EVENT_BEFORE_UPDATE);
 }
-ok(toastNode.getComponent(cc.UIOpacity).opacity > 100, '提示条已淡入', `opacity=${toastNode.getComponent(cc.UIOpacity).opacity}`);
+/* 面板没有淡入（openSheet 里直接建好就显示），所以这里原来断言
+   `UIOpacity.opacity > 100` 会拿到 null —— 面板根节点压根没挂 UIOpacity。
+   改成断言"它真的画出来了"：卡片有 Graphics、遮罩有 Graphics。 */
+const sheetCard = sheetNode.getChildByName('card');
+const sheetScrim = sheetNode.getChildByName('scrim');
+ok(!!sheetCard && !!sheetCard.getComponent(cc.Graphics), '面板卡片已绘制（paintCard）');
+ok(!!sheetScrim && !!sheetScrim.getComponent(cc.Graphics), '面板有全屏遮罩');
+
+/* 点遮罩应当关掉面板 —— 这是唯一的关闭路径，必须测 */
+sheetScrim.emitTouch(Node.EventType.TOUCH_END);
+ok(!canvas.getChildByName('__Sheet'), '点遮罩能关掉面板');
+
+/* 再开一次，确认"关了还能开"，不是一次性的 */
+hotWt.emitTouch(Node.EventType.TOUCH_END);
+ok(!!canvas.getChildByName('__Sheet'), '关掉后能再次打开（面板仍只有一个）');
 
 /* --- 5.6 徽标热区不小于 88×88 --- */
 const hotUT = hotWt.getComponent(UITransform);
@@ -398,14 +395,18 @@ ok(progTxt === '3 / 8 关', '关卡进度读自存档', `txt-prog = ${progTxt}`)
 
 const goLine = dock3.getChildByName('Btn-Go').getChildByName('line')
     .getComponent(cc.Label).string;
-ok(goLine.indexOf('带 3 只') === 0, '出门按钮的"带几只"与出战人数一致', `line = ${goLine}`);
-ok(goLine.indexOf('苔原 4 / 8') > 0, '出门按钮显示的是"下一关"而不是已通关数', `line = ${goLine}`);
+/* ⚠ 副标题在改版里换成了**能量**（`能量 100`），不再是"带 N 只 · 苔原 4 / 8"。
+   按钮同时只有 248×76，「带几只 + 第几关」塞不下；而"这一下要花多少能量"
+   是点之前最需要知道的数。原断言留着只会一直红。 */
+ok(/^能量 \d+$/.test(goLine), '出门按钮显示本次消耗的能量', `line = ${goLine}`);
 
-/* 宠物：cleared=3 → 砂糖 / 年糕 / 团子 在家，雪团 / 豆奶 / 星屑 还没回来 */
+/* 宠物：草地**只站当前伙伴一只**（其余在 Dock 的槽位里）。
+   这条以前断言 cleared=3 时砂糖/年糕/团子三只都站草地上 ——
+   后来改成"只站一只"，测试没跟。 */
 const pets3 = c3.getChildByName('Pets');
 const petOn = (n) => pets3.getChildByName(n).active;
-ok(petOn('砂糖') && petOn('年糕') && petOn('团子'),
-    '已解锁的宠物出现在草地上', `砂糖=${petOn('砂糖')} 年糕=${petOn('年糕')} 团子=${petOn('团子')}`);
+const onGrass = ['砂糖', '年糕', '团子', '雪团', '豆奶', '星屑'].filter(petOn);
+ok(onGrass.length === 1, '草地上只有一只伙伴', `站着的是 ${onGrass.join('/') || '(无)'}`);
 ok(!petOn('雪团') && !petOn('豆奶') && !petOn('星屑'),
     '未解锁的宠物不出现（预置但 active=false）',
     `雪团=${petOn('雪团')} 豆奶=${petOn('豆奶')} 星屑=${petOn('星屑')}`);

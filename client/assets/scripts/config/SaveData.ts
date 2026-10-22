@@ -16,6 +16,8 @@
  *    任何一侧多带一个引擎依赖都会让另外两侧跑不起来。存储后端用运行时探测。
  */
 
+import { PETS } from './Roster';
+
 /* ==========================================================================
  * 1. 存储后端
  * ========================================================================== */
@@ -69,6 +71,27 @@ function store(): Store | null {
  * 2. 存档结构
  * ========================================================================== */
 
+/** 工作台做出来、灶台和派遣会消耗的东西 */
+export interface HomeBag {
+    /** 干粮：灶台直接吃，不扣果子 */
+    ration: number;
+    /** 收集篮：收回派遣时产量 ×1.5，用掉一个 */
+    basket: number;
+}
+
+/** 正在外面采集的那一只。`since` 是出发的时间戳（毫秒） */
+export interface DispatchJob {
+    id: string;
+    since: number;
+}
+
+/** 设置页记住的两项。本版没有音效文件，静音开关先存着，画质会改帧率。 */
+export interface HomePrefs {
+    mute: boolean;
+    /** true = 清晰 60 帧，false = 流畅 30 帧 */
+    crisp: boolean;
+}
+
 export interface SaveState {
     /** 已通关数（苔原 1/8）。驱动宠物解锁与出战人数 */
     cleared: number;
@@ -88,12 +111,36 @@ export interface SaveState {
     satiety: number;
     /** 累计出门场次（只做统计，不参与任何判定） */
     runs: number;
+    /** 每只被摸 / 被喂累计的亲密度点数。5 点一颗心，最多 5 颗 */
+    pats: Record<string, number>;
+    bag: HomeBag;
+    /** 没有派出时是 null */
+    dispatch: DispatchJob | null;
+    settings: HomePrefs;
+    /** 出门用的能量，0~100。和饱食不是一回事：饱食管火力，能量管能不能出门 */
+    energy: number;
+    /** 上次把能量结算到「现在」的时间戳。恢复按它算，不按帧 */
+    energyAt: number;
+    /** 灶台成功喂过几次、工作台做成几次、派遣收回几次。任务读这些数 */
+    feeds: number;
+    crafts: number;
+    dispatches: number;
+    /** 已经领过奖的任务 id */
+    claimed: string[];
+    /** 回到家园时要报的一句。报完就清空 */
+    lastReward: string;
 }
 
 /**
  * 默认存档。资源初值刻意与 `Home.scene` 里三个 `val` Label 的静态值一致 ——
  * 这样"从没存过档"和"存过档"看起来是同一天，不会出现开局数字忽然跳变。
  */
+function blankPats(): Record<string, number> {
+    const o: Record<string, number> = {};
+    for (const p of PETS) o[p.id] = 0;
+    return o;
+}
+
 export const DEFAULT_SAVE: SaveState = {
     cleared: 0,
     apples: 248,
@@ -102,9 +149,67 @@ export const DEFAULT_SAVE: SaveState = {
     active: 'sugar-stand',
     satiety: 100,
     runs: 0,
+    pats: blankPats(),
+    bag: { ration: 0, basket: 0 },
+    dispatch: null,
+    settings: { mute: false, crisp: true },
+    energy: 100,
+    energyAt: 0,
+    feeds: 0,
+    crafts: 0,
+    dispatches: 0,
+    claimed: [],
+    lastReward: '',
 };
 
-/** 版本化键名：结构一变就换键，旧档自然失效，不做迁移（原型期） */
+/** 默认档的深拷贝。浅拷贝会让调用方改到 `DEFAULT_SAVE` 里的 pats / bag。 */
+function freshSave(): SaveState {
+    return {
+        ...DEFAULT_SAVE,
+        pats: { ...DEFAULT_SAVE.pats },
+        bag: { ...DEFAULT_SAVE.bag },
+        settings: { ...DEFAULT_SAVE.settings },
+        dispatch: null,
+        claimed: [],
+        energyAt: Date.now(),
+    };
+}
+
+function loadPats(raw: unknown): Record<string, number> {
+    const src = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+    const o = blankPats();
+    for (const id of Object.keys(o)) o[id] = Math.floor(clampNum(src[id], 0, 0, 99_999));
+    return o;
+}
+
+function loadBag(raw: unknown): HomeBag {
+    const src = raw && typeof raw === 'object' ? raw as Partial<HomeBag> : {};
+    return {
+        ration: Math.floor(clampNum(src.ration, 0, 0, 999)),
+        basket: Math.floor(clampNum(src.basket, 0, 0, 999)),
+    };
+}
+
+function loadDispatch(raw: unknown): DispatchJob | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const src = raw as Partial<DispatchJob>;
+    if (typeof src.id !== 'string' || !PETS.some((p) => p.id === src.id)) return null;
+    if (typeof src.since !== 'number' || !isFinite(src.since)) return null;
+    return { id: src.id, since: src.since };
+}
+
+function loadPrefs(raw: unknown): HomePrefs {
+    const src = raw && typeof raw === 'object' ? raw as Partial<HomePrefs> : {};
+    return {
+        mute: src.mute === true,
+        crisp: src.crisp !== false,
+    };
+}
+
+/**
+ * 版本化键名。新加的亲密度 / 背包 / 派遣 / 设置在读档时补默认值，
+ * 不换键 —— 换了会把已经打过的进度清掉。
+ */
 const KEY = 'pawpack.save.v1';
 
 const clampNum = (v: unknown, def: number, lo: number, hi: number): number => {
@@ -119,24 +224,24 @@ const clampNum = (v: unknown, def: number, lo: number, hi: number): number => {
  */
 export function loadSave(): SaveState {
     const s = store();
-    if (!s) return { ...DEFAULT_SAVE };
+    if (!s) return freshSave();
 
     let raw: string | null = null;
     try {
         raw = s.getItem(KEY);
     } catch (e) {
-        return { ...DEFAULT_SAVE };
+        return freshSave();
     }
-    if (!raw) return { ...DEFAULT_SAVE };
+    if (!raw) return freshSave();
 
     let o: Partial<SaveState> | null = null;
     try {
         o = JSON.parse(raw) as Partial<SaveState>;
     } catch (e) {
         /* 存档损坏就当没存过，不要崩 —— 玩家丢档比丢进度更痛 */
-        return { ...DEFAULT_SAVE };
+        return freshSave();
     }
-    if (!o || typeof o !== 'object') return { ...DEFAULT_SAVE };
+    if (!o || typeof o !== 'object') return freshSave();
 
     return {
         cleared: Math.floor(clampNum(o.cleared, DEFAULT_SAVE.cleared, 0, 8)),
@@ -146,6 +251,17 @@ export function loadSave(): SaveState {
         active: typeof o.active === 'string' && o.active ? o.active : DEFAULT_SAVE.active,
         satiety: clampNum(o.satiety, DEFAULT_SAVE.satiety, 0, 100),
         runs: Math.floor(clampNum(o.runs, DEFAULT_SAVE.runs, 0, 999_999)),
+        pats: loadPats(o.pats),
+        bag: loadBag(o.bag),
+        dispatch: loadDispatch(o.dispatch),
+        settings: loadPrefs(o.settings),
+        energy: Math.floor(clampNum(o.energy, DEFAULT_SAVE.energy, 0, 100)),
+        energyAt: typeof o.energyAt === 'number' && isFinite(o.energyAt) && o.energyAt > 0 ? o.energyAt : Date.now(),
+        feeds: Math.floor(clampNum(o.feeds, 0, 0, 999_999)),
+        crafts: Math.floor(clampNum(o.crafts, 0, 0, 999_999)),
+        dispatches: Math.floor(clampNum(o.dispatches, 0, 0, 999_999)),
+        claimed: Array.isArray(o.claimed) ? o.claimed.filter((id) => typeof id === 'string') : [],
+        lastReward: typeof o.lastReward === 'string' ? o.lastReward.slice(0, 80) : '',
     };
 }
 
@@ -252,7 +368,7 @@ export function lootOf(s: LootInput): Loot {
  * 4. 结算入池
  * ========================================================================== */
 
-/** 回家后的饱食度下限（= "回家吃一顿"）。 */
+/** 一顿吃满的饱食度。结算不再用它兜底，灶台把肚子喂到这里为止。 */
 export const REST_SATIETY = 100;
 
 /**
@@ -261,8 +377,8 @@ export const REST_SATIETY = 100;
  * 三件事在这里一次做完，避免调用方漏掉其中一件：
  *  1. 资源入池；
  *  2. 通关则推进关卡进度（`cleared`），驱动宠物解锁与出战人数；
- *  3. 饱食度回写 —— 但**回家必吃一顿**，所以取 `REST_SATIETY` 作为下限。
- *     灶台上线后把这里改成"实际吃了多少"，这个字段立刻开始有变化。
+ *  3. 饱食度按战斗结束时的数回写。
+ *     回家不再自动吃饱 —— 要吃去灶台。`REST_SATIETY` 留着表示"一顿吃满"。
  */
 export function settleInto(
     prev: SaveState,
@@ -271,14 +387,14 @@ export function settleInto(
 ): { next: SaveState; loot: Loot } {
     const loot = lootOf(stats);
     const won = stats.endReason === 'victory';
-
+    const sat = Math.min(100, endSatiety);
     const next: SaveState = {
         ...prev,
         apples: prev.apples + loot.apples,
         logs: prev.logs + loot.logs,
         coins: prev.coins + loot.coins,
         cleared: won ? Math.min(8, prev.cleared + 1) : prev.cleared,
-        satiety: Math.max(REST_SATIETY, Math.min(100, endSatiety)),
+        satiety: sat < 0 ? 0 : sat,
         runs: prev.runs + 1,
     };
     saveSave(next);

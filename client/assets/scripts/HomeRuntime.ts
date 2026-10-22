@@ -15,17 +15,17 @@
  *      逻辑像素；徽标视觉 47×48 太小，另开隐形热区，视觉不动。
  *      按下必监听 TOUCH_CANCEL，否则手指滑出去会卡在按下的状态弹不回来。
  *
- *   2. 生命感 —— 宠物呼吸、领地内**贴地走动**、点它会弹一下并冒颗心。
- *      不蹦跳：蹦跳是"没有行走帧"时的权宜之计，看着像宠物在撒欢，不像在溜达。
- *      现在的走法是「60% 朝镜头走近/走远 + 40% 短距离横移」，配 1.2px 碎步起伏
- *      与 1.5° 摇摆。真正的迈腿动作需要行走序列帧，规格见 §14.4。详见 `startWalk`。
- *      雾层垂直缓移 + 透明度呼吸，制造空气感。
+ *   2. 生命感 —— 宠物站在原地呼吸，点它会弹一下并冒颗心。
+ *      单帧正面立绘做不出走路：横移读成贴纸在滑，上下位移读成跳。
+ *      行走序列帧补上之前先站着（规格见 §14.4）。雾层仍缓移，空气感留着。
  *
- *   3. 结果 —— 点了之后一定有事发生。次要入口给 toast 说明，
- *      主行动「出门」给出发确认卡，卡上的「出发」真的 `loadScene('Battle')`。
+ *   3. 结果 —— 点了之后一定有事发生。灶台 / 工作台 / 派遣 / 设置 / 图鉴
+ *      都打开真面板并写存档。主行动「出门」给出发确认卡，
+ *      卡上的「出发」真的 `loadScene('Battle')`。
  *
  *   4. 存档回流 —— 资源池 / 关卡进度 / 饱食度全部读自 `config/SaveData.ts`，
- *      不再显示场景里写死的假数字。家园只读存档，写只发生在战斗结算。
+ *      不再显示场景里写死的假数字。战斗结算写战利品，家园入口写喂饭、
+ *      制作、派遣和亲密度。
  *
  * 生效方式
  * --------
@@ -45,14 +45,21 @@
 
 import {
     Node, UITransform, UIOpacity, Label, Sprite, Graphics, Color,
-    EventTouch, Vec3, tween, director, Director,
+    EventTouch, Vec3, tween, director, Director, game,
     assetManager, SceneAsset,
 } from 'cc';
 import { EDITOR } from 'cc/env';
 import { MAX_SQUAD, PETS, petGap, squadSize, unlockedPets } from './config/Roster';
-import { loadSave } from './config/SaveData';
+import { loadSave, saveSave } from './config/SaveData';
 import type { SaveState } from './config/SaveData';
 import { SATIETY } from './config/BattleConfig';
+import {
+    MEALS, RECIPES, PET_LINE, DISPATCH_SEC, DISPATCH_CAP,
+    ENERGY_MAX, ENERGY_COST,
+    feed, craft, recordPat, startDispatch, collectDispatch, peekDispatch,
+    toggleMute, toggleCrisp, heartText, canDispatch,
+    settleEnergy, spendEnergy, TASKS, taskPhase, claimTask, claimableCount,
+} from './config/HomeBiz';
 
 /* ==========================================================================
  * 设计常量（引擎中立规格，单位＝设计像素，基准 1280×720）
@@ -66,14 +73,58 @@ const HOT_MIN = 88;
 
 const WHITE = new Color(255, 255, 255, 255);
 
-/** 出发卡片配色（与主界面米+棕的家族一致，不引入新色相） */
-const CARD_FILL = new Color(255, 246, 233, 252);
+/**
+ * 卡片白 —— 这一档色值不是"我挑的白"，是**从现有 UI 贴图上采下来的**。
+ *
+ * 采样（assets/ui/home/*.png，取卡片中心像素）：
+ *   badge-cap-3.png     (255, 252, 244, 240)
+ *   panel-res.png       (252, 249, 237, 241)
+ *   panel-hud-tip.png   (252, 247, 235, 241)
+ *
+ * 三张都在 (252~255, 247~252, 235~244) 这个区间里 —— 也就是说这一屏的"白"
+ * 本身就是**带一点暖调的米白**，不是 #FFFFFF。运行时新画的卡片必须落进同一个
+ * 区间，否则同一屏里会出现两种白，读作"这两块不是一套的"。
+ *
+ * 上一版写 (255,246,233)，比贴图低 6~11 个色阶，明显偏黄；
+ * 用户的原话是"其他 UI 底色还是以白色的" —— 他要的不是纯白，
+ * 是"别突然变黄"。
+ */
+const CARD_FILL = new Color(255, 252, 244, 242);
 const CARD_LINE = new Color(214, 168, 128, 255);
 const INK = new Color(92, 66, 50, 255);
 const INK_SOFT = new Color(150, 118, 96, 255);
 const SCRIM = new Color(38, 26, 20, 255);
 const BTN_FILL = new Color(242, 186, 108, 255);
 const BTN_DEEP = new Color(150, 104, 58, 255);
+const ROW_FILL = new Color(255, 252, 246, 255);
+const ROW_OFF = new Color(232, 224, 212, 255);
+
+/**
+ * 不透明的卡片白 —— 只在"卡片要**盖住**底下的东西"时用。
+ *
+ * 上面那档 242 的 alpha 是给弹层用的：下面压着一层深色遮罩，半透一点更像玻璃。
+ * 但派遣卡要盖住的是**背景图里那块深绿告示板**，而那块板上画满了白色横线
+ * （告示板的"文字"）。242 的 alpha 会让那几条白线以 5% 的强度透出来，
+ * 卡片上浮着几条鬼影，比原来的深绿板还像 bug —— 这是渲染图上一眼看到的。
+ */
+const CARD_FILL_SOLID = new Color(255, 252, 244, 255);
+
+/** 米白卡片：外圈深棕、内圈浅缝，和院子里的圆牌是同一套 */
+function paintCard(g: Graphics, w: number, h: number) {
+    const x = -w / 2;
+    const y = -h / 2;
+    g.fillColor = CARD_FILL;
+    g.roundRect(x, y, w, h, 28);
+    g.fill();
+    g.lineWidth = 4;
+    g.strokeColor = new Color(122, 80, 52, 255);
+    g.roundRect(x, y, w, h, 28);
+    g.stroke();
+    g.lineWidth = 2;
+    g.strokeColor = new Color(214, 176, 140, 210);
+    g.roundRect(x + 10, y + 10, w - 20, h - 20, 20);
+    g.stroke();
+}
 
 /* --------------------------------------------------------------------------
  * 宠物领地（设计坐标 0~1280，取自 game.src.html 的 PETS.roam，唯一真值）
@@ -90,6 +141,19 @@ const PET_ROAM: Record<string, [number, number]> = {
     '豆奶': [862, 932],
     '星屑': [1106, 1162],
 };
+
+/**
+ * 六只的落脚点。脚底锚点，坐标是画布中心系。
+ *
+ * 都站在屋前那条空地上，左右错开、深浅只差二十像素。
+ * 第一只如果贴在前景大花里，会比房子还抢眼；后面解锁的再排成一排，
+ * 就成了贴在镜头前的贴纸。空地装得下以后再来的同伴。
+ */
+/**
+ * 草地上只站当前这一只。脚底锚点，画布中心系。
+ * 落在屋前空地、灶台和告示板之间，不挡门，也不站进花里。
+ */
+const LAWN_SPOT: [number, number] = [170, -168];
 
 /* --------------------------------------------------------------------------
  * 入口说明文案。没有 hover 的平台上只有 :hover 提示等于没有提示，
@@ -265,12 +329,14 @@ class HomeController {
     private codex: Node | null = null;
     private codexOp: UIOpacity | null = null;
 
+    /** 灶台 / 工作台 / 派遣 / 设置共用的一张卡片。同时只开一张。 */
+    private sheet: Node | null = null;
+    /** 派遣已经喊过「回来了」，避免每一帧都 toast */
+    private dispatchPing = false;
+
     /**
-     * 存档快照。
-     *
-     * 家园是**展示端**：它只读存档，从不写 —— 写只发生在战斗结算
-     * （`GameBootstrap` → `settleInto`）。这样"战斗说带回 16 个果子、
-     * 家园只多了 14 个"这类对不上就不可能发生。
+     * 存档快照。战斗结算写战利品，这里写喂饭 / 制作 / 派遣 / 亲密度。
+     * 改完立刻 `saveSave`，顶部三个数字和饱食条同一帧刷新。
      */
     private save: SaveState = loadSave();
 
@@ -285,19 +351,29 @@ class HomeController {
         /* 归位要排在 bindBadges 之前：热区是按徽标当前尺寸算的，
            先把图标/文字摆正，再挂热区，热区和视觉才对得上。 */
         this.alignHud();
-        /* 系统入口在归位之后**统一搬成右侧一条竖栏**。
-           必须先 alignHud 后 layout：alignHud 会把 Cap 贴回 Badge 下方，
-           反过来做就又变成"牌子按旧坐标挂着"。 */
+        /* 先 alignHud 再钉到建筑上：alignHud 会把说明牌子贴回徽标下面。 */
         this.layoutRail();
         this.bindPets();
         /* 存档刷新必须排在 bindDock / bindHud 之前：
            它们绑的事件回调里会读 this.save（比如出战卡文案），
            先刷一遍能保证第一帧看到的就是真值。 */
         this.bindSave();
+        const settled = settleEnergy(this.save, Date.now());
+        if (settled !== this.save) this.commit(settled);
+        this.syncLawn();
+        this.applyPrefs();
         this.bindBadges();
         this.bindDock();
         this.bindHud();
+        this.placeResources();
         this.bindAmbient();
+        this.placeTaskBtn();
+        this.placeDispatchCard();
+        if (this.save.lastReward) {
+            const msg = this.save.lastReward;
+            this.commit({ ...this.save, lastReward: '' });
+            this.toast(msg);
+        }
     }
 
     /* ----------------------------------------------------------------------
@@ -410,68 +486,23 @@ class HomeController {
      * -------------------------------------------------------------------- */
 
     /**
-     * 把四个系统徽标搬成画面右侧一条等距竖栏。
-     *
-     * **为什么不再让它们散在场景里。**
-     * 这些徽标的坐标原本是照着"门口那块牌子 / 灶台 / 木桌在哪"手摆的，
-     * 于是同一行的三个（工作台 43 / 图鉴 31 / 灶台 53）顶边差 22px、
-     * 说明底板一宽一窄（48 和 37 两种）—— 单看每个都还行，并排一眼就是
-     * "贴纸没贴齐"。它们既想当场景物件、又想当 UI 入口，两个身份都不成立。
-     *
-     * 现在改成：**场景照旧是纯美术，入口统一进右栏**。竖栏的好处是
-     * 位置由公式算，永远是等距的；加一个入口不用再手摆坐标。
-     *
-     * 「去苔原」在这里被隐藏：底部 `Btn-Go`（出门）已经把这件事做了，
-     * 地图上再放一个是重复入口，玩家会不知道哪个才是"开始游戏"。
+     * 四个建筑入口用场景里摆好的位置：工作台在木桌，图鉴在屋门，
+     * 灶台在石灶，派遣在告示板。运行时再挪一次，就会飘到宠物头上、
+     * 或者压进出门按钮。
+     * 「去苔原」藏掉：右下角的出门按钮已经是这条路。
      */
     private layoutRail() {
         const badges = this.canvas.getChildByName('Badges');
         if (!badges) return;
 
-        /** 顺序即视觉顺序（从上往下）。不在表里的徽标一律隐藏。 */
-        const ORDER = ['图鉴', '工作台', '灶台', '派遣'];
-        /** 竖直中轴。距画布右边缘 97px，给设置按钮（右上）留出干净的角。 */
-        const RAIL_CX = 543;
-        /** 第一项顶边 / 相邻项顶边落差 */
-        const RAIL_TOP = 196;
-        const GAP = 94;
-        /** 与 alignHud 里同一个值 */
-        const CAP_GAP = 46;
-
+        const keep = new Set(['图鉴', '工作台', '灶台', '派遣']);
         for (const n of badges.children.slice()) {
-            if (!n.name.startsWith('Badge-') || n.name.indexOf('-hot') >= 0) continue;
-            if (ORDER.indexOf(n.name.slice(6)) < 0) n.active = false;
+            if (n.name.indexOf('-hot') >= 0) continue;
+            const key = n.name.startsWith('Badge-') ? n.name.slice(6)
+                : n.name.startsWith('Cap-') ? n.name.slice(4) : '';
+            if (!key || keep.has(key)) continue;
+            n.active = false;
         }
-
-        ORDER.forEach((key, i) => {
-            const b = badges.getChildByName(`Badge-${key}`);
-            const but = b && b.getComponent(UITransform);
-            if (!b || !but) return;
-            b.active = true;
-            const bw = but.contentSize.width;
-            const topY = RAIL_TOP - i * GAP;
-            b.setPosition(RAIL_CX - bw / 2, topY, 0);
-
-            const cap = badges.getChildByName(`Cap-${key}`);
-            const cut = cap && cap.getComponent(UITransform);
-            if (!cap || !cut) return;
-
-            /* 底板统一等宽。
-             * 场景里只有两种底板图（badge-cap-3 = 三字宽、badge-cap-2 = 两字宽），
-             * 按字数选图 → 一排牌子宽窄参差，这是"强行贴上去"最刺眼的一处。
-             * 底板图本身就是可拉伸的圆角胶囊，统一拉到 47 宽、文字重新居中即可。 */
-            const sp = cap.getComponent(Sprite);
-            if (sp) sp.sizeMode = Sprite.SizeMode.CUSTOM;
-            cut.setContentSize(47, cut.contentSize.height);
-            cap.setPosition(RAIL_CX - 47 / 2, topY - CAP_GAP, 0);
-
-            const txt = cap.getChildByName('txt');
-            const tut = txt && txt.getComponent(UITransform);
-            if (txt && tut) {
-                txt.setPosition((47 - tut.contentSize.width) / 2,
-                                -(cut.contentSize.height - tut.contentSize.height) / 2, 0);
-            }
-        });
     }
 
     /**
@@ -509,6 +540,13 @@ class HomeController {
         this.setResVal('Res-Log', s.logs);
         this.setResVal('Res-Coin', s.coins);
 
+        const lead = PETS.find((p) => s.cleared >= p.at);
+        const tipTxt = this.canvas.getChildByName('HUD')
+            ?.getChildByName('HudTip')
+            ?.getChildByName('txt')
+            ?.getComponent(Label);
+        if (tipTxt && lead) tipTxt.string = `${lead.name} 在院子里`;
+
         /* ---- 关卡进度（苔原 x / 8 + 8 个关卡格）---- */
         const prog = this.canvas.getChildByName('HUD')?.getChildByName('HudProgress');
         if (prog) {
@@ -530,11 +568,52 @@ class HomeController {
         const go = this.canvas.getChildByName('Dock')?.getChildByName('Btn-Go');
         const gl = go?.getChildByName('line')?.getComponent(Label);
         if (gl) {
-            gl.string = `带 ${squadSize(s.cleared)} 只 · 苔原 ${Math.min(8, s.cleared + 1)} / 8`;
+            gl.overflow = Label.Overflow.SHRINK;
+            gl.string = `能量 ${s.energy}`;
         }
+        this.refreshTaskBtn();
 
         /* ---- 饱食度：与战斗同一个 0~100 的数 ---- */
         this.refreshSatiety();
+    }
+
+    /** 果子 / 材料 / 吧唧排到右上，给院子中间和左下的宠物留空。 */
+    private placeResources() {
+        const dock = this.canvas.getChildByName('Dock');
+        if (!dock) return;
+        const names = ['Res-Apple', 'Res-Log', 'Res-Coin'];
+        const cards: { n: Node; ut: UITransform }[] = [];
+        for (const name of names) {
+            const n = dock.getChildByName(name);
+            const ut = n && n.getComponent(UITransform);
+            if (n && ut) cards.push({ n, ut });
+        }
+        const gap = 8;
+        const right = 568;
+        const top = 346;
+        const total = cards.reduce((s, c) => s + c.ut.contentSize.width, 0) + gap * Math.max(0, cards.length - 1);
+        let left = right - total;
+        let cardH = 72;
+        for (const c of cards) {
+            const w = c.ut.contentSize.width;
+            cardH = c.ut.contentSize.height;
+            c.n.setPosition(left + w * c.ut.anchorX, top - cardH * (1 - c.ut.anchorY), 0);
+            left += w + gap;
+        }
+
+        /* 提示条原来横在资源卡上面。挪到这一排的下沿，避免和果子叠在一起。 */
+        const tip = this.canvas.getChildByName('HUD')?.getChildByName('HudTip');
+        const tut = tip && tip.getComponent(UITransform);
+        if (tip && tut) {
+            const tw = tut.contentSize.width;
+            const th = tut.contentSize.height;
+            const tipTop = top - cardH - 8;
+            tip.setPosition(
+                right - tw * (1 - tut.anchorX),
+                tipTop - th * (1 - tut.anchorY),
+                0,
+            );
+        }
     }
 
     /** 写一个资源卡的数值（`Res-*` 节点下名为 `val` 的 Label） */
@@ -625,10 +704,12 @@ class HomeController {
             /* 存档说了算：场景把六只都预置好了，但只有解锁的该出现在草地上。
                未解锁的连热区都不建 —— 一只看不见的宠物能点出 toast 是 bug。 */
             const def = PETS.find((p) => p.name === n.name);
-            const on = !def || this.save.cleared >= def.at;
+            const lead = PETS.find((p) => this.save.cleared >= p.at);
+            const on = !!def && !!lead && def.id === lead.id;
             n.active = on;
             if (!on) continue;
 
+            n.setPosition(LAWN_SPOT[0], LAWN_SPOT[1], 0);
             const roam = PET_ROAM[n.name] ?? [120, 392];
             const ut = n.getComponent(UITransform);
             const petH = ut ? ut.contentSize.height : 84;
@@ -672,26 +753,22 @@ class HomeController {
                 rt.down = false;
                 rt.pop = 0.42;
                 this.popHeart(n);
+                if (!def) return;
+                const r = recordPat(this.save, def.id);
+                if (r.ok) this.commit(r.next);
+                this.toast(r.say);
             });
             hot.on(Node.EventType.TOUCH_CANCEL, () => { rt.down = false; });
         }
     }
 
     /**
-     * 起步走一段。
+     * 起步走一段。**当前没有调用方。**
      *
-     * ⚠️ 这里**不是蹦跳**。跨过三版之后的结论：
-     *
-     *   1. 砂糖是**正面站立单帧**，没有行走帧 → 腿部不可能交替，"迈腿"画不出来；
-     *   2. 但正视图角色做**长距离横移**时，无论怎么调都会读成"贴纸在滑/在倒退"
-     *      —— 这是视角问题，不是参数问题；
-     *   3. 正视图真正成立的运动是**朝镜头走近 / 走远**：角色本来就面朝观众，
-     *      配合近大远小，谁都能看出它在走。
-     *
-     * 所以步子改成「60% 前后走 + 40% 横向小幅挪」，并且横向的那 40% 走的是
-     * **贴地碎步**（每步 1.2px 起伏 + 1.5° 摇摆），不是腾空。
-     *
-     * 想要真正的迈腿动作，只有一条路：补行走序列帧（规格见 §14.4）。
+     * 单帧正面立绘试过三种动法，都站不住：
+     *   横移 → 贴纸在滑；蹦跳 → 撒欢；朝镜头走近走远 → 上下一窜，看起来还是跳。
+     * 行走序列帧（规格见 §14.4）补上之前，宠物站在原地，只留呼吸。
+     * 这段留着，是为了帧到了以后把 `tickPet` 里那一行调用接回去，而不是重写领地夹取。
      */
     private startWalk(p: PetRt) {
         const curX = p.node.position.x;
@@ -731,7 +808,7 @@ class HomeController {
     private tickPet(p: PetRt, dt: number) {
         /* 节点被销毁后，`position` 会返回 null（读它立刻抛 "reading 'x'"）。
            这里再兜一层 —— 就算哪天 dispose 漏调，也只会少动一只宠物，不会崩整帧。 */
-        if (!p.node || !p.node.isValid) return;
+        if (!p.node || !p.node.isValid || !p.node.active) return;
 
         const pos = p.node.position;
         if (!pos) return;
@@ -764,8 +841,8 @@ class HomeController {
                 p.wait = rand(0.9, 2.6);
             }
         } else {
-            p.wait -= dt;
-            if (p.wait <= 0) this.startWalk(p);
+            /* 不调用 startWalk。没有行走帧时，任何位移都会被读成滑或者跳。 */
+            p.wait = 0;
         }
 
         /* ---- 碎步：每步一次起伏 + 每步一次左右摇摆 ----
@@ -774,8 +851,13 @@ class HomeController {
         const bob = Math.sin(ph) * 1.2 * gait;
         const sway = Math.sin(p.step * Math.PI) * 1.5 * gait * p.dir;
 
-        /* 呼吸：锚点在脚底(0.5,0)，上下浮动读起来就是身体起伏。走起来时压掉。 */
-        const breath = Math.sin((this.t / p.dur) * Math.PI * 2 + p.ph) * 1.5 * (1 - gait);
+        /* **静止时完全不动。**
+           上一版给了 1.5px、周期 0.9~2.2 秒的"呼吸"，本意是让院子有生气；
+           实际读起来是"宠物飘在水上" —— 用户原话是"宠物在场景晃动不要了"。
+           锚点在脚底 (0.5, 0)，任何竖直位移都会被读成**脚离地**，1.5px 也够露馅，
+           因为没有影子跟着一起动。
+           交互反馈（点一下弹起来 + 冒心）保留：那是"回应"，不是"晃动"。 */
+        const breath = 0;
 
         /* 点击弹跳：抛物线包络，跟碎步的 y 通道叠加 */
         let pop = 0;
@@ -845,11 +927,13 @@ class HomeController {
             const key = n.name.slice(6);
             if (!n.active) continue;
 
-            /* 图鉴是唯一一个**已经有真实内容**的入口（六只宠物的收集状态），
-               所以它开面板，不再弹"待实装"。其余三个还没有系统，先给 toast ——
-               给一个假面板比给一句"待实装"更伤信任。 */
-            if (key === '图鉴') {
-                this.makeHot(n, `${n.name}-hot`, HOT_MIN, HOT_MIN, () => this.openCodex(), 0.90);
+            const open = key === '图鉴' ? () => this.openCodex()
+                : key === '灶台' ? () => this.openKitchen()
+                : key === '工作台' ? () => this.openBench()
+                : key === '派遣' ? () => this.openDispatch()
+                : null;
+            if (open) {
+                this.makeHot(n, `${n.name}-hot`, HOT_MIN, HOT_MIN, open, 0.90);
                 continue;
             }
 
@@ -866,9 +950,25 @@ class HomeController {
         const root = this.canvas.getChildByName('Dock');
         if (!root) return;
 
-        /* —— 主行动：出门。509×84 已在触屏下限附近，直接用本体热区 —— */
+        /* —— 主行动：出门。收到右下角，不再横在院子下沿 —— */
         const go = root.getChildByName('Btn-Go');
         if (go) {
+            const gut = go.getComponent(UITransform);
+            if (gut) {
+                gut.setContentSize(248, 76);
+                /* 锚点是左上。右缘离屏幕 20，下缘离屏幕 18。告示板在它上方。 */
+                go.setPosition(640 - 20 - 248, -360 + 18 + 76, 0);
+            }
+            const txt = go.getChildByName('txt');
+            if (txt) txt.setPosition(108, -20, 0);
+            const line = go.getChildByName('line');
+            if (line) {
+                line.setPosition(20, -48, 0);
+                const lut = line.getComponent(UITransform);
+                if (lut) lut.setContentSize(200, 16);
+            }
+            const sub = go.getChildByName('sub');
+            if (sub) sub.active = false;
             this.press(go, 0.965);
             go.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
                 e.propagationStopped = true;
@@ -878,6 +978,7 @@ class HomeController {
             /* 箭头左右摆：主行动需要一个持续的视觉邀请 */
             const ar = go.getChildByName('ar');
             if (ar) {
+                ar.setPosition(214, -36, 0);
                 this.arrow = ar;
                 this.arrowBaseX = ar.position.x;
             }
@@ -932,9 +1033,7 @@ class HomeController {
         const gear = root.getChildByName('IconBtn');
         if (gear) {
             /* 视觉 43×46 太小，热区补到 88×88 */
-            this.makeHot(gear, 'IconBtn-hot', HOT_MIN, HOT_MIN, () => {
-                this.toast('设置 · 音量 / 画质 / 返回标题（待实装）');
-            }, 0.90);
+            this.makeHot(gear, 'IconBtn-hot', HOT_MIN, HOT_MIN, () => this.openSettings(), 0.90);
         }
 
         const hud = root.getChildByName('HudProgress');
@@ -1057,6 +1156,7 @@ class HomeController {
         this.depart = null;
         this.departOp = null;
         this.departScrim = null;
+        this.sheet = null;
         this.toastState = 'off';
     }
 
@@ -1074,6 +1174,8 @@ class HomeController {
         if (!isFinite(dt) || dt <= 0) return;
         dt = Math.min(dt, 0.05);
         this.t += dt;
+        this.pingDispatch();
+        this.tickEnergy(dt);
 
         for (const p of this.pets) this.tickPet(p, dt);
 
@@ -1186,14 +1288,7 @@ class HomeController {
         card.parent = root;
         card.addComponent(UITransform).setContentSize(560, 344);
 
-        const g = card.addComponent(Graphics);
-        g.fillColor = CARD_FILL;
-        g.roundRect(-280, -172, 560, 344, 24);
-        g.fill();
-        g.lineWidth = 3;
-        g.strokeColor = CARD_LINE;
-        g.roundRect(-280, -172, 560, 344, 24);
-        g.stroke();
+        paintCard(card.addComponent(Graphics), 560, 344);
 
         /* ---- 卡片文案全部从存档现算 ----
            原来这三行是写死的「苔原 1 / 8」「饱食 12/20」「战力 ×1.21」：
@@ -1211,7 +1306,10 @@ class HomeController {
 
         mkLabel(card, 'title', `苔原 ${Math.min(8, s.cleared + 1)} / 8`, 40, INK, 500, 56)
             .node.setPosition(0, 108, 0);
-        mkLabel(card, 'sub', `第 ${s.runs + 1} 次出门 · 赢得战利品会直接进家园资源池`, 19, INK_SOFT, 520, 30)
+        const enough = s.energy >= ENERGY_COST;
+        mkLabel(card, 'sub',
+            `能量 ${s.energy}/${ENERGY_MAX} · 出发消耗 ${ENERGY_COST} · 回来按这一趟的收成给奖励`,
+            16, enough ? INK_SOFT : new Color(176, 72, 48, 255), 520, 36)
             .node.setPosition(0, 66, 0);
 
         /* 分隔线 */
@@ -1249,7 +1347,7 @@ class HomeController {
         bg.strokeColor = BTN_DEEP;
         bg.roundRect(-100, -30, 200, 60, 30);
         bg.stroke();
-        mkLabel(btn, 'txt', '出  发', 24, new Color(96, 58, 28, 255), 180, 40);
+        mkLabel(btn, 'txt', enough ? '出  发' : '能量不足', 24, new Color(96, 58, 28, 255), 180, 40);
 
         this.press(btn, 0.95);
         btn.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
@@ -1272,15 +1370,323 @@ class HomeController {
     }
 
     /* ----------------------------------------------------------------------
+     * 家园业务：写存档、刷数字、打开面板
+     * -------------------------------------------------------------------- */
+
+    private commit(next: SaveState) {
+        const since = this.save.dispatch ? this.save.dispatch.since : 0;
+        this.save = next;
+        saveSave(next);
+        this.bindSave();
+        this.syncLawn();
+        if (!next.dispatch || next.dispatch.since !== since) this.dispatchPing = false;
+        /* 出发卡是打开时现算的。喂完饭再出门，卡上必须是新的饱食度。 */
+        if (this.depart && !this.depart.active) {
+            this.depart.destroy();
+            this.depart = null;
+            this.departOp = null;
+        }
+    }
+
+    private energyAcc = 0;
+
+    /** 派出的那只暂时离开草地，收回来再出现 */
+    private syncLawn() {
+        const away = this.save.dispatch ? this.save.dispatch.id : '';
+        const lead = PETS.find((p) => this.save.cleared >= p.at);
+        for (const p of this.pets) {
+            const def = PETS.find((x) => x.name === p.node.name);
+            if (!def) continue;
+            p.node.active = !!lead && def.id === lead.id && def.id !== away;
+        }
+    }
+
+    private applyPrefs() {
+        game.frameRate = this.save.settings.crisp ? 60 : 30;
+    }
+
+    private pingDispatch() {
+        const job = this.save.dispatch;
+        if (!job || this.dispatchPing || this.sheet) return;
+        if (peekDispatch(this.save, Date.now()).hauls < 1) return;
+        this.dispatchPing = true;
+        const name = PETS.find((p) => p.id === job.id);
+        this.toast(`${name ? name.name : '它'} 带东西回来了 · 去派遣板收下`);
+    }
+
+    private closeSheet() {
+        if (!this.sheet) return;
+        const n = this.sheet;
+        this.sheet = null;
+        n.removeFromParent();
+        n.destroy();
+    }
+
+    /**
+     * 一张米白卡片盖在院子上。点空白关掉。
+     * 内容每次现画，所以喂完、做完、收回来，数字都是刚写进存档的。
+     */
+    private openSheet(title: string, sub: string, fill: (card: Node) => void) {
+        this.closeSheet();
+        if (this.codex) {
+            this.codex.removeFromParent();
+            this.codex.destroy();
+            this.codex = null;
+            this.codexOp = null;
+        }
+
+        const CW = 640;
+        const CH = 520;
+        const root = new Node('__Sheet');
+        root.parent = this.canvas;
+        root.addComponent(UITransform).setContentSize(W, H);
+        root.setSiblingIndex(-1);
+        this.sheet = root;
+
+        const scrim = new Node('scrim');
+        scrim.parent = root;
+        scrim.addComponent(UITransform).setContentSize(W, H);
+        const sg = scrim.addComponent(Graphics);
+        sg.fillColor = new Color(38, 26, 20, 205);
+        sg.rect(-W / 2, -H / 2, W, H);
+        sg.fill();
+        scrim.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
+            e.propagationStopped = true;
+            this.closeSheet();
+        });
+
+        const card = new Node('card');
+        card.parent = root;
+        card.addComponent(UITransform).setContentSize(CW, CH);
+        paintCard(card.addComponent(Graphics), CW, CH);
+        card.on(Node.EventType.TOUCH_END, (e: EventTouch) => { e.propagationStopped = true; });
+
+        mkLabel(card, 'title', title, 34, INK, 560, 44).node.setPosition(0, CH / 2 - 48, 0);
+        const subLb = mkLabel(card, 'sub', sub, 16, INK_SOFT, 580, 36);
+        subLb.overflow = Label.Overflow.SHRINK;
+        subLb.node.setPosition(0, CH / 2 - 88, 0);
+        fill(card);
+        mkLabel(card, 'tip', '点空白处关闭', 14, INK_SOFT, 400, 22).node.setPosition(0, -CH / 2 + 26, 0);
+    }
+
+    private mkBtn(parent: Node, name: string, text: string, x: number, y: number, onClick: () => void, h = 52) {
+        const w = 520;
+        const btn = new Node(name);
+        btn.parent = parent;
+        btn.addComponent(UITransform).setContentSize(w, h);
+        btn.setPosition(x, y, 0);
+        const rad = Math.min(26, h / 2);
+        const g = btn.addComponent(Graphics);
+        g.fillColor = BTN_FILL;
+        g.roundRect(-w / 2, -h / 2, w, h, rad);
+        g.fill();
+        g.lineWidth = 3;
+        g.strokeColor = BTN_DEEP;
+        g.roundRect(-w / 2, -h / 2, w, h, rad);
+        g.stroke();
+        const lb = mkLabel(btn, 'txt', text, 16, new Color(96, 58, 28, 255), w - 24, h - 8);
+        lb.overflow = Label.Overflow.SHRINK;
+        this.press(btn, 0.97);
+        btn.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
+            e.propagationStopped = true;
+            onClick();
+        });
+    }
+
+    /**
+     * 一行功能：左边首字圆标，中间名字和花费，右边一颗杏黄按钮。
+     * 不能点的行（未解锁、已领）整行变灰，不挂点击。
+     */
+    private mkRow(
+        parent: Node, name: string, title: string, meta: string, action: string,
+        x: number, y: number, onClick: () => void, enabled = true, h = 62,
+    ) {
+        const w = 560;
+        const row = new Node(name);
+        row.parent = parent;
+        row.addComponent(UITransform).setContentSize(w, h);
+        row.setPosition(x, y, 0);
+        const g = row.addComponent(Graphics);
+        g.fillColor = enabled ? ROW_FILL : ROW_OFF;
+        g.roundRect(-w / 2, -h / 2, w, h, 18);
+        g.fill();
+        g.lineWidth = 2;
+        g.strokeColor = enabled ? BTN_DEEP : new Color(176, 160, 144, 255);
+        g.roundRect(-w / 2, -h / 2, w, h, 18);
+        g.stroke();
+        g.fillColor = enabled ? new Color(246, 214, 150, 255) : new Color(206, 196, 184, 255);
+        g.circle(-w / 2 + 36, 0, 18);
+        g.fill();
+        const aw = 96;
+        const ah = 34;
+        const ax = w / 2 - 14 - aw / 2;
+        g.fillColor = enabled ? BTN_FILL : new Color(196, 184, 168, 255);
+        g.roundRect(ax - aw / 2, -ah / 2, aw, ah, 16);
+        g.fill();
+
+        mkLabel(row, 'mark', title.slice(0, 1), 18, new Color(92, 60, 24, 255), 36, 26)
+            .node.setPosition(-w / 2 + 36, 0, 0);
+        const two = h >= 56;
+        const tl = mkLabel(row, 'title', title, two ? 20 : 16, enabled ? INK : INK_SOFT, 220, two ? 26 : 22);
+        tl.horizontalAlign = Label.HorizontalAlign.LEFT;
+        tl.node.setPosition(-w / 2 + 66 + (two ? 100 : 110), two ? 10 : 8, 0);
+        const ml = mkLabel(row, 'meta', meta, two ? 14 : 12, INK_SOFT, 300, two ? 20 : 16);
+        ml.horizontalAlign = Label.HorizontalAlign.LEFT;
+        ml.overflow = Label.Overflow.SHRINK;
+        ml.node.setPosition(-w / 2 + 66 + 150, two ? -14 : -10, 0);
+        mkLabel(row, 'act', action, 16, new Color(96, 58, 28, 255), aw - 8, 24)
+            .node.setPosition(ax, 0, 0);
+
+        if (!enabled) return;
+        this.press(row, 0.98);
+        row.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
+            e.propagationStopped = true;
+            onClick();
+        });
+    }
+
+    private act(r: { ok: boolean; say: string; next?: SaveState }, reopen: () => void) {
+        if (r.ok && r.next) {
+            this.commit(r.next);
+            this.applyPrefs();
+        }
+        /* 失败也重画：派遣的倒计时、背包数字才跟得上刚点的那一下 */
+        reopen();
+        this.toast(r.say);
+    }
+
+    private openKitchen() {
+        const s = this.save;
+        const who = PETS.find((p) => p.id === s.active);
+        this.openSheet(
+            '灶台',
+            `${who ? who.name : '出战'} 的肚子 ${Math.round(s.satiety)}/100 · 果子 ${s.apples} · 材料 ${s.logs} · 干粮 ${s.bag.ration}`,
+            (card) => {
+                MEALS.forEach((m, i) => {
+                    const cost = [
+                        m.apples ? `果子 ${m.apples}` : '',
+                        m.logs ? `材料 ${m.logs}` : '',
+                        m.ration ? '背包 1' : '',
+                    ].filter(Boolean).join(' + ');
+                    this.mkRow(card, m.id, m.name, `${cost}   饱食 +${m.sat}`, '喂', 0, 78 - i * 76, () => {
+                        this.act(feed(this.save, m.id), () => this.openKitchen());
+                    });
+                });
+            },
+        );
+    }
+
+    private openBench() {
+        const s = this.save;
+        this.openSheet(
+            '工作台',
+            `果子 ${s.apples} · 材料 ${s.logs} · 吧唧 ${s.coins} · 干粮 ${s.bag.ration} · 收集篮 ${s.bag.basket}`,
+            (card) => {
+                RECIPES.forEach((r, i) => {
+                    const cost = [
+                        r.apples ? `果子 ${r.apples}` : '',
+                        r.logs ? `材料 ${r.logs}` : '',
+                        r.coins ? `吧唧 ${r.coins}` : '',
+                    ].filter(Boolean).join(' + ');
+                    const use = r.give === 'ration' ? '拿到灶台就能吃' : '派遣产量多一半';
+                    this.mkRow(card, r.id, r.name, `${cost}   ${use}`, '制作', 0, 36 - i * 84, () => {
+                        this.act(craft(this.save, r.id), () => this.openBench());
+                    });
+                });
+            },
+        );
+    }
+
+    private openDispatch() {
+        const s = this.save;
+        const job = s.dispatch;
+        if (job) {
+            const peek = peekDispatch(s, Date.now());
+            const name = PETS.find((p) => p.id === job.id);
+            const who = name ? name.name : '它';
+            const sub = peek.hauls > 0
+                ? `${who} 可以收回 ${peek.hauls} 趟 · 果子 ${peek.apples} · 材料 ${peek.logs} · 吧唧 ${peek.coins}`
+                : `${who} 还要 ${peek.left} 秒 · 一趟 ${DISPATCH_SEC} 秒，最多 ${DISPATCH_CAP} 趟`;
+            this.openSheet('派遣', sub, (card) => {
+                this.mkRow(
+                    card, 'back', who,
+                    peek.hauls > 0
+                        ? `果子 ${peek.apples} · 材料 ${peek.logs} · 吧唧 ${peek.coins}`
+                        : `还要 ${peek.left} 秒`,
+                    peek.hauls > 0 ? '收回' : '等着',
+                    0, 20,
+                    () => { this.act(collectDispatch(this.save, Date.now()), () => this.openDispatch()); },
+                    peek.hauls > 0,
+                );
+            });
+            return;
+        }
+        const owned = unlockedPets(s.cleared);
+        this.openSheet(
+            '派遣',
+            owned.length < 2
+                ? '家里只有一只，先去苔原带同伴回来'
+                : '留在家里的去采集。跟你出门的那只这趟不派。',
+            (card) => {
+                const choices = owned.filter((p) => p.id !== s.active);
+                if (!choices.length) {
+                    mkLabel(card, 'none', '没有能派的同伴', 18, INK_SOFT, 400, 32).node.setPosition(0, 20, 0);
+                    return;
+                }
+                choices.forEach((p, i) => {
+                    const ok = canDispatch(s, p.id);
+                    this.mkRow(
+                        card, p.id, p.name,
+                        ok ? '留在家里，可以去采' : '跟你出门，这趟不派',
+                        ok ? '派出' : '不能派',
+                        0, 78 - i * 70,
+                        () => { this.act(startDispatch(this.save, p.id, Date.now()), () => this.openDispatch()); },
+                        ok,
+                    );
+                });
+            },
+        );
+    }
+
+    private openSettings() {
+        const s = this.save.settings;
+        this.openSheet(
+            '设置',
+            '画质会立刻改帧率。音效开关先记住，这一版还没有声音。',
+            (card) => {
+                this.mkRow(card, 'crisp', '画质', s.crisp ? '清晰 · 60 帧' : '流畅 · 30 帧', s.crisp ? '清晰' : '流畅', 0, 40, () => {
+                    this.act(toggleCrisp(this.save), () => this.openSettings());
+                });
+                this.mkRow(card, 'mute', '音效', '这一版还没有声音，开关会记住', s.mute ? '关' : '开', 0, -40, () => {
+                    this.act(toggleMute(this.save), () => this.openSettings());
+                });
+            },
+        );
+    }
+
+    /* ----------------------------------------------------------------------
      * 图鉴面板：右侧竖栏「图鉴」打开
      * -------------------------------------------------------------------- */
 
     private openCodex() {
+        this.closeSheet();
+        if (this.codex) {
+            this.codex.removeFromParent();
+            this.codex.destroy();
+            this.codex = null;
+            this.codexOp = null;
+        }
         this.ensureCodex();
-        if (!this.codex || !this.codexOp) return;
-        this.codex.active = true;
-        this.codexOp.opacity = 0;
-        tween(this.codexOp).to(0.20, { opacity: 255 }).start();
+        /* 取到局部变量再判空：TS 不会因为调用 `ensureCodex()` 就认为
+           `this.codex` 可能又变成非空，于是在 `this.codex = null` 之后
+           把它收窄成 `never`，下面这行就报 "Property 'active' does not
+           exist on type 'never'"，编译红着、却完全不影响运行。
+           用局部量把这个收窄打断，写法也更难出错。 */
+        const cx = this.codex as Node | null, cxOp = this.codexOp;
+        if (!cx || !cxOp) return;
+        cx.active = true;
+        cxOp.opacity = 0;
+        tween(cxOp).to(0.20, { opacity: 255 }).start();
     }
 
     private closeCodex() {
@@ -1328,14 +1734,7 @@ class HomeController {
         const card = new Node('card');
         card.parent = root;
         card.addComponent(UITransform).setContentSize(CW, CH);
-        const g = card.addComponent(Graphics);
-        g.fillColor = CARD_FILL;
-        g.roundRect(-CW / 2, -CH / 2, CW, CH, 26);
-        g.fill();
-        g.lineWidth = 3;
-        g.strokeColor = CARD_LINE;
-        g.roundRect(-CW / 2, -CH / 2, CW, CH, 26);
-        g.stroke();
+        paintCard(card.addComponent(Graphics), CW, CH);
         /* 卡面吃掉点击，别透到遮罩上把面板关掉 */
         card.on(Node.EventType.TOUCH_END, (e: EventTouch) => { e.propagationStopped = true; });
 
@@ -1380,11 +1779,14 @@ class HomeController {
                 .node.setPosition(0, 34, 0);
 
             mkLabel(cell, 'name', got ? p.name : '未收服', 19,
-                    got ? INK : INK_SOFT, 180, 26).node.setPosition(0, -28, 0);
+                    got ? INK : INK_SOFT, 180, 26).node.setPosition(0, -22, 0);
 
-            mkLabel(cell, 'state', got ? '已收服' : `还差 ${gap} 关`, 14,
+            const pats = this.save.pats[p.id] || 0;
+            mkLabel(cell, 'state', got ? `${heartText(pats)}  摸 ${pats}` : `还差 ${gap} 关`, 14,
                     got ? new Color(63, 125, 36, 255) : INK_SOFT, 180, 22)
-                .node.setPosition(0, -54, 0);
+                .node.setPosition(0, -48, 0);
+            mkLabel(cell, 'line', got ? (PET_LINE[p.id] || '') : '', 13, INK_SOFT, 180, 20)
+                .node.setPosition(0, -68, 0);
         });
 
         mkLabel(card, 'tip', '点空白处关闭', 14, INK_SOFT, 400, 22).node.setPosition(0, -206, 0);
@@ -1393,11 +1795,22 @@ class HomeController {
     }
 
     /** 出门入口。这就是「点了要有反应」的落点。 */
-    private openDepart() {        this.ensureDepart();
-        if (!this.depart || !this.departOp) return;
-        this.depart.active = true;
-        this.departOp.opacity = 0;
-        tween(this.departOp).to(0.22, { opacity: 255 }).start();
+    private openDepart() {
+        this.closeSheet();
+        const settled = settleEnergy(this.save, Date.now());
+        if (settled !== this.save) this.commit(settled);
+        if (this.depart) {
+            this.depart.destroy();
+            this.depart = null;
+            this.departOp = null;
+        }
+        this.ensureDepart();
+        /* 同 openCodex：局部量打断 TS 的属性收窄，避免 never 报错 */
+        const dp = this.depart as Node | null, dpOp = this.departOp;
+        if (!dp || !dpOp) return;
+        dp.active = true;
+        dpOp.opacity = 0;
+        tween(dpOp).to(0.22, { opacity: 255 }).start();
     }
 
     /** @param after 淡出播完后再执行（切场景要等动画收尾，否则是"闪一下"） */
@@ -1411,15 +1824,170 @@ class HomeController {
             .start();
     }
 
+    private placeTaskBtn() {
+        const badges = this.canvas.getChildByName('Badges');
+        if (!badges || badges.getChildByName('TaskBtn')) return;
+        const btn = new Node('TaskBtn');
+        btn.parent = badges;
+        const box = btn.addComponent(UITransform);
+        /* 点击区 84×76：比视觉大一圈，因为底下是"牌子上的一行字"，
+           看着小但必须好点。视觉尺寸由 Label 自己定，和点击区分离。 */
+        box.setContentSize(84, 76);
+        box.setAnchorPoint(0.5, 0.5);
+        /* 路标牌**中间那块**木板的正文中心。
+           用 tools/_grid-crop.js 在原图坐标系上量（不是看缩放后的截图）：
+             整块板 y 250..285、x 168..256；
+             去掉左侧箭头尖（x<190）和右侧缺口（x>252），
+             可放字的净区是 x 190..252 / y 254..282，中心 (221, 268)；
+             转到以画布中心为原点的 Cocos 坐标 —— 中心 (-419, 90)。
+           上一版写 (-416, 101)：右 3px、上 9px，字压在木牌的上沿高光线上，
+           看起来像"贴纸没贴正"而不是"牌子上写着字"。
+           实测校验：渲染后按墨色 (86,50,24) 取掩膜，字形框 x 210..231 /
+           y 261..272，中心 (220.5, 266.5) —— 与净区中心差 1.5px，收工。 */
+        btn.setPosition(-419, 90, 0);
+
+        /* **不画底，字直接写在木牌上。**
+           上一版是一个 72×36 的橙色胶囊浮在牌子右边：既不在牌子上
+           （用户第 1 条"任务我想在牌子上"），又正好压在"去苔原"那个
+           圆形徽标的位置上（用户第 2 条"很多重了"）。两条说的是同一件事。
+
+           现在没有底板：木牌本来的木色就是背景，字是深棕，
+           读作"牌子上写着任务"，而不是"一个按钮贴在牌子旁边"。
+
+           按下反馈不能再用缩放（透明底缩放看不出来），改成在牌面上
+           压一层暖光 —— 相当于"按下去的时候那块木头被照亮了一点"。 */
+        /* 按下时的暖光块**不能超出木牌正文**：正文只有 62px 宽，
+           上一版的 84px 会盖到木牌两侧的描边上，读作"牌子被人用荧光笔涂了"。
+           66×24 正好比正文字宽 4px，四边都在木头里。 */
+        const g = btn.addComponent(Graphics);
+        const repaint = (a: number) => {
+            g.clear();
+            g.fillColor = new Color(255, 244, 206, a);
+            g.roundRect(-33, -12, 66, 24, 10);
+            g.fill();
+        };
+        repaint(0);
+
+        /* 15px：木牌正文净高 28px，15px 的字形实高约 15px（占 54%）。
+           13px 只占 43%，在 1280×720 的实机上看是"木牌上有个小logo"，
+           不是"木牌上写着字"。再加就顶到上下描边了。 */
+        mkLabel(btn, 'txt', '任务', 15, new Color(86, 50, 24, 255), 62, 20);
+
+        btn.on(Node.EventType.TOUCH_START, () => repaint(64));
+        btn.on(Node.EventType.TOUCH_CANCEL, () => repaint(0));
+        btn.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
+            e.propagationStopped = true;
+            repaint(0);
+            this.openTasks();
+        });
+        this.refreshTaskBtn();
+    }
+
     /**
-     * 进入战斗。
+     * 派遣：把背景图里那块深绿告示板**盖成一张白卡**。
+     *
+     * 用户两条反馈是同一件事的首尾：
+     *   · "派遣很突兀"
+     *   · "其他 UI 底色还是以白色的"
+     * 那一屏里只有这块板是深绿 —— 暖黄草地上唯一的高饱和冷色，
+     * 眼睛第一眼就落在它上面；而资源卡、芽屋卡、宠物卡全是米白圆角卡，
+     * 它是个异类。盖成同一套白卡，两条一起解决。
+     *
+     * 绿板是**背景图的一部分**，删不掉，所以只能用一张同尺寸的卡盖住。
+     *
+     * 尺寸是量出来的，不是估的（tools/_grid-crop.js + 像素分段）：
+     *   bg.png 里那块板的绿芯是 rgb(78,107,82)、外框是 rgb(96,61,35)，
+     *   分段得到 bg 坐标 x 1185..1326 / y 637..732；
+     *   bg.png 是 1536×1024 画进 1280×853.33，缩放 0.8333，顶点在 (0,-40)，
+     *   换成屏幕坐标 = **x 987..1105 / y 491..570**，也就是 118×79。
+     *
+     * 上一版按"x 987~1145 / y 482~595"取了 170×128 —— 那份数字是看缩放后的
+     * 截图读的，宽高都大了四成，卡片糊成一块白板，比原来的绿板还抢眼。
+     *
+     * 卡片取 132×108：横向盖住绿板（987..1105，两侧各留 6px），
+     * 纵向要额外吃进**派遣徽标的顶边**（475）——徽标+文字底牌
+     * （475..544）本来就压在板上，卡片必须把它们一起框进来，
+     * 否则白卡上会浮着一半在板外、一半在板内的图标。
+     * 132×108 中心 (406,-162) → 屏幕 980..1112 / 468..576。
+     */
+    private placeDispatchCard() {
+        const badges = this.canvas.getChildByName('Badges');
+        if (!badges || badges.getChildByName('DispatchCard')) return;
+        const card = new Node('DispatchCard');
+        card.parent = badges;
+        const box = card.addComponent(UITransform);
+        /* 高 116（不是 79+12=91）：卡片不只是"盖住绿板"，它还要把
+           **派遣徽标（475）+ 文字底牌（到 544）**一起框进去，
+           而且两者都得落在内圈浅描边里面 —— 内圈离边 8px + 2px 线宽，
+           所以上下各让出 13px：460+13=473 ≤ 475，558-13=545 ≥ 544。 */
+        const CW = 132, CH = 116;
+        box.setContentSize(CW, CH);
+        box.setAnchorPoint(0.5, 0.5);
+        card.setPosition(406, -156, 0);
+
+        const g = card.addComponent(Graphics);
+        /* 和资源卡同一套：米白填充 + 深棕粗描边 + 内圈浅描边。
+           圆角 22 = 资源卡（89×72，圆角 28）的同一比例：短边的 0.24 倍左右。
+           改尺寸的时候圆角必须跟着算，固定 28 会让 108 高的卡看起来"角被啃掉了"。 */
+        g.fillColor = CARD_FILL_SOLID;
+        g.roundRect(-CW / 2, -CH / 2, CW, CH, 22);
+        g.fill();
+        g.lineWidth = 4;
+        g.strokeColor = new Color(122, 80, 52, 255);
+        g.roundRect(-CW / 2, -CH / 2, CW, CH, 22);
+        g.stroke();
+        g.lineWidth = 2;
+        g.strokeColor = new Color(214, 176, 140, 210);
+        g.roundRect(-CW / 2 + 8, -CH / 2 + 8, CW - 16, CH - 16, 16);
+        g.stroke();
+
+        card.setSiblingIndex(0);
+    }
+
+    private refreshTaskBtn() {
+        const lb = this.canvas.getChildByName('Badges')
+            ?.getChildByName('TaskBtn')
+            ?.getChildByName('txt')
+            ?.getComponent(Label);
+        if (!lb) return;
+        const n = claimableCount(this.save);
+        lb.string = n > 0 ? `任务 ${n}` : '任务';
+    }
+
+    private tickEnergy(dt: number) {
+        this.energyAcc += dt;
+        if (this.energyAcc < 1) return;
+        this.energyAcc = 0;
+        const next = settleEnergy(this.save, Date.now());
+        if (next !== this.save) this.commit(next);
+    }
+
+    private openTasks() {
+        const n = claimableCount(this.save);
+        this.openSheet('任务', n > 0 ? `${n} 件可以领 · 做完就领，不每天刷新` : '做完就领，不每天刷新', (card) => {
+            TASKS.forEach((t, i) => {
+                const phase = taskPhase(this.save, t.id);
+                const mark = phase === 'claimed' ? '已领' : phase === 'ready' ? '领取' : '未完成';
+                this.mkRow(card, t.id, t.name, `${t.desc} · ${t.reward}`, mark, 0, 96 - i * 50, () => {
+                    this.act(claimTask(this.save, t.id), () => this.openTasks());
+                }, phase === 'ready', 46);
+            });
+        });
+    }
+
+    /**
+     * 进入战斗。能量够才扣；场景没打开就不扣。
      *
      * 用 tween 的 call 切场景，而不是 setTimeout：出发卡有 0.18s 淡出，
      * 立刻 loadScene 会把动画连同场景一起销毁（"闪一下"）。
-     * 挂在 tween 上还能保证——万一这一帧之后场景被别的原因销毁，
-     * 回调会随 tween 一起被回收，不会留一个野定时器去 loadScene。
      */
     private launchBattle() {
+        const paid = spendEnergy(this.save, Date.now());
+        if (!paid.ok) {
+            this.toast(paid.say);
+            return;
+        }
+        const ticket = paid.next;
         this.closeDepart(() => {
             /* 为什么不用 director.loadScene('Battle')：
                本工程 settings 里没有 scenes 注册表（program.json / builder.json
@@ -1430,13 +1998,23 @@ class HomeController {
                构建面板的 Scenes 列表（标准做法）。 */
             const BATTLE_UUID = 'b1a4d7e2-3c58-4f90-8a61-2e7b9c4d5f03';
             assetManager.loadAny(BATTLE_UUID, (err: Error | null, asset: unknown) => {
-                if (!err && asset instanceof SceneAsset) {
-                    director.runScene((asset as SceneAsset).scene);
+                /* `SceneAsset.scene` 的声明是 `Scene | null`（资源还没展开时是 null），
+                   直接 runScene 会塞进去一个 null 场景，引擎那边只会给一句莫名其妙的报错。
+                   所以先取出来判空，再交给回退分支处理。 */
+                const sc = asset instanceof SceneAsset ? asset.scene : null;
+                if (!err && sc) {
+                    this.commit(ticket);
+                    director.runScene(sc);
                     return;
                 }
                 console.warn('[HomeRuntime] 按 uuid 载入战斗失败，回退 loadScene：', err);
                 director.loadScene('Battle', (e2) => {
-                    if (e2) console.error('[HomeRuntime] 进入战斗失败：', e2);
+                    if (e2) {
+                        console.error('[HomeRuntime] 进入战斗失败：', e2);
+                        this.toast('苔原没打开，能量还在');
+                        return;
+                    }
+                    this.commit(ticket);
                 });
             });
         });
@@ -1478,7 +2056,7 @@ function tryBoot() {
 
     bootedScene = sc as unknown as Node;
     ctrl = new HomeController(canvas);
-    console.log('[HomeRuntime] 已接管主界面：宠物走动 / 点击反馈 / 出发卡 全部就绪');
+    console.log('[HomeRuntime] 已接管主界面：宠物待机 / 点击反馈 / 出发卡 全部就绪');
 }
 
 /**

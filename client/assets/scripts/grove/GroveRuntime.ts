@@ -1716,6 +1716,7 @@ function goHome(allClear) {
   const gain = Math.round(S.trip.loot * S.trip.multi) + (allClear ? 12 : 0);
   S.home.loot += gain;
   S.home.lastLoot = gain;
+  S.home.lastStages = S.trip.stages;
   S.home.runs++;
   S.belly = 100;                         // 回家吃饭
   S.trip = { loot: 0, multi: 1, stages: 0 };
@@ -2731,13 +2732,18 @@ function updateBalls(dt) {
 
          滚丢要给人一个交代：装在里面的人放回场上。直接 dead 的话
          玩家看到的是"莫名其妙少了两只"，那会读成 bug。 */
-      if (b.x + b.r < WALL_L - 2) {
+      /* 判出界的线是**画面边缘**，不是逻辑墙 WALL_L。
+         上一版写 `b.x + b.r < WALL_L - 2`（球心 < 46），球在离左缘 46px 的
+         地方就没了 —— 那时左端有一根封口树干挡着，看起来像"滚进树根下面"。
+         现在两端都是敞开的地面，球必须真的滚出屏幕才消失，
+         否则就成了"在草地上凭空不见"。 */
+      if (b.x + b.r < -4) {
         b.dead = true;
         S.stat.lost = (S.stat.lost || 0) + 1;
         const back = respawnPacked(b, 1, WALL_L + 46);
         for (const f of back) S.foes.push(f);
-        addText(WALL_L + 54, GROUND_Y - 96, "滚出去了…", "#CBD8E8", 18);
-        for (let i = 0; i < 8; i++) addFrag(WALL_L + 6, GROUND_Y - 10, 5, "#8B5A32");
+        addText(72, GROUND_Y - 110, "滚出去了…", "#CBD8E8", 18);
+        for (let i = 0; i < 8; i++) addFrag(14, GROUND_Y - 10, 5, "#8B5A32");
         continue;
       }
     } else {
@@ -4320,16 +4326,26 @@ function drawPlat(g, p) {
   const isGround = p.kind === "ground";
 
   if (isGround) {
-    // ---- 地面：泥土块 + 一层圆齿草皮。草齿是圆的，这是 Q 版和写实的唯一分界线
+    /* ---- 地面：泥土块 + 一层圆齿草皮。草齿是圆的，这是 Q 版和写实的唯一分界线。
+     *
+     * **画到画面外（-20 ~ 980），不在地面块的逻辑边界（26 / 934）收口。**
+     * 逻辑边界只是球的碰撞范围，不是地面的边缘 —— 上一版在 26/934 收口，
+     * 两端就露出"地面到此为止"的断头，于是必须再画一个封口物（树干/出口门）
+     * 去遮它。用户那两句"右下角圆筒太突兀""左侧那个也不需要"，
+     * 要遮的东西本来就不该存在。
+     *
+     * 现在地面直接铺出画外：球滚到画面外就是"滚出屏幕"，这是 2D 里
+     * 最不需要解释的一种出界，不用任何装置去交代。 */
+    const px = -20, pw = W + 40;
     const dg = g.createLinearGradient(0, p.y, 0, p.y + p.h + 26);
     dg.addColorStop(0, TH.dirt);
     dg.addColorStop(1, TH.dirt2);
     g.fillStyle = dg;
-    g.fillRect(p.x, p.y, p.w, p.h + 26);
+    g.fillRect(px, p.y, pw, p.h + 26);
 
     // 土里的石子：几颗深色圆点，固定位置
     g.fillStyle = "rgba(0,0,0,.14)";
-    for (let i = 0, x = p.x + 20; x < p.x + p.w - 16; i++, x += 62) {
+    for (let i = 0, x = px + 20; x < px + pw - 16; i++, x += 62) {
       const o = hash(i + 31);
       g.beginPath();
       g.ellipse(x + o * 18, p.y + 16 + o * 20, 4 + o * 4, 3 + o * 3, 0, 0, 6.283);
@@ -4339,24 +4355,24 @@ function drawPlat(g, p) {
     // 草皮底
     g.fillStyle = TH.grass2;
     g.beginPath();
-    g.moveTo(p.x, p.y + 6);
-    g.lineTo(p.x, p.y - 4);
-    for (let x = p.x, i = 0; x <= p.x + p.w; i++, x += 22) {
+    g.moveTo(px, p.y + 6);
+    g.lineTo(px, p.y - 4);
+    for (let x = px, i = 0; x <= px + pw; i++, x += 22) {
       g.arc(x + 11, p.y - 4, 12, Math.PI, 0);
     }
-    g.lineTo(p.x + p.w, p.y + 6);
+    g.lineTo(px + pw, p.y + 6);
     g.closePath();
     g.fill();
 
     // 草皮亮面
     g.fillStyle = TH.grass;
     g.beginPath();
-    g.moveTo(p.x, p.y + 2);
-    g.lineTo(p.x, p.y - 6);
-    for (let x = p.x, i = 0; x <= p.x + p.w; i++, x += 26) {
+    g.moveTo(px, p.y + 2);
+    g.lineTo(px, p.y - 6);
+    for (let x = px, i = 0; x <= px + pw; i++, x += 26) {
       g.arc(x + 13, p.y - 6, 12, Math.PI, 0);
     }
-    g.lineTo(p.x + p.w, p.y + 2);
+    g.lineTo(px + pw, p.y + 2);
     g.closePath();
     g.fill();
 
@@ -4364,8 +4380,8 @@ function drawPlat(g, p) {
     g.strokeStyle = "rgba(24,58,34,.32)";
     g.lineWidth = 2;
     g.beginPath();
-    g.moveTo(p.x, p.y - 4);
-    for (let x = p.x, i = 0; x <= p.x + p.w; i++, x += 22) {
+    g.moveTo(px, p.y - 4);
+    for (let x = px, i = 0; x <= px + pw; i++, x += 22) {
       g.arc(x + 11, p.y - 4, 12, Math.PI, 0);
     }
     g.stroke();
@@ -4374,7 +4390,7 @@ function drawPlat(g, p) {
     g.strokeStyle = "rgba(40,110,52,.35)";
     g.lineWidth = 2;
     g.lineCap = "round";
-    for (let i = 0, x = p.x + 14; x < p.x + p.w; i++, x += 74) {
+    for (let i = 0, x = px + 14; x < px + pw; i++, x += 74) {
       const hh = 5 + hash(i + 7) * 5;
       g.beginPath();
       g.moveTo(x, p.y - 7);
@@ -4575,46 +4591,97 @@ function drawPlat(g, p) {
    描边负责把它从背景里拔出来，轮廓负责让人一眼认出是火。
    --------------------------------------------------------------------------- */
 function qflame(g, cx, by, h, w, ph) {
-  // 两条不同频率的正弦叠加：单频会看出"匀速呼吸"，两条才像随机跳动。
-  // 幅度刻意压到 ±9%，再大就成了"火在抽搐"。
-  const flick = Math.sin(S.t * 8 + ph * 3.1) * 0.09 + Math.sin(S.t * 13.7 + ph * 2.1) * 0.05;
-  const hh = h * (1 + flick);
-  const ww = w * (1 - flick * 0.6);
-  const tipX = cx + Math.sin(S.t * 5.4 + ph * 2.2) * ww * 0.20;
+  const t = S.t;
 
-  /* 同一个形状按 k 缩放、按 raise 上抬。内焰套用外焰的轮廓，
-     三层才是"一团火"，三层各自乱画就变成"三团火叠着"。 */
-  const path = (k, raise) => {
-    const b = by - raise;
-    const H = hh * k, W = ww * k;
-    const tx = cx + (tipX - cx) * k;
+  /* 三条互不成整数比的频率叠加。
+     单频 = 匀速呼吸，一眼看出是循环；两条 = 看十秒能数出周期；
+     三条才像"没规律"。幅度递减，高频只负责让轮廓起毛刺。 */
+  const wob = (k) =>
+      Math.sin(t * 7.3 + ph * 3.1 + k) * 0.052 +
+      Math.sin(t * 11.9 + ph * 2.1 + k * 1.7) * 0.030 +
+      Math.sin(t * 17.7 + ph * 5.3 + k * 2.3) * 0.016;
+
+  /* 每一层用**自己的相位**，这是这一版和上一版最根本的差别。
+     上一版三层共用同一组 flick / ww / tipX，等于等比缩放 ——
+     画面上读作"一个气球在呼吸"，不是"火在烧"。
+     火能被认出来的证据是**各层不同步**：外焰抖得快、焰心稳，中间那层跟着气流摆。 */
+  /* 窜火：每隔几秒突然窜高一次。
+     `max(0,sin)^6` 这个形状的意义 —— 六次方让函数在绝大部分时间里贴近 0，
+     只在峰值附近几十度内冲上去。所以三次里大概有两次"几乎不动"、
+     一次突然拉高 22%。用普通正弦做不出来：那是匀速升降，
+     看起来像弹簧在拉。真火就是"长时间安静 + 偶尔窜一下"。 */
+  const surge = 1 + Math.pow(Math.max(0, Math.sin(t * 1.55 + ph * 2.3)), 6) * 0.20;
+
+  const path = (k, raise, lp) => {
+    const f = wob(lp);
+    const H = h * k * (1 + f) * surge;
+    /* 窜高时**同时变细**：面积守恒的直觉。只拉高不瘦身的话，
+       窜火那一刻会变成一个又高又胖的橙团 —— 那是气球，不是火。 */
+    const W = w * k * (1 - f * 0.55) / Math.sqrt(surge);
+    // 顶端横摆：两侧控制点各用不同相位，火焰才会"扭"；同相位就只是整体左右平移
+    const tx = cx + Math.sin(t * 5.4 + ph * 2.2 + lp * 1.4) * W * 0.13;
+    const lx = Math.sin(t * 8.6 + ph + lp) * W * 0.11;
+    const rx = Math.sin(t * 8.6 + ph + lp + 2.2) * W * 0.11;
+    const b = by - raise * H;
     g.beginPath();
-    g.moveTo(cx, b);
-    g.bezierCurveTo(cx - W * 0.64, b, cx - W * 0.60, b - H * 0.52, tx, b - H);
-    g.bezierCurveTo(cx + W * 0.60, b - H * 0.52, cx + W * 0.64, b, cx, b);
+    /* 轮廓比例是 Q 版火焰的关键：**底宽 = 高 × 0.78**，中段往外鼓。
+       上一版底宽只有高的 0.6 倍、中段还往里收，画出来是三根"尖塔"——
+       尖顶瘦身是写实火焰的形状，Q 版火焰必须是**胖水滴**：
+       下半个圆、上半个尖，重心压在下面。 */
+    g.moveTo(cx - W * 0.46, b);
+    g.bezierCurveTo(cx - W * 0.74 + lx, b - H * 0.20,
+                    cx - W * 0.44 + lx, b - H * 0.70, tx, b - H);
+    g.bezierCurveTo(cx + W * 0.44 + rx, b - H * 0.70,
+                    cx + W * 0.74 + rx, b - H * 0.20, cx + W * 0.46, b);
     g.closePath();
   };
 
+  /* **亮度要闪，不是恒定的。**
+     真火最容易被认出来的特征不是形状，是**同一团火在零点几秒内亮度来回变**：
+     一瞬间窜亮、一瞬间压下去。上一版三层用的是三个固定色值，
+     无论形状抖得多好，看上去都是"一个不断变形的橙色物体"。
+     这条和形状抖动是两件事，缺一样都不像火。 */
+  const heat = 0.84 + Math.sin(t * 13.7 + ph * 4.1) * 0.10
+                    + Math.sin(t * 23.1 + ph * 1.7) * 0.055;
+
   // 外焰
-  path(1, 0);
-  g.fillStyle = "#FF7A22";
+  path(1, 0, 0);
+  g.fillStyle = hexMix("#F05C0A", "#FFA23C", heat);
   g.fill();
   /* 只描外焰。内焰也描的话，一团火的内部会出现两条黑线，
      读作"火裂开了"—— 这是描边最容易用错的地方。 */
-  g.strokeStyle = "rgba(112,38,10,.78)";
+  g.strokeStyle = "rgba(112,38,10,.70)";
   g.lineWidth = 2.2;
   g.lineJoin = "round";
   g.stroke();
 
-  // 中焰
-  path(0.60, hh * 0.11);
-  g.fillStyle = "#FFC63C";
+  // 中焰（相位 +1.9）
+  path(0.60, 0.11, 1.9);
+  g.fillStyle = hexMix("#FFB31E", "#FFE07A", heat);
   g.fill();
 
-  // 焰心
-  path(0.30, hh * 0.21);
-  g.fillStyle = "#FFF4B8";
+  // 焰心（相位 +3.7，最稳）：亮到过曝时直接给白
+  path(0.30, 0.21, 3.7);
+  g.fillStyle = heat > 0.94 ? "#FFFCE0" : "#FFF4B8";
   g.fill();
+
+  /* 焰舌：从焰尖脱出去、往上飘一段就淡掉的一小团。
+     这是"火"最容易被认出来的一个动作 —— 火不是一个会伸缩的色块，
+     它一直在往上掉渣、掉渣的东西还继续烧。没有这一层，
+     再好的抖动也只是"橙色的形状在动"。 */
+  for (let i = 0; i < 2; i++) {
+    const k = ((t * 0.74 + ph * 0.9 + i * 0.5) % 1);
+    const ex = cx + Math.sin(k * 6.2 + ph + i * 2.4) * w * 0.34;
+    const ey = by - h * 0.86 - k * h * 0.72;
+    const sw = (1 - k) * w * 0.20;
+    const sh = (1 - k) * h * 0.24;
+    g.globalAlpha = (1 - k) * 0.80;
+    g.fillStyle = k < 0.40 ? "#FFD977" : "#FF8A2E";
+    g.beginPath();
+    g.ellipse(ex, ey, sw, sh, 0, 0, 6.283);
+    g.fill();
+  }
+  g.globalAlpha = 1;
 }
 
 /* ---------------------------------------------------------------------------
@@ -4759,6 +4826,73 @@ function drawPit(g, pit) {
     g.ellipse(cx, BOT - 5, w * 0.42, 10, 0, 0, 6.283);
     g.fill();
 
+    /* ---- 火光溢出：**这一层是"真火"和"火的贴图"唯一的分界线**。
+      现实里任何一个光源都会在自己周围留下明暗变化。一团火如果只照亮
+      自己、不照亮周围任何东西，眼睛立刻判定它是贴上去的一张橙图 ——
+      这正是用户前几轮反复说的"像贴上去的"在火坑这里的形态。
+
+      三圈，半径 34 / 74 / 118：
+        · 内圈压在坑口和坑沿上，把土堆照成暖色（不是把土染橙，
+          是让土“被照亮” —— 所以用叠加式的低 alpha，不用实色）
+        · 中圈落到坑外的草地上
+        · 外圈只到几乎看不出，作用是让边界不出现一圈硬边
+
+      强度用一个独立的高频抖动，和火焰的抖动**不同频**：
+      同频的话光圈会跟着火焰一起呼吸，读作一个整体缩放的特效；
+      不同频才像"火苗窜了一下，光跟着闪"。 */
+    const glowK = 0.86 + Math.sin(S.t * 9.1) * 0.07 + Math.sin(S.t * 14.7 + 1.3) * 0.05;
+    /* **必须用 `lighter`（加色）叠，不能用普通 alpha。**
+       普通 alpha 是把橙色"混"进草地色，浓度一高就变脏、一低就看不见 ——
+       试过 0.26 的那一版，采样（550,500）几乎和周围一模一样。
+       真实的光是**相加**的：照到哪儿，那儿的每个通道都往上加。
+       lighter 才是物理上正确的叠加，而且低 alpha 就有明显效果。 */
+    g.save();
+    g.globalCompositeOperation = "lighter";
+    /* 衰减曲线是"平"的，不是"高斯"的：0~55% 半径内几乎不掉，
+       85% 之后才快速收口。用标准的三段式（0/0.5/1 线性）时，
+       半径 110 才能照到的地方实际 alpha 只剩 4% —— 画上去看不出来，
+       采样差 5 个色阶，人眼完全无感。平坦曲线才能在**同一块草地**
+       上留下能看出来的明暗差。 */
+    /* **必须是扁椭圆，不是圆。** 两个理由：
+       ① 火在平地上投出的光斑本来就是横向铺开的，圆形光斑是"聚光灯"；
+       ② 圆形半径 200 会一路照到 350 那层浮空台**上面**去 ——
+          平台是不透明的，光穿过去就露馅了。扁到 ry/rx ≈ 0.55 之后，
+          最外圈也只到 y≈470，正好停在 462 那层平台下沿。
+       三层的圆心略微错开（-3 / +4 / 0），叠出来的边界就不是一个完美圆，
+       避免读作"贴了一张径向渐变"。 */
+    for (const [rx_, ry_, dx_, a0] of [[178, 104, -3, 0.105], [124, 76, 4, 0.175], [74, 50, 0, 0.38]]) {
+      const gx = cx + dx_, gy = BOT - 44;
+      const gg = g.createRadialGradient(gx, gy, 2, gx, gy, rx_);
+      gg.addColorStop(0, `rgba(255,178,84,${a0 * glowK})`);
+      gg.addColorStop(0.55, `rgba(255,152,62,${a0 * glowK * 0.72})`);
+      gg.addColorStop(0.86, `rgba(255,132,46,${a0 * glowK * 0.16})`);
+      gg.addColorStop(1, "rgba(255,120,30,0)");
+      g.save();
+      g.translate(gx, gy);
+      g.scale(1, ry_ / rx_);
+      g.fillStyle = gg;
+      g.beginPath();
+      g.arc(0, 0, rx_, 0, 6.283);
+      g.fill();
+      g.restore();
+    }
+    g.restore();
+    /* 坑内后壁被火照亮的那一片：一条贴着后壁的暖带。
+       没有它，坑腔永远是同一个暗度，火焰像插在一个洞里；
+       有它，坑才是一个**被自己的火烧亮的容器**。 */
+    const wallLit = g.createLinearGradient(0, y + CUT, 0, BOT);
+    wallLit.addColorStop(0, `rgba(255,150,60,${0.20 * glowK})`);
+    wallLit.addColorStop(0.6, `rgba(255,120,40,${0.09 * glowK})`);
+    wallLit.addColorStop(1, "rgba(255,110,30,0)");
+    g.fillStyle = wallLit;
+    g.beginPath();
+    g.moveTo(x + INSET - 1, y + CUT);
+    g.lineTo(x + w - INSET + 1, y + CUT);
+    g.lineTo(x + w - INSET, BOT - 2);
+    g.lineTo(x + INSET, BOT - 2);
+    g.closePath();
+    g.fill();
+
     /* 炭块：3 块圆角黑炭，每块都带描边 + 顶面被烤亮。
        有描边才有体积 —— 无描边的色块丢在火里只会读作"噪点"。 */
     const coals = [[-0.27, 2, 14, 9], [0.04, -1, 17, 11], [0.31, 3, 13, 8]];
@@ -4775,21 +4909,48 @@ function drawPit(g, pit) {
       g.fill();
     }
 
+    /* 火根：火焰底边不能是水平直线 —— 直线读作"一排贴纸的下沿"。
+       先用一条亮橙的扁椭圆把三团火的脚糊在一起，火才是"从炭火里长出来的"。 */
+    for (const dx of [-0.26, 0, 0.27]) {
+      const fg = g.createRadialGradient(cx + dx * w, BOT - 3, 1, cx + dx * w, BOT - 3, w * 0.22);
+      fg.addColorStop(0, `rgba(255,222,130,${0.85 * glowK})`);
+      fg.addColorStop(0.55, `rgba(255,146,44,${0.55 * glowK})`);
+      fg.addColorStop(1, "rgba(255,110,20,0)");
+      g.fillStyle = fg;
+      g.beginPath();
+      g.ellipse(cx + dx * w, BOT - 3, w * 0.22, 7, 0, 0, 6.283);
+      g.fill();
+    }
+
     /* 火焰：**三团大的**，不是七根细条。
        旧版 7 根 22px 火苗、实体只有 5px 宽 —— 缩到手机上不足 3px，
        读作"一排橙色竖线"。Q 版靠轮廓识别，必须画大。
        中间那团高 50（坑口到焰尖），另外两团 34 / 30，错落才不像三根蜡烛。 */
-    qflame(g, cx - w * 0.25, BOT - 1, 28, 19, 0.0);
-    qflame(g, cx + w * 0.26, BOT - 1, 25, 17, 1.9);
-    qflame(g, cx, BOT - 3, 44, 27, 0.8);
+    qflame(g, cx - w * 0.30, BOT - 1, 26, 19, 0.0);
+    qflame(g, cx + w * 0.31, BOT - 1, 23, 17, 1.9);
+    qflame(g, cx, BOT - 3, 42, 30, 0.8);
 
-    // 火星：静止的火焰像贴图，动起来才像在烧
-    for (let i = 0; i < 6; i++) {
-      const ph = (S.t * 0.8 + i * 0.17) % 1;
-      g.globalAlpha = (1 - ph) * 0.95;
-      g.fillStyle = i % 2 ? "#FFD977" : "#FF9A3C";
+    /* 火星：8 颗，每颗带一条**短拖尾**。
+       拖尾是"它在动"的直接证据 —— 单颗圆点无论飘多快，静帧上都是个点；
+       有了拖尾，同一帧就有了方向和速度。拖尾用同一颗的上一段位置反推，
+       不用额外状态，所以不会和暂停/回溯打架。 */
+    for (let i = 0; i < 8; i++) {
+      const ph = (S.t * 0.62 + i * 0.125) % 1;
+      const sx = cx + Math.sin(ph * 6.4 + i * 2.1) * (12 + i * 2.6) + ph * ph * (i % 2 ? 9 : -7);
+      const sy = BOT - 12 - ph * 58;
+      const sr = 2.9 - ph * 1.5;
+      const tail = 3.6 + ph * 7;
+      g.globalAlpha = (1 - ph) * 0.90;
+      g.strokeStyle = i % 2 ? "#FFD977" : "#FF9A3C";
+      g.lineWidth = sr * 1.5;
+      g.lineCap = "round";
       g.beginPath();
-      g.arc(cx + Math.sin(ph * 7 + i * 2) * (13 + i * 3), BOT - 12 - ph * 52, 2.8 - ph * 1.4, 0, 6.283);
+      g.moveTo(sx, sy);
+      g.lineTo(sx - Math.sin(ph * 6.4 + i * 2.1) * tail * 0.5, sy + tail);
+      g.stroke();
+      g.fillStyle = i % 2 ? "#FFF0B8" : "#FFC061";
+      g.beginPath();
+      g.arc(sx, sy, sr, 0, 6.283);
       g.fill();
     }
     g.globalAlpha = 1;
@@ -5250,439 +5411,6 @@ function drawStump(g, s) {
   }
 }
 
-/* ---------------------------------------------------------------------------
-   出口门（原来是"营地编筐"）
-   ---------------------------------------------------------------------------
-   机制完全没变：球从地面滚进 CAMP 区间 = 送走一个球，落袋结算。
-   变的只是**它长什么样**，以及**它为什么应该长这样**：
-
-     · 编筐是一个"容器"，玩家读到的信息是"把球放进篮子"。
-       但这一屏的动作是"把球推出去"，语义对不上。
-     · 篮子是**平躺在地上**的，球滚进去时没有"穿过一个口"的瞬间，
-       于是整个落袋过程读作"球滚到边上消失了" —— 这正是用户说的
-       "撞过去就消失了，不会弹"。
-     · 门是一个**竖起来的洞**。球进去有明确的"进门"动作，
-       而且门的框架本身给出了场景的右边界：撞到框上是弹，进洞是出。
-
-   尺寸依据（画布 960×600，GROUND_Y = 556，CAMP = 852~934，宽 82）：
-     门洞净宽 58 —— 球直径 48，留 10px 余量。再窄会出现"看起来能进、
-                   实际卡在门框上弹回来"的手感 bug。
-     立柱宽 12  —— 852~864 / 922~934，和 CAMP 区间严格对齐，
-                   保证"视觉上的门口"和"判定上的落袋区间"是同一个范围。
-     柱高 76    —— 柱顶 480，拱顶 439。占屏高 19.5%，站在草地上是一处
-                   明确的建筑，但不是一座压倒场景的城门。
-   --------------------------------------------------------------------------- */
-function drawGate(g) {
-  /* ==========================================================================
-     出口：**一根横放的空心圆木，开口朝左**。
-
-     为什么不是拱门 —— 用户的原话："这个门应该朝向我方单位，不是朝向玩家的"。
-
-     上一版画的是一个正对镜头的拱门：门洞开在屏幕平面里，读作"墙上贴了
-     一张画着门的画"。球是从横方向滚进去的，方向和画面矛盾，所以眼睛
-     判定的是"球在门前面消失了"，而不是"球进了门"。
-
-     2D 侧视要表达"洞朝左"，标准解法是把**近端断面画成椭圆**：
-     镜头略偏右偏上，一个朝左的圆形断面在画面上就是一枚竖椭圆。
-     看到椭圆，人眼立刻判定"这个面是斜着朝我的"，于是"洞朝左"成立。
-     正圆断面只会读作"正对着我的一个洞"，那又回到原来那个问题。
-
-     尺寸（画布 960×600，GROUND_Y = 556，CAMP = 852~934）：
-       · 断面圆心 x = 846 —— 比 CAMP.x（852）再往左让 6px。
-         球心一进 852 就判落袋，断面必须在 852 之前张开，
-         否则球是在洞口外面凭空没的（上一版就是这个毛病）。
-       · 洞口内腔 ry = 30（高 60），球高 48，余量 12。
-       · 圆木外径 ry = 42（高 84）→ 壁厚 12。壁厚再薄读作"一层皮"，
-         读不出"这是实心木头里挖了个洞"。
-       · 圆木长到画面外（960），不收口 —— 收口就变成"一截木头摆在场景里"，
-         而不是"木头从这里延伸出去，洞正好开在这一头"。
-     ========================================================================== */
-  const ox = 846;                       // 断面圆心 x
-  const oy = 528;                       // 断面圆心 y
-  const outerR = 42, outerRx = 27;      // 圆木外径（竖椭圆）
-  const boreR = 30, boreRx = 15;        // 洞口内腔
-  const base = CAMP.y;                  // 556
-  const top = oy - outerR;              // 486
-  const bot = oy + outerR;              // 570
-
-  const woodFace = TH.wood, woodDark = TH.wood2, woodLit = TH.wood3;
-
-  /* ---- ① 落在地上的影：圆木压在草地上，脚下必须有一块暗。
-     没有这一块，96px 粗的圆木读作"浮在草上的一张纸"。 */
-  g.fillStyle = "rgba(18,40,22,.26)";
-  g.beginPath();
-  g.ellipse(ox + 52, bot - 6, 118, 15, 0, 0, 6.283);
-  g.fill();
-
-  /* ---- ② 圆木筒身：往画面右外延伸，不收口。
-     竖向渐变 = 圆柱：上缘受天光、中线以下转背光、最下缘一条反光。
-     三段而不是两段 —— 只有"亮→暗"两段读作一块圆角板，
-     加了底部反光才有"下半个圆柱"这个读法。 */
-  g.save();
-  g.beginPath();
-  g.moveTo(ox, top);
-  g.lineTo(W + 20, top - 8);
-  g.lineTo(W + 20, bot - 6);
-  g.lineTo(ox, bot);
-  g.closePath();
-  g.clip();
-  const cyg = g.createLinearGradient(0, top, 0, bot);
-  cyg.addColorStop(0, woodLit);
-  cyg.addColorStop(0.16, woodFace);
-  cyg.addColorStop(0.62, woodFace);
-  cyg.addColorStop(0.86, woodDark);
-  cyg.addColorStop(1, hexMix(woodDark, woodFace, 0.45));
-  g.fillStyle = cyg;
-  g.fillRect(ox, top - 12, W + 30, outerR * 2 + 24);
-
-  /* 树皮：横向的短沟，几条。竖沟在横放的圆木上会读成"一捆木条"。 */
-  g.strokeStyle = "rgba(70,40,20,.26)";
-  g.lineWidth = 1.8;
-  g.lineCap = "round";
-  for (let i = 0; i < 7; i++) {
-    const yy = top + 10 + hash(i * 3.1) * (outerR * 2 - 20);
-    const x0 = ox + 18 + hash(i * 7.7) * 90;
-    const w0 = 34 + hash(i * 5.3) * 56;
-    g.beginPath();
-    g.moveTo(x0, yy);
-    g.quadraticCurveTo(x0 + w0 * 0.5, yy + 2.4, x0 + w0, yy);
-    g.stroke();
-  }
-  // 筒身的明暗分界：一条很淡的暗带，圆柱才转得过去
-  g.fillStyle = "rgba(60,32,14,.16)";
-  g.fillRect(ox, oy + 10, W + 30, 14);
-  g.restore();
-
-  /* ---- ③ 近端断面：一圈年轮。这是"木头被锯断"的唯一证据。 */
-  /* 断面的木色：**不能用 cream 色**。
-     上一版混了 44% 的 #FFEDC4，拍出来是一圈奶油白 —— 读作塑料管口，
-     读不出"锯开的木头"。断面应该是**暖木黄、比筒身受光面更亮一档**，
-     但仍然是木头的色相。 */
-  const faceG = g.createLinearGradient(ox - outerRx, oy - outerR, ox + outerRx, oy + outerR);
-  faceG.addColorStop(0, hexMix(woodLit, "#FFF0CE", 0.30));
-  faceG.addColorStop(0.55, woodLit);
-  faceG.addColorStop(1, hexMix(woodFace, "#FFD9A0", 0.18));
-  g.fillStyle = faceG;
-  g.beginPath();
-  g.ellipse(ox, oy, outerRx, outerR, 0, 0, 6.283);
-  g.fill();
-  // 年轮：三圈，越往外越淡
-  g.strokeStyle = "rgba(88,50,20,.40)";
-  g.lineWidth = 1.6;
-  for (const k of [0.60, 0.78, 0.92]) {
-    g.beginPath();
-    g.ellipse(ox, oy, outerRx * k, outerR * k, 0, 0, 6.283);
-    g.stroke();
-  }
-
-  /* ---- ④ 内腔：近黑的暖褐，不是纯黑。
-     纯黑在暖色画面里是一个"洞"；偏暖的深褐才是"里面没有光"。 */
-  g.fillStyle = "#180F09";
-  g.beginPath();
-  g.ellipse(ox, oy, boreRx, boreR, 0, 0, 6.283);
-  g.fill();
-
-  /* ---- ⑤ 内腔里的地面：一块往右上收的浅色楔形。
-     **这一笔是"洞能走进去"的全部证据。** 没有它，内腔是一块黑，
-     球滚进去和球被吞掉没有区别；有了它，洞里有一个"底"，
-     球是"踩在里面的地上滚进去的"。 */
-  const fl = g.createLinearGradient(ox, oy + boreR, ox + 90, oy + boreR - 14);
-  fl.addColorStop(0, "#9A6C3E");
-  fl.addColorStop(0.5, "#5A3C22");
-  fl.addColorStop(1, "#1C120A");
-  g.save();
-  g.beginPath();
-  g.ellipse(ox, oy, boreRx, boreR, 0, 0, 6.283);
-  g.clip();
-  g.fillStyle = fl;
-  g.beginPath();
-  g.moveTo(ox - boreRx, oy + boreR);
-  g.lineTo(ox + boreRx * 2.4, oy + boreR - 4);
-  g.lineTo(ox + boreRx * 2.4, oy + boreR - 26);
-  g.lineTo(ox - boreRx, oy + boreR - 12);
-  g.closePath();
-  g.fill();
-  /* 内腔顶部：一条更暗的压边 —— 洞顶永远比洞底暗，
-     这是低角度外光唯一正确的明暗关系，两边同亮度洞里就成一块平板。 */
-  g.fillStyle = "rgba(0,0,0,.42)";
-  g.beginPath();
-  g.ellipse(ox, oy - boreR * 0.5, boreRx * 1.3, boreR * 0.8, 0, 0, 6.283);
-  g.fill();
-  /* 内腔左缘的受光边：洞口有厚度，光从这里切进去。
-     漏了这条，断面和内腔之间没有转折，整个洞塌成一张贴图。 */
-  const rim = g.createLinearGradient(ox - boreRx, 0, ox + boreRx * 0.6, 0);
-  rim.addColorStop(0, "rgba(255,222,158,.42)");
-  rim.addColorStop(1, "rgba(255,222,158,0)");
-  g.fillStyle = rim;
-  g.fillRect(ox - boreRx, oy - boreR, boreRx * 1.6, boreR * 2);
-  g.restore();
-
-  /* ---- ⑥ 断面到内腔之间那圈壁：描一圈中调的木色边，
-     让"壁有厚度"这件事在轮廓上成立。 */
-  g.strokeStyle = "rgba(58,32,14,.52)";
-  g.lineWidth = 2.2;
-  g.beginPath();
-  g.ellipse(ox, oy, boreRx + 1.2, boreR + 1.2, 0, 0, 6.283);
-  g.stroke();
-
-  /* ---- ⑦ 外轮廓：整圈描边，把圆木从草地上拔出来。
-     同屏所有物件都是 2.6~3.2px 深色描边，这一条不画，
-     圆木会立刻并进背景 —— 这是"贴纸感"最常见的一个成因。 */
-  g.strokeStyle = COL.outline;
-  g.lineWidth = 3;
-  g.lineJoin = "round";
-  g.beginPath();
-  g.ellipse(ox, oy, outerRx, outerR, 0, 0, 6.283);
-  g.stroke();
-  g.beginPath();
-  g.moveTo(ox, top);
-  g.lineTo(W + 20, top - 8);
-  g.moveTo(ox, bot);
-  g.lineTo(W + 20, bot - 6);
-  g.stroke();
-
-  /* ---- ⑧ 洞口洒到外面的暖光：告诉玩家"洞的另一头有光"。
-     没有这一层，洞口是个黑洞；有了，它是个出口。 */
-  const spill = g.createRadialGradient(ox - 10, oy + 16, 4, ox - 10, oy + 16, 86);
-  spill.addColorStop(0, "rgba(255,212,130,.30)");
-  spill.addColorStop(1, "rgba(255,212,130,0)");
-  g.fillStyle = spill;
-  g.beginPath();
-  g.ellipse(ox - 8, oy + 16, 86, 58, 0, 0, 6.283);
-  g.fill();
-  for (let i = 0; i < 7; i++) {
-    const ph = (S.t * 0.30 + hash(i * 5.1)) % 1;
-    g.globalAlpha = 0.30 * (1 - ph);
-    g.fillStyle = "#FFE6AE";
-    g.beginPath();
-    g.arc(ox - 30 + hash(i * 3.7) * 80, oy + 22 - ph * 64, 1.3 + hash(i) * 1.2, 0, 6.283);
-    g.fill();
-    g.globalAlpha = 1;
-  }
-
-  /* ---- ⑨ 圆木顶上的箭头牌。
-     **图内不写字。** 箭头是唯一跨语言读得懂的"出口"符号；
-     写"出口"两个字既没法多语言，也把画面从"场景"拉回"UI"。 */
-  const sx = ox + 34, sy = top - 46;
-  g.fillStyle = "rgba(18,40,22,.22)";
-  g.beginPath();
-  g.ellipse(sx + 22, top - 2, 30, 6, 0, 0, 6.283);
-  g.fill();
-  // 两根立柱把小牌撑在圆木上
-  g.fillStyle = woodDark;
-  g.fillRect(sx + 2, top - 14, 5, 16);
-  g.fillRect(sx + 40, top - 14, 5, 16);
-  g.fillStyle = hexMix(woodFace, "#FFE9C4", 0.34);
-  rr(g, sx - 6, sy, 56, 34, 8);
-  g.fill();
-  g.strokeStyle = COL.outline;
-  g.lineWidth = 2.4;
-  rr(g, sx - 6, sy, 56, 34, 8);
-  g.stroke();
-  g.fillStyle = "#4A2E14";
-  g.beginPath();
-  g.moveTo(sx + 38, sy + 17);
-  g.lineTo(sx + 24, sy + 8);
-  g.lineTo(sx + 24, sy + 14);
-  g.lineTo(sx + 6, sy + 14);
-  g.lineTo(sx + 6, sy + 20);
-  g.lineTo(sx + 24, sy + 20);
-  g.lineTo(sx + 24, sy + 26);
-  g.closePath();
-  g.fill();
-
-  /* ---- ⑩ 洞口边上的草：几撮小叶压在圆木下缘。
-     这一步是"它长在这块地里"的最后一道保险 ——
-     一个物体如果没有东西**压住它的边缘**，它永远读作贴上去的。 */
-  for (let i = 0; i < 5; i++) {
-    const gx = ox - 16 + i * 17 + hash(i * 2.3) * 8;
-    const gh = 9 + hash(i * 4.1) * 11;
-    g.strokeStyle = rgbaOf(TH.grassDark, 0.62);
-    g.lineWidth = 2;
-    g.lineCap = "round";
-    g.beginPath();
-    g.moveTo(gx, bot + 2);
-    g.quadraticCurveTo(gx - 4, bot + 2 - gh * 0.6, gx - 6, bot + 2 - gh);
-    g.moveTo(gx + 3, bot + 2);
-    g.quadraticCurveTo(gx + 7, bot + 2 - gh * 0.5, gx + 9, bot + 2 - gh * 0.85);
-    g.stroke();
-  }
-}
-
-function drawBounds(g) {
-  /* ==========================================================================
-     左端：**上段是树干，下段是开口**。
-
-     用户的原话："左下角和右下角球直接滚出去，上层是可以反弹的"。
-     所以左端不能再是通高的实心墙 —— 地面那一层必须真的空出来，
-     球要从树干底下滚出去、掉到画面外。
-
-     尺寸依据：
-       · 树干下缘 = 496。球顶在 534（球心 556、半径 22，取球心压在台面上的
-         这套物理约定），留 38px 余量，读作"球从树根下面钻过去"，
-         而不是"从一条缝里硬挤过去"。
-       · 树干上缘 = -20（出画）。它要盖住 462 那层浮空台的左端，
-         所以下缘必须低于 462 —— 496 - 462 = 34，够。
-       · 树干宽 -16 → 30。右缘 30 是刻意的：球被逻辑墙夹在 WALL_L = 26 上，
-         球心到 26 时左边缘正好落在 26，压进树皮 4px = "撞进树里"。
-     ========================================================================== */
-  const L = -16, R = 30, w = R - L;
-  const yBot = 496;
-
-  /* ---- ⓪ 洞口底部的暗：树干下面那一段是空的（球从这里出去）。
-     先在地面和树干之间压一道暗，眼睛立刻读到"这里是个开口"。
-     没有这道暗，树干下缘会和草地同色，读作"树干一直长到地里"。 */
-  const holeDark = g.createLinearGradient(0, yBot - 6, 0, GROUND_Y + 10);
-  holeDark.addColorStop(0, "rgba(14,32,20,.50)");
-  holeDark.addColorStop(0.55, "rgba(14,32,20,.26)");
-  holeDark.addColorStop(1, "rgba(14,32,20,.06)");
-  g.fillStyle = holeDark;
-  g.fillRect(0, yBot - 6, 46, GROUND_Y - yBot + 18);
-
-  /* ---- ① 树干主体。
-     Q 版读作树的三件东西：明显的受光边 + 粗树皮沟 + 一个树瘤。
-     缺受光边是片，缺树瘤是柱子，三样都有才是树。 */
-  g.fillStyle = TH.wood2;
-  rr(g, L, -20, w, yBot + 20, 10);
-  g.fill();
-
-  // 体积：右缘受光、左缘压暗
-  g.fillStyle = TH.wood;
-  rr(g, L + 8, -20, w - 14, yBot + 20, 9);
-  g.fill();
-  g.fillStyle = "rgba(239,192,137,.62)";
-  rr(g, R - 9, -20, 6, yBot + 20, 3);
-  g.fill();
-  g.fillStyle = "rgba(48,30,18,.30)";
-  rr(g, L + 1, -20, 7, yBot + 20, 3);
-  g.fill();
-
-  // 树皮沟：粗、深、断成一截一截（连续到底就是画了三条竖线）
-  g.fillStyle = "rgba(62,38,22,.56)";
-  for (const [gx, gw] of [[L + 12, 6], [L + 24, 5], [L + 35, 7]]) {
-    for (let yy = -16; yy < yBot - 30; yy += 74) {
-      const hh = 40 + (Math.abs(gx * 7 + yy) % 18);
-      rr(g, gx, yy, gw, Math.min(hh, yBot - 10 - yy), 3);
-      g.fill();
-    }
-  }
-
-  // 树瘤：位置固定（不随机），在视平线附近，人眼高度最容易读到
-  g.fillStyle = TH.wood3;
-  g.beginPath();
-  g.ellipse(L + 27, 300, 13, 20, 0.10, 0, 6.283);
-  g.fill();
-  g.strokeStyle = "rgba(58,34,18,.66)";
-  g.lineWidth = 2;
-  g.stroke();
-  g.strokeStyle = "rgba(120,78,44,.52)";
-  g.lineWidth = 1.4;
-  g.beginPath();
-  g.ellipse(L + 27, 300, 7, 12, 0.10, 0, 6.283);
-  g.stroke();
-
-  /* ---- ② 树根：**这是"开口"能读出来的关键**。
-     树干如果是一刀平切在 496，读作"柱子被截断了"。
-     根必须往外趴：右缘的根往画面里伸出去一小截、上面再拱起一坨，
-     于是树干下缘变成一道**拱**，球从拱下钻出去。
-     拱形和方形的心理差别就在这：拱 = 通道，方 = 缺口。 */
-  /* 树干的下缘：**往上收，不往下挂**。
-     上一版在底部堆了一个"主根"的鼓包，拍出来像树干下面挂了个袋子，
-     而且把开口从 60px 压到 22px —— 球明明过得去，看起来像要卡住。
-     现在只做两件事：底缘用一条圆弧收口（读作"树根往里收"），
-     右缘往外带出 6px（读作"根扎进土里"）。开口保持干净。
-     这条边界是硬约束：球顶在 534，树干下缘 496，必须留够 38px。 */
-  const rootRy = yBot;
-  g.fillStyle = TH.wood2;
-  g.beginPath();
-  g.moveTo(L, rootRy - 22);
-  g.quadraticCurveTo(L + 6, rootRy + 4, R + 8, rootRy - 2);
-  g.quadraticCurveTo(R + 2, rootRy - 16, R, rootRy - 22);
-  g.closePath();
-  g.fill();
-  // 根上的受光：右缘一条，和整屏光源一致
-  g.fillStyle = "rgba(226,176,120,.34)";
-  g.beginPath();
-  g.moveTo(R - 8, rootRy - 22);
-  g.quadraticCurveTo(R + 4, rootRy - 12, R + 8, rootRy - 2);
-  g.quadraticCurveTo(R - 2, rootRy - 10, R - 4, rootRy - 20);
-  g.closePath();
-  g.fill();
-  // 断面：底缘那条虚线一样的断口，说明"根是被地面挡住的"
-  g.strokeStyle = "rgba(48,28,14,.55)";
-  g.lineWidth = 2;
-  g.beginPath();
-  g.moveTo(L + 2, rootRy - 18);
-  g.quadraticCurveTo(L + 6, rootRy + 3, R + 7, rootRy - 3);
-  g.stroke();
-
-  // 描边压最上
-  g.strokeStyle = COL.outline;
-  g.lineWidth = 3;
-  rr(g, L, -20, w, yBot + 20, 10);
-  g.stroke();
-
-
-  /* ---- ③ 左端地缝：**地面到这里断了**，球从这儿滚下去。
-   *
-   * 上一版只压了一条 34px 宽的暗边。可是背景草地一直铺到画面最左，
-   * 暗边一盖，"地面继续往前"的读法没被推翻 —— 球在那儿消失，
-   * 玩家看到的还是"凭空没了"，和右端那个毛病一模一样。
-   *
-   * 真正的解法是把这里画成一道**沟**：左右两侧各有一片断裂的草皮
-   * 挂着（断面朝内），中间往下是黑的。有"断"才有"落"。
-   * 沟宽 52（0~52），比球直径 48 略宽 —— 刚好让球看起来掉得进去。
-   */
-  const chasmR = 52;
-  // 沟里的暗：上浅下深，最深处在画面外
-  const cg = g.createLinearGradient(0, GROUND_Y - 10, 0, GROUND_Y + 52);
-  cg.addColorStop(0, "rgba(22,34,22,.72)");
-  cg.addColorStop(0.45, "rgba(12,20,14,.92)");
-  cg.addColorStop(1, "rgba(6,10,8,1)");
-  g.fillStyle = cg;
-  g.beginPath();
-  g.moveTo(-4, GROUND_Y - 10);
-  g.lineTo(chasmR, GROUND_Y - 8);
-  g.lineTo(chasmR + 6, GROUND_Y + 52);
-  g.lineTo(-4, GROUND_Y + 52);
-  g.closePath();
-  g.fill();
-
-  // 右侧断口的土：一条竖着的断面，看得见土的厚度
-  g.fillStyle = TH.dirt2 || "#3E2E22";
-  g.beginPath();
-  g.moveTo(chasmR - 2, GROUND_Y - 8);
-  g.lineTo(chasmR + 12, GROUND_Y - 6);
-  g.lineTo(chasmR + 16, GROUND_Y + 52);
-  g.lineTo(chasmR + 2, GROUND_Y + 52);
-  g.closePath();
-  g.fill();
-  // 断口上的草皮：被切开的那一层，压在最上面
-  g.strokeStyle = rgbaOf(TH.grassLight, 0.62);
-  g.lineWidth = 3;
-  g.beginPath();
-  g.moveTo(chasmR - 2, GROUND_Y - 8);
-  g.quadraticCurveTo(chasmR + 5, GROUND_Y - 13, chasmR + 12, GROUND_Y - 6);
-  g.stroke();
-  g.strokeStyle = "rgba(46,72,40,.55)";
-  g.lineWidth = 1.6;
-  g.beginPath();
-  g.moveTo(chasmR - 2, GROUND_Y - 6);
-  g.quadraticCurveTo(chasmR + 5, GROUND_Y - 11, chasmR + 12, GROUND_Y - 4);
-  g.stroke();
-
-  // 沟边两根外露的草：断口必须是"活"的，光秃秃一条线读作裁切
-  g.strokeStyle = rgbaOf(TH.grassDark, 0.66);
-  g.lineWidth = 2;
-  g.lineCap = "round";
-  for (const [gx, gy, gh] of [[chasmR - 8, GROUND_Y - 8, 12], [chasmR + 8, GROUND_Y - 7, 15]]) {
-    g.beginPath();
-    g.moveTo(gx, gy);
-    g.quadraticCurveTo(gx + 3, gy - gh * 0.6, gx + 6, gy - gh);
-    g.stroke();
-  }
-}
-
 function drawLevel() {
   const g = ctx;
   // 顺序有讲究，三层各管一件事：
@@ -5693,13 +5421,10 @@ function drawLevel() {
   for (const r of RAMPS) drawRamp(g, r);
   for (const p of PLATS) if (p.kind === "ground") drawPlat(g, p);
   for (const pit of PITS) drawPit(g, pit);
-  drawGate(g);
   for (const p of PLATS) if (p.kind !== "ground") drawPlat(g, p);
   for (const b of BOUNCERS) drawBouncer(g, b);
   for (const pt of PORTALS) drawPortal(g, pt);
   for (const s of S.stumps) drawStump(g, s);
-  // 两端封口放**最后**：它要压住平台、坡、坑的边缘，而不是被它们盖住
-  drawBounds(g);
 }
 
 /* 前景灌木：画面最底边一排压暗的剪影。

@@ -20,12 +20,32 @@ def _canvas(n=68):
 
 
 def bench(n=68):
-    """工作台：锤子 —— 横头 + 竖柄，柄尾收窄。"""
-    im, d = _canvas(n)
-    d.rounded_rectangle([13, 17, 55, 31], radius=4, fill=INK)
-    d.rounded_rectangle([28, 29, 40, 57], radius=4, fill=INK)
-    d.rounded_rectangle([15, 19, 43, 23], radius=2, fill=HI)
-    return im
+    """工作台：锤子 —— 斜置 24°，锤头 + 长柄。
+
+    上一版是"头宽 42 / 柄长 28"的正交 T 字，剪影就是一个字母 T。
+    锤子的辨识特征在**比例**：柄长 ≈ 头长的 2.5 倍以上，且整体斜置。
+    所以放大画布画完再旋转 —— 直接手算斜 polygon 的坐标只会画出歪方块。
+    """
+    k = 3
+    S = n * k
+    big = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(big)
+    c = S // 2
+    sc = S / 68.0
+
+    def R(x0, y0, x1, y1, r, fill):
+        ox = oy = c - 34 * sc
+        d.rounded_rectangle([ox + x0 * sc, oy + y0 * sc, ox + x1 * sc, oy + y1 * sc],
+                            radius=max(1, int(r * sc)), fill=fill)
+
+    R(10, 15, 44, 26, 5, INK)          # 锤头（横向长块）
+    R(12, 17, 42, 20, 2, HI)           # 头顶高光
+    R(14, 26, 30, 33, 4, INK)          # 锤颈（把头压在一侧，制造"偏心"）
+    R(19, 30, 30, 60, 5, INK)          # 长柄
+    R(21, 32, 27, 44, 3, HI)           # 柄高光
+
+    big = big.rotate(-24, resample=Image.BICUBIC, center=(c, c))
+    return big.crop((c - n // 2, c - n // 2, c + n // 2, c + n // 2))
 
 
 def codex(n=68):
@@ -39,13 +59,17 @@ def codex(n=68):
 
 
 def stove(n=68):
-    """灶台：带盖的锅 —— 宽锅身 + 顶部提环 + 左右锅耳。"""
+    """灶台：带盖的锅 —— 宽锅身 + 比锅身更宽的锅沿 + 中央盖钮。
+
+    上一版顶上一个直径 16 的空心"提环"，在 29px 下只剩一个圆点，
+    读作"锅盖上插了个把手"。锅的辨识特征是**锅沿比锅身宽**这一圈，
+    盖钮只要一个实心小球就够。
+    """
     im, d = _canvas(n)
-    d.rounded_rectangle([13, 27, 55, 33], radius=3, fill=INK)          # 锅沿
-    d.rounded_rectangle([16, 31, 52, 53], radius=12, fill=INK)         # 锅身
-    d.ellipse([26, 13, 42, 27], fill=INK_D)                           # 提环
-    d.ellipse([30, 17, 38, 24], fill=(0, 0, 0, 0))                     # 环孔
-    d.rounded_rectangle([18, 33, 50, 37], radius=3, fill=HI)
+    d.rounded_rectangle([12, 29, 56, 55], radius=14, fill=INK)         # 锅身
+    d.rounded_rectangle([9, 24, 59, 33], radius=4, fill=INK_D)         # 锅沿（更宽）
+    d.ellipse([30, 12, 38, 22], fill=INK_D)                           # 盖钮
+    d.rounded_rectangle([17, 35, 51, 40], radius=3, fill=HI)           # 身高光
     return im
 
 
@@ -59,13 +83,18 @@ def send(n=68):
 
 
 def footprint(n=68):
-    """去苔原：脚印 —— 脚掌 + 三趾，朝向一致。"""
+    """去苔原：脚印 —— 脚掌 + 三趾，朝右上。
+
+    上一版掌 26×28、趾 9~10px 紧贴掌顶，缩到 29px 后三趾黏成一坨，
+    读作"一颗豆子"。脚印的辨识特征是**趾与掌之间的空隙**，
+    所以趾要小、要分开、要和掌留 3px 以上的缝。
+    """
     im, d = _canvas(n)
-    d.ellipse([21, 27, 47, 55], fill=INK)
-    d.ellipse([21, 14, 30, 25], fill=INK)     # 左趾
-    d.ellipse([30, 11, 40, 23], fill=INK)     # 中趾
-    d.ellipse([38, 15, 47, 26], fill=INK)     # 右趾
-    d.ellipse([23, 29, 38, 36], fill=HI)
+    d.ellipse([22, 30, 48, 58], fill=INK)       # 掌
+    d.ellipse([20, 15, 28, 25], fill=INK)       # 左趾
+    d.ellipse([31, 10, 40, 21], fill=INK)       # 中趾（最高）
+    d.ellipse([41, 16, 49, 26], fill=INK)       # 右趾
+    d.ellipse([24, 32, 38, 40], fill=HI)
     return im
 
 

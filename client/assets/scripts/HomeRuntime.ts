@@ -397,7 +397,7 @@ class HomeController {
      * 居中公式可以直接用 (父宽 - 子宽) / 2。
      */
     private alignHud() {
-        const BADGE_W = 47, BADGE_H = 48;
+        const BADGE_W = 48, BADGE_H = 48;
         /* 说明底板离圆徽 46px：牌子顶边压在圆徽下沿上面 2px，
            看起来是"挂"在徽标下面，不是浮在旁边 */
         const CAP_GAP = 46;

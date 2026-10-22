@@ -1936,8 +1936,8 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 32,
-      "height": 32
+      "width": 30,
+      "height": 30
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -1997,7 +1997,7 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 47,
+      "width": 48,
       "height": 48
     },
     "_anchorPoint": {
@@ -2158,8 +2158,8 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 33,
-      "height": 13.86
+      "width": 36,
+      "height": 16
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -2191,10 +2191,10 @@
     "_string": "工作台",
     "_horizontalAlign": 1,
     "_verticalAlign": 1,
-    "_actualFontSize": 11,
-    "_fontSize": 11,
+    "_actualFontSize": 12,
+    "_fontSize": 12,
     "_fontFamily": "Microsoft YaHei",
-    "_lineHeight": 11,
+    "_lineHeight": 16,
     "_overflow": 0,
     "_enableWrapText": false,
     "_font": null,
@@ -2242,8 +2242,8 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 48,
-      "height": 23
+      "width": 52,
+      "height": 24
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -2403,8 +2403,8 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 32,
-      "height": 32
+      "width": 30,
+      "height": 30
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -2464,7 +2464,7 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 47,
+      "width": 48,
       "height": 48
     },
     "_anchorPoint": {
@@ -2625,8 +2625,8 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 22,
-      "height": 13.86
+      "width": 24,
+      "height": 16
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -2658,10 +2658,10 @@
     "_string": "图鉴",
     "_horizontalAlign": 1,
     "_verticalAlign": 1,
-    "_actualFontSize": 11,
-    "_fontSize": 11,
+    "_actualFontSize": 12,
+    "_fontSize": 12,
     "_fontFamily": "Microsoft YaHei",
-    "_lineHeight": 11,
+    "_lineHeight": 16,
     "_overflow": 0,
     "_enableWrapText": false,
     "_font": null,
@@ -2709,8 +2709,8 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 37,
-      "height": 23
+      "width": 40,
+      "height": 24
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -2870,8 +2870,8 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 32,
-      "height": 32
+      "width": 30,
+      "height": 30
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -2931,7 +2931,7 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 47,
+      "width": 48,
       "height": 48
     },
     "_anchorPoint": {
@@ -3092,8 +3092,8 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 22,
-      "height": 13.86
+      "width": 24,
+      "height": 16
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -3125,10 +3125,10 @@
     "_string": "灶台",
     "_horizontalAlign": 1,
     "_verticalAlign": 1,
-    "_actualFontSize": 11,
-    "_fontSize": 11,
+    "_actualFontSize": 12,
+    "_fontSize": 12,
     "_fontFamily": "Microsoft YaHei",
-    "_lineHeight": 11,
+    "_lineHeight": 16,
     "_overflow": 0,
     "_enableWrapText": false,
     "_font": null,
@@ -3176,8 +3176,8 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 37,
-      "height": 23
+      "width": 40,
+      "height": 24
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -3337,8 +3337,8 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 32,
-      "height": 32
+      "width": 30,
+      "height": 30
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -3398,7 +3398,7 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 47,
+      "width": 48,
       "height": 48
     },
     "_anchorPoint": {
@@ -3559,8 +3559,8 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 22,
-      "height": 13.86
+      "width": 24,
+      "height": 16
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -3592,10 +3592,10 @@
     "_string": "派遣",
     "_horizontalAlign": 1,
     "_verticalAlign": 1,
-    "_actualFontSize": 11,
-    "_fontSize": 11,
+    "_actualFontSize": 12,
+    "_fontSize": 12,
     "_fontFamily": "Microsoft YaHei",
-    "_lineHeight": 11,
+    "_lineHeight": 16,
     "_overflow": 0,
     "_enableWrapText": false,
     "_font": null,
@@ -3643,8 +3643,8 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 37,
-      "height": 23
+      "width": 40,
+      "height": 24
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -3804,8 +3804,8 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 32,
-      "height": 32
+      "width": 30,
+      "height": 30
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -3865,7 +3865,7 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 47,
+      "width": 48,
       "height": 48
     },
     "_anchorPoint": {
@@ -4026,8 +4026,8 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 33,
-      "height": 13.86
+      "width": 36,
+      "height": 16
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",
@@ -4059,10 +4059,10 @@
     "_string": "去苔原",
     "_horizontalAlign": 1,
     "_verticalAlign": 1,
-    "_actualFontSize": 11,
-    "_fontSize": 11,
+    "_actualFontSize": 12,
+    "_fontSize": 12,
     "_fontFamily": "Microsoft YaHei",
-    "_lineHeight": 11,
+    "_lineHeight": 16,
     "_overflow": 0,
     "_enableWrapText": false,
     "_font": null,
@@ -4110,8 +4110,8 @@
     "__prefab": null,
     "_contentSize": {
       "__type__": "cc.Size",
-      "width": 48,
-      "height": 23
+      "width": 52,
+      "height": 24
     },
     "_anchorPoint": {
       "__type__": "cc.Vec2",

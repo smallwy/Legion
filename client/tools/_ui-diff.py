@@ -15,8 +15,8 @@ FR = "C:/Windows/Fonts/msyh.ttc"
 BAR = 46
 W, H = 1280, 720
 
-before = Image.open(os.path.join(CLIENT, "shots/_home-rt.png")).convert("RGB")
-after = Image.open(os.path.join(CLIENT, "shots/ui-bench/22-主界面-设计感改后.png")).convert("RGB")
+before = Image.open(os.path.join(CLIENT, "shots/17-主界面-运行时改后.png")).convert("RGB")
+after = Image.open(os.path.join(CLIENT, "shots/_home-rt.png")).convert("RGB")
 
 out = Image.new("RGB", (W, (BAR + H) * 2 + 16), (30, 24, 20))
 d = ImageDraw.Draw(out)
@@ -25,9 +25,9 @@ f_b = ImageFont.truetype(FB, 22)
 f_s = ImageFont.truetype(FR, 17)
 
 titles = [
-    ("改前", "圆徽 47×48 · 描边 2.75px ｜ 名字胶囊描边 0.75px · 字号 11 / 行高 11 ｜ 图标细线 29px",
+    ("改前", "圆徽 47×48 · 描边 2.75px ｜ 名字板描边 0.75px · 字号 11 / 行高 11 ｜ 牌面纯色 #FFFCF4",
      (196, 140, 120)),
-    ("改后", "挂牌 56×56 · 描边 3px ｜ 缎带与牌同宽 · 字号 12 / 行高 16 ｜ 图标块面 34px ｜ 渐变 + 内高光 + 落影",
+    ("改后 C", "方牌 48×48 · 描边 3px 一致 ｜ 名字板保留椭圆，52/40×24 · 字号 12 / 行高 16 ｜ 暖奶油渐变 + 顶高光 + 底内阴影",
      (150, 208, 150)),
 ]
 

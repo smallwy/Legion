@@ -100,10 +100,17 @@ def plate(dst, cx, cy, size=56, radius=14, edge=3):
 
 
 def ribbon(dst, cx, top, tw, h=26, radius=7, edge=3, min_w=0):
-    """缎带与牌**同宽**（min_w = 牌宽）。
-    宽度随文字变会出现"工作台宽、图鉴窄"，四组并排就是一列参差不齐的标签；
-    同宽才读作"牌的签名条"，而不是"另贴上去的一张纸条"。"""
-    w = int(round(max(tw + 16, min_w)))
+    """名字底板。
+
+    **形态回到原设计的椭圆胶囊**（radius = h/2 全圆头），不用小圆角方条。
+    上一版做成 radius 6 的方条，理由是"与 12 圆角的方牌同族"，
+    但实测读起来像优惠券/价签，而且和场景里路标的圆头木牌不是一套语言。
+    形状保持原样，**只修那两处真正断层的参数**：描边 0.75 → 3px、字号 11 → 12。
+
+    宽度仍然随文字走（原来是 37/48），因为胶囊一旦拉到牌宽就变成
+    第二条方形牌，反而更像"两块板叠着"。min_w 兜底防止 2 字胶囊过窄。"""
+    w = int(round(max(tw + 14, min_w)))
+    radius = min(radius, h // 2)
     pad = 24
     ox = oy = pad // 2
     lay = Image.new("RGBA", (w + pad, h + pad), (0, 0, 0, 0))
@@ -166,7 +173,7 @@ def go_button(dst, x0, y0, w, h, radius=38):
 def main():
     global FACE_TOP, FACE_BOT, LINE, THEME
     src = sys.argv[1] if len(sys.argv) > 1 else "shots/_home-rt.png"
-    out = sys.argv[2] if len(sys.argv) > 2 else "shots/ui-bench/22-主界面-设计感改后.png"
+    out = sys.argv[2] if len(sys.argv) > 2 else "shots/ui-bench/32-定稿-C暖奶油-椭圆名字-模拟.png"
     THEME = sys.argv[3] if len(sys.argv) > 3 else "cream"
     size = int(sys.argv[4]) if len(sys.argv) > 4 else 56
     p = PAL[THEME]
@@ -174,7 +181,9 @@ def main():
 
     im = Image.open(os.path.join(CLIENT, src)).convert("RGBA")
 
-    badges = [("工作台", 273, 396), ("图鉴", 500, 353), ("灶台", 628, 331), ("派遣", 1048, 499)]
+    # 5 个徽标的屏幕中心（由场景 pos + anchor(0,1) + 47×48 反算）
+    badges = [("工作台", 273, 396), ("图鉴", 500, 353), ("灶台", 628, 331),
+              ("派遣", 1048, 499), ("去苔原", 285, 203)]
     # 图标换成块面版：旧图标是 29px 细线稿，放大到 34 直接糊
     import _ui_icons
     ic_sz = int(round(size * 0.6))
@@ -187,11 +196,11 @@ def main():
         im.alpha_composite(ic, (cx - ic.size[0] // 2, cy - ic.size[1] // 2))
 
     d = ImageDraw.Draw(im)
-    rb_top = cy + half - 2
     for name, cx, cy in badges:
         f = font(12)
         tw = d.textlength(name, font=f)
-        ribbon(im, cx, cy + half - 2, tw, h=24, radius=6, min_w=size)
+        # h=24 / radius=12 = 全圆头胶囊；min_w=40 让 2 字标签不至于缩成一个点
+        ribbon(im, cx, cy + half - 2, tw, h=24, radius=12, min_w=40)
         d = ImageDraw.Draw(im)
         d.text((cx - tw / 2, cy + half - 2 + 12 - 3), name, font=f,
                fill=(74, 44, 20) if THEME == "cream" else (66, 38, 16))
@@ -203,7 +212,7 @@ def main():
     ax, ay = 1232, 664
     d.polygon([(ax - 7, ay - 10), (ax + 8, ay), (ax - 7, ay + 10)], fill=(132, 78, 30))
 
-    # 任务：先在字框内做横向木纹插值填充，再写 17px
+    # 任务：先在字框内做横向木纹插值填充，再写 15px（与代码里的字号一致）
     bx0, bx1, by0, by1 = 188, 258, 250, 288
     px = im.load()
     for y in range(by0, by1):
@@ -213,9 +222,9 @@ def main():
             t = (x - bx0) / max(1, bx1 - bx0 - 1)
             px[x, y] = tuple(int(l[k] + (r[k] - l[k]) * t) for k in range(3)) + (255,)
     d = ImageDraw.Draw(im)
-    f17 = font(17, True)
-    tw = d.textlength("任务", font=f17)
-    d.text((221 - tw / 2, 268 - 17 / 2), "任务", font=f17, fill=(74, 42, 18))
+    f15 = font(15)
+    tw = d.textlength("任务", font=f15)
+    d.text((221 - tw / 2, 268 - 15 / 2), "任务", font=f15, fill=(74, 42, 18))
 
     os.makedirs(os.path.dirname(os.path.join(CLIENT, out)), exist_ok=True)
     im.convert("RGB").save(os.path.join(CLIENT, out), quality=96)

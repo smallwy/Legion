@@ -483,13 +483,43 @@ const THEMES = {
     wood: "#C98A50", wood2: "#8B5A32", wood3: "#EFC089",
     accent: "#FFE066",
   },
-  swamp: {
-    sky1: "#F2B45C", sky2: "#FFE6AE", cloud: "#FFF6DE",
-    hill1: "#C9A45E", hill2: "#E0C489",
-    grass: "#7FA843", grass2: "#B4CF63",
-    dirt: "#7A5433", dirt2: "#4E3622",
-    wood: "#B87C46", wood2: "#7C5129", wood3: "#E2AF74",
-    accent: "#FFD447",
+  snow: {
+    /* 雪原。**这一套是替换掉原来的 swamp（泥沼）**，不是第九套 ——
+       八套主题的槽位固定，不许靠加关卡来补题材。
+
+       为什么换掉的就是 swamp：换之前八套里有四套是暖橙黄
+       （tundra 暖金 / swamp 暖黄 / slope 暖橙 / stairs 亮黄），
+       第 1、2、4、7 关在玩家眼里几乎是同一关。swamp 和 tundra 的
+       色值差不到 10%，是四套里重复度最高的那一套 —— 换它，顺手把
+       "前四关像一关"这个问题一起解决了。
+
+       雪地放第 2 关而不放第 1 关：第 1 关的暖金森林是**对着概念图
+       调出来的**（见 tundra 的注释），不动已确认的东西；而第 1→2 关
+       从暖金跳到冷白，是整个流程里感知最强的一次换景，
+       正好卡在玩家决定"要不要继续玩"的那个位置。
+
+       ---- 雪地的三条硬约束（都不是审美，是可见性）----
+
+       ① **雪面不能被 GRASS_DIM(0.80) 压**。所有其它主题压暗草地是为了
+          让角色跳出来；雪靠"亮"才成立，压到 0.80 就是一块灰地。
+          雪地单独用 SNOW_DIM = 0.90。角色照样能读出来，靠的是
+          描边（COL.outline）+ 木平台的暖色，不是靠压暗地面。
+
+       ② **比纯白低一档**。grass 取 #D6E3F2 而不是 #FFFFFF：
+          纯白雪面会把白色弹丸、幼虫、UI 白字全吃掉；
+          而且真实雪在阴天就是蓝的 —— 白是"雪的反光"，蓝才是"雪本身"。
+
+       ③ **木平台是雪地里唯一的暖色**。木色由 makeTheme 统一锁暖棕，
+          主题只留 22% 倾向 —— 这条对雪地是加分项：踩点一眼可辨，
+          比在草地上还清楚。
+        */
+    snow: true,
+    sky1: "#6E9BC9", sky2: "#DDEAF8", cloud: "#F5FAFF",
+    hill1: "#9FB8D0", hill2: "#C8D8E8",
+    grass: "#D6E3F2", grass2: "#EFF6FF",
+    dirt: "#7C8CA4", dirt2: "#55647A",
+    wood: "#9E7B5E", wood2: "#6E5340", wood3: "#C7A484",
+    accent: "#79E0F5",
   },
   cliff: {
     sky1: "#8E7BD6", sky2: "#D9D2FF", cloud: "#F2EEFF",
@@ -579,6 +609,14 @@ const THEMES = {
    **只压 grass / grass2** —— 压暗 sky / wood 会把纵深反着压平。 */
 const GRASS_DIM = 0.80;
 
+/* 雪地的地面压暗系数。**雪是唯一不能按 0.80 压的主题。**
+   0.80 的 #D6E3F2 会变成 #ABB6C2 —— 一块冷灰水泥，不是雪。
+   0.90 之后明度约 205，仍比压过的草地（约 130）亮 75 档，
+   角色分离靠描边和木平台的暖色，不靠把地面压黑。
+   **只给雪地开这个口子**，其它七套一律 0.80 —— 否则会变成
+   "每关都能找到一个理由调参数"，八套就不成一套系统了。 */
+const SNOW_DIM = 0.90;
+
 function hexDim(hex, k) {
   const n = parseInt(hex.slice(1), 16);
   const r = Math.min(255, Math.round(((n >> 16) & 255) * k));
@@ -621,8 +659,9 @@ for (const _tk of Object.keys(THEMES)) {
      平台要"靠描边和投影分离"，压暗它们只会把层次压平。
      压同一个系数，草皮亮面与草地底色的相对关系不变 ——
      两个色各压各的，草皮的"受光"会消失，地面就变成一块平涂。 */
-  T.grass2 = hexDim(T.grass2, GRASS_DIM);
-  T.grass = hexDim(T.grass, GRASS_DIM);
+  const gdim = T.snow ? SNOW_DIM : GRASS_DIM;
+  T.grass2 = hexDim(T.grass2, gdim);
+  T.grass = hexDim(T.grass, gdim);
 
   /* ---------------- 木材锁定 ----------------
      八关八套主题，但**木头只有一种**。
@@ -686,6 +725,21 @@ for (const _tk of Object.keys(THEMES)) {
      亮的那一侧靠边缘的暖光，不靠整体提亮。 */
   T.treeNear = hexDim(hexMix(hexMix(T.grass2, LEAF, 0.30), "#FFFFFF", 0.05), 0.74);
   T.treeFar = hexMix(T.treeNear, T.hillFar, 0.28);
+
+  /* 雪地的树**不能从雪面派生**。
+     上面的通用算法是 mix(grass2, LEAF) —— 雪地的 grass2 近白，混出的是淡绿白，
+     压 0.74 之后是灰绿，读作"一棵掉漆的树"。雪松本来就是深色的：
+     **雪压枝头不等于树变白**（这一点和雪面不能压暗是同一条逻辑的反面）。
+     压 0.92 而不是 0.74 —— 雪地背景整体亮，树要压得更沉才有剪影；
+     远景树混远山的比例也从 0.28 拉到 0.52，让它在雪雾里退得更快。 */
+  if (T.snow) {
+    T.treeNear = hexDim("#2E5B4A", 0.92);
+    /* 远景树混 0.72（通用是 0.28、第一版给雪地也是 0.52）。
+       0.52 出来是灰绿的一片，在雪雾里读作"雾霾"而不是"远处的树林" ——
+       雪景的远景树几乎只剩蓝灰轮廓，绿色早被雪和空气吃掉了。 */
+    T.treeFar = hexMix(T.treeNear, T.hillFar, 0.72);
+  }
+
   T.trunkNear = hexDim(T.wood2, 0.86);
   T.trunkFar = hexMix(T.trunkNear, T.hillFar, 0.45);
 
@@ -704,9 +758,33 @@ for (const _tk of Object.keys(THEMES)) {
      受光边也提一档（0.22 → 0.34），否则一丛里几片叶子分不出来，只是黑球。 */
   T.shrub = hexDim(hexMix(T.grass, INK_LEAF, 0.54), 0.70);
   T.shrubLit = hexMix(T.shrub, "#FFE9B8", 0.34);
+
+  /* ---------------- 雪地：四处覆写 ----------------
+     上面所有派生都建立在「草是绿的、土地是褐的」这个前提上。雪地一条都不成立，
+     所以不是调参数能解决的 —— 必须按"雪"的物理重算。
+
+     **集中写在循环末尾一处**，不散到各自的算法里：八套主题共用一套派生流程，
+     雪地是唯一的例外分支，例外越集中越不容易在下一次改动时漏掉。
+
+     ① 远山：通用是 mix(sky2, cooled)，雪地 sky2 与 grass 都近白 → 混出白，
+        远山整片消失。雪景的纵深**全靠远山那点冷蓝**，所以直接锁蓝灰。
+     ② 地平线雾带同理，混一个淡蓝才有"远处空气"。
+     ③ 地面最暗档：通用 hexDim(grass, 0.74) 把雪压成 #9EA6B2 —— 一块沥青路面。
+        雪的"暗部"是**背光的雪**，是蓝的、不是灰的。改成压得极轻再混冷蓝。
+     ④ 前景灌木：通用是把草地混墨绿压暗 → 深绿灌木。雪地里长深绿灌木丛
+        读作"没扫干净的落叶"。改成冷白 —— 形状语言现成的，白色就是雪堆。
+        **受光边保持最亮**，否则雪堆会糊成一个白团。 */
+  if (T.snow) {
+    T.hillFar = hexMix(T.sky2, "#7E9BBE", 0.42);
+    T.hillNear = hexMix(T.sky2, "#6C8CB2", 0.62);
+    T.horizon = hexMix(T.sky2, "#C8D8EA", 0.50);
+    T.grassDark = hexMix(hexDim(T.grass, 0.92), "#8FA6C4", 0.38);
+    T.shrub = hexMix("#DCE8F6", "#93AACB", 0.42);
+    T.shrubLit = "#F4FAFF";
+  }
 }
 
-const THEME_ORDER = ["tundra", "swamp", "cliff", "slope", "bouncy", "well", "stairs", "tower"];
+const THEME_ORDER = ["tundra", "snow", "cliff", "slope", "bouncy", "well", "stairs", "tower"];
 
 const LEVELS = [
   /* ---------------- 1 ----------------
@@ -760,9 +838,12 @@ const LEVELS = [
      三条坑 + 一条从地面爬到 462 的长坡。坡是这关的"另一条路"：
      球滚下去能上二层，人也能走上去。 */
   {
-    id: "marsh", name: "泥沼", sub: "三池 · 中间一条长坡",
-    note: "左泥、中水、右火。中间那条 140 长的坡能上能下，球滚下去会自己爬回 462",
-    theme: "swamp",
+    /* 原「泥沼」。主题换成雪原时一并改了名 —— 雪地上叫"泥沼"是自相矛盾，
+       但**关卡结构一个数都没动**：三池、长坡、平台位置全是原样。
+       换的是皮肤，不是关卡。 */
+    id: "snowfield", name: "雪原", sub: "三池 · 中间一条长坡",
+    note: "左冰泥、中冰水、右火。中间那条 226 长的坡能上能下，球滚下去会自己爬回 462",
+    theme: "snow",
     goal: "collect", collect: 12, par: { time: 60, made: 9 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
@@ -3793,9 +3874,15 @@ function drawTree(g, x, baseY, sc, back, dim) {
    * 暖的那头往夕阳的金黄偏，冷的那头往青绿偏，都不离开本关的色域。 */
   const hueShift = hash(x * 0.37 + 5.1) * 2 - 1;
   if (back) {
-    leafBase = hueShift > 0
-      ? hexMix(leafBase, "#E8C066", hueShift * 0.34)
-      : hexMix(leafBase, "#4C8C74", -hueShift * 0.30);
+    /* 雪地的远景树**不能往暖金偏**。上面那条黄绿/橙金混色是为暖色森林调的，
+       雪雾里的树只有两个方向：更冷、或被雪压得更白。
+       所以这里不按 hueShift 的正负分冷暖，而是用它决定"这棵树积了多少雪"
+       —— 一片雪林里每棵的积雪量本来就不一样，这个随机量正好现成。 */
+    leafBase = TH.snow
+      ? hexMix(leafBase, "#C6D8EC", 0.10 + hash(x * 0.91 + 3.3) * 0.30)
+      : (hueShift > 0
+        ? hexMix(leafBase, "#E8C066", hueShift * 0.34)
+        : hexMix(leafBase, "#4C8C74", -hueShift * 0.30));
   }
   // 树干
   g.fillStyle = back ? hexMix(trunkBase, TH.horizon, mixTo) : TH.trunkNear;
@@ -3860,6 +3947,27 @@ function drawTree(g, x, baseY, sc, back, dim) {
     g.beginPath();
     g.arc(x + lit * r * 0.30, cy - r * 0.42, r * 0.16, 0, 6.283);
     g.fill();
+
+    /* ---- 树冠积雪（只雪地）----
+       雪景最省事的识别特征不是"地面白"，是**树顶那道白边**。
+       没有它，画面读作"雾里的森林"；有了它，一眼读作"下过雪的森林"。
+
+       三条要点：
+         · **不描边** —— 一描边就变成"树冠上贴了块白色补丁"，
+           雪是堆上去的，它的边界是软的。
+         · 位置比受光面再高一点、再大一圈：受光面在 r*0.34 处、半径 0.44r，
+           雪在 r*0.46 / 0.66r —— 雪盖的是树冠**上表面**，不是正面的反光点。
+         · 两块叠加（大块 + 小高光），因为纯一块 r*0.66 的白团边界太圆，
+           看着像"顶了个球"；加一小块偏心高光，轮廓才碎、才像积的。 */
+    if (TH.snow) {
+      g.fillStyle = "rgba(240,247,255,.90)";
+      blobPath(g, x + lit * r * 0.08, cy - r * 0.46, r * 0.66, seed + 4.4);
+      g.fill();
+      g.fillStyle = "rgba(255,255,255,.95)";
+      g.beginPath();
+      g.arc(x + lit * r * 0.18, cy - r * 0.58, r * 0.30, 0, 6.283);
+      g.fill();
+    }
   } else {
     /* 中景树冠也必须有一块受光面 —— **纯剪影排成一行就是一道绿篱**，
        这是重做第一版翻车的地方：15 棵树冠颜色一样、形状一样、没有明暗，
@@ -3891,6 +3999,58 @@ function drawTree(g, x, baseY, sc, back, dim) {
  */
 function ridgeY(x) {
   return 300 + Math.sin(x * 0.0031 + 1.1) * 13 + Math.sin(x * 0.0072 + 3.4) * 6.5;
+}
+
+/* ----------------------------------------------------------------------------
+   落雪 —— 只在雪地主题生效
+   ----------------------------------------------------------------------------
+   **纯函数、零状态**：不建粒子数组，位置由 (序号, S.t) 直接算出来。
+   三条理由：
+     1) 不占存档、不影响任何玩法断言 —— grove-smoke 比的是数值，
+        多一个数组就多一个可能被写坏的变量；
+     2) 切关卡不用清场，S.t 一变雪自然错开；
+     3) 和云是同一个做法（云也是 hash 固定位置）。
+   **绝对不能用 Math.random()** —— 每帧随机会让雪变成噪点闪烁，
+   只有 hash(seed) 才是一条稳定的下落路径。
+
+   两档而不是一档：同尺寸同速度的雪片读起来是一层贴纸。
+     远景 54 片 · 半径 0.9–1.6 · 26–40 px/s · alpha .45 → 靠"密"读作空气
+     近景 16 片 · 半径 1.8–2.8 · 52–78 px/s · alpha .85 → 靠"大"读作距离
+
+   横向漂移走 sin(t·0.7 + 相位)×10，不是匀速直线 —— 雪是打着旋落的，
+   直线下落一眼假。相位由 hash 给，保证每片不同步。
+   -------------------------------------------------------------------------- */
+function drawSnowfall(g) {
+  if (!TH.snow) return;
+  const t = S.t;
+  const span = W + 40;
+  g.save();
+  g.fillStyle = "#FFFFFF";
+  for (let layer = 0; layer < 2; layer++) {
+    /* 数量 80 / 22 是**量出来的下限**，不是拍的：第一版 54 / 16 在 960×600 上
+       平均每 1.2 万个像素才有一片，截图里几乎找不到 —— 雪"看不见"等于没有。
+       密度这东西没有"稍微一点"这一档：要么读得出在下雪，要么只是画面脏。 */
+    const n = layer ? 22 : 80;
+    const rA = layer ? 1.8 : 0.9, rB = layer ? 2.8 : 1.6;
+    const sA = layer ? 52 : 26, sB = layer ? 78 : 40;
+    g.globalAlpha = layer ? 0.92 : 0.55;
+    for (let i = 0; i < n; i++) {
+      const h1 = hash(i * 1.37 + layer * 91.7);
+      const h2 = hash(i * 4.11 + layer * 53.3);
+      const h3 = hash(i * 7.73 + layer * 17.9);
+      const spd = sA + (sB - sA) * h3;
+      /* y 走 (t·spd + 初相位) % (H+40) 减 20 —— 让雪片**从画面上方外面
+         进来、落到下方外面去**，而不是凭空在顶边出现、在底边消失。 */
+      const y = ((t * spd + h2 * (H + 40)) % (H + 40)) - 20;
+      const x = ((h1 * span + Math.sin(t * 0.7 + h2 * 6.283) * 10 + span) % span) - 10;
+      const r = rA + (rB - rA) * h1;
+      g.beginPath();
+      g.arc(x, y, r, 0, 6.283);
+      g.fill();
+    }
+  }
+  g.globalAlpha = 1;
+  g.restore();
 }
 
 function drawForest(world) {
@@ -8511,6 +8671,12 @@ function render() {
       g.fill();
     }
     g.globalAlpha = 1;
+
+    /* 落雪画在"所有场景元素之后、飘字和 HUD 之前"。
+       放这一层的理由：雪是**空气**，它该盖住地形和角色；
+       但飘字和 HUD 是**信息**，雪盖上去就是拿可读性换氛围 —— 不接受。
+       非雪地主题在函数第一行就 return，零开销。 */
+    drawSnowfall(g);
 
     // 飘字只在战斗阶段画。结算面板有自己的大字，
     // 两者叠在一起会糊成一团（"空地清干净了"压在"满载而归"上）。

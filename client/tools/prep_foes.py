@@ -58,7 +58,15 @@ VIVID = dict(boost=1.45, gamma=0.80)
 # key = GroveRuntime 里 FOES 的 id；vw/vh 是**画出来的**尺寸（显示像素）
 # src 显式写文件名：ImageGen 的产物是时间戳命名，靠 glob 猜"哪个是 bug"迟早拿错图。
 FOES = {
-    "bug":  {"vw": 44, "vh": 28, "src": "Q_version_hand_painted_waterco_2026-10-22T08-37-11.png"},
+    # `flip`：**立绘必须朝右**。drawFoe 只画朝右的版本，靠 g.scale(f.face, 1)
+    # 镜像翻面（与宠物同一套规矩，否则三套造型要写三份代码）。
+    # 所以图朝左 = 走起来倒着爬 —— 这正是刺毛虫第一版的 bug。
+    #
+    # 朝向只能**逐张人工确认**：把贴图放大 3 倍看脸朝哪边（眼睛、嘴、尾角在哪侧）。
+    # 不能靠代码判断，也不能假设"同一批提示词出图朝向一致" —— 实测这一批
+    # 四张里三张朝右、刺毛虫朝左，模型是按构图提示词自由发挥的。
+    "bug":  {"vw": 44, "vh": 28, "flip": True,
+             "src": "Q_version_hand_painted_waterco_2026-10-22T08-37-11.png"},
     "crow": {"vw": 42, "vh": 34, "src": "Q_version_hand_painted_waterco_2026-10-22T08-44-08.png"},
     # 野猪是 charge 型（唯一会主动冲锋撞人的小怪），视觉上必须有压迫感。
     # 62×44 与宠物（73 高）太接近，同框会读成"第四只宠物"；
@@ -212,6 +220,11 @@ def main():
         im = Image.open(cand[-1]).convert("RGBA")
         bgs = corners(im)
         im = kill_watermark(im, bgs)
+        # 翻面必须排在 kill_watermark **之后**：AI 出的图水印在右下角，
+        # 那一块是被 kill_watermark 按"右下象限"涂掉的。先翻的话水印跑到左下，
+        # 涂抹区打空，紫品红底噪会留在图里。
+        if cfg.get("flip"):
+            im = im.transpose(Image.FLIP_LEFT_RIGHT)
         im = keyout(im, bgs)
         im = despill(im)
 

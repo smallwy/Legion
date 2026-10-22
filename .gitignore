@@ -41,3 +41,5 @@ client/shots/_old/
 .playwright-mcp/
 client/prototype/_check2/
 client/shots/_*.png
+# 预览/接触表目录（_rt-bg-preview.py、prep_foes.py 等工具的中间产物）
+client/shots/_*/

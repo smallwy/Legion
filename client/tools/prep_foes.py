@@ -11,6 +11,16 @@
   一只横着爬的毛毛虫碰撞是 34×28，但画出来 44×28 才像个虫。
   改视觉尺寸不影响任何玩法断言。
 
+**为什么要描边（v2 加的，第一版漏了）**：
+  第一版只做了「抠底 → 装框」，出图后摆进草地立刻发现读不出来 ——
+  AI 的水彩边缘是渐隐的，主体又偏中灰调，铺在饱和的深绿草地上就"化"进去了。
+  旧的三档色代码图形虽然有"塑料感"，但它是靠 `COL.outline`（#3A2B44）深描边
+  撑起剪影的，34px 下一眼能数清有几只。
+  所以这里补两步后处理，**不换图、不重出，只做管线修正**：
+    · outline() —— 按 alpha 外扩 gen 一圈墨线，和全场景的 COL.outline 同色；
+    · punch()   —— 对比度/饱和度微抬 + 亮度微压，把主体从草地的中明度里拔出来。
+  这两步对四只敌人**用同一组数值**（只有描边宽度按体高微调）—— 家族一致性优先。
+
 用法：
   python client/tools/prep_foes.py            # 只出预览接触表
   python client/tools/prep_foes.py --write    # 同时写进 assets/resources/grove
@@ -20,7 +30,7 @@ import io
 import os
 import sys
 
-from PIL import Image, ImageChops, ImageFilter
+from PIL import Image, ImageChops, ImageEnhance, ImageFilter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "concept", "foes")
@@ -28,13 +38,34 @@ OUT = os.path.join(ROOT, "shots")
 
 S = 4                       # 4x：与 badge-* / UI 同一套超采样口径
 
+# 描边墨色与 GroveRuntime 的 COL.outline 完全一致。
+# 换成别的颜色（纯黑、比自己暗的同类色）都会让敌人看起来"不属于这个世界"。
+INK = (0x3A, 0x2B, 0x44)
+
+# 后处理强度 —— 四只敌人共用，不许各自调。
+# 依据不是审美，是**量出来的明度差**（前景 alpha>200 像素的平均色 vs 背景）：
+#   bug   (189,176, 44) lum 165   ← 草地 lum 152，只差 13，色相又都是绿 → 糊
+#   crow  (149,128,123) lum 136   ← 比草地暗 16，且 R/G/B 差 26（灰）→ 一块灰斑
+#   boar  (189,115, 36) lum 128   ← 暗 24，够了
+#   larva (206,209,100) lum 189   ← 亮 37，够了
+# 也就是说：不是全局"太暗"，而是 AI 给的水彩整体**彩度偏低**，
+# 旧的三档色代码图形 c1 明度 178 + 纯色块，所以 34px 下反而更好读。
+# 亮度只微抬（压暗是错的方向，第一版试过，越压越融）；
+# 重点走 vivid 的 S 曲线 —— 对明暗结构无损，只把"灰调"拉回"彩调"。
+PUNCH = dict(contrast=1.12, color=1.00, bright=1.06)
+VIVID = dict(boost=1.45, gamma=0.80)
+
 # key = GroveRuntime 里 FOES 的 id；vw/vh 是**画出来的**尺寸（显示像素）
 # src 显式写文件名：ImageGen 的产物是时间戳命名，靠 glob 猜"哪个是 bug"迟早拿错图。
 FOES = {
     "bug":  {"vw": 44, "vh": 28, "src": "Q_version_hand_painted_waterco_2026-10-22T08-37-11.png"},
-    "crow": {"vw": 42, "vh": 34, "src": None},
-    "boar": {"vw": 62, "vh": 44, "src": None},
-    "larva":{"vw": 30, "vh": 24, "src": None},
+    "crow": {"vw": 42, "vh": 34, "src": "Q_version_hand_painted_waterco_2026-10-22T08-44-08.png"},
+    # 野猪是 charge 型（唯一会主动冲锋撞人的小怪），视觉上必须有压迫感。
+    # 62×44 与宠物（73 高）太接近，同框会读成"第四只宠物"；
+    # 放大到 76×54 —— **碰撞盒仍是 FOES.boar 的 56×40，一点没动**，
+    # 多出来的部分只是视觉溢出（和 bug 的 34 碰撞 / 44 视觉同一个道理）。
+    "boar": {"vw": 76, "vh": 54, "src": "Q_version_hand_painted_waterco_2026-10-22T08-44-53.png"},
+    "larva":{"vw": 30, "vh": 24, "src": "Q_version_hand_painted_waterco_2026-10-22T08-45-20.png"},
 }
 
 
@@ -95,18 +126,76 @@ def despill(im):
     return im
 
 
-def fit(im, vw, vh):
+def fit(im, vw, vh, ow):
     """等比缩放到能装进 vw*S × vh*S 的最大尺寸，居中，四周留透明。
-    **不拉伸** —— 拉伸会让描边粗细在横竖方向不一致，一眼看出是硬塞的。"""
+    **不拉伸** —— 拉伸会让描边粗细在横竖方向不一致，一眼看出是硬塞的。
+
+    ow 是描边外扩宽度（4x 像素）。内容要预留 2*ow 的空间，
+    否则描边会被画布裁掉一圈 —— 表现为"只有上边有边、下边没有"。"""
     tw, th = vw * S, vh * S
     bb = im.getbbox()
     im = im.crop(bb)
-    k = min(tw / im.width, th / im.height)
+    iw, ih = tw - 2 * ow, th - 2 * ow
+    k = min(iw / im.width, ih / im.height)
     nw, nh = max(1, round(im.width * k)), max(1, round(im.height * k))
     im = im.resize((nw, nh), Image.LANCZOS)
     lay = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
     lay.alpha_composite(im, ((tw - nw) // 2, (th - nh) // 2))
     return lay
+
+
+def punch(im, contrast=1.0, color=1.0, bright=1.0):
+    """对比度 / 饱和度 / 亮度。**只动 RGB，alpha 原样搬过去** ——
+    ImageEnhance 作用在 RGBA 上会把透明区的 RGB 也拉一遍，
+    在 1px 边缘上表现为一圈脏色（抠底留下的品红底噪被放大）。"""
+    a = im.getchannel("A")
+    r = im.convert("RGB")
+    r = ImageEnhance.Contrast(r).enhance(contrast)
+    r = ImageEnhance.Color(r).enhance(color)
+    r = ImageEnhance.Brightness(r).enhance(bright)
+    r = r.convert("RGBA")
+    r.putalpha(a)
+    return r
+
+
+def vivid(im, boost=1.0, gamma=1.0):
+    """逐像素提饱和度（走 HSV 的 S 通道，带 gamma 曲线）。
+
+    为什么不用 ImageEnhance.Color：它是**乘法**，S=0.12 的灰紫乘 1.45 还是 0.17，
+    等于没动。而"灰调"恰恰是这批水彩立绘最需要救的地方 ——
+    乌鸦 mean (149,128,123)，R/G/B 差不到 26，在饱和的草地上就是一块灰斑。
+
+    gamma < 1 把中间饱和度顶得多、高饱和保住，避免整体过艳变塑料。
+    明度（V）一律不碰：明暗结构是画里的东西，动了就假。
+    """
+    if boost == 1.0 and gamma == 1.0:
+        return im
+    a = im.getchannel("A")
+    h, s, v = im.convert("RGB").convert("HSV").split()
+    lut = [min(255, int(round(pow(x / 255.0, gamma) * 255 * boost))) for x in range(256)]
+    out = Image.merge("HSV", (h, s.point(lut), v)).convert("RGB").convert("RGBA")
+    out.putalpha(a)
+    return out
+
+
+def outline(im, ow, ink=INK):
+    """按 alpha 外扩 gen 一圈墨线，画在原图**下面**（原图盖住内侧一半）。
+
+    为什么不用 MaxFilter：它是方形掩膜，半径一大就出直角，虫子的圆肚子
+    会变成圆角矩形。用「高斯模糊 + 阈值」等效于圆形膨胀，再补一次微模糊
+    把阈值产生的硬边磨掉（描边外缘要有 1px 抗锯齿，否则缩到 28px 会闪）。"""
+    a = im.getchannel("A")
+    grown = a.filter(ImageFilter.GaussianBlur(ow * 0.62))
+    grown = grown.point(lambda v: 255 if v > 110 else 0)
+    grown = grown.filter(ImageFilter.GaussianBlur(max(0.8, ow * 0.30)))
+
+    layer = Image.new("RGBA", im.size, (ink[0], ink[1], ink[2], 0))
+    layer.putalpha(grown)
+
+    out = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    out.alpha_composite(layer)
+    out.alpha_composite(im)
+    return out
 
 
 def main():
@@ -125,11 +214,23 @@ def main():
         im = kill_watermark(im, bgs)
         im = keyout(im, bgs)
         im = despill(im)
-        lay = fit(im, cfg["vw"], cfg["vh"])
+
+        # 描边宽度：**按显示体高定**，不按贴图尺寸。
+        # 28 高的虫子和 44 高的野猪用同一根 6px(4x) 线，虫子的相对线宽就粗一倍，
+        # 看起来像"描边重、脸小"；所以小虫子要细、大野猪要粗，视觉线宽才齐。
+        # 系数 0.065 是量出来的：宠物立绘（pet-cat 292px）自身的画内描边折合显示
+        # 约 2.4px，2.4 / 73 ≈ 0.033 —— 但宠物是"整幅画"的描边，敌人要额外
+        # 承担"从草地背景里分离"的职责，所以取近 2 倍。第一版取 0.045 实测偏细，
+        # 同框时一眼看得出"宠物有墨线、敌人像贴纸"。
+        ow = round(max(1.5, min(2.6, cfg["vh"] * 0.065)) * S)
+        lay = fit(im, cfg["vw"], cfg["vh"], ow)
+        lay = punch(lay, **PUNCH)
+        lay = vivid(lay, **VIVID)
+        lay = outline(lay, ow)
         bb = lay.getchannel("A").getbbox()
-        print("  %-6s ← %-28s  %dx%d  显示 %dx%d  alpha=%s"
+        print("  %-6s ← %-28s  %dx%d  显示 %dx%d  ow=%.1fpx  内容=%s"
               % (key, os.path.basename(cand[-1])[:28], lay.width, lay.height,
-                 cfg["vw"], cfg["vh"], bb))
+                 cfg["vw"], cfg["vh"], ow / S, bb))
         if write:
             dst = os.path.join(ROOT, "assets", "resources", "grove", "foe-%s.png" % key)
             lay.save(dst)

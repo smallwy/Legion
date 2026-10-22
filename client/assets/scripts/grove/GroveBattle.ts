@@ -96,6 +96,14 @@ const KEY_MAP: Readonly<Record<number, string>> = {
 const ART_MANIFEST: ReadonlyArray<readonly [string, string]> = [
     ...HERO_IDS.map((id) => ['pet-' + id, 'grove/pet-' + id] as const),
     ...HERO_IDS.map((id) => ['head-' + id, 'grove/head-' + id] as const),
+    /* 敌人立绘（client/tools/prep_foes.py 产出，4x）。
+       键名约定 foe-<FOES 的 id>；绘制侧靠 `artOf('foe-' + key)` 取，
+       取不到就回退到三档色代码图形 —— 所以这里少一项也不会白屏，
+       只会那一种敌人退回旧画法（画风断层又回来一格，但玩法不受影响）。 */
+    ['foe-bug', 'grove/foe-bug'],
+    ['foe-crow', 'grove/foe-crow'],
+    ['foe-boar', 'grove/foe-boar'],
+    ['foe-larva', 'grove/foe-larva'],
     ['ui-pip', 'grove/ui-pip'],
     ['ui-pip-on', 'grove/ui-pip-on'],
     ['ui-coin', 'grove/ui-coin'],

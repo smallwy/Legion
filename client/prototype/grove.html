@@ -397,12 +397,21 @@ const DOOR = { x: 282, y: 502 };
 const FOES = {
   // c1 主体 / c2 亮面 / c3 暗部（腿、尾、耳朵）。三档色是 Q 版的关键：
   // 只有一档色的角色在缩到 34px 时会变成一个纯色块。
-  bug:  { name: "刺毛虫", c1: "#8FD45E", c2: "#B6EE7E", c3: "#4E8A3A", w: 34, h: 28, spd: 58, kind: "walk", sc: 1 },
-  crow: { name: "乌 鸦", c1: "#A98CF0", c2: "#CDB8FF", c3: "#6B54A8", w: 36, h: 32, spd: 92, kind: "fly",  sc: 1 },
-  boar: { name: "小野猪", c1: "#E8A06A", c2: "#FFD2A8", c3: "#B06A3E", w: 56, h: 40, spd: 74, kind: "charge", sc: 1 },
+  //
+  // **w/h 是碰撞盒，vw/vh 是画多大** —— 两者刻意分开：
+  //   · w/h 决定球能不能撞上、被撞飞多远，改它等于改数值；
+  //   · vw/vh 只决定贴图画多大，改它不影响任何玩法断言。
+  // 分开的现实理由：横着爬的毛毛虫碰撞得窄（34）才摸得准，
+  // 但要画到 44 宽才看得出是条虫；野猪是唯一会冲锋的小怪，
+  // 视觉要有压迫感（76×54），碰撞仍按 56×40 算，多出来的是视觉溢出。
+  // vw/vh 必须与 client/tools/prep_foes.py 的 FOES 表**逐字一致** ——
+  // 那边按这个尺寸装框，这边按这个尺寸绘制，不一致就会变形或留白边。
+  bug:  { name: "刺毛虫", c1: "#8FD45E", c2: "#B6EE7E", c3: "#4E8A3A", w: 34, h: 28, vw: 44, vh: 28, spd: 58, kind: "walk", sc: 1 },
+  crow: { name: "乌 鸦", c1: "#A98CF0", c2: "#CDB8FF", c3: "#6B54A8", w: 36, h: 32, vw: 42, vh: 34, spd: 92, kind: "fly",  sc: 1 },
+  boar: { name: "小野猪", c1: "#E8A06A", c2: "#FFD2A8", c3: "#B06A3E", w: 56, h: 40, vw: 76, vh: 54, spd: 74, kind: "charge", sc: 1 },
   // 幼虫：BOSS 产出来的。它不打玩家 —— 它往 BOSS 身边爬，到了就被吃掉。
   // 这才是"繁殖"真正给玩家的压力：你得决定先去拦虫，还是继续打壳。
-  larva: { name: "幼 虫", c1: "#CDE888", c2: "#EFFBB8", c3: "#7F9A44", w: 26, h: 22, spd: 104, kind: "walk", sc: 1 },
+  larva: { name: "幼 虫", c1: "#CDE888", c2: "#EFFBB8", c3: "#7F9A44", w: 26, h: 22, vw: 30, vh: 24, spd: 104, kind: "walk", sc: 1 },
 };
 
 /* ============================================================================
@@ -6471,7 +6480,33 @@ function drawFoe(g, f) {
   // 只画朝右的版本，靠镜像翻面 —— 三套造型各自处理左右会把代码写成三份
   g.save();
   g.scale(f.face, 1);
-  if (f.larva) drawLarva(g, f, bw, bh, t);
+
+  /* 敌人立绘（4x 贴图，由 GroveBattle 走 resources.load 注入 ART["foe-<key>"]）。
+     有图就贴图、没图回退到下面那三套三档色代码图形 —— 与宠物同一套「两套并存」的规矩。
+
+     **画多大用 def.vw/vh，不是碰撞盒 bw/bh**。碰撞与视觉刻意分开：
+     野猪碰撞 56×40、画 76×54，多出来的部分不参与任何碰撞判定。
+     贴图由 prep_foes.py 按 vw/vh 等比装框（不拉伸），所以按原比例还原不会变形；
+     反过来说，这里如果改用 bw/bh 当视觉尺寸，贴图就会被压扁 —— 因为贴图的
+     宽高比是 vw/vh，不是 bw/bh。
+
+     **底边必须贴 f.y**：局部坐标里 y 向下为正，贴图底边要落在世界 y = f.y 上，
+     也就是局部 y = bh/2。所以 yTop = bh/2 - ih，而不是简单的 -ih/2。
+     写成 -ih/2 的后果是：视觉比碰撞高的敌人会往地里陷 (ih-bh)/2 像素
+     —— 野猪会陷 7px，脚看不见了。
+
+     贴图是静态的，原来画法里"腿在动"的信息会丢；用 1.2px 的走路弹跳补回来
+     （28 高的敌人上是 4%，够读出"在挪"，又不至于像在蹦）。 */
+  const foeKey = f.larva ? "larva"
+    : f.kind === "fly" ? "crow"
+    : f.kind === "charge" ? "boar" : "bug";
+  const foeImg = artOf("foe-" + foeKey);
+  if (foeImg) {
+    const ih = d.vh || bh, iw = ih * (foeImg.width / foeImg.height);
+    const walkBob = f.kind === "walk" || f.kind === "charge"
+      ? Math.abs(Math.sin(t * 8 + (f.bob || 0))) * 1.2 : 0;
+    g.drawImage(foeImg, -iw / 2, bh / 2 - ih - walkBob, iw, ih);
+  } else if (f.larva) drawLarva(g, f, bw, bh, t);
   else if (f.kind === "fly") drawCrow(g, f, bw, bh, t);
   else if (f.kind === "charge") drawBoar(g, f, bw, bh, t);
   else drawWorm(g, f, bw, bh, t);
@@ -6479,14 +6514,22 @@ function drawFoe(g, f) {
   g.restore();
 
   // ---- 包裹层：这是这个游戏里唯一的"血条"，必须一眼数得清
+  //
+  // **环要包住视觉体，不是碰撞盒**。贴图化以后两者不再相等（野猪碰撞 56×40、
+  // 画 68×50），如果还用 bw/bh 算半径，环就会切进身体里 —— 出图看得很明显：
+  // 野猪的血条比它自己小一圈，像穿了件小一号的衣服。
+  // 中心也要跟着视觉体走：贴图底边贴 f.y，所以视觉体中心是 f.y - vh/2，
+  // 而 cx/cy 里的 cy 是按碰撞高 bh 算的 —— 别直接复用。
   if (f.coat > 0) {
+    const cvw = d.vw || bw, cvh = d.vh || bh;
+    const ccy = f.y - cvh / 2;
     for (let i = 0; i < f.coat; i++) {
       const p = i / 3;
       g.strokeStyle = i === 2 ? "#B9F06A" : "#8FD45A";
       g.lineWidth = 3.2 - i * 0.5;
       g.globalAlpha = 0.95;
       g.beginPath();
-      g.ellipse(cx, cy, bw * 0.5 + 3 + p * 5, bh * 0.5 + 3 + p * 5,
+      g.ellipse(cx, ccy, cvw * 0.5 + 3 + p * 5, cvh * 0.5 + 3 + p * 5,
         (i * 0.5 + S.t * 0.6) % 3.14, 0.3 + i, 3.9 + i);
       g.stroke();
     }
@@ -6495,7 +6538,7 @@ function drawFoe(g, f) {
       g.globalAlpha = 0.28 + Math.sin(S.t * 8) * 0.14;
       g.fillStyle = "#B9F06A";
       g.beginPath();
-      g.ellipse(cx, cy, bw * 0.72, bh * 0.72, 0, 0, 6.283);
+      g.ellipse(cx, ccy, cvw * 0.72, cvh * 0.72, 0, 0, 6.283);
       g.fill();
       g.globalAlpha = 1;
     }

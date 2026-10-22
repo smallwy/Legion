@@ -1950,6 +1950,79 @@ console.log("\n=== 24g. 结算面板的两个按钮：画在哪就点在哪 ==="
   eq(threw, null, "结算面板能渲染（含两个按钮、肚子条、台词）");
 }
 
+console.log("\n=== 26. 地面层两端开口 / 上层反弹 ===");
+/* 用户的原话：「左下角和右下角球直接滚出去，上层是可以反弹的」。
+ *
+ * 这条规则有三个地方必须同时成立，缺一个玩家就会发现"预瞄骗人"或者
+ * "球在边上来回抽":
+ *   ① 物理：地面层的球不被夹回场地，滚出去就判出场
+ *   ② 物理：上层的球撞墙必须反弹（不能连墙一起没了）
+ *   ③ 预瞄：线画出来的结果要和实际一致
+ * 所以下面三段分开测，任何一段单独通过都没有意义。
+ */
+{
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+  seed(S);
+  P._start(0, 0);
+  for (const ff of S.foes) ff.x = 4000;      // 挪走敌人，只测边界
+  const f = S.foes[0];
+  f.x = 200; P.coatFoe(f, 3);
+  const b = S.balls[0];
+  b.x = 200; b.y = P.GROUND_Y; b.vx = -520; b.vy = 0;
+
+  let bounced = false;
+  for (let i = 0; i < 120; i++) {
+    P.tick(1 / 60);
+    if (b.dead) break;
+    if (b.vx > 5) bounced = true;            // 只要反向过一次就说明撞墙了
+  }
+  ok(b.dead, "地面层：球往左滚出场地就没了");
+  ok(!bounced, "地面层：全程没有反向（说明没有隐形墙把它弹回来）");
+  ok((S.stat.lost || 0) >= 1, "滚出去记一次 lost（不是静默消失）");
+}
+{
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+  seed(S);
+  P._start(0, 0);
+  for (const ff of S.foes) ff.x = 4000;
+  const f = S.foes[0];
+  f.x = 120; P.coatFoe(f, 3);
+  const b = S.balls[0];
+  // 最低那层浮空台是 462（关卡数据里第一个非地面台）。现查，不写死。
+  const lp = P.PLATS.find(p => p.kind !== "ground" && p.y < P.GROUND_Y);
+  ok(!!lp, "关卡里至少有一层浮空台");
+  b.x = 120; b.y = lp.y; b.vx = -520; b.vy = 0;
+
+  let bounced = false;
+  for (let i = 0; i < 90; i++) {
+    P.tick(1 / 60);
+    if (b.vx > 5) { bounced = true; break; }
+  }
+  ok(bounced, "上层：球撞到左墙会弹回来（墙还在）");
+  ok(!b.dead, "上层：弹回来之后球还在场上");
+}
+{
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+  seed(S);
+  P._start(0, 0);
+  for (const ff of S.foes) ff.x = 4000;
+  const f = S.foes[0];
+  f.x = 200; P.coatFoe(f, 3);
+  const b = S.balls[0];
+  b.x = 200; b.y = P.GROUND_Y; b.vx = 0; b.vy = 0;
+  const A = P.predictBall(b, -1);
+  ok(A.end === "out", "预瞄线：地面层往左画到「出界」，不是画一条会弹回来的线",
+    "end=" + A.end);
+
+  const lp = P.PLATS.find(p => p.kind !== "ground" && p.y < P.GROUND_Y);
+  b.y = lp.y; b.x = 120;
+  const B = P.predictBall(b, -1);
+  ok(B.end !== "out", "预瞄线：上层往左不会画出「出界」", "end=" + B.end);
+}
+
 console.log("\n" + "=".repeat(56));
 if (fail) {
   console.log("通过 " + pass + " · 失败 " + fail);

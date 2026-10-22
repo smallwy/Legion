@@ -1376,7 +1376,13 @@ class HomeController {
         bg.strokeColor = BTN_DEEP;
         bg.roundRect(-100, -30, 200, 60, 30);
         bg.stroke();
-        mkLabel(btn, 'txt', enough ? '出  发' : '能量不足', 24, new Color(96, 58, 28, 255), 180, 40);
+        /* 文案固定成「出 发」。
+         * 上一版这里是 `enough ? '出  发' : '能量不足'` —— 删能量系统时
+         * enough 这个变量一起被删了，但这一行漏改，于是运行时 ReferenceError，
+         * 整张出发卡渲染失败（点"出门"什么都不会弹出来）。
+         * 教训：删一个机制时，**它的"文案"和它的"数值"要一起找一遍**，
+         * 字符串里的分支最容易漏，因为 tsc 只有在真的扫到这个文件时才报。 */
+        mkLabel(btn, 'txt', '出  发', 24, new Color(96, 58, 28, 255), 180, 40);
 
         this.press(btn, 0.95);
         btn.on(Node.EventType.TOUCH_END, (e: EventTouch) => {

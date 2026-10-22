@@ -205,7 +205,7 @@ const HEROES = [
       // 改成真的有速度、有射程、会撑开的弹，六个人的手感才在同一套规则上。
       spawnShot({
         x: u.x + u.face * 22, y: u.y - 26,
-        vx: u.face * 520, vy: 0, r: 18, life: 0.52,
+        vx: u.face * 740, vy: 0, r: 18, life: 0.52,
         kind: "wave", dir: u.face, grow: 130, maxR: 46,
         color: "#FFF0C8", pierce: true,
       });
@@ -283,7 +283,7 @@ const HEROES = [
       for (const [dy, vy, c] of [[-26, -22, "#DCD0FF"], [-10, 46, "#A98CFF"]]) {
         spawnShot({
           x: u.x + u.face * 20, y: u.y + dy,
-          vx: u.face * 780, vy, r: 12, life: 0.40,
+          vx: u.face * 1040, vy, r: 12, life: 0.40,
           kind: "shadow", dir: u.face, pierce: true, color: c,
         });
       }
@@ -1760,7 +1760,6 @@ function updatePlayer(dt) {
     if (ax !== 0) {
       p.face = ax;
       p.vx = ax * H.spd;
-      p.walkPhase += dt * 14;
     } else {
       // 地面摩擦大、空中近乎无阻力 —— 空中能改方向才跟手
       const fr = p.onGround ? 2600 : 420;
@@ -1808,6 +1807,12 @@ function updatePlayer(dt) {
   }
 
   stepBody(p, dt);
+
+  // 落地且在往前走才迈步。相位只给绘制用：悬空、冲刺时停住，
+  // 免得脚在空中还蹬、或者冲刺变成原地踏步。
+  if (p.onGround && p.dashT <= 0 && Math.abs(p.vx) > 40) {
+    p.walkPhase += dt * 11;
+  }
 
   // ---- 跳（带土狼时间 + 输入缓冲，手感全靠这两个）
   if (S.press.jump) p.jumpBuf = 0.12;
@@ -3126,7 +3131,7 @@ function updateShots(dt) {
       const T = 0.30;
       const k = s.t < T ? s.t / T
                         : Math.max(0, 1 - (s.t - T) / Math.max(0.001, s.maxLife - T));
-      s.x = u.x + s.dir * (18 + k * 152);
+      s.x = u.x + s.dir * (18 + k * 230);
       s.y = u.y - 26;
       s.spin += dt * 30;
       if (s.life <= 0) s.dead = true;
@@ -3572,21 +3577,53 @@ function blobPath(g, cx, cy, r, seed) {
   g.closePath();
 }
 
-function drawTree(g, x, baseY, sc, back) {
+/**
+ * 一棵 Q 版树。
+ *
+ * `back`   —— true = 无描边（远景/中景）；false = 有描边（贴脸的近景）
+ * `dim`    —— 空气透视的浓度，0 = 完全融进雾里，1 = 实色。
+ *
+ * **为什么要有 dim 这个连续值，而不是"远/中/近"三档枚举：**
+ * 上一版只有 back 一个布尔，于是全部中景树只能是同一档颜色、同一档浓度，
+ * 九棵排在一起读作"一条墙纸"。参考概念图里远处的树是**一层一层化进雾里**
+ * 的，浓度必须连续可调，眼睛才分得出第 1 排、第 2 排、第 3 排。
+ *
+ * 退后不靠"调低 globalAlpha"（透明会和后面的绿混成脏色，读作"没画清"），
+ * 靠**换色**：往地平线雾色里混。混得越多越像在雾里，这正是空气透视。
+ */
+function drawTree(g, x, baseY, sc, back, dim) {
+  const D = dim === undefined ? 1 : dim;
   g.save();
-  /* 远景树不靠"变透明"退后。透明会和后面的草地混成脏色（0.34 的绿
-     压在一片绿上，读到的不是"远"，是"没画清"）。靠**换色**才干净：
-     往远山那一档靠，自带空气透视，还不用承担混色风险。 */
-  g.globalAlpha = back ? 0.88 : 1;
-  const tw = 16 * sc, th = 40 * sc;
+  g.globalAlpha = back ? 0.88 * (0.55 + D * 0.45) : 1;
+  /* 树干 60×sc、树冠 27×sc。
+   *
+   * **这两个数是从"一排绿篱"改回来的。** 原来是 40 / 31 —— 树干 37 高、
+   * 树冠 62 宽，比例 1.2，读作"棒棒糖"或"灌木"，不读作树。
+   * 中景的一排棒棒糖连起来就成了一道绿篱，这是第一版重做时最刺眼的问题。
+   * 真实的中景树在低角度看是**细高的**：树干 58~60、树冠 26~27，
+   * 高度/宽度比 1.7 左右，才读成"远处的一棵树"。
+   *
+   * 树干宽度保持 16×sc 不动（sc=0.8 时 13px）—— 这是比例的另一半，
+   * 只拉长不加宽，才有"细高"而不是"柱子变长了"。 */
+  const tw = 16 * sc, th = 60 * sc;
+  /* 颜色按 depth 在 treeFar ↔ treeNear 之间插值，再往雾里混一点。
+   *
+   * 上一版只做了一件事：往 horizon 混 (1-D)。D 从 0.28 到 0.82 的树，
+   * 每一棵都是**从同一个 treeFar 出发**的，最近那棵也只比最远那棵实一点 ——
+   * 拍出来十五棵树同一个淡橄榄色，深度只剩大小差别，整体读作"一层雾树"。
+   * 正解是**两端都要动**：最近的那棵吃满 treeNear（深绿、有彩度），
+   * 最远的那棵在 treeFar 之外再混 55% 的雾。两端拉开，中间才有梯度。 */
+  const mixTo = (1 - D) * 0.55;
+  const trunkBase = back ? hexMix(TH.trunkFar, TH.trunkNear, D) : TH.trunkNear;
+  const leafBase = back ? hexMix(TH.treeFar, TH.treeNear, D) : TH.treeNear;
   // 树干
-  g.fillStyle = back ? TH.trunkFar : TH.trunkNear;
+  g.fillStyle = back ? hexMix(trunkBase, TH.horizon, mixTo) : TH.trunkNear;
   rr(g, x - tw / 2, baseY - th, tw, th + 4, 5 * sc);
   g.fill();
   // 树冠：一团叶子，不是一个一个圆
-  const cy = baseY - th - 13 * sc, r = 31 * sc;
+  const cy = baseY - th - 13 * sc, r = 27 * sc;
   const seed = (x + (back ? 3.7 : 0)) * 0.031;
-  g.fillStyle = back ? TH.treeFar : TH.treeNear;
+  g.fillStyle = back ? hexMix(leafBase, TH.horizon, mixTo) : TH.treeNear;
   blobPath(g, x, cy, r, seed);
   g.fill();
 
@@ -3605,16 +3642,52 @@ function drawTree(g, x, baseY, sc, back) {
        **受光色必须是暖的。** 原来写 `rgba(226,255,222,.30)`（冷白绿），
        在蓝天版本里看着像"叶面反光"，换到暖金天空之后立刻露馅：
        树冠读作"天上挂了一个浅米绿的球"，和周围一个色温都没有。
-       光是橙色天空来的，高光就得偏暖 —— 这一点跟"前景受光边不用纯白"是同一条。 */
+       光是橙色天空来的，高光就得偏暖 —— 这一点跟"前景受光边不用纯白"是同一条。
+
+       **受光面必须在朝太阳的那一侧。** 太阳固定在 (700, 74)，原来两棵近景树
+       的高光都固定偏左（x - r*0.24）—— 左边那棵（x=6）等于把高光画在了背光面。
+       两个物件的受光方向互相矛盾，眼睛就把它们读成"两张贴纸"，
+       这是"背景像贴上去的"里最隐蔽的一条。
+       现在按 x 和太阳的左右关系取符号：太阳在右边，高光就往右偏。 */
+    const lit = (700 - x) >= 0 ? 1 : -1;
     g.fillStyle = "rgba(255,238,178,.24)";
-    blobPath(g, x - r * 0.24, cy - r * 0.30, r * 0.42, seed + 1.9);
+    blobPath(g, x + lit * r * 0.24, cy - r * 0.30, r * 0.42, seed + 1.9);
     g.fill();
     g.fillStyle = "rgba(255,246,206,.34)";
     g.beginPath();
-    g.arc(x - r * 0.30, cy - r * 0.42, r * 0.16, 0, 6.283);
+    g.arc(x + lit * r * 0.30, cy - r * 0.42, r * 0.16, 0, 6.283);
+    g.fill();
+  } else {
+    /* 中景树冠也必须有一块受光面 —— **纯剪影排成一行就是一道绿篱**，
+       这是重做第一版翻车的地方：15 棵树冠颜色一样、形状一样、没有明暗，
+       叠起来读作"一条绿色的墙"，而不是"远处有几棵树"。
+       但这里**不能描边**：描边会把远处的树钉到前景（描边的粗细是距离的刻度）。
+       只给一块偏移的受光团：往太阳那一侧上移 18% 半径，往天光混 42%，
+       远树（D 小）的 alpha 本来就低，这块会自然跟着淡下去。 */
+    const lit2 = (700 - x) >= 0 ? 1 : -1;
+    g.fillStyle = rgbaOf(hexMix(TH.treeFar, TH.cloud, 0.42), 0.55);
+    blobPath(g, x + lit2 * r * 0.18, cy - r * 0.22, r * 0.62, seed + 1.9);
     g.fill();
   }
   g.restore();
+}
+
+/* ---- 草脊：地面与远山之间那条边 ------------------------------------------
+ *
+ * **上一版是 `fillRect(0, 300, W, H - 300)` —— 一条横贯全屏的绝对水平线。**
+ * 这是"背景像贴上去的"最大的单一来源：任何一条贯穿整幅画面的直线，
+ * 眼睛都会读成"两块图拼在这里"。参考概念图里草地是**一条起伏的脊**，
+ * 脊后面才是远山和雾林，所以才有前后。
+ *
+ * 两个正弦叠加（周期约 2027 / 873，振幅 13 / 6.5），合成起伏 ±19.5px。
+ * 周期刻意不成整数比 —— 单个正弦在 960 宽里会左右各留一段同形，
+ * 读作"复制粘贴的波浪"。
+ *
+ * 振幅上限 20 是被碰撞几何反推的：脊线最高 280.5，而最上面那层平台在 248、
+ * 坡底在 350，脊线不能越过 300±22 这条带，否则会开始和玩法元素打架。
+ */
+function ridgeY(x) {
+  return 300 + Math.sin(x * 0.0031 + 1.1) * 13 + Math.sin(x * 0.0072 + 3.4) * 6.5;
 }
 
 function drawForest(world) {
@@ -3640,45 +3713,152 @@ function drawForest(world) {
   // 光柱压在山之上、地表之下：光是在空气里走的，被山挡住就成了贴纸。
   drawSunShaft(g);
 
-  // 地平线雾带：山脚到草地之间 54px 的天空色残余。
+  // 地平线雾带：山脚到草地之间 68px 的天空色残余。
   // 没有这一层，草地是"一刀切"压在山脚上的，读作两块色板拼接。
-  const hz = g.createLinearGradient(0, 298, 0, 352);
+  // **必须在草脊之前画** —— 它盖的是山脚，不是草地。
+  const hz = g.createLinearGradient(0, 284, 0, 352);
   hz.addColorStop(0, rgbaOf(TH.horizon, 0.94));
   hz.addColorStop(1, rgbaOf(TH.horizon, 0));
   g.fillStyle = hz;
-  g.fillRect(0, 298, W, 54);
+  g.fillRect(0, 284, W, 68);
 
   // 地面：明度纵深三档。地平线亮（远处受天光）、中段本色、画面底部最暗。
   // 一整片同色读作"一张绿色纸"；压一道 26% 的明度落差，地面自己就有纵深了。
-  const gr = g.createLinearGradient(0, 300, 0, H);
+  // **上边界是草脊曲线，不是一条直线**（见 ridgeY 的注释）。
+  const gr = g.createLinearGradient(0, 276, 0, H);
   gr.addColorStop(0, TH.grassLight);
   gr.addColorStop(0.30, TH.grass2);
   gr.addColorStop(0.68, TH.grass);
   gr.addColorStop(1, TH.grassDark);
   g.fillStyle = gr;
-  g.fillRect(0, 300, W, H - 300);
+  g.beginPath();
+  g.moveTo(0, H);
+  for (let x = 0; x <= W + 12; x += 12) g.lineTo(x, ridgeY(x));
+  g.lineTo(W + 12, H);
+  g.closePath();
+  g.fill();
+
+  /* 草脊的受光边：沿脊线走一条 2.5px 的浅金线。
+     参考概念图里草地和远山交界处有一条被夕阳打亮的边 —— 就这一条线，
+     把"两块色板拼接"变成了"一个坡顶"。alpha 只给 0.55（在 grassLight 上），
+     再往上就是描边，会读成"贴了一条金丝"。
+     往下压 1.2px：压在脊线的**内侧**，露出来的是草地自身的亮面。 */
+  g.strokeStyle = rgbaOf(TH.grassLight, 0.55);
+  g.lineWidth = 2.5;
+  g.beginPath();
+  for (let x = 0; x <= W + 12; x += 12) {
+    const y = ridgeY(x) + 1.2;
+    if (x === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.stroke();
 
   // 地面上的浅色条纹：给"深度"，但只在低对比度下出现。
-  // 已经有三档明度了，条纹只是补充；alpha 从 0.10 收到 0.07，
+  // 已经有三档明度了，条纹只是补充；alpha 从 0.07 收到 0.05，
   // 否则每一道都是一条"横在战场上的白线"。
-  g.globalAlpha = 0.07;
+  g.globalAlpha = 0.05;
   g.fillStyle = "#FFFFFF";
   for (let i = 0; i < 5; i++) {
-    const y = 340 + i * 52;
+    const y = 352 + i * 48;
     g.beginPath();
     g.ellipse(W / 2, y, 460 - i * 30, 10 + i * 2, 0, 0, 6.283);
     g.fill();
   }
   g.globalAlpha = 1;
 
-  // 中景树线：站在地平线上（底边 306~320），把"中景"这一层立起来。
-  // 原来底边压在 322~332、alpha 0.34 —— 树冠整个埋进草地色块里，
-  // 等于没有中景，背景只剩"天 + 地"两块，这就是"平"的全部原因。
-  for (let i = 0; i < 9; i++) {
-    const x = 18 + i * 118 + hash(i * 3.1) * 26;
-    const sc = 0.54 + hash(i * 1.7) * 0.28;
-    drawTree(g, x, 308 + hash(i * 5.3) * 12, sc, true);
+  /* 草面纹理：一撮撮小草，越靠下越大越密。
+     没有这一层，300~556 是一整片纯渐变 —— 那是"一张绿色纸"的最后一块证据，
+     也是"像贴上去"最直白的一条：真实的一整片草地里找不到一块干净的平面。
+     一撮只画两根细弧，不做叶片造型 —— 草地上有 90 撮，
+     每一撮都画清楚反而会读成"一片尖刺"。
+     尺寸 / 线宽 / 透明度三样都随 y 递增（近大远小），这一层的纵深就出来了。 */
+  for (let i = 0; i < 90; i++) {
+    const tx = hash(i * 13.7) * W;
+    const ty = ridgeY(tx) + 26 + Math.pow(hash(i * 7.9), 0.72) * 246;
+    if (ty > 558) continue;
+    const k = clamp((ty - 300) / 256, 0, 1);          // 0 = 远，1 = 近
+    const s = 2 + k * 4.5;
+    g.strokeStyle = rgbaOf(TH.grassDark, 0.10 + k * 0.13);
+    g.lineWidth = 1.1 + k * 0.9;
+    g.lineCap = "round";
+    g.beginPath();
+    g.moveTo(tx - s * 0.7, ty);
+    g.quadraticCurveTo(tx - s * 0.4, ty - s * 1.3, tx, ty - s * 1.75);
+    g.moveTo(tx + s * 0.7, ty);
+    g.quadraticCurveTo(tx + s * 0.4, ty - s * 1.05, tx, ty - s * 1.5);
+    g.stroke();
   }
+
+  /* 树高统一乘这个系数。
+   *
+   * 表里的 sc 是"相对基准树"的比例，基准树（sc=1）高 60+27×1.9 ≈ 111px。
+   * 乘 1.5 之后，最高的那棵 ≈ 167px = 屏高的 28%，加上草脊的位置，
+   * 树冠顶到 y≈150 —— 正好落在最上层平台（248）之上、HUD（90）之下。
+   *
+   * 为什么必须放大：原来最高的树只有 111px = 屏高 18%，
+   * 十五棵排开读作"草地上散着几棵小树"，而不是"战斗发生在一片林子的空地上"。
+   * 概念图里中景树占到屏高一半 —— 背景的体量感直接来自这个比例，
+   * 不是来自细节画得多不多。 */
+  const TREE_SCALE = 1.5;
+
+  /* 更远的一排树（第二道树线）：**专门用来填前排的缝**。
+     只有一排树的时候，每棵树之间露出天空和草地，读作"草地上散着几棵蘑菇"——
+     间距再随机也救不了，因为"稀疏"本身就是问题。
+     后排尺寸只有前排的 40%~55%、贴着草脊站、颜色再往雾里推一档，
+     它不负责造型，只负责把"树后面还有树"这件事画出来。
+     这一层是概念图和当前实现差别最大的地方：概念图的背景是一**片**林，不是几棵树。 */
+  const FAR_TREES = [
+    [  12, 0.30, 0.16], [  62, 0.38, 0.24], [ 116, 0.26, 0.14],
+    [ 176, 0.34, 0.20], [ 240, 0.28, 0.14], [ 306, 0.36, 0.22],
+    [ 368, 0.25, 0.12], [ 442, 0.34, 0.20], [ 508, 0.30, 0.16],
+    [ 578, 0.38, 0.24], [ 646, 0.26, 0.14], [ 706, 0.34, 0.18],
+    [ 768, 0.30, 0.16], [ 830, 0.36, 0.22], [ 896, 0.27, 0.12],
+  ];
+  for (const [fx, fsc, fd] of FAR_TREES) {
+    // 贴着草脊站（+3 让树干底边压进草皮 3px，不然会浮在脊线上面）
+    drawTree(g, fx, ridgeY(fx) + 3, fsc * TREE_SCALE, true, fd);
+  }
+
+  /* 中景树：**三档深度 + 允许互相遮挡**。
+     上一版 9 棵等距 118px、同一档尺寸（0.54~0.82）、同一条基线（308~320）——
+     等距 + 等高 + 等大，三条凑齐就是"平"的定义，拍出来是一条墙纸条带。
+
+     深度的唯一可靠线索是**遮挡**：一棵压住另一棵的边缘，眼睛才认为它在前面。
+     所以这里刻意让相邻两棵重叠 20%~40%，间距 42~84 不等，尺寸分三档
+     （0.44 / 0.66 / 0.94），基线按 depth 递进（越近越往下）。
+     depth 同时喂给 drawTree 的 dim —— 越远的越往地平线雾色里混。
+     格式：[x, 尺寸, depth] */
+  const MID_TREES = [
+    [  26, 0.62, 0.60], [  84, 0.42, 0.34], [ 138, 0.76, 0.80],
+    [ 214, 0.48, 0.42], [ 272, 0.58, 0.56], [ 340, 0.40, 0.28],
+    [ 396, 0.70, 0.74], [ 474, 0.46, 0.38], [ 532, 0.78, 0.82],
+    [ 612, 0.52, 0.46], [ 672, 0.64, 0.64], [ 742, 0.44, 0.34],
+    [ 800, 0.74, 0.78], [ 862, 0.50, 0.42], [ 930, 0.60, 0.58],
+  ];
+  for (const [tx, tsc, td] of MID_TREES) {
+    /* 基线 = 草脊 + 一个和 depth 成正比的小位移。
+       越近越靠下 —— 这是"从低角度看一片平地"时唯一成立的规律；
+       少了它，树再大也贴在同一个平面上。
+       **位移只给 12px，不能给 30。** 试过 30：树干会整根落到草脊以下，
+       十五根立在草地前面、间距又均匀，读作"一排栅栏"。
+       树必须**扎在脊线上**，深度靠尺寸和颜色差别的，不靠把树往下挪。
+       **夹到 334**：350 那层平台从 350 起，树根扎进去就开始读作
+       "战斗发生在树上"（之前踩过一次，六棵树画在战场背后）。 */
+    const by = Math.min(334, ridgeY(tx) + 2 + td * 12);
+    drawTree(g, tx, by, tsc * TREE_SCALE, true, td);
+  }
+
+  /* 树脚雾：草脊那一条上贴一层薄雾，把树根"化"进地面。
+     **只能是贴着草脊的一条薄带（26px 高、alpha .14）。**
+     第一版写成 48px 高、alpha .30，覆盖了树干下半截 —— 出来是
+     "树干被拦腰切了一刀"，因为空气透视是**按距离**累积的，不是按高度。
+     同一棵树的上半截和下半截离镜头一样远，凭什么下半截更雾？
+     所以这一层只负责"地面和树根之间没有硬边界"，不负责纵深；
+     纵深交给 drawTree 的 dim。 */
+  const fog = g.createLinearGradient(0, 296, 0, 322);
+  fog.addColorStop(0, rgbaOf(TH.horizon, 0.14));
+  fog.addColorStop(1, rgbaOf(TH.horizon, 0));
+  g.fillStyle = fog;
+  g.fillRect(0, 296, W, 26);
 
   /* 两侧近景树：**一侧一棵**。
      原来是 "1.9 + 1.3" 两棵并排 —— 两个 blob 各自描边，描边在中间交叉，
@@ -3724,9 +3904,18 @@ function drawForest(world) {
    之前斜坡用 26、浮空台用 h+6（18~26 之间浮动），两块接在一起永远差几像素，
    肉眼读出来的就是"拼上去的"。 */
 const PLAT_TOP = 7;    // 顶面：俯视能看到的窄面带
-const PLAT_TK  = 33;   // 视觉总厚（从物理顶面 p.y 往下量）
+/* 视觉总厚（从物理顶面 p.y 往下量）。
+ *
+ * **33 → 27 是用户一句"比较粗大了点"量出来的，不是审美偏好。**
+ * 屏高 600，33 占 5.5%；参考概念图里圆木直径只占屏高 4%（= 24）。
+ * 取 27 = 4.5%，是"细一档但仍然是根木头"的位置：
+ *   再往下到 24 会读成"一块板"（层缝就没有高度可放了，3 层挤不进 8px）；
+ *   再往上到 30 就回到"粗大"，和参考图差得太远。
+ * 27 = 3 × 9，每层 9px —— 刚好够一条层缝(3.4) + 一个年轮(5.6)，
+ * LAYER_SHIFT 的错缝语义不变。 */
+const PLAT_TK  = 27;
 
-/* 平台由几层木板叠成。33 / 3 = 11，每层刚好够放一条层缝 + 一个年轮。
+/* 平台由几层木板叠成。27 / 3 = 9，每层刚好够放一条层缝 + 一个年轮。
    改这个数就要同步看 LAYER_SHIFT —— 层数是"错缝"的唯一来源。 */
 const LAYERS = 3;
 /* 每层拼缝的水平偏移。**必须互不相同且不成倍数**，否则三层缝会在
@@ -4106,7 +4295,19 @@ function drawRamp(g, r) {
   // 竖直量的话，45° 的坡看起来只有平路的 70% 厚 —— 这就是"斜的比横的薄"。
   // 平台是水平的（垂直厚度 = 竖直厚度 = PLAT_TK），坡用同一个垂直厚度，
   // 竖直投影自动放大 1/cosθ，两块接在一起才真的"厚度吻合"。
-  const TK  = PLAT_TK;
+  /* 栈道面厚度。
+   *
+   * **21 是"坡不能堵"量出来的。** 整条坡在最长的一关是 494 长，
+   * 厚度 27 就等于 13000 平方像素的实色横在屏幕中间 —— 它把背景挡完了，
+   * 背景再有层次也看不见，这就是用户说的"太堵"。
+   * 收到 21（-22%）之后体量明显下去，但仍然是"一根木头"，不是"一张纸"。
+   *
+   * **接头处必须是 PLAT_TK，往前走 18% 行程才收到 21。**
+   * 不做这个渐变，台面和坡的下缘会差 6px，接缝处出现一个看得见的台阶缺口
+   * —— 那正是上一版花大力气消灭掉的"两根木头对接"。
+   * 顺带白拿一点透视：越往下越薄。
+   */
+  const RAMP_TK = 21;
   const TOP = 6;
   const N   = 48;                // 采样点取密，弯的地方才没有折线感
   const x1 = r.x, x2 = r.x + r.w;
@@ -4126,9 +4327,17 @@ function drawRamp(g, r) {
   const vk = (x) => Math.sqrt(1 + slopeAt(x) * slopeAt(x));
   const off = (x, t) => t * vk(x);
 
+  /* 某一点的栈道面厚度。s 从**高的一端**量起 —— 高的一端接台面，要吻合。 */
+  const tkAt = (x) => {
+    let s = clamp((x - x1) / r.w, 0, 1);
+    if (!highLeft) s = 1 - s;
+    const k = clamp(s / 0.18, 0, 1);
+    return PLAT_TK + (RAMP_TK - PLAT_TK) * k;
+  };
+
   const yA = yAt(xa), yB = yAt(xb);
   const yTop = Math.min(yA, yB);
-  const yBot = Math.max(yA, yB) + TK * 1.7;
+  const yBot = Math.max(yA, yB) + PLAT_TK * 1.7;
 
   // 沿曲线切一条带：上沿 / 下沿都可以是常数或 (x) => 竖直偏移
   const band = (topFn, botFn) => {
@@ -4147,9 +4356,11 @@ function drawRamp(g, r) {
     g.closePath();
   };
 
-  // ① 影子：跟着坡走的一条暗带，落在下方的背景/地面上
-  g.fillStyle = "rgba(16,42,28,.16)";
-  band((x) => off(x, 8), (x) => off(x, TK + 13));
+  // ① 环境遮蔽：贴着栈道底面的一条薄暗带。
+  //    厚度收窄到 11（原来是 13~46 的一大条），alpha .16 → .13 ——
+  //    它的职责已经从"影子"降级成"底面有厚度"，不再参与构图。
+  g.fillStyle = "rgba(16,42,28,.13)";
+  band((x) => off(x, 5), (x) => off(x, tkAt(x) + 10));
   g.fill();
 
   // ② 主体
@@ -4159,12 +4370,12 @@ function drawRamp(g, r) {
   bg.addColorStop(0.72, TH.wood);
   bg.addColorStop(1, TH.wood2);
   g.fillStyle = bg;
-  band(0, (x) => off(x, TK));
+  band(0, (x) => off(x, tkAt(x)));
   g.fill();
 
   // ③ 顶带 / 层缝 / 底带 / 拼缝，全部 clip 在路面里
   g.save();
-  band(0, (x) => off(x, TK));
+  band(0, (x) => off(x, tkAt(x)));
   g.clip();
 
   // 顶带跟着曲线走 —— 这是"路"和"管子"的分界线：
@@ -4176,26 +4387,26 @@ function drawRamp(g, r) {
   band(0, 2);
   g.fill();
   g.fillStyle = "rgba(40,22,10,.30)";
-  band((x) => off(x, TK) - 6, (x) => off(x, TK));
+  band((x) => off(x, tkAt(x)) - 5, (x) => off(x, tkAt(x)));
   g.fill();
 
-  /* 分层：和浮空台同一套（3 层、层缝在 t = TK/3、2TK/3）。
+  /* 分层：和浮空台同一套（3 层，层缝在 t = TK·⅓、TK·⅔）。
      **层缝必须沿曲线画**。用 fillRect 画水平线，在 40° 的坡上会直接穿出路面 ——
-     这是"坡"和"台阶"最容易被写混的一处：台阶的缝是水平的，坡的缝平行于路面。 */
-  const LHt = TK / LAYERS;
+     这是"坡"和"台阶"最容易被写混的一处：台阶的缝是水平的，坡的缝平行于路面。
+     厚度现在是 tkAt(x) 变的，所以层缝位置也得跟着变，不能再用常数。 */
   for (let L = 1; L < LAYERS; L++) {
-    const t = LHt * L;
+    const f = L / LAYERS;
     g.fillStyle = "rgba(255,255,255,.30)";
-    band((x) => off(x, t), (x) => off(x, t) + 1.8);
+    band((x) => off(x, tkAt(x) * f), (x) => off(x, tkAt(x) * f) + 1.8);
     g.fill();
     g.fillStyle = "rgba(34,18,8,.34)";
-    band((x) => off(x, t) + 1.8, (x) => off(x, t) + 3.4);
+    band((x) => off(x, tkAt(x) * f) + 1.8, (x) => off(x, tkAt(x) * f) + 3.4);
     g.fill();
   }
-  for (let L = 0; L < LAYERS; L++) {
-    const t2 = LHt * (L + 1);
+  for (let L = 1; L <= LAYERS; L++) {
+    const f = L / LAYERS;
     g.fillStyle = "rgba(34,18,8,.15)";
-    band((x) => off(x, t2) - 2.2, (x) => off(x, t2));
+    band((x) => off(x, tkAt(x) * f) - 2.2, (x) => off(x, tkAt(x) * f));
     g.fill();
   }
 
@@ -4204,10 +4415,12 @@ function drawRamp(g, r) {
   g.strokeStyle = "rgba(52,30,16,.24)";
   g.lineWidth = 1.2;
   for (let L = 0; L < LAYERS; L++) {
-    const t0 = LHt * L + 2.4, t1 = LHt * (L + 1) - 3;
     const sh = LAYER_SHIFT[L % LAYER_SHIFT.length];
     for (let x = x1 + 26 + sh; x < x2 - 16; x += 48) {
-      const y = yAt(x);
+      const y = yAt(x), tk = tkAt(x);
+      const t0 = tk * (L / LAYERS) + 2.2;
+      const t1 = tk * ((L + 1) / LAYERS) - 2.6;
+      if (t1 <= t0 + 0.6) continue;     // 薄段放不下一道缝就跳过，别画成一条黑点
       g.beginPath();
       g.moveTo(x, y + off(x, t0));
       g.lineTo(x, y + off(x, t1));
@@ -4215,6 +4428,44 @@ function drawRamp(g, r) {
     }
   }
   g.restore();
+
+  /* ③b 短支腿 —— **这是"不堵"的关键，不是装饰。**
+   *
+   * 参考概念图里的栈道是「薄板 + 稀疏支腿 + 底下透空」。
+   * 透空这件事有两个作用，缺一不可：
+   *   ① 视觉体量直接砍掉一半 —— 实心厚板挡住的那 20~30px 背景回来了；
+   *   ② 支腿给出了「这块板浮在地面之上」的唯一证据。
+   *      没有它，一条薄板在 2D 里会读成"画在背景上的一条线"，
+   *      反而比厚板更像贴纸。
+   *
+   * **支腿不落地。** 最长那一关坡顶离地 206px，落地就是战场中间竖一排栅栏，
+   * 球道会被切成格子（可读性事故）。只出 18px 的短腿，读作"架起来的"就够 ——
+   * 观众不需要知道它架在什么上，这是 Q 版卡通的默认豁免。 */
+  const LEGS = [0.26, 0.46, 0.66, 0.84];
+  for (const s of LEGS) {
+    const bx = x1 + r.w * s;
+    const byTop = yAt(bx) + off(bx, tkAt(bx));
+    const lw = 7, lh = 18;
+    g.fillStyle = TH.wood2;
+    rr(g, bx - lw / 2, byTop - 3, lw, lh, 2.5);
+    g.fill();
+    // 斜撑：往上坡方向斜伸一根短木，给出"支"的方向
+    g.strokeStyle = COL.outline;
+    g.lineWidth = 1.8;
+    g.lineJoin = "round";
+    g.beginPath();
+    g.moveTo(bx - lw / 2 + 1, byTop + 4);
+    g.lineTo(bx - lw / 2 - 9, byTop - 6);
+    g.stroke();
+    // 腿的轮廓：左、下、右三边（上边被栈道面盖住，不描）
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(bx - lw / 2, byTop);
+    g.lineTo(bx - lw / 2, byTop + lh - 2.5);
+    g.quadraticCurveTo(bx, byTop + lh + 1.5, bx + lw / 2, byTop + lh - 2.5);
+    g.lineTo(bx + lw / 2, byTop);
+    g.stroke();
+  }
 
   // ④ 外轮廓：上缘、下缘各描一条，**不闭合**。
   //    闭合就会在接平台那一端画出一道竖边，正好压在平台端头上 ——
@@ -4243,7 +4494,7 @@ function drawRamp(g, r) {
   g.beginPath();
   for (let i = 0; i <= N; i++) {
     const x = x1 + (x2 - x1) * (i / N);
-    const y = yAt(x) + off(x, TK);
+    const y = yAt(x) + off(x, tkAt(x));
     if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
   }
   g.stroke();
@@ -4252,13 +4503,13 @@ function drawRamp(g, r) {
   if (openL) {
     g.beginPath();
     g.moveTo(x1, yAt(x1));
-    g.lineTo(x1, yAt(x1) + off(x1, TK));
+    g.lineTo(x1, yAt(x1) + off(x1, tkAt(x1)));
     g.stroke();
   }
   if (openR) {
     g.beginPath();
     g.moveTo(x2, yAt(x2));
-    g.lineTo(x2, yAt(x2) + off(x2, TK));
+    g.lineTo(x2, yAt(x2) + off(x2, tkAt(x2)));
     g.stroke();
   }
 }
@@ -4614,7 +4865,7 @@ function drawPet(g, x, footY, w, h, H, face, o) {
   // 有美术立绘就贴图（只有进 Cocos 才有），否则走下面这一整套代码图形。
   // 碰撞体始终是 w×h，贴图只改绘制，手感不变。
   const art = artOf("pet-" + H.id);
-  if (art) { drawPetSprite(g, art, x, footY, w, h, face, A, o); return; }
+  if (art) { drawPetSprite(g, art, x, footY, w, h, face, A, o, H.id); return; }
 
   const sq = o.squash || 0;
   const bw = w * (1 + sq * 0.16);
@@ -4756,6 +5007,22 @@ function drawPet(g, x, footY, w, h, H, face, o) {
   g.ellipse(x + face * bw * 0.04, footY - bh * 0.50, 3, 2.2, 0, 0, 6.283);
   g.fill();
 
+  // 没有立绘时的迈步：身体还是那个圆角矩形，两条腿从髋部对摆。
+  // 腿画在身体之后，脚才会伸到轮廓外面 —— 缩在身体里等于没画。
+  if (o.stepping) {
+    const s = Math.sin(o.gait || 0) * bw * 0.62;
+    g.strokeStyle = H.c3;
+    g.lineWidth = Math.max(2.4, bw * 0.09);
+    g.lineCap = "round";
+    const hip = footY - bh * 0.28;
+    g.beginPath();
+    g.moveTo(x - face * bw * 0.10, hip);
+    g.lineTo(x - face * bw * 0.10 + s, footY + 1);
+    g.moveTo(x + face * bw * 0.18, hip);
+    g.lineTo(x + face * bw * 0.18 - s, footY + 1);
+    g.stroke();
+  }
+
   // 出手瞬间的挤压
   if (o.flash > 0) {
     g.globalAlpha = o.flash * 0.7 * A;
@@ -4775,7 +5042,7 @@ function drawPet(g, x, footY, w, h, H, face, o) {
      ② 落脚点：立绘的脚在图片底边，所以底边对齐 footY。
      ③ 朝向：美术只画了一张（正面偏右），往左走靠 scale(-1,1) 镜像。
 
-   ×1.82 是量出来的（见下方 PET_VIS_K）：概念图里猫体高 ≈ 平台厚 2.6 倍、屏高 12.3%。
+   画出来多高只看 PET_VIS_K（见下方）：立绘按体高缩放，不是按碰撞盒原样贴。
    -------------------------------------------------------------------------- */
 /** 立绘的"体高 / 图高"。
  *
@@ -4790,22 +5057,33 @@ const PET_BODY_K = 0.656;
 /** 视觉体高 / 碰撞高。
  *
  *  **这个数是场景比例的唯一旋钮，改它等于改"宠物在画面里多大"。**
+ *  画出来的图高 = 碰撞高 × PET_VIS_K / PET_BODY_K。
  *
- *  参考坐标是 `client/concept/pets/` 那批概念图：猫的体高 ≈ 平台厚度的 2.6 倍，
- *  ≈ 屏幕高度的 12.3%，猫宽 ≈ 单块平台宽度的 34%。
+ *  硬约束不是概念图，是两层平台之间的空：
+ *    地面脚底 556，上一层台面 462，中间 94px；
+ *    木板从台面往下画 33px（PLAT_TK），真正能站人的空气只剩 61px。
+ *    立绘比 61px 高，头顶就插进上一层木板里。
  *
- *  走过的三个值，记下来免得再来回：
- *    1.35 → 屏高 9.8%。站上去读作"贴在平台边上的小宠物"，不是这一段的重点。
- *    1.82 → 屏高 **16.5%**（实测，不是估算）。反过来压过了球：
- *           球直径 88、宠物 99 —— 推球时球比宠物小，画面里是"猫在推一个球"，
- *           而这块游戏的镜头关系应该是"球和猫同量级"。而且头顶快贴到上一层台面。
- *    1.60 → 屏高 ≈ 14.5%，宠物 87 ≈ 球 88。**和球同高**是这里真正的锚点：
- *           推球是主玩法，两个东西并排时谁也别压谁。
- *
- *  上限卡在 1.9：再大视觉宽就会超过碰撞宽 2.4 倍，玩家会站在空气上。 */
-const PET_VIS_K = 1.60;
+ *  走过的值，别再按"球直径 88"调回去 —— 那是量错的。
+ *  普通球半径 22、直径 44（88 是 BOSS 球的直径）。
+ *    1.82 / 1.60 → 猫的图高 107px，比空气缝还高 46px，头在木板里面。
+ *    0.78 → 猫的图高 53px，身体和 44px 的球同一量级，头顶离木板还有空。
+ *           老实牛碰撞最高（52），图高约 62px，刚好贴着缝的上沿。 */
+const PET_VIS_K = 0.78;
 
-function drawPetSprite(g, img, x, footY, w, h, face, A, o) {
+/** 站立图上前后腿的切法。原图都朝左，split 左侧是前腿。
+ *  hip 是髋在图高上的位置（0 = 图顶，1 = 脚底）。数字是对着六张立绘的
+ *  不透明像素量的：再往上切会把肚子切进腿里，再往下切只剩脚尖。 */
+const WALK_CUT = {
+  cat: { hip: 0.87, split: 0.54 },
+  dog: { hip: 0.90, split: 0.55 },
+  fox: { hip: 0.87, split: 0.48 },
+  ham: { hip: 0.93, split: 0.55 },
+  ox:  { hip: 0.84, split: 0.55 },
+  rab: { hip: 0.88, split: 0.52 },
+};
+
+function drawPetSprite(g, img, x, footY, w, h, face, A, o, id) {
   // 影子：和代码图形同一套，贴地
   g.globalAlpha = 0.18 * A;
   g.fillStyle = "#16261C";
@@ -4841,7 +5119,45 @@ function drawPetSprite(g, img, x, footY, w, h, face, A, o) {
   // 系数 0.8 不是 1.8。1.8 的时候 brightness 到 1.72，橙色猫直接被提成白猫 ——
   // 截图里看就是"换了只宠物"。闪白只该让人注意到"它在出手"，不该改颜色。
   if (o.flash > 0) g.filter = "brightness(" + (1 + o.flash * 0.8).toFixed(2) + ")";
-  g.drawImage(img, -dw / 2, -dh, dw, dh);
+
+  const cut = o.stepping && WALK_CUT[id];
+  if (!cut) {
+    g.drawImage(img, -dw / 2, -dh, dw, dh);
+    g.restore();
+    g.globalAlpha = 1;
+    return;
+  }
+
+  /* 走路姿势：同一张站立图切三块。
+   *   后腿、身体、前腿，绕髋关节对摆。身体反方向轻轻前倾。
+   * 不做整只上下蹦 —— 那读成跳。脚离地是腿在转，身子的脚点不动。
+   * 裁切发生在旋转之后的同一套坐标里，转出去的脚不会被切掉。 */
+  const hipY = -dh * (1 - cut.hip);
+  const xL = -dw / 2;
+  const xR = dw / 2;
+  const split = xL + dw * cut.split;
+  const swing = Math.sin(o.gait || 0) * 0.95;
+  const rock = Math.sin(o.gait || 0) * 0.10;
+  const yTop = hipY - 2;
+  const legH = 8 - yTop;
+
+  function part(x0, y0, rw, rh, rot, px, py) {
+    g.save();
+    g.translate(px, py);
+    g.rotate(rot);
+    g.translate(-px, -py);
+    g.beginPath();
+    g.rect(x0, y0, rw, rh);
+    g.clip();
+    g.drawImage(img, xL, -dh, dw, dh);
+    g.restore();
+  }
+
+  part(split - 3, yTop, xR - split + 8, legH, swing, (split + xR) / 2, hipY);
+  // 身体只压过髋线 3px。再往下会把站立的脚也画出来，和摆出去的腿叠成两双脚。
+  part(xL - 4, -dh - 8, dw + 8, hipY + 3 - (-dh - 8), -rock, 0, hipY);
+  part(xL - 6, yTop, split - xL + 8, legH, -swing, (xL + split) / 2, hipY);
+
   g.restore();
   g.globalAlpha = 1;
 }
@@ -7142,12 +7458,15 @@ function render() {
       }
       // 朝向也走 dir：施法这 0.26 秒里，脸的朝向和身体的倾斜必须是同一个数，
       // 分开取（一个 p.face 一个 castDir）就会出现"往左打、转过来看右边"。
+      const stepping = p.onGround && p.dashT <= 0 && Math.abs(p.vx) > 40;
       drawPet(g, p.x, p.y, p.w, p.h, H, dir, {
         // 前冲段再压一点：形变比位移更容易读成"发力"，而且不用改立绘
         squash: (p.onGround ? 0 : (p.vy < 0 ? -0.16 : 0.12)) + Math.max(0, lean) * 0.18,
         flash: p.castAnim > 0 && ck > 0.24 && ck < 0.6 ? 0.42 : 0,
         belly: 0.15 + 0.85 * clamp(S.belly / 100, 0, 1),
         mood: bellyTier() === 0 ? 1 : bellyTier() === 1 ? 0.22 : 0,
+        stepping: stepping,
+        gait: stepping ? p.walkPhase : 0,
       });
       g.restore();
       g.globalAlpha = 1;

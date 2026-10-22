@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>家园 · Q 版界面对到游戏上</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1c140e; }
+  #stage {
+    position: absolute; left: 0; top: 0; width: 1280px; height: 720px; overflow: hidden;
+    transform-origin: top left;
+    background: #f3d7a2 url("../assets/ui/home/bg.png") center/cover no-repeat;
+    font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #5c4232; user-select: none;
+  }
+  .pet {
+    position: absolute; left: 600px; top: 418px; height: 132px;
+    filter: drop-shadow(0 6px 0 rgba(90, 50, 20, .16));
+    pointer-events: none;
+  }
+  .ghost {
+    position: absolute; height: 118px; opacity: .28;
+    filter: grayscale(.2); pointer-events: none;
+  }
+  .pill {
+    position: absolute; display: flex; align-items: center; gap: 6px;
+    height: 36px; padding: 0 14px 0 10px; border-radius: 18px;
+    background: #fff6e9; border: 2px solid #8a5a32;
+    box-shadow: 0 3px 0 rgba(90, 50, 20, .18);
+    font-weight: 700; font-size: 15px;
+  }
+  .pill b { font-weight: 800; }
+  #p1 { right: 292px; top: 16px; }
+  #p2 { right: 156px; top: 16px; }
+  #p3 { right: 22px; top: 16px; }
+  .gear {
+    position: absolute; right: 16px; top: 58px; width: 40px; height: 40px;
+    border-radius: 20px; border: 2px solid #8a5a32; background: #fff6e9;
+    font-size: 16px; cursor: pointer;
+  }
+  .pin {
+    position: absolute; width: 78px; margin-left: -39px; padding: 0; border: 0;
+    background: none; cursor: pointer; text-align: center;
+  }
+  .pin .badge {
+    display: block; width: 58px; height: 58px; margin: 0 auto; border-radius: 18px;
+    border: 3px solid #6d4124; background: linear-gradient(#fffaf0, #f3d7a4);
+    box-shadow: 0 4px 0 rgba(90, 50, 20, .22), inset 0 2px 0 #fff;
+    position: relative;
+  }
+  .pin em {
+    display: inline-block; margin-top: 4px; padding: 1px 8px; border-radius: 9px;
+    background: rgba(255, 246, 233, .94); border: 1.5px solid rgba(122, 80, 52, .45);
+    font-style: normal; font-size: 12px; font-weight: 800; color: #5c4232;
+  }
+  .pin .dot {
+    position: absolute; right: 6px; top: -4px; min-width: 16px; height: 16px; line-height: 16px;
+    border-radius: 8px; background: #d4543c; color: #fff; font-style: normal; font-size: 10px; font-weight: 800;
+  }
+  .ico { position: absolute; left: 50%; top: 50%; }
+  .ico.book { width: 22px; height: 16px; margin: -8px 0 0 -11px; background: #e07a4a; border-radius: 2px 4px 4px 2px; box-shadow: inset 8px 0 #fff6e4; }
+  .ico.book::after { content: ""; position: absolute; left: 10px; top: 2px; bottom: 2px; width: 1px; background: #8a5a32; }
+  .ico.hammer { width: 8px; height: 22px; margin: -12px 0 0 -2px; background: #8a5a32; border-radius: 2px; transform: rotate(-40deg); }
+  .ico.hammer::before { content: ""; position: absolute; left: -7px; top: -2px; width: 20px; height: 8px; background: #c8cdd2; border-radius: 2px; border: 1px solid #6a7078; }
+  .ico.pot { width: 22px; height: 14px; margin: -4px 0 0 -11px; background: #5c4034; border-radius: 0 0 8px 8px; }
+  .ico.pot::before { content: ""; position: absolute; left: 4px; top: -8px; width: 14px; height: 8px; border: 3px solid #5c4034; border-bottom: 0; border-radius: 8px 8px 0 0; }
+  .ico.pot::after { content: ""; position: absolute; left: 7px; top: -14px; width: 8px; height: 6px; border-radius: 4px; background: #e8eef2; opacity: .85; }
+  .ico.pack { width: 20px; height: 18px; margin: -6px 0 0 -10px; background: #c47a3a; border-radius: 4px 4px 6px 6px; }
+  .ico.pack::before { content: ""; position: absolute; left: 4px; top: -6px; width: 12px; height: 8px; border: 3px solid #8a5428; border-bottom: 0; border-radius: 8px 8px 0 0; }
+  .ico.sign { width: 6px; height: 24px; margin: -10px 0 0 -3px; background: #8a5a32; border-radius: 2px; }
+  .ico.sign::before { content: ""; position: absolute; left: -10px; top: 0; width: 26px; height: 8px; background: #e8c56b; border: 2px solid #8a5a32; border-radius: 2px; }
+  .go {
+    position: absolute; right: 18px; bottom: 16px; width: 260px; height: 84px;
+    border-radius: 39px; border: 3px solid #8a5a32; background: #ffce6e;
+    box-shadow: 0 5px 0 #e0a04a; cursor: pointer; font-size: 26px; font-weight: 900;
+  }
+  .go span { display: block; margin-top: -6px; font-size: 12px; font-weight: 700; color: #8a5a32; }
+  #mask {
+    position: absolute; inset: 0; background: rgba(40, 24, 14, .45);
+    display: none; align-items: center; justify-content: center;
+  }
+  #mask.on { display: flex; }
+  .card {
+    width: 760px; min-height: 420px; padding: 22px 28px 18px; border-radius: 28px;
+    background: #fff6e9; border: 4px solid #7a5034;
+    box-shadow: inset 0 0 0 8px #fff6e9, inset 0 0 0 10px #d6b08c;
+    position: relative;
+  }
+  .card h2 { margin: 0; text-align: center; font-size: 32px; }
+  .card .sub { margin: 4px 0 14px; text-align: center; color: #967860; font-size: 14px; }
+  .card .tip { margin: 12px 0 0; text-align: center; color: #967860; font-size: 13px; }
+  .row {
+    display: flex; align-items: center; gap: 12px; height: 64px; margin: 8px 0;
+    padding: 0 10px 0 12px; border-radius: 18px; background: #fffaf0;
+    border: 2px solid #96683a;
+  }
+  .row img, .mark {
+    width: 40px; height: 40px; border-radius: 20px; object-fit: cover; background: #f6d696;
+  }
+  .mark { display: flex; align-items: center; justify-content: center; font-weight: 800; }
+  .row .tx { flex: 1; }
+  .row .tx b { display: block; font-size: 18px; }
+  .row .tx span { color: #967860; font-size: 13px; }
+  .row button {
+    height: 36px; min-width: 84px; border-radius: 16px; border: 0; background: #f2ba6c;
+    font-weight: 800; color: #603c1c; cursor: pointer;
+  }
+  .row.off { background: #e8e0d4; border-color: #b0a090; }
+  .row.off button { background: #c4b8a8; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .cell { text-align: center; padding: 8px 4px 10px; }
+  .cell img { width: 84px; height: 84px; border-radius: 42px; border: 3px solid #b07a3c; background: #f6ce80; object-fit: cover; }
+  .cell.lock img { filter: grayscale(1); opacity: .55; border-style: dashed; }
+  .cell b { display: block; margin-top: 4px; }
+  .cell span { color: #967860; font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <img class="ghost" alt="" src="../assets/ui/home/pets/xing-xie-fox.png" style="left:300px;top:400px" />
+  <img class="ghost" alt="" src="../assets/ui/home/pets/nian-gao-dog.png" style="left:430px;top:408px" />
+  <img class="ghost" alt="" src="../assets/ui/home/pets/tuan-zi-ham.png" style="left:520px;top:440px" />
+  <img class="ghost" alt="" src="../assets/ui/home/pets/xue-tuan-rab.png" style="left:730px;top:420px" />
+  <img class="ghost" alt="" src="../assets/ui/home/pets/dou-nai-ox.png" style="left:860px;top:400px" />
+  <img class="pet" alt="" src="../assets/ui/home/pets/sugar-stand.png" />
+  <div class="pill" id="p1">果子 <b>248</b></div>
+  <div class="pill" id="p2">材料 <b>36</b></div>
+  <div class="pill" id="p3">吧唧 <b>12</b></div>
+  <button class="gear" data-open="set" title="设置">⚙</button>
+  <button class="pin" data-open="task" style="left:186px;top:268px"><span class="badge"><i class="ico sign"></i><i class="dot">1</i></span><em>任务</em></button>
+  <button class="pin" data-open="bench" style="left:262px;top:392px"><span class="badge"><i class="ico hammer"></i></span><em>工作台</em></button>
+  <button class="pin" data-open="codex" style="left:493px;top:354px"><span class="badge"><i class="ico book"></i></span><em>图鉴</em></button>
+  <button class="pin" data-open="stove" style="left:640px;top:328px"><span class="badge"><i class="ico pot"></i></span><em>灶台</em></button>
+  <button class="pin" data-open="send" style="left:1004px;top:530px"><span class="badge"><i class="ico pack"></i></span><em>派遣</em></button>
+  <button class="go" data-open="go">出门<span>能量 80</span></button>
+  <div id="mask"><div class="card" id="card"></div></div>
+</div>
+<script>
+const H = {
+  sugar: "../assets/ui/home/heads-circle/sugar-stand.png",
+  dog: "../assets/ui/home/heads-circle/nian-gao-dog.png",
+  ham: "../assets/ui/home/heads-circle/tuan-zi-ham.png",
+  rab: "../assets/ui/home/heads-circle/xue-tuan-rab.png",
+  ox: "../assets/ui/home/heads-circle/dou-nai-ox.png",
+  fox: "../assets/ui/home/heads-circle/xing-xie-fox.png",
+};
+function row(img, title, meta, act, off) {
+  const face = img
+    ? `<img src="${img}" alt="" />`
+    : `<div class="mark">${title.slice(0, 1)}</div>`;
+  return `<div class="row${off ? " off" : ""}">${face}<div class="tx"><b>${title}</b><span>${meta}</span></div><button>${act}</button></div>`;
+}
+const PAGES = {
+  stove: () => `<h2>灶台</h2><div class="sub">砂糖的肚子 40/100 · 果子 248 · 材料 36 · 干粮 0</div>
+    ${row("", "野果", "果子 8 · 饱食 +22 · 能量 +12", "喂")}
+    ${row("", "热汤", "果子 16 + 材料 1 · 饱食 +48", "喂")}
+    ${row("", "干粮", "背包 1 · 饱食 +35", "喂", true)}
+    <div class="tip">点空白处关闭</div>`,
+  bench: () => `<h2>工作台</h2><div class="sub">果子 248 · 材料 36 · 吧唧 12</div>
+    ${row("", "干粮", "果子 10 + 材料 2 · 拿到灶台就能吃", "制作")}
+    ${row("", "收集篮", "材料 5 + 吧唧 1 · 派遣产量多一半", "制作")}
+    <div class="tip">点空白处关闭</div>`,
+  send: () => `<h2>派遣</h2><div class="sub">留在家里的去采集。跟你出门的那只这趟不派。</div>
+    ${row(H.dog, "年糕", "留在家里，可以去采", "派出")}
+    ${row(H.ham, "团子", "还没回家", "未解锁", true)}
+    ${row(H.sugar, "砂糖", "跟你出门，这趟不派", "不能派", true)}
+    <div class="tip">点空白处关闭</div>`,
+  codex: () => `<h2>图鉴</h2><div class="sub">已收服 1 / 6</div><div class="grid">
+    <div class="cell"><img src="${H.sugar}" /><b>砂糖</b><span>♥ 哼。</span></div>
+    <div class="cell lock"><img src="${H.dog}" /><b>年糕</b><span>还差 1 关</span></div>
+    <div class="cell lock"><img src="${H.ham}" /><b>团子</b><span>还差 3 关</span></div>
+    <div class="cell lock"><img src="${H.rab}" /><b>雪团</b><span>还差 5 关</span></div>
+    <div class="cell lock"><img src="${H.ox}" /><b>豆奶</b><span>还差 7 关</span></div>
+    <div class="cell lock"><img src="${H.fox}" /><b>星屑</b><span>还差 8 关</span></div>
+  </div><div class="tip">点空白处关闭</div>`,
+  go: () => `<h2>出发</h2><div class="sub">能量 80/100 · 本趟消耗 20</div>
+    ${row(H.sugar, "苔原 1 / 8", "队伍 1 只 · 砂糖 · 饱食 40", "出发")}
+    <div class="tip">点空白处关闭</div>`,
+  task: () => `<h2>任务</h2><div class="sub">1 件可以领 · 做完就领，不每天刷新</div>
+    ${row("", "出门一趟", "打完回来一次 · 果子 +12 · 能量 +10", "领取")}
+    ${row("", "喂一顿", "在灶台喂一次 · 材料 +4", "未完成", true)}
+    ${row("", "做一份干粮", "工作台做出一份 · 果子 +8", "未完成", true)}
+    ${row("", "派人去采", "派遣收回一次 · 吧唧 +2", "未完成", true)}
+    ${row("", "带同伴回家", "通关 1 关 · 果子 +20", "未完成", true)}
+    ${row("", "跟它熟一点", "摸到 1 颗心 · 能量 +15", "已领", true)}
+    <div class="tip">点空白处关闭</div>`,
+  set: () => `<h2>设置</h2><div class="sub">画质会立刻改帧率。音效先记住，这一版还没有声音。</div>
+    ${row("", "画质", "清晰 · 60 帧", "清晰")}
+    ${row("", "音效", "开关会记住", "开")}
+    <div class="tip">点空白处关闭</div>`,
+};
+const mask = document.getElementById("mask");
+const card = document.getElementById("card");
+function open(id) {
+  card.innerHTML = PAGES[id]();
+  mask.classList.add("on");
+}
+document.querySelectorAll("[data-open]").forEach((n) => {
+  n.addEventListener("click", (e) => { e.stopPropagation(); open(n.dataset.open); });
+});
+mask.addEventListener("click", () => mask.classList.remove("on"));
+card.addEventListener("click", (e) => e.stopPropagation());
+const q = new URLSearchParams(location.search).get("open");
+if (q && PAGES[q]) open(q);
+function fit() {
+  const s = Math.min(window.innerWidth / 1280, window.innerHeight / 720);
+  document.getElementById("stage").style.transform = "scale(" + s + ")";
+}
+addEventListener("resize", fit);
+fit();
+</script>
+</body>
+</html>

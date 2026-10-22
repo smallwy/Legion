@@ -164,6 +164,11 @@ function audit() {
         if (ut && hasVisual && ut.contentSize.width > 1 && ut.contentSize.height > 1) {
             const w = ut.contentSize.width * s, h = ut.contentSize.height * s;
             const ax = ut._anchorPoint.x, ay = ut._anchorPoint.y;
+            if (!isFinite(px) || !isFinite(py) || !isFinite(w) || !isFinite(h)) {
+                /* NaN 不会抛错，只会让这一格"从图上消失" —— 报出来，别让它静默 */
+                console.log(`  ⚠ ${n.name} 坐标/尺寸是 NaN：pos(${n._pos.x},${n._pos.y}) ` +
+                    `size(${ut.contentSize.width}×${ut.contentSize.height}) scale(${n._scale.x})`);
+            }
             rects.push({
                 node: n,
                 name: n.name, x0: px - ax * w, y0: py - (1 - ay) * h,
@@ -190,10 +195,14 @@ function audit() {
         for (let n = b.parent; n; n = n.parent) if (n === a) return true;
         return false;
     };
+    /* 背景 / 雾层 / 宠物这三层本来就在所有 UI 底下，和谁"相交"都正常。
+       放进报告只会把真正的重叠淹掉。 */
+    const BACKDROP = /^(BG|FogTop|FogBot|Pets|Camera|Canvas|Scene|Home)$/;
     let hits = 0;
     for (let i = 0; i < rects.length; i++) {
         for (let j = i + 1; j < rects.length; j++) {
             const a = rects[i], b = rects[j];
+            if (BACKDROP.test(a.name) || BACKDROP.test(b.name)) continue;
             /* 父子天然重叠（子节点就画在父板上），不算问题 */
             if (isAncestor(a.node, b.node) || isAncestor(b.node, a.node)) continue;
             const w = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);

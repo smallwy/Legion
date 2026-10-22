@@ -577,42 +577,37 @@ class HomeController {
         this.refreshSatiety();
     }
 
-    /** 果子 / 材料 / 吧唧排到右上，给院子中间和左下的宠物留空。 */
+    /**
+     * 三张资源卡**留在 Dock 左端**，并排贴紧。
+     *
+     * 上一版把它们搬到右上角（right=568 / top=346）。那个位置和提示条
+     * HudTip（屏幕 965..1208 / 6..46）**整块重叠** —— 果子卡 925..1014、
+     * 材料卡 1022..1111、吧唧卡 1119..1208，后两张直接盖在提示条上。
+     * 这就是用户说的"位置也不对"。而 Dock 左端 17..282 反过来空出 265px，
+     * 一格宽的空洞比放三张卡还显眼。
+     *
+     * 而且 Dock 本来就是按"左边三张资源卡"排的：宠物卡起点 287
+     * 正好接在 282 后面。所以正确的做法不是给卡找新位置，是**别动它们**。
+     *
+     * 只修一处：场景里三张卡是 89 宽、间距 88，相邻两张压 1px。
+     * 1px 重叠在纯色卡上看不出来，但两张卡都有 4px 深棕描边，
+     * 叠起来会在交界处出现一条双倍深的竖线。改成间距 90（留 1px 缝）。
+     */
     private placeResources() {
         const dock = this.canvas.getChildByName('Dock');
         if (!dock) return;
         const names = ['Res-Apple', 'Res-Log', 'Res-Coin'];
-        const cards: { n: Node; ut: UITransform }[] = [];
+        const LEFT = -623;   // 屏幕 x 17
+        const TOP = -270;    // 屏幕 y 630
+        const GAP = 1;
+        let x = LEFT;
         for (const name of names) {
             const n = dock.getChildByName(name);
             const ut = n && n.getComponent(UITransform);
-            if (n && ut) cards.push({ n, ut });
-        }
-        const gap = 8;
-        const right = 568;
-        const top = 346;
-        const total = cards.reduce((s, c) => s + c.ut.contentSize.width, 0) + gap * Math.max(0, cards.length - 1);
-        let left = right - total;
-        let cardH = 72;
-        for (const c of cards) {
-            const w = c.ut.contentSize.width;
-            cardH = c.ut.contentSize.height;
-            c.n.setPosition(left + w * c.ut.anchorX, top - cardH * (1 - c.ut.anchorY), 0);
-            left += w + gap;
-        }
-
-        /* 提示条原来横在资源卡上面。挪到这一排的下沿，避免和果子叠在一起。 */
-        const tip = this.canvas.getChildByName('HUD')?.getChildByName('HudTip');
-        const tut = tip && tip.getComponent(UITransform);
-        if (tip && tut) {
-            const tw = tut.contentSize.width;
-            const th = tut.contentSize.height;
-            const tipTop = top - cardH - 8;
-            tip.setPosition(
-                right - tw * (1 - tut.anchorX),
-                tipTop - th * (1 - tut.anchorY),
-                0,
-            );
+            if (!n || !ut) continue;
+            /* 两张卡的锚点都是左上，所以 position 就是左上角，不用再算 anchor */
+            n.setPosition(x, TOP, 0);
+            x += ut.contentSize.width + GAP;
         }
     }
 
@@ -950,22 +945,39 @@ class HomeController {
         const root = this.canvas.getChildByName('Dock');
         if (!root) return;
 
-        /* —— 主行动：出门。收到右下角，不再横在院子下沿 —— */
+        /* —— 主行动：出门。收到右下角，但不留空洞 ——
+         *
+         * 上一版 248 宽：按钮右缘贴到 1260，左边就从"星屑"槽的 734
+         * 一路空到 1012 —— 278px、占屏宽 22% 的空洞。
+         * 整条底栏读成"左边一堆东西 + 右边一个孤零零的按钮"。
+         *
+         * 460 宽：右缘仍在 1260（离屏 20），左缘落在 800，
+         * 和槽位之间留 66px 的分隔。460 也不是新数字 ——
+         * 场景里这个按钮本来就画成 509 宽，是运行时把它砍到 248 的。
+         */
+        const GW = 460;
         const go = root.getChildByName('Btn-Go');
         if (go) {
             const gut = go.getComponent(UITransform);
             if (gut) {
-                gut.setContentSize(248, 76);
+                gut.setContentSize(GW, 76);
                 /* 锚点是左上。右缘离屏幕 20，下缘离屏幕 18。告示板在它上方。 */
-                go.setPosition(640 - 20 - 248, -360 + 18 + 76, 0);
+                go.setPosition(640 - 20 - GW, -360 + 18 + 76, 0);
             }
+            /* 子节点坐标是相对**按钮左上角**的。按钮 76 高、中心在 -38：
+               出门字高 34 → -22 时占 22..56；能量行高 16 → -30 时占 30..46；
+               两者中线都在 38 附近，和按钮中线对齐。 */
             const txt = go.getChildByName('txt');
-            if (txt) txt.setPosition(108, -20, 0);
+            if (txt) txt.setPosition(120, -22, 0);
             const line = go.getChildByName('line');
             if (line) {
-                line.setPosition(20, -48, 0);
+                line.setPosition(200, -30, 0);
                 const lut = line.getComponent(UITransform);
                 if (lut) lut.setContentSize(200, 16);
+                /* 居中而不是左对齐：按钮变宽以后左对齐会让"能量 100"这五个字
+                   贴在左边、右边留一大块空，看起来像漏了内容。 */
+                const llb = line.getComponent(Label);
+                if (llb) llb.horizontalAlign = Label.HorizontalAlign.CENTER;
             }
             const sub = go.getChildByName('sub');
             if (sub) sub.active = false;
@@ -978,7 +990,7 @@ class HomeController {
             /* 箭头左右摆：主行动需要一个持续的视觉邀请 */
             const ar = go.getChildByName('ar');
             if (ar) {
-                ar.setPosition(214, -36, 0);
+                ar.setPosition(430, -30, 0);
                 this.arrow = ar;
                 this.arrowBaseX = ar.position.x;
             }
@@ -1842,8 +1854,8 @@ class HomeController {
              转到以画布中心为原点的 Cocos 坐标 —— 中心 (-419, 90)。
            上一版写 (-416, 101)：右 3px、上 9px，字压在木牌的上沿高光线上，
            看起来像"贴纸没贴正"而不是"牌子上写着字"。
-           实测校验：渲染后按墨色 (86,50,24) 取掩膜，字形框 x 210..231 /
-           y 261..272，中心 (220.5, 266.5) —— 与净区中心差 1.5px，收工。 */
+           实测校验：渲染后按墨色 (86,50,24) 取掩膜，字形框 x 208..234 /
+           y 262..275（27×14），中心 (221, 268.5) —— 与净区中心 (221,268) 差 0.5px。 */
         btn.setPosition(-419, 90, 0);
 
         /* **不画底，字直接写在木牌上。**

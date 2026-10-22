@@ -32,7 +32,7 @@ Module._resolveFilename = function (request, ...args) {
 };
 
 const cc = require(MOCK);
-const { Node, Scene, UITransform, director, Director } = cc;
+const { Node, Scene, UITransform, Label, director, Director } = cc;
 
 /* ---------- 3. 从真实场景文件构造节点树 ---------- */
 const SCENE = path.join(__dirname, '..', 'assets', 'scenes', 'Home.scene');
@@ -65,6 +65,19 @@ function buildScene() {
                     x: (comp._anchorPoint && comp._anchorPoint.x) ?? 0.5,
                     y: (comp._anchorPoint && comp._anchorPoint.y) ?? 0.5,
                 };
+            } else if (comp.__type__ === 'cc.Label') {
+                /* 场景里的 Label 也要挂上。以前只挂 UITransform，于是
+                   `getChildByName('line').getComponent(Label)` 拿到 null ——
+                   这一点让 bindDock 里对着 Label 设 alignment 的代码直接崩，
+                   而真引擎里那个节点**是有 Label 的**。
+                   替身比真引擎"少一个组件"，报出来的错就会指错地方。 */
+                const lb = node.addComponent(Label);
+                lb.string = comp._string || '';
+                lb.fontSize = comp._fontSize || 20;
+                lb.lineHeight = comp._lineHeight || Math.round(lb.fontSize * 1.35);
+                lb.color = new cc.Color(
+                    comp._color.r, comp._color.g, comp._color.b, comp._color.a);
+                lb.horizontalAlign = comp._horizontalAlign ?? 1;
             }
         }
         for (const cref of (d._children || [])) build(cref.__id__, node);

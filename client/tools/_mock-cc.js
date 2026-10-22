@@ -159,6 +159,15 @@ class UITransform {
     }
     get width() { return this.contentSize.width; }
     get height() { return this.contentSize.height; }
+    /* ⚠ `anchorX` / `anchorY` 是 UITransform 上**独立于 `_anchorPoint`** 的存取器，
+       真引擎里有。缺了它们，`left + w * ut.anchorX` 会算出 NaN，
+       于是节点被 setPosition(NaN, NaN) —— 画面上直接消失，而且**不报错**。
+       placeResources() 正是这么写的：三张资源卡在离线渲染里凭空失踪了好几轮，
+       直到 _home-rt-shot.js 的 --audit 加了 NaN 报警才暴露。 */
+    get anchorX() { return this._anchorPoint.x; }
+    set anchorX(v) { this._anchorPoint.x = v; }
+    get anchorY() { return this._anchorPoint.y; }
+    set anchorY(v) { this._anchorPoint.y = v; }
     /** 测试里 Canvas 位于原点，世界坐标即本地坐标 */
     convertToNodeSpaceAR(v) { return new Vec3(v.x, v.y, v.z || 0); }
 }

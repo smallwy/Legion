@@ -42,10 +42,11 @@
 import {
     _decorator, Component, Node, Camera, Color,
     director, assetManager, SceneAsset, resources, ImageAsset,
+    input, Input, KeyCode, EventKeyboard,
 } from 'cc';
 import {
     groveAttachCanvas, groveBoot, grovePointer, groveRender, groveSetArt,
-    groveSetExitHook, groveTick,
+    groveSetExitHook, groveTick, GROVE,
 } from './GroveRuntime';
 
 const { ccclass } = _decorator;
@@ -62,6 +63,23 @@ const STAGE_Z = '10';
 
 /** 六只宠物的 heroId（和 GroveRuntime 的 HEROES[].id 一一对应） */
 const HERO_IDS = ['cat', 'dog', 'ham', 'rab', 'ox', 'fox'];
+
+/**
+ * 引擎键盘通道的键位表。
+ *
+ * **只转发状态键，绝不转发动作键**（R 重打 / E 收工 / Enter 继续）。
+ * 动作键是"按一下执行一次"，而这里和运行时内部的 window 监听是**两条同时活着的通路** ——
+ * 动作键双转发就会执行两次：R 连开两局、Enter 连跳两关。
+ * 状态键是幂等的（置 true / 置 false），双写没有副作用。
+ */
+const KEY_MAP: Readonly<Record<number, string>> = {
+    [KeyCode.ARROW_LEFT]: 'left', [KeyCode.KEY_A]: 'left',
+    [KeyCode.ARROW_RIGHT]: 'right', [KeyCode.KEY_D]: 'right',
+    [KeyCode.ARROW_UP]: 'jump', [KeyCode.KEY_W]: 'jump', [KeyCode.SPACE]: 'jump',
+    [KeyCode.ARROW_DOWN]: 'down', [KeyCode.KEY_S]: 'down',
+    [KeyCode.KEY_J]: 'atk',
+    [KeyCode.KEY_K]: 'dash',
+};
 
 /**
  * 美术图清单：注入键 → resources 下的路径。
@@ -126,6 +144,7 @@ export class GroveBattle extends Component {
         this._loadArt();
         groveBoot();
 
+        this._bindCocosInput();
         this._ready = true;
 
         console.log(
@@ -290,7 +309,70 @@ export class GroveBattle extends Component {
             ev.preventDefault();
             const p = toWorld(ev);
             grovePointer('down', p.x, p.y);
+            this._handAtk(true);
         });
+
+        /* 松开、滑出画面、系统打断（来电 / 切应用）都要收枪。
+           漏一个，角色就会一直自己喷 —— 玩家只会觉得"游戏疯了"。 */
+        const release = (): void => this._handAtk(false);
+        cv.addEventListener('pointerup', release);
+        cv.addEventListener('pointercancel', release);
+        cv.addEventListener('pointerleave', release);
+        window.addEventListener('blur', release);
+    }
+
+    /**
+     * 指针施法：战斗中按住鼠标 / 手指 = 连喷。
+     *
+     * 这是给键盘留的**兜底通路**。玩家反馈"能走能跳就是打不了"，
+     * 而 pointer 这条路是确定通的（选人界面、结算按钮都靠它）。
+     * 键盘能喷就用键盘，键盘哑了鼠标照样能把一整关打完。
+     *
+     * 只在 play 阶段生效：点结算按钮、点选人卡片都不会被当成开火。
+     */
+    private _handAtk(on: boolean): void {
+        const S = (GROVE as any).S;
+        if (!S || !S.keys) return;
+        if (on && S.phase !== 'play') return;
+        S.keys.atk = on;
+    }
+
+    /**
+     * 引擎自己的键盘通道 —— 和运行时内部那套 window 监听**并存**，不是替换。
+     *
+     * DOM 那条是运行时自带的（原型里就靠它，走捕获阶段），但进了 Cocos 之后
+     * keydown 可能压根到不了页面：编辑器 Game View 的焦点、宿主页面的快捷键拦截，
+     * 都能把它吃掉。症状不是"全哑"，而是**能走能跳、按 J 喷不出来** ——
+     * 走跳是引擎另一条路径转发的，喷只认 S.keys.atk 这一张表。
+     *
+     * 引擎的 input 由 Cocos 自己注册在 canvas 上，只要有焦点就一定收得到。
+     */
+    private _bindCocosInput(): void {
+        input.on(Input.EventType.KEY_DOWN, this._onKeyDown);
+        input.on(Input.EventType.KEY_UP, this._onKeyUp);
+    }
+
+    private _onKeyDown = (ev: EventKeyboard): void => {
+        const k = KEY_MAP[ev.keyCode];
+        if (!k) return;
+        const S = (GROVE as any).S;
+        if (!S || !S.keys || S.phase !== 'play') return;
+        // 边沿只在"第一次按下"记一次：按住键会不停重发 KEY_DOWN。
+        if (!S.keys[k]) S.press[k] = true;
+        S.keys[k] = true;
+    };
+
+    private _onKeyUp = (ev: EventKeyboard): void => {
+        const k = KEY_MAP[ev.keyCode];
+        if (!k) return;
+        const S = (GROVE as any).S;
+        if (!S || !S.keys) return;
+        S.keys[k] = false;
+    };
+
+    private _unbindCocosInput(): void {
+        input.off(Input.EventType.KEY_DOWN, this._onKeyDown);
+        input.off(Input.EventType.KEY_UP, this._onKeyUp);
     }
 
     private _unmountStage(): void {
@@ -362,6 +444,7 @@ export class GroveBattle extends Component {
 
     onDestroy(): void {
         this._ready = false;
+        this._unbindCocosInput();
         groveSetExitHook(null);
         this._unmountStage();
         this._cv = null;

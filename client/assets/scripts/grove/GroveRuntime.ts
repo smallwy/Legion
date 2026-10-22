@@ -441,10 +441,21 @@ const THEMES = {
     accent: "#FFD9F0",
   },
   slope: {
+    /* 暖橙关最容易整屏糊成一块。原来 sky / hill / grass / wood 四层全是橙，
+       只有明度差别，一压暗草地之后连明度差也没了 —— 拍出来是"橙色渐变板"。
+       解法是把**色相**拆开，不是继续调明度：
+         · 远处山 → 灰紫（大气透视本来就让远山偏冷，不是偏暖）
+         · 草地   → 橄榄（橙里带绿，和木平台区分开）
+         · 木平台 → 锁定暖棕（makeTheme 里统一锁，主题只留 22% 倾向）
+       三档色相分开之后，暖金天空反而把层次衬出来了。
+
+       **注意 hill1 / hill2 是死字段** —— 远山实际用 makeTheme 派生的
+       hillFar / hillNear（= mix(sky2, cooled, 0.48 / 0.72)，cooled 由 grass 来）。
+       上一轮改 hill1/hill2 完全没生效，就是没看到这一层。 */
     sky1: "#FF9A5C", sky2: "#FFDDB0", cloud: "#FFF3E2",
-    hill1: "#E08A5E", hill2: "#F2B48A",
-    grass: "#D9764A", grass2: "#F2A06A",
-    dirt: "#8C4F32", dirt2: "#5E3320",
+    hill1: "#A87A96", hill2: "#CBAAA4",
+    grass: "#6E8A52", grass2: "#95AF70",
+    dirt: "#7A5432", dirt2: "#4E3520",
     wood: "#C4703E", wood2: "#8A4A26", wood3: "#EEA06E",
     accent: "#FFE9A8",
   },
@@ -473,10 +484,16 @@ const THEMES = {
     accent: "#FFD34E",
   },
   tower: {
-    sky1: "#2A2350", sky2: "#6E5AA8", cloud: "#B9A8E8",
+    /* 紫夜。但**天空和地面不能同色相** —— 原来 grass "#4E4A8E" 和
+       sky "#2A2350" 是同一个紫，只在明度上差一档，压暗草地之后连明度差都没了，
+       整屏一张紫色渐变板（第 4 关犯过一模一样的错，只是那边是橙）。
+       月光下的草地是**青绿**、不是紫：紫是天空的色相，地面只受它一点环境光。
+       三档色相分开（紫天空 / 青绿地面 / 暖棕木台），紫夜反而把层次衬出来。 */
+    night: true,
+    sky1: "#221C46", sky2: "#4E4086", cloud: "#9C8CD0",
     hill1: "#3A3168", hill2: "#54488E",
-    grass: "#4E4A8E", grass2: "#7A72BE",
-    dirt: "#2E2A4C", dirt2: "#1C1A32",
+    grass: "#2F6B62", grass2: "#4E9A88",
+    dirt: "#3A3140", dirt2: "#231E2C",
     wood: "#8E80CA", wood2: "#6A5E9E", wood3: "#C8BEF2",
     accent: "#FFE066",
   },
@@ -548,6 +565,37 @@ for (const _tk of Object.keys(THEMES)) {
   T.grass2 = hexDim(T.grass2, GRASS_DIM);
   T.grass = hexDim(T.grass, GRASS_DIM);
 
+  /* ---------------- 木材锁定 ----------------
+     八关八套主题，但**木头只有一种**。
+
+     原来 wood / wood2 / wood3 跟着主题整组换色相：第 8 关（紫夜）是
+     "#8E80CA / #6A5E9E / #C8BEF2"，画出来是**一排紫色胶囊**。
+     玩家不会读成"被紫光照着的木板"，只会读成"这不是木头" ——
+     这是常识违反，不是风格选择，和"树画成橙色"是同一类错。
+
+     概念图里环境是冷的（背光的蓝绿林荫），人造物是暖的（橙木台），
+     靠这个冷暖对立把"能站的地方"从背景里推出来。
+     所以木头锁在暖棕，主题只决定**被什么光照着**：
+     主题原木色只留 16% 的倾向，冷关偏灰紫、暖关偏橙。
+
+     明度还要跟环境走一档：夜里（天空暗）木头要沉下去，
+     否则紫夜关一排暖橙木板会亮得像贴了荧光条。 */
+  const WB3 = "#E6C08A";   // 顶面受光
+  const WB1 = "#BC8049";   // 顶面主色
+  const WB2 = "#7C5029";   // 侧面暗部
+  /* 主题只留 22%。再高（试过 0.45）第 8 关又会读出紫色胶囊；
+     再低（0.10）八关看起来是同一张图，关与关之间没有温差。 */
+  const tint = hexMix(WB1, T.wood, 0.22);
+  const skyL = (parseInt(T.sky1.slice(1, 3), 16) * 0.3 +
+                parseInt(T.sky1.slice(3, 5), 16) * 0.59 +
+                parseInt(T.sky1.slice(5, 7), 16) * 0.11) / 255;
+  /* 0.86（夜）~ 1.0（白天）。0.86 是下限：再压木头的板缝就消失了，
+     而板缝正是"这是堆叠木板"唯一的证据。 */
+  const ambL = 0.86 + 0.14 * Math.min(1, skyL * 1.9);
+  T.wood3 = hexDim(hexMix(WB3, tint, 0.30), ambL);
+  T.wood = hexDim(tint, ambL);
+  T.wood2 = hexDim(hexMix(WB2, tint, 0.34), ambL);
+
   /* 地面自己也要有纵深：地平线附近发亮（远处受天光照）、画面底部最暗。 */
   const cooled = hexMix(T.grass, COOL, 0.24);
   T.grassLight = hexMix(T.grass2, T.sky2, 0.30);
@@ -590,9 +638,13 @@ for (const _tk of Object.keys(THEMES)) {
      混的色也不能是 COOL（偏青蓝）：青蓝前景压在绿草上会发灰，
      读作"没上色的草"。改混近黑的墨绿 INK_LEAF，压完是暖调的暗，
      和暖金天空、橙木平台在同一色温上。 */
-  T.shrub = hexDim(hexMix(T.grass, INK_LEAF, 0.66), 0.52);
-  /* 剪影也要有受光边，否则整丛是死板的一块。顶部顺着光来的方向亮一点。 */
-  T.shrubLit = hexMix(T.shrub, "#FFE9B8", 0.22);
+  /* 剪影是"**深**"，不是"黑"。
+     0.66 混 + 0.52 压之后，第 1 关（暖金天空、亮绿草地）出来是一整条
+     近乎纯黑的带子 —— 读作"画面被黑边切掉一截"，读不出"这是草"。
+     混 0.54、压 0.70：仍然是画面里最暗的一层，但看得出是绿、是叶子。
+     受光边也提一档（0.22 → 0.34），否则一丛里几片叶子分不出来，只是黑球。 */
+  T.shrub = hexDim(hexMix(T.grass, INK_LEAF, 0.54), 0.70);
+  T.shrubLit = hexMix(T.shrub, "#FFE9B8", 0.34);
 }
 
 const THEME_ORDER = ["tundra", "swamp", "cliff", "slope", "bouncy", "well", "stairs", "tower"];
@@ -1266,6 +1318,14 @@ const KEYMAP = {
   ShiftLeft: "aim", ShiftRight: "aim",
 };
 
+/* 键盘监听走**捕获阶段**（第三个参数 true），不走冒泡阶段。
+
+   麻烦在这里：Cocos 预览把 game canvas 铺在最上层，它自己的输入系统、
+   以及宿主页面任何一层监听，只要调了 stopPropagation，冒泡阶段挂在
+   window 上的监听就收不到。而症状恰好是"能走能跳、就是按 J 喷不出来" ——
+   走和跳是别的东西转发的，喷只认这一张表。
+
+   捕获阶段 window 是事件链上的第一个节点，谁拦都拦不住它。 */
 window.addEventListener("keydown", (ev) => {
   // 非战斗阶段，方向键归界面用，不往角色身上送
   const inPlay = S.phase === "play";
@@ -1315,7 +1375,7 @@ window.addEventListener("keydown", (ev) => {
       ev.preventDefault();
     }
   }
-});
+}, true);
 
 window.addEventListener("keyup", (ev) => {
   const k = KEYMAP[ev.code];
@@ -1328,7 +1388,7 @@ window.addEventListener("keyup", (ev) => {
     S.keys[k] = false;
     if (S.phase === "play") ev.preventDefault();
   }
-});
+}, true);
 
 /* 窗口失焦：把按键表整个清空。
    不挡的话，按住 → 切标签页 → 松开（keyup 打给了别的窗口）→ 回来，
@@ -3369,6 +3429,37 @@ function drawSky(g) {
      被提亮又掉饱和，出来是"沙漠灰"，不是概念图的金橙 —— 往白里混就是降饱和，
      这一层不能当"光"用，只能当"亮"用。
      大晕必须是**饱和橙**（#FFC96A）：色相推暖、明度只提一点点。 */
+  /* 夜关画月亮，不画太阳。
+     紫夜 + 一圈暖橙大光晕 = 一片粉紫，读作"日落的延迟摄影"挂在星空上 ——
+     这是第 8 关最刺眼的一处违和：地面是夜、天上是黄昏。
+     月亮只做三件事：一层弱冷晕、一个满月、几块环形山。
+     光晕必须是**冷**的（190,206,255），换成暖白又变回日落。
+
+     位置也不能用太阳那个 (700,74)：右上角被"清场"卡片占着，
+     30px 的月亮会被整块盖住 —— 太阳没露馅是因为它的光晕有 520 半径，
+     隔着一层卡片还能透出来；月亮小，盖住就真没了。挪到卡片下方。 */
+  if (TH.night) {
+    const mx = 858, my = 214;
+    const night = g.createRadialGradient(mx, my, 16, mx, my, 300);
+    night.addColorStop(0, "rgba(196,210,255,.22)");
+    night.addColorStop(0.45, "rgba(164,182,242,.09)");
+    night.addColorStop(1, "rgba(164,182,242,0)");
+    g.fillStyle = night;
+    g.fillRect(0, 0, W, 420);
+
+    g.fillStyle = "rgba(242,246,255,.95)";
+    g.beginPath();
+    g.arc(mx, my, 28, 0, 6.283);
+    g.fill();
+    /* 环形山。没有它就是一个白色圆点，读作"UI 图标"；
+       三块大小不一的暗斑压上去，才读作"月亮是个球"。 */
+    g.fillStyle = "rgba(192,204,238,.50)";
+    g.beginPath(); g.arc(mx - 8, my - 7, 7, 0, 6.283); g.fill();
+    g.beginPath(); g.arc(mx + 8, my + 8, 5, 0, 6.283); g.fill();
+    g.beginPath(); g.arc(mx + 11, my - 10, 3.6, 0, 6.283); g.fill();
+    return;
+  }
+
   const sunX = 700, sunY = 74;
   const wide = g.createRadialGradient(sunX, sunY, 20, sunX, sunY, 520);
   wide.addColorStop(0, "rgba(255,201,106,.34)");
@@ -3396,8 +3487,10 @@ function drawSky(g) {
    变成一条把画面劈成两半的斜线；62° 靠右，只在右半屏扫过。 */
 function drawSunShaft(g) {
   g.save();
-  g.globalAlpha = 0.07;
-  g.fillStyle = "#FFF6D2";
+  /* 夜关的"光柱"是月光，要更淡、更冷。暖白光柱压在紫夜色上，
+     会在中段扫出一条**灰米色**的斜带 —— 紫里的暖光只会变脏，不会变亮。 */
+  g.globalAlpha = TH.night ? 0.05 : 0.07;
+  g.fillStyle = TH.night ? "#C8D6FF" : "#FFF6D2";
   g.beginPath();
   g.moveTo(700, 60);
   g.lineTo(760, 60);
@@ -4389,50 +4482,74 @@ function drawForeground(g) {
   const base = TH.shrub || TH.grass;
   const lit = TH.shrubLit || base;
   const DEAD = GROUND_Y - 4;       // 552：盖住草皮鼓包，只淹掉球底 4px
-  /* 11 丛 × 5 片 = 55 片。13 × 7 = 91 片拍出来是"底部铺了一整条草甸"，
-     球滚过去读作在草丛里穿行，而不是"球从草后面滚过"。
-     前景的作用是**压住画框下沿**，不是再造一层地面。 */
-  const N = 11;
+  /* 9 丛。上一版 11 丛 × 5 根细叶，每丛体量比球还小 —— 用户原话是
+     "灌木大点 自然很多"。剪影层的说服力靠**体量**，不靠丛数：
+     9 丛做得大，下沿才是"几丛灌木挡着镜头"，不是"地上插了一排草"。 */
+  /* 丛的位置**写死，不均分**。
+     均分（i/(N-1)）会让每一丛落在等距位置上，中段必然压住火坑 / 营地 ——
+     那是玩法目标，被前景吃掉之后玩家找不到该往哪儿推（实测第 1 关火坑被盖掉一半）。
+     所以丛集中在两侧，中段 0.30~0.70 留空，视线和球道从中间穿过。 */
+  const SPOTS = [0.065, 0.185, 0.305, 0.695, 0.815, 0.935];
+  const N = SPOTS.length;
 
   for (let i = 0; i < N; i++) {
-    const t = i / (N - 1);
+    const t = SPOTS[i];
 
-    /* **中间保留，只是不抬高。**
-       完全不画的版本拍出来是"两侧各剩三根杂草"—— 中段地面空得像没做前景。
-       概念图里中段那一层低矮的暗草是有的，只是永远不越过球的下沿，
-       所以它只吃地面、不吃球道。这里靠"中间 lift = 0 → top 就是 552 死线"实现。 */
-
-    /* 两侧抬高的上限是 **46**，不是"想抬多高抬多高"。
-       前景在 drawLevel 之后画，抬过头会直接盖住 462 层台面 ——
-       玩家会看到"一块草遮住一段能站的地方"，那是可读性事故，不是构图。
-       能抬的极限由 462 层底边 495 反推：顶到 506 还留 11px 余量。 */
+    /* 两侧抬高的上限是 **62**。
+       这个数是从碰撞几何反推的，不是随口调：462 层台面底边在 482，
+       顶到 490 还留 8px 余量。再高就直接盖住"能站的地方"，
+       那是可读性事故，不是构图。
+       幂次 2.2（不是 1.5）：抬高只发生在最外侧那几丛，靠里的保持贴地，
+       否则六丛连成一条等高齿条。 */
     const edge = Math.abs(t - 0.5) * 2;
-    const lift = Math.pow(edge, 1.5) * 46;
+    const lift = Math.pow(edge, 2.2) * 62;
 
-    /* 一丛 = 一束草叶，不是三个圆叠一个柱。
-       上一版是 `arc + arc + arc + rect`，剪影读作"三个黑球堆在一条黑带上"，
-       概念图里的前景是**叶片状**的 —— 有个尖，而且几片的高度彼此错开。
-       这里用二次曲线画 6 片叶子，每片独立的长度和倾角。 */
-    const r = 22 + hash(i * 3.7) * 16 + edge * 12;
-    const x = -30 + t * (W + 60) + (hash(i * 4.7) - 0.5) * 40;
-    const top = DEAD - lift + hash(i * 5.3) * 16;
-    const bottom = H + 6;                                   // 叶根压到屏幕外
-    const hh = bottom - top;                                // 簇高：48 ~ 94
+    const r = 50 + hash(i * 3.7) * 28 + edge * 24;          // 50 ~ 102：一丛的半宽
+    /* x 用 t × W 直接取，**不加外扩**。
+       上一版是 -56 + t×(W+112)：最外那丛的中心落在 -23，整个人在屏幕外，
+       只剩几片叶子伸进来 —— 拍出来底部"只有几根草"，看不出有一丛灌木。 */
+    const x = t * W + (hash(i * 4.7) - 0.5) * 34;
+    /* 顶端**故意不等高**：随机幅度放到 30px。
+       原来所有丛都贴 552 线，拍出来是一排锯齿齿条；
+       真实的一排灌木是错落的，高的挡住矮的。 */
+    const top = DEAD - lift + hash(i * 5.3) * 30 - 8;
+    const cy = top + r * 0.86;                              // 团心
 
-    for (let k = 0; k < 5; k++) {
-      const u = k / 4 - 0.5;                                // -0.5 ~ 0.5
-      const ang = u * 1.55;
-      const len = hh * (0.70 + hash(i * 9.1 + k * 2.3) * 0.30);
-      const tipX = x + Math.sin(ang) * len * 0.66;
-      const tipY = bottom - len;
-      const rootX = x + u * r * 1.20;
-      /* 受光：靠外、靠高的那几片用 lit 色。
-         一丛里全同色 = 一块黑剪影，加两片亮一点的才读得出"这丛有几片叶子"。 */
-      g.fillStyle = hash(i * 4.1 + k * 1.9) > 0.58 ? lit : base;
+    /* ① 底座 —— 低矮的暗团，只负责"这块地方是实心的"，不负责造型。
+       上一版让团占满整个轮廓（0.82r 半径），拍出来是"一个绿色圆丘上面插了几根尖"，
+       读作石头或土包。**造型交给叶子，团只垫底。** */
+    g.fillStyle = base;
+    blobPath(g, x, cy + r * 0.76, r * 0.86, i * 1.7 + 0.4);
+    g.fill();
+    blobPath(g, x - r * 0.68, cy + r * 0.60, r * 0.60, i * 3.1 + 1.6);
+    g.fill();
+    blobPath(g, x + r * 0.72, cy + r * 0.56, r * 0.56, i * 4.9 + 2.8);
+    g.fill();
+
+    /* ② 叶子 —— **一丛的主体是 12 片宽叶，不是那个团。**
+       叶宽按长度算（bw = len × 0.34），长叶细一点、短叶宽一点。
+       试过三档都不对：写死宽度 + 长度差 0.5 倍 → 灰绿色的铲子；
+       bw = len×0.20 的细长叶 → "几根草"；只有 7 片 → 叶间漏出地面，
+       读作"几片叶子插在地上"，不读作一丛灌木。密到 12 片，缝才被填上。
+       叶根也不许在同一水平线上：从同一点放射出去就是海胆，
+       根部高度按 hash 错开 0.4r，才是"从团里长出来"。 */
+    for (let k = 0; k < 12; k++) {
+      const spread = ((k + 0.5) / 12 - 0.5) * 1.86;         // -0.93 ~ 0.93
+      const ang = spread * 1.05 - 0.10;                     // 整体略偏左，跟着光源
+      const len = r * (0.48 + hash(i * 7.3 + k * 3.1) * 0.62);
+      const rootX = x + spread * r * 0.70;
+      const rootY = cy + r * (0.04 + hash(i * 5.9 + k * 1.7) * 0.38);
+      const tipX = rootX + Math.sin(ang) * len * 1.35;
+      /* 夹到 top 上：叶尖越线就戳到球道，玩家会读成"球卡在草里了"。 */
+      const tipY = Math.max(top - 1, rootY - len * Math.cos(ang));
+      const cosA = Math.cos(ang), sinA = Math.sin(ang);
+      const bw = len * 0.34;
+      const midX = (rootX + tipX) / 2, midY = (rootY + tipY) / 2;
+      g.fillStyle = hash(i * 4.1 + k * 1.9) > 0.42 ? lit : base;
       g.beginPath();
-      g.moveTo(rootX - r * 0.16, bottom);
-      g.quadraticCurveTo(x + Math.sin(ang) * len * 0.30 - 7, bottom - len * 0.52, tipX, tipY);
-      g.quadraticCurveTo(x + Math.sin(ang) * len * 0.30 + 7, bottom - len * 0.52, rootX + r * 0.16, bottom);
+      g.moveTo(rootX, rootY);
+      g.quadraticCurveTo(midX - cosA * bw, midY + sinA * bw, tipX, tipY);
+      g.quadraticCurveTo(midX + cosA * bw, midY - sinA * bw, rootX, rootY);
       g.closePath();
       g.fill();
     }
@@ -4676,13 +4793,17 @@ const PET_BODY_K = 0.656;
  *
  *  参考坐标是 `client/concept/pets/` 那批概念图：猫的体高 ≈ 平台厚度的 2.6 倍，
  *  ≈ 屏幕高度的 12.3%，猫宽 ≈ 单块平台宽度的 34%。
- *  1.35 时画出来是平台厚的 1.79 倍 / 屏高 9.8% / 平台宽 22% ——
- *  三档全部偏小，站上去读作"一只贴在平台边上的小宠物"，不是"这一段的主角"。
- *  而且球直径 88 比宠物还高，推球时球把人整个盖住，看不出是谁在推。
  *
- *  1.82 对应 2.4 倍 / 13.3% / 30%，三档同时落进概念图区间。
+ *  走过的三个值，记下来免得再来回：
+ *    1.35 → 屏高 9.8%。站上去读作"贴在平台边上的小宠物"，不是这一段的重点。
+ *    1.82 → 屏高 **16.5%**（实测，不是估算）。反过来压过了球：
+ *           球直径 88、宠物 99 —— 推球时球比宠物小，画面里是"猫在推一个球"，
+ *           而这块游戏的镜头关系应该是"球和猫同量级"。而且头顶快贴到上一层台面。
+ *    1.60 → 屏高 ≈ 14.5%，宠物 87 ≈ 球 88。**和球同高**是这里真正的锚点：
+ *           推球是主玩法，两个东西并排时谁也别压谁。
+ *
  *  上限卡在 1.9：再大视觉宽就会超过碰撞宽 2.4 倍，玩家会站在空气上。 */
-const PET_VIS_K = 1.82;
+const PET_VIS_K = 1.60;
 
 function drawPetSprite(g, img, x, footY, w, h, face, A, o) {
   // 影子：和代码图形同一套，贴地

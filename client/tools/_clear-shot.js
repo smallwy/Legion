@@ -58,8 +58,12 @@ function boot() {
 /** 摆一个"刚过关"的状态。参数控制"差几秒"和"有没有旧纪录"。 */
 function pose(P, S, opt) {
   const st = P.curStage();
-  S.phase = "clear";
+  S.phase = opt.fail ? "fail" : "clear";
+  if (opt.fail) S.failWhy = opt.failWhy || "";
   S.clearT = 0;
+  /* 入场动画要"演完"。不设的话 settleT 是 0，评级会停在弹入的第一帧
+     （punch=0.55）—— 渲出一颗只有一半大的徽章，然后被当成"版式做小了"。 */
+  S.settleT = 2;
   S.hoverBtn = -1;
   S.playT = opt.playT;
   S.killed = opt.killed;
@@ -105,6 +109,17 @@ async function main() {
     { label: "B · 过 S 线（用时在线上）", playT: 51.2, killed: 10, total: 10, made: 3, rk: "S", prev: "A" },
     { label: "C · 差 18s（够不着，不显示差值）", playT: 78.0, killed: 10, total: 10, made: 3, rk: "B", prev: "" },
     { label: "D · 球数不达标（另一条 S 线）", playT: 44.0, killed: 10, total: 10, made: 12, rk: "A", prev: "B" },
+    /* 失败态必须一起出图。它是**另一套版式**（没有评级区，换成"没做到"+原因），
+       只验成功态就交付，等于只做了一半。 */
+    { label: "E · 失败（球用完）", playT: 88.0, killed: 6, total: 10, made: 8, rk: "B",
+      prev: "", fail: true, failWhy: "球用完了，还有 4 只没送走" },
+    { label: "F · 失败（目标没打到）", playT: 104.0, killed: 10, total: 10, made: 8, rk: "B",
+      prev: "", fail: true, failWhy: "人都送走了，但用了 8 颗球（只给 5 颗）" },
+    /* B 级必须单独摆一个：`rk` 这一栏只是**塞进 S.best 的假数据**，
+       画面上显示什么由 rate() 实时算 —— 时间和球都没达标才是 B。
+       之前四个用例里没有一个是这样，于是 B 那套配色从来没被渲染过，
+       换配色等于没验。 */
+    { label: "G · B 级（时间和球都没达标）", playT: 78.0, killed: 10, total: 10, made: 12, rk: "B", prev: "" },
   ];
 
   const shots = [];
@@ -116,17 +131,20 @@ async function main() {
     const st = pose(P, S, c);
     P.render();
     const png = canvas.toBuffer("image/png");
-    const crop = { x: 300, y: 30, w: 660, h: 560 };
+    /* 裁切窗必须比卡片大一圈，且左右对称 —— 上一版写 x:300,w:660，
+       把 620 宽的卡片左边 130px 直接切掉了，"送走 10 / 10"那行永远读不全，
+       看截图的人只会以为是我的排版溢出了。 */
+    const crop = { x: 170, y: 40, w: 620, h: 470 };
     shots.push({ label: c.label, png, crop, par: st.par });
     console.log(
       `${c.label}  贴图 ${nArt} 张  par.time=${st.par.time}  playT=${c.playT}` +
-      `  差=${(c.playT - st.par.time).toFixed(1)}s  → ${c.rk}`
+      `  差=${(c.playT - st.par.time).toFixed(1)}s  → rate()=${c.fail ? "—" : P.rate()}`
     );
   }
 
   const CW = shots[0].crop.w, CH = shots[0].crop.h;
   const pad = 8, labH = 24;
-  const cols = 2, rows = 2;
+  const cols = 2, rows = Math.ceil(shots.length / 2);
   const out = createCanvas(cols * (CW + pad) + pad, rows * (CH + labH + pad) + pad);
   const g = out.getContext("2d");
   g.fillStyle = "#15171A";

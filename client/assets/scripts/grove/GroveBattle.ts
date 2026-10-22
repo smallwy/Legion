@@ -48,7 +48,7 @@ import {
     groveAttachCanvas, groveBoot, grovePointer, groveRender, groveSetArt,
     groveSetExitHook, groveTick, GROVE,
 } from './GroveRuntime';
-import { loadSave, saveSave } from '../config/SaveData';
+import { loadSave, saveSave, LEVEL_COUNT } from '../config/SaveData';
 import { applyRunReward, payoutFromRun } from '../config/HomeBiz';
 
 const { ccclass } = _decorator;
@@ -436,9 +436,63 @@ export class GroveBattle extends Component {
         }
     }
 
+    /**
+     * 把每关的最佳评级合并进家园存档。
+     *
+     * 评级是**唯一的重玩动机**，而它原来只活在推球侧的 `S.best` 里：
+     * 算出来、写内存、从不显示、重启归零。主界面图鉴要读它，
+     * 所以必须有这一趟"合并写回"。
+     *
+     * 只升不降：家园已经是 S，推球这次打 A 不会抹掉 S —— 否则玩家
+     * 会因为"怕打坏纪录"而不敢重打，正好和重玩动机相反。
+     *
+     * 独立成一个函数而不是塞进 `_syncProgressToHome`：那个函数在
+     * `next === prev` 时 early return（进度没变就什么都不做），
+     * 而"重打一关刷 S"恰恰是进度不变、评级变了的场景。
+     */
+    private _syncRanksToHome(): void {
+        try {
+            const g = globalThis as unknown as {
+                localStorage?: Storage;
+                cc?: { sys?: { localStorage?: Storage } };
+            };
+            const store = (g.cc && g.cc.sys && g.cc.sys.localStorage) || g.localStorage;
+            if (!store) return;
+
+            const raw = store.getItem('pawpack.best');
+            if (!raw) return;
+            const arr: unknown = JSON.parse(raw);
+            if (!Array.isArray(arr)) return;
+
+            const homeRaw = store.getItem('pawpack.save.v1');
+            const home = homeRaw ? (JSON.parse(homeRaw) as Record<string, unknown>) : {};
+            const prev = Array.isArray(home.best) ? (home.best as unknown[]) : [];
+            const ORD: Record<string, number> = { B: 1, A: 2, S: 3 };
+
+            const out: string[] = [];
+            let changed = false;
+            const n = Math.max(prev.length, arr.length, LEVEL_COUNT);
+            for (let i = 0; i < n; i++) {
+                const a = typeof prev[i] === 'string' ? prev[i] as string : '';
+                const bv = typeof arr[i] === 'string' ? arr[i] as string : '';
+                const keep = (ORD[bv] || 0) > (ORD[a] || 0) ? bv : a;
+                if (keep !== a) changed = true;
+                out.push(keep);
+            }
+            if (!changed) return;
+
+            home.best = out;
+            home.v = typeof home.v === 'number' ? home.v : 1;
+            store.setItem('pawpack.save.v1', JSON.stringify(home));
+            console.log('[GroveBattle] 评级已回写主界面：' + out.join('|'));
+        } catch (e) {
+            // 存档坏了不该把人卡在战斗里
+            console.warn('[GroveBattle] 评级同步失败（不影响战斗本身）', e);
+        }
+    }
+
     /** 把这一趟的果子 / 材料 / 吧唧写进家园存档。回到主界面再报一句。 */
-    private _bankRun(kind: string): void {
-        const s = GROVE.S;
+    private _bankRun(kind: string): void {        const s = GROVE.S;
         const home = s.home || {};
         const trip = s.trip || {};
         const payout = payoutFromRun({
@@ -460,6 +514,7 @@ export class GroveBattle extends Component {
         this._unmountStage();
         this._bankRun(kind || 'done');
         this._syncProgressToHome();
+        this._syncRanksToHome();
 
         assetManager.loadAny(HOME_UUID, (err: Error | null, asset: unknown) => {
             if (!err && asset instanceof SceneAsset) {

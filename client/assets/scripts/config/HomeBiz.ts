@@ -18,13 +18,18 @@ export const MAX_HEARTS = 5;
 export const DISPATCH_SEC = 30;
 export const DISPATCH_CAP = 3;
 
-/** 出门能量。和饱食分开：饱食管这一趟的火力，能量管今天还能不能再出门 */
-export const ENERGY_MAX = 100;
-export const ENERGY_COST = 20;
-/** 没满的时候，这么多秒回 1 点。一趟 20 点大约 6 分钟回满 */
-export const ENERGY_REGEN_SEC = 18;
-/** 灶台喂成功，顺手回一点能量 */
-export const ENERGY_FEED = 12;
+/* ---- 能量门禁已移除（2026-10-22） ----
+ *
+ * 原来：`ENERGY_MAX 100 / COST 20 / REGEN 18s` —— 打 5 趟要等 6 分钟，
+ * 而且按离线时间戳结算，关掉游戏也在计时。
+ *
+ * **这是手游留存模型**（靠内购 / 广告变现，用等待制造回访），
+ * 用在买断制上是纯粹的差评来源：8 关需要 8 趟，玩家必然被拦一次，
+ * 而且大概率拦在"下一只宠物快解锁了"的地方。
+ *
+ * 现在：出门不再有次数限制。节奏由**饱食度**承担 —— 它每关 −16，
+ * 饿了火力下降，喂一顿要花果子，这条链是"经营"，不是"等待"。
+ * 少一道时间门，玩家少一个"我花钱买的游戏它凭什么不让我玩"的瞬间。 */
 
 /** 在家时会说的那句。和战斗门口的性格是同一批话 */
 export const PET_LINE: Record<string, string> = {
@@ -150,18 +155,15 @@ export function feed(prev: SaveState, mealId: string): ActResult {
     next.bag.ration -= meal.ration;
     next.satiety = Math.min(100, next.satiety + meal.sat);
     next.feeds += 1;
-    const energyGain = Math.min(ENERGY_FEED, ENERGY_MAX - next.energy);
-    next.energy += energyGain;
     const id = next.active;
     const before = heartsOf(next.pats[id] || 0);
     next.pats[id] = (next.pats[id] || 0) + meal.bond;
     const up = heartsOf(next.pats[id]) - before;
     const heart = up > 0 ? ` · 亲密度 +${up}` : '';
-    const energy = energyGain > 0 ? ` · 能量 +${energyGain}` : '';
     return {
         ok: true,
         next,
-        say: `${petName(id)} 吃了${meal.name} · 饱食 ${Math.round(next.satiety)}${heart}${energy}`,
+        say: `${petName(id)} 吃了${meal.name} · 饱食 ${Math.round(next.satiety)}${heart}`,
     };
 }
 
@@ -245,30 +247,8 @@ export function toggleCrisp(prev: SaveState): ActResult {
     return { ok: true, next, say: next.settings.crisp ? '画质 · 清晰' : '画质 · 流畅' };
 }
 
-/** 把离线这段时间的能量补上。没变化时返回原来的对象，调用方用引用比较决定要不要写盘 */
-export function settleEnergy(prev: SaveState, now: number): SaveState {
-    if (prev.energy >= ENERGY_MAX) return prev;
-    const step = ENERGY_REGEN_SEC * 1000;
-    const gain = Math.floor(Math.max(0, now - prev.energyAt) / step);
-    if (gain <= 0) return prev;
-    const next = clone(prev);
-    next.energy = Math.min(ENERGY_MAX, prev.energy + gain);
-    next.energyAt = next.energy >= ENERGY_MAX ? now : prev.energyAt + gain * step;
-    return next;
-}
-
-export function spendEnergy(prev: SaveState, now: number): ActResult {
-    const settled = settleEnergy(prev, now);
-    if (settled.energy < ENERGY_COST) {
-        const lack = ENERGY_COST - settled.energy;
-        return { ok: false, say: `能量不够 · ${settled.energy}/${ENERGY_MAX} · 还差 ${lack}` };
-    }
-    const next = clone(settled);
-    const wasFull = settled.energy >= ENERGY_MAX;
-    next.energy -= ENERGY_COST;
-    if (wasFull) next.energyAt = now;
-    return { ok: true, next, say: `消耗 ${ENERGY_COST} 能量 · 还剩 ${next.energy}` };
-}
+/* `settleEnergy` / `spendEnergy` 随能量门禁一起删除（见文件头部那段）。
+   调用方现在直接进战斗 —— `launchBattle()` 里不再有 paid.ok 分支。 */
 
 export interface RunPayout {
     apples: number;
@@ -320,16 +300,19 @@ export interface TaskDef {
 
 export const TASKS: ReadonlyArray<TaskDef> = [
     {
+        /* 任务奖励里的"能量 +X"全部换成了实际资源 —— 能量门禁删了之后，
+           再发能量就是发一个没人用的数字，等于奖励是空的。
+           换的标准：**每件任务给的东西要能立刻花出去**（喂饭/做东西/买东西）。 */
         id: 'out', name: '出门一趟', desc: '打完回来一次',
-        reward: '果子 +12 · 能量 +10',
+        reward: '果子 +12 · 材料 +2',
         ready: (s) => s.runs >= 1,
-        grant: (s) => { s.apples += 12; s.energy = Math.min(ENERGY_MAX, s.energy + 10); },
+        grant: (s) => { s.apples += 12; s.logs += 2; },
     },
     {
         id: 'feed', name: '喂一顿', desc: '在灶台喂一次',
-        reward: '材料 +4 · 能量 +8',
+        reward: '材料 +4 · 果子 +6',
         ready: (s) => s.feeds >= 1,
-        grant: (s) => { s.logs += 4; s.energy = Math.min(ENERGY_MAX, s.energy + 8); },
+        grant: (s) => { s.logs += 4; s.apples += 6; },
     },
     {
         id: 'craft', name: '做一份干粮', desc: '在工作台做出干粮或收集篮',
@@ -339,9 +322,9 @@ export const TASKS: ReadonlyArray<TaskDef> = [
     },
     {
         id: 'send', name: '派人去采', desc: '派遣收回一次',
-        reward: '吧唧 +2 · 能量 +10',
+        reward: '吧唧 +2 · 果子 +10',
         ready: (s) => s.dispatches >= 1,
-        grant: (s) => { s.coins += 2; s.energy = Math.min(ENERGY_MAX, s.energy + 10); },
+        grant: (s) => { s.coins += 2; s.apples += 10; },
     },
     {
         id: 'pal', name: '带同伴回家', desc: '通关 1 关',
@@ -351,9 +334,9 @@ export const TASKS: ReadonlyArray<TaskDef> = [
     },
     {
         id: 'pat', name: '跟它熟一点', desc: '任意一只摸到 1 颗心',
-        reward: '能量 +15',
+        reward: '果子 +15',
         ready: (s) => Object.keys(s.pats).some((id) => heartsOf(s.pats[id] || 0) >= 1),
-        grant: (s) => { s.energy = Math.min(ENERGY_MAX, s.energy + 15); },
+        grant: (s) => { s.apples += 15; },
     },
 ];
 

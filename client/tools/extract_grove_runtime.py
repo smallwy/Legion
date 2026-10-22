@@ -140,8 +140,11 @@ def main():
     # ① 主循环整段删掉 —— 由 GroveBattle.update() 驱动
     body = cut(body, 'let lastT = 0;', 'requestAnimationFrame(frame);\n}')
 
-    # ① 启动段（loadProgress/resetRun + 从 URL 进来 + rAF 兜底）换成显式入口
-    i = body.index('loadProgress();\nresetRun();')
+    # ① 启动段（loadProgress/loadBest/resetRun + 从 URL 进来 + rAF 兜底）换成显式入口
+    # 锚点只认 `loadProgress();` 这一句 —— 原来写的是
+    # `'loadProgress();\nresetRun();'`，加一行 `loadBest()` 就 index 失败。
+    # 函数定义是 `function loadProgress() {`，不含 `loadProgress();`，不会误命中。
+    i = body.index('loadProgress();')
     j = body.index('/* ---------- 调试导出 ---------- */')
     body = body[:i] + BOOT + body[j:]
 

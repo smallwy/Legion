@@ -391,6 +391,58 @@ const FOES = {
 const GROUND_Y = 556;
 const WALL_L = 26, WALL_R = 934;
 
+/** 雪从 0 积到最厚要这么多秒。第 2 关 par 是 60 秒，所以通常打到一半才过半厚 */
+const SNOW_BUILD_SEC = 90;
+/** 雪最厚时敌人还剩多少速度。−30%：看得出"它们慢了"，又不至于变成站桩 */
+const SNOW_FOE_SLOW = 0.30;
+/** 雪最厚时猫还剩多少速度。−18%：比敌人小 —— 玩家先于敌人感到"陷进去"就太难了 */
+const SNOW_HERO_SLOW = 0.18;
+
+/** 敌人速度系数。雪厚了走不动 —— 这是"雪是机制"里最省的一刀：只改一个乘数 */
+function foeSpeedK() {
+  return S.snowDepth > 0 ? 1 - SNOW_FOE_SLOW * S.snowDepth : 1;
+}
+/** 猫的移动系数。比敌人轻：雪该让玩家觉得"地面重了"，不该让他觉得"猫坏了" */
+function heroSpeedK() {
+  return S.snowDepth > 0 ? 1 - SNOW_HERO_SLOW * S.snowDepth : 1;
+}
+
+/* ----------------------------------------------------------------------------
+   脚印
+
+   雪地上留洞。**只做猫和球**，不做敌人 —— 敌人多、走位碎，
+   一堆小椭圆会糊成噪点，反而看不出"谁走过"。
+
+   间距按**走了多远**算，不按帧：按帧的话站着不动也会一直踩，
+   屏幕上会长出一条原地不动的脚印带。
+
+   上限 120 个：脚印是消耗品，不是存档内容。再多也不会更"被踩过"，
+   只会让每帧多画好几百个椭圆。
+   -------------------------------------------------------------------------- */
+function leavePrints() {
+  if (!TH.snow || S.snowDepth < 0.25) return;
+
+  const p = S.p;
+  if (p && !p.dead && p.onGround) {
+    if (S._pkLast === undefined) S._pkLast = p.x;
+    if (Math.abs(p.x - S._pkLast) > 11) {
+      S._pkLast = p.x;
+      S.footprints.push({ x: p.x, y: p.y, t: S.t, w: 9, h: 3.8 });
+    }
+  }
+
+  for (const b of S.balls) {
+    if (b.dead || !b.onGround) continue;
+    if (b._pkLast === undefined) b._pkLast = b.x;
+    if (Math.abs(b.x - b._pkLast) > 9) {
+      b._pkLast = b.x;
+      S.footprints.push({ x: b.x, y: b.y, t: S.t, w: b.r * 1.1, h: b.r * 0.3 });
+    }
+  }
+
+  while (S.footprints.length > 120) S.footprints.shift();
+}
+
 /* 球是不是在**地面层**这条道上。
  *
  * 这一条决定了左右两端到底该不该有墙 —— 原来两端是通高的隐形墙，
@@ -1353,6 +1405,16 @@ const S = {
   playT: 0,             // 这一关的战斗用时。和 S.t 分开：S.t 是动画钟，结算后还要走
   clearT: 0,            // 结算面板已经停了多久（到点自动进下一关）
   best: new Array(LEVELS.length).fill(null),   // 每关最佳评价（"S"/"A"/"B"/null）
+  rankPrev: "",         // 打这一关**之前**的最佳评价。结算面板用它判断"是不是新纪录"
+  /* 雪厚 0..1。**只有雪原关会长**，其余关恒为 0 —— 这是"雪是机制"的总开关。
+     长满要 90 秒，而第 2 关的 par 是 60 秒：也就是说多数人在它最厚之前就打完了，
+     重打的人才会吃到"整片白 + 敌人冻僵"。
+     这不是没调好 —— 雪是**一趟比一趟更难的变量**，不是固定皮肤。 */
+  snowDepth: 0,
+  /* 脚印 {x, y, t, w}。留在雪地上的洞：球滚过留一串，猫跑过留一串。
+     **这是"雪是机制"里唯一不改变数值、但玩家第一眼就能看见的部分** ——
+     没有脚印，雪就只是"地面白了一点"；有了脚印，地面才像被踩过。 */
+  footprints: [],
   t: 0,                 // 全局动画钟（云、火苗、闪烁都靠它）
   heroIdx: 0,
 
@@ -1730,6 +1792,14 @@ function beginRun(i) {
   if (typeof i === "number") S.stage = clamp(i, 0, LEVELS.length - 1);
   S.playT = 0;
   S.clearT = 0;
+  /* 清掉上一关留下的"打之前最好成绩"。不清的话，重打第 3 关时
+     结算面板会拿第 2 关的纪录去比，把"首次记录"错报成"新纪录"。 */
+  S.rankPrev = "";
+  /* 雪和脚印是**关卡级状态**，必须跟着关卡重置 ——
+     从雪原走回暖金森林时如果不清，雪会跟着飘到第 1 关（TH.snow 是 false，
+     落雪drawSnowfall 会自己 return，但脚印是数组，不会自己消失）。 */
+  S.snowDepth = 0;
+  S.footprints.length = 0;
   S.progress = Math.max(S.progress, S.stage);
   const SI = curStage();
   loadLevel(S.stage);
@@ -1847,6 +1917,35 @@ function loadProgress() {
   } catch (e) {}
 }
 
+/* ---------------------------------------------------------------------------
+   评级落盘
+
+   进度和评级**分开存**：`pawpack.progress` 是一个数字（能打到第几关），
+   `pawpack.best` 是 8 格数组（每关打得多好）。两件事独立变化 ——
+   通关一次不代表拿了 S，重打刷 S 也不推进进度。
+
+   为什么非存不可：`S.best` 原来是**死数据**。它被算出来、写进内存、
+   然后没有任何地方读过它 —— 重启归零。一个 30 分钟的游戏，
+   "刷 S"是仅有的重玩动机，而这个动机原来连凭证都不留。
+   --------------------------------------------------------------------------- */
+function saveBest() {
+  try { localStorage.setItem("pawpack.best", JSON.stringify(S.best)); } catch (e) {}
+}
+function loadBest() {
+  try {
+    const raw = localStorage.getItem("pawpack.best");
+    if (!raw) return;
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return;
+    /* 白名单：存档是外部输入（浏览器里能手改），
+       一个 "SSS" 不该在图鉴上变成一行看不懂的字。 */
+    for (let i = 0; i < S.best.length; i++) {
+      const v = arr[i];
+      if (v === "S" || v === "A" || v === "B") S.best[i] = v;
+    }
+  } catch (e) {}
+}
+
 /* ============================================================================
    7. 玩家
    ========================================================================== */
@@ -1878,10 +1977,16 @@ function updatePlayer(dt) {
     if (S.keys.right) ax += 1;
     if (ax !== 0) {
       p.face = ax;
-      p.vx = ax * H.spd;
+      p.vx = ax * H.spd * heroSpeedK();
     } else {
-      // 地面摩擦大、空中近乎无阻力 —— 空中能改方向才跟手
-      const fr = p.onGround ? 2600 : 420;
+      /* 地面摩擦大、空中近乎无阻力 —— 空中能改方向才跟手。
+       *
+       * **雪地上摩擦变小，这才是"打滑"**。原来打算给球加打滑，但球在这套
+       * 物理里根本没有滚动摩擦（不撞东西就一直滚），"更滑"没有实现空间 ——
+       * 真正有摩擦、也真正能被打滑影响的是**猫**：松手之后会再滑出去一段。
+       * 慢是惩罚，滑是手感变化，后者才是雪的"物理感"。
+       * 0.55 是在第 2 关试出来的：再小（0.7）像在冰上，越过弯道直接掉进坑里。 */
+      const fr = p.onGround ? 2600 * (1 - 0.55 * S.snowDepth) : 420;
       if (Math.abs(p.vx) <= fr * dt) p.vx = 0;
       else p.vx -= sign(p.vx) * fr * dt;
     }
@@ -2151,6 +2256,9 @@ function updateFoe(f, dt) {
   f.hitT = Math.max(0, f.hitT - dt);
   f.stun = Math.max(0, f.stun - dt);
   f.bob += dt * 3.2;
+  /* 雪厚了走不动。乘在速度上而不是改 def.spd ——
+     FOES 是共享表，改它等于把所有敌人永久变慢，切关也不会恢复。 */
+  const FK = foeSpeedK();
 
   // 被裹到 3 层就该变球了，这里是保险（正常流程在 coatFoe 里处理）
   if (f.coat >= (f.cm || 3)) return;
@@ -2162,7 +2270,7 @@ function updateFoe(f, dt) {
     const p = S.p;
     if (p && !p.dead) {
       const dx = p.x - f.x;
-      f.vx = sign(dx) * f.def.spd * (Math.abs(dx) > 40 ? 1 : 0.15);
+      f.vx = sign(dx) * f.def.spd * FK * (Math.abs(dx) > 40 ? 1 : 0.15);
       f.face = sign(dx);
     }
     f.x += f.vx * dt;
@@ -2178,18 +2286,18 @@ function updateFoe(f, dt) {
     if (!boss || f.bornT > 14) {
       // 没有 BOSS 了 / 爬了 14 秒还没到 —— 自己散掉，别在场上堆着
       if (f.bornT > 14) f.dead = true;
-      f.vx = f.dir * f.def.spd * 0.5;
+      f.vx = f.dir * f.def.spd * FK * 0.5;
     } else if ((f.wanderT || 0) > 0) {
       // 刚孵出来：先朝外爬一小段。这一段是给玩家的反应时间，
       // 也是"虫群散开"的画面 —— 一出壳就直扑 BOSS 的话，玩家只看到一串加号。
       f.wanderT -= dt;
       f.face = f.dir;
-      f.vx = f.face * f.def.spd * 0.72;
+      f.vx = f.face * f.def.spd * FK * 0.72;
     } else {
       const dx = boss.x - f.x;
       f.dir = sign(dx);
       f.face = f.dir;
-      f.vx = f.face * f.def.spd * 1.15;
+      f.vx = f.face * f.def.spd * FK * 1.15;
       // 到嘴：横向贴住 + 同一层 + 出了孵化保护期
       // 差一层就够不着：幼虫在上层平台、BOSS 在地面时，它得先走到边缘掉下去。
       // 上一版给了它"跳"，结果它在平台上原地蹦，永远绕不到 BOSS 那一侧。
@@ -2214,13 +2322,13 @@ function updateFoe(f, dt) {
     }
     if (f.charging > 0) {
       f.charging -= dt;
-      f.vx = f.face * f.def.spd * 3.1;
+      f.vx = f.face * f.def.spd * FK * 3.1;
     } else {
       if (f.chargeT <= 0) { f.charging = 0.55; f.chargeT = rand(2.2, 3.6); }
-      f.vx = f.face * f.def.spd * 0.5;
+      f.vx = f.face * f.def.spd * FK * 0.5;
     }
   } else {
-    f.vx = f.dir * f.def.spd;
+    f.vx = f.dir * f.def.spd * FK;
     f.face = f.dir;
   }
 
@@ -4011,8 +4119,12 @@ function drawSnowfall(g) {
   for (let layer = 0; layer < 2; layer++) {
     /* 数量 80 / 22 是**量出来的下限**，不是拍的：第一版 54 / 16 在 960×600 上
        平均每 1.2 万个像素才有一片，截图里几乎找不到 —— 雪"看不见"等于没有。
-       密度这东西没有"稍微一点"这一档：要么读得出在下雪，要么只是画面脏。 */
-    const n = layer ? 22 : 80;
+       密度这东西没有"稍微一点"这一档：要么读得出在下雪，要么只是画面脏。
+
+       **再乘一个随雪厚长的系数**：薄雪 35%、最厚 100%。
+       同一场雪从稀到密，比"一开场就是大雪"多说明一件事 —— 时间在走。 */
+    const k = 0.35 + 0.65 * S.snowDepth;
+    const n = Math.max(4, Math.round((layer ? 22 : 80) * k));
     const rA = layer ? 1.8 : 0.9, rB = layer ? 2.8 : 1.6;
     const sA = layer ? 52 : 26, sB = layer ? 78 : 40;
     g.globalAlpha = layer ? 0.92 : 0.55;
@@ -4540,9 +4652,53 @@ function platPath(g, x, y, w, h, r, flatL, flatR) {
   g.closePath();
 }
 
+/* ----------------------------------------------------------------------------
+   雪线：沿平台顶面画一条上缘起伏的白带
+
+   **上缘必须起伏**。直的一条读作"在台子上贴了张白纸"，起伏才读作"堆了一层雪"。
+   起伏用 `hash` 定（不是 Math.random）—— 每帧随机会让雪原地抽搐。
+
+   形状用**圆齿**而不是随机多边形：地面本来就是一排圆弧草齿，
+   雪顺着同一套齿形加厚，看起来是"同一块地上积了雪"；
+   换成另一套几何就变成"两块不同的地"。
+   -------------------------------------------------------------------------- */
+function snowLine(g, x, w, y, depth) {
+  if (!TH.snow || depth <= 0.04) return;
+  /* **不做圆齿，做一条上缘低频起伏的实心带。**
+   *
+   * 第一版照草皮的做法画了一排上拱的圆弧，出来读作"花边"——
+   * 因为草皮本身就是一排向下鼓的圆弧，两层齿叠在同一位置，
+   * 谁也读不出是雪，只像给台子镶了道白蕾丝。
+   *
+   * 雪的证据不是齿，是**一条连续的厚带 + 上缘的松软起伏**。
+   * 起伏频率用 54px 一段（草齿是 26px）：比草慢一倍，
+   * 视觉上才不会和草齿共振。幅度由 hash 定，每段不一样 ——
+   * 一样的话会读成"规则的波浪装饰"，那还是花边。 */
+  const h = 3 + 10 * depth;
+  const n = Math.max(2, Math.round(w / 54));
+  const step = w / n;
+  const baseY = y - h * 0.42;
+
+  g.save();
+  g.globalAlpha = 0.55 + 0.42 * depth;
+  g.fillStyle = "#F4F8FF";
+  g.beginPath();
+  g.moveTo(x, y + 5);
+  g.lineTo(x, baseY);
+  for (let i = 0; i < n; i++) {
+    const x0 = x + step * i;
+    const x1 = x0 + step;
+    const bump = h * (0.5 + 0.62 * hash(i * 5.1 + x * 0.011));
+    g.quadraticCurveTo((x0 + x1) / 2, baseY - bump, x1, baseY);
+  }
+  g.lineTo(x + w, y + 5);
+  g.closePath();
+  g.fill();
+  g.restore();
+}
+
 function drawPlat(g, p) {
   const isGround = p.kind === "ground";
-
   if (isGround) {
     /* ---- 地面：泥土块 + 一层圆齿草皮。草齿是圆的，这是 Q 版和写实的唯一分界线。
      *
@@ -4615,6 +4771,8 @@ function drawPlat(g, p) {
       g.quadraticCurveTo(x + 3, p.y - 7 - hh, x + 6, p.y - 7);
       g.stroke();
     }
+    /* 积雪压在草尖**之后** —— 雪是把草压住的，画在草尖下面就成了"草从雪里长出来" */
+    snowLine(g, px, pw, p.y - 4, S.snowDepth);
     return;
   }
 
@@ -4796,6 +4954,13 @@ function drawPlat(g, p) {
     g.moveTo(p.x + p.w, p.y + R);
     g.lineTo(p.x + p.w, p.y + TK - R);
     g.stroke();
+  }
+
+  /* 积雪盖在木头顶面。**必须压在描边之后** ——
+     否则那条 2.6px 的深棕上缘会从雪里透出来，读作"雪是垫在木头底下的一张纸"。
+     左右各内缩 2px，避开端头那个大年轮（雪不该盖住断面）。 */
+  if (TH.snow && S.snowDepth > 0.04) {
+    snowLine(g, p.x + 3, p.w - 6, p.y + 1, S.snowDepth);
   }
 }
 
@@ -5628,6 +5793,39 @@ function drawStump(g, s) {
     g.lineTo(sx + 2, top + 34);
     g.lineTo(sx - 4, top + 52);
     g.stroke();
+  }
+}
+
+/* 脚印的绘制。雪被踩下去 = 比脚下的雪**暗**一点、偏冷一点。
+ *
+ * 不用纯白高光：雪面本来就是白的，再叠白什么都看不见。
+ * 用 #8FA6C4（冷蓝灰）+ alpha 0.3 —— 这是"雪下面的阴影"的颜色，
+ * 不是"雪上的脏"，所以不会看起来像泥。
+ *
+ * 12 秒后消失（雪会慢慢把它填上）。最后 4 秒淡出，
+ * 不然会看到脚印"啪"地一下集体不见。 */
+function drawPrints(g) {
+  if (!TH.snow || S.footprints.length === 0) return;
+  for (const f of S.footprints) {
+    const age = S.t - f.t;
+    if (age > 12) continue;
+    const k = age > 8 ? (12 - age) / 4 : 1;
+    /* 雪坑的颜色是**雪下面的阴影**，不是"雪上的脏"。
+       取 #A8BED8（冷蓝）+ alpha 0.55：和雪面 #F4F8FF 混出来约 (202,216,234)，
+       比雪暗 40 级 —— 够看清一串，又不至于看起来像泥点。
+       第一版给的是 0.42 / #7E96B8，混出来只暗 26 级，出图上完全找不到；
+       更早一版 0.30 更是等于没画。**这是"量出来"而不是"估出来"的**。 */
+    g.globalAlpha = 0.55 * k;
+    g.fillStyle = "#A8BED8";
+    g.beginPath();
+    g.ellipse(f.x, f.y - 1, f.w * 0.5, f.h * 0.5, 0, 0, 6.283);
+    g.fill();
+  }
+  g.globalAlpha = 1;
+  /* 过期项在这里清，不在 leavePrints 里：两处都清会互相踩，
+     而且绘制侧才知道"看不见了"这件事。 */
+  for (let i = S.footprints.length - 1; i >= 0; i--) {
+    if (S.t - S.footprints[i].t > 12) S.footprints.splice(i, 1);
   }
 }
 
@@ -8266,12 +8464,26 @@ function tick(dt) {
 
   if (S.phase === "play") {
     S.playT += dt;
+
+    /* ---- 雪：越下越厚 ----
+     *
+     * 90 秒长满，而第 2 关 par 是 60 秒 —— 多数人在它最厚之前就打完了。
+     * 这是有意的：**雪是一趟比一趟更难的变量，不是固定皮肤**。
+     * 第一次打是薄雪（好看），重打刷 S 的人才会撞上"整片白 + 敌人冻僵"，
+     * 于是同一关的第二遍是真的第二遍，不是把第一遍再走一次。
+     *
+     * 只在 play 阶段涨：结算面板停着的时候雪还在下会让人以为时间在走。 */
+    if (TH.snow) {
+      S.snowDepth = Math.min(1, S.snowDepth + dt / SNOW_BUILD_SEC);
+    }
+
     updatePlayer(dt);
     for (const f of S.foes) updateFoe(f, dt);
     updateShots(dt);
     updateBalls(dt);
     updateShocks(dt);
     updateFoeShots(dt);
+    leavePrints();
 
     // ---- 台词 ----
     // 三个触发点各自只响一次/关。挑的都是"玩家会停一下"的瞬间：
@@ -8325,7 +8537,14 @@ function tick(dt) {
         const rk = rate();
         const ORD2 = { B: 1, A: 2, S: 3 };
         const idx = S.stage;
-        if (!S.best[idx] || ORD2[rk] > ORD2[S.best[idx]]) S.best[idx] = rk;
+        /* 评级只升不降：拿过一次 S，之后打 A 不会把 S 抹掉 ——
+           否则玩家不敢重打（"万一打差了纪录没了"）。
+           先存下"打之前"的最佳，结算面板拿它判断是不是新纪录。 */
+        S.rankPrev = S.best[idx] || "";
+        if (!S.best[idx] || ORD2[rk] > ORD2[S.best[idx]]) {
+          S.best[idx] = rk;
+          saveBest();
+        }
         S.progress = Math.max(S.progress, S.stage + 1);
         saveProgress();
         addText(W / 2, 250, "这一屏清干净了", "#FFE9B0", 32, 2.2);
@@ -8388,6 +8607,9 @@ function render() {
 
   drawForest(false);
   drawLevel();
+  /* 脚印紧跟平台：它属于**地面**，不属于角色 ——
+     画在角色之后会盖住脚，画在平台之前会被平台盖掉。 */
+  drawPrints(g);
   // 前景压在地面之后（它吃掉草皮下沿）、单位之前（绝不挡角色和球）。
   // 顺序错了会直接毁掉玩法可读性：草挡住球，玩家就不知道球落没落地。
   drawForeground(g);
@@ -8764,16 +8986,42 @@ function render() {
           g.font = "bold 52px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
           g.fillText(rk, cx, cardY + 142);
         }
+
+        /* 新纪录：只有真的刷上去了才说。
+           **"新纪录"三个字比"S"更值钱** —— S 是绝对标准（一辈子拿一次），
+           新纪录是相对自己（每关每次都可能拿到）。30 分钟的游戏里，
+           后者才是能反复触发的那个反馈。 */
+        if (S.rankPrev !== rk) {
+          g.fillStyle = K.cream ? "#C0871A" : "#FFE58A";
+          g.font = "bold 13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+          g.textAlign = "left";
+          g.fillText(S.rankPrev ? "新纪录" : "首次记录", cx + 76, cardY + 142);
+          g.textAlign = "center";
+        }
       } else {
         g.fillStyle = K.cream ? "#A2492F" : "#FFD3C8";
         g.font = "15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
         g.fillText(S.failWhy || "饿晕了…", cx, cardY + 134);
       }
 
-      // 数据：两行，第一行是"送走多少"，第二行是"目标那条线打没打到"
+      // 数据：两行，第一行是"送走多少 + 用时 / S 线"，第二行是"目标那条线打没打到"
+      //
+      // **用时必须和 S 线并排**。原来只写"用时 62.4s"——玩家知道自己花了多久，
+      // 但不知道离 S 差多远，于是"再来一次"这个念头根本不会出现。
+      // 差值比数值本身有用：62.4s 是个事实，差 2.4s 是个理由。
+      //
+      // 差值只写在**够得着**的时候（超 S 线 20% 以上就闭嘴）。
+      // 阈值用比例不用绝对值：各关 par 从 60 到 135 秒不等，
+      // 写死 12 秒的话第 1 关很宽容、最后一关永远不显示。
+      // 差 5 倍的局说"差 18 秒"不是激励，是提醒他这局打得很烂。
+      const pT = st.par.time;
+      const dT = S.playT - pT;
+      const nearMiss = ok && dT > 0.05 && dT <= pT * 0.2;
       g.fillStyle = K.ink;
       g.font = "bold 15px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-      g.fillText("送走 " + S.killed + " / " + S.total + " 只   ·   用时 " + S.playT.toFixed(1) + "s",
+      g.fillText("送走 " + S.killed + " / " + S.total + " 只   ·   用时 " +
+                 S.playT.toFixed(1) + "s" + (ok ? " / S 线 " + pT.toFixed(1) + "s" : "") +
+                 (nearMiss ? "（差 " + dT.toFixed(1) + "s）" : ""),
                  cx, cardY + 198);
 
       let goalLine = "";
@@ -9128,7 +9376,7 @@ export const GROVE: any = {
   resetRun, beginRun, tick, render,
   setupLevel, updatePlayer, updateFoe, updateShots, updateBalls,
   coatFoe, makeBallFrom, burstBall, spawnShot,
-  spawnWave, foeFromSpec, updateShocks, hurtPlayer,
+  spawnWave, foeFromSpec, updateShocks, hurtPlayer, leavePrints,
   dropChest, dropFrom, DROP_KINDS,
   predictBall, aimFor, ballBudget, checkGoal, rate, goalProgress,
   curStage, curGoal, loadLevel, rampAt, nextLevel, saveProgress,

@@ -2,11 +2,11 @@
  * 家园四个入口的业务断言。不启动引擎。
  * 运行：node --experimental-strip-types client/tools/home-biz-check.mts
  */
-import { DEFAULT_SAVE, loadSave, saveSave, resetSave } from '../assets/scripts/config/SaveData.ts';
+import { DEFAULT_SAVE, loadSave, saveSave, resetSave, LEVEL_COUNT } from '../assets/scripts/config/SaveData.ts';
 import {
     feed, craft, recordPat, startDispatch, collectDispatch, peekDispatch,
     heartsOf, DISPATCH_SEC,
-    settleEnergy, spendEnergy, claimTask, payoutFromRun, applyRunReward, ENERGY_COST,
+    claimTask, payoutFromRun, applyRunReward,
 } from '../assets/scripts/config/HomeBiz.ts';
 
 let pass = 0;
@@ -110,42 +110,51 @@ saveSave(DEFAULT_SAVE);
 const round = loadSave();
 ok(round.bag.ration === 0 && round.settings.crisp === true && round.dispatch === null, '新字段缺省时读得回来');
 ok(round.pats['sugar-stand'] === 0 && round.pats['xing-xie-fox'] === 0, '六只的亲密度都有格子');
+ok(Array.isArray(round.best) && round.best.length === LEVEL_COUNT
+   && round.best.every((v) => v === ''),
+    '评级数组：新档是 8 个空位', String(round.best && round.best.length));
+
+/* 脏档：评级是外部输入（推球侧会写、浏览器里能手改），
+   一个 "SSS" 或数字不该变成图鉴上的一行怪字。
+   期望：S 留下、Z/3/null 丢掉、A 留下、空串保留、B 留下、小写 s 丢掉。 */
+resetSave();
+saveSave({ ...DEFAULT_SAVE, best: ['S', 'Z', 3, null, 'A', '', 'B', 's'] as unknown as string[] });
+const dirty = loadSave();
+ok(dirty.best.join(',') === 'S,,,,A,,B,',
+    '评级白名单：只认 S/A/B，其余当没打过', dirty.best.join('|'));
+resetSave();
 
 const peek0 = peekDispatch(sent.ok ? sent.next : home, 1_000);
 ok(peek0.hauls === 0 && peek0.left === DISPATCH_SEC, '刚派出时还要等满一趟');
 
 const now = 1_700_000_000_000;
-const low = base();
-low.energy = 10;
-ok(spendEnergy(low, now).ok === false, '能量不够出不了门');
-const rich = base();
-rich.energy = 100;
-rich.energyAt = now - 999_999;
-const spent = spendEnergy(rich, now);
-ok(spent.ok && spent.next.energy === 100 - ENERGY_COST && spent.next.energyAt === now,
-    '出门扣 20，满的时候从现在开始回', spent.ok ? String(spent.next.energy) : spent.say);
-const held = spent.ok ? settleEnergy(spent.next, now + 17_000) : spent.next;
-ok(spent.ok && held === spent.next, '不到 18 秒不回能量');
-const later = spent.ok ? settleEnergy(spent.next, now + 18_000) : spent.next;
-ok(later.energy === 100 - ENERGY_COST + 1, '18 秒回 1 点', String(later.energy));
-const fullE = base();
-ok(settleEnergy(fullE, now) === fullE, '满能量时不另写一份');
 
-const hungryE = base();
-hungryE.satiety = 40;
-hungryE.apples = 8;
-hungryE.energy = 50;
-const fed = feed(hungryE, 'fruit');
-ok(fed.ok && fed.next.energy === 62 && fed.next.feeds === 1, '喂一顿回 12 能量，并记一次');
+/* ---- 能量门禁已删（2026-10-22）----
+ *
+ * 原来这一组测的是"能量不够出不了门 / 18 秒回 1 点 / 满的时候从当前时刻开始计时"。
+ * 那是手游的等待模型，买断制里只会换差评，所以整套删掉了。
+ * 保留一条**架构断言**：HomeBiz 不许再导出 settleEnergy / spendEnergy ——
+ * 有人哪天想加回来，得先看到这条红灯，而不是悄悄加一个"每日体力"。
+ * 断言写在静态检查里（tools/verify-*.js 的 import 清单），这里不重复。 */
+
+const fed = (() => {
+    const h = base();
+    h.satiety = 40;
+    h.apples = 30;
+    return feed(h, 'fruit');
+})();
+ok(fed.ok && fed.next.feeds === 1 && fed.next.satiety === 62, '喂一顿：饱食 +22，并记一次',
+    fed.ok ? `${fed.next.satiety}` : fed.say);
 
 const noRun = base();
 ok(claimTask(noRun, 'out').ok === false, '还没出门领不了');
 noRun.runs = 1;
-noRun.energy = 40;
 const apples0 = noRun.apples;
+const logs0 = noRun.logs;
 const got = claimTask(noRun, 'out');
-ok(got.ok && got.next.apples === apples0 + 12 && got.next.energy === 50 && got.next.claimed.indexOf('out') >= 0,
-    '出门任务领果子和能量');
+ok(got.ok && got.next.apples === apples0 + 12 && got.next.logs === logs0 + 2
+   && got.next.claimed.indexOf('out') >= 0,
+    '出门任务领 12 果子 + 2 材料（原来是发能量，门禁删了之后发能量等于没发）');
 ok(got.ok && claimTask(got.next, 'out').ok === false, '同一件不能领第二次');
 
 const donePay = payoutFromRun({ kind: 'done', lastLoot: 30, lastStages: 2, tripLoot: 0, tripStages: 0, food: 9 });

@@ -55,10 +55,9 @@ import type { SaveState } from './config/SaveData';
 import { SATIETY } from './config/BattleConfig';
 import {
     MEALS, RECIPES, PET_LINE, DISPATCH_SEC, DISPATCH_CAP,
-    ENERGY_MAX, ENERGY_COST,
     feed, craft, recordPat, startDispatch, collectDispatch, peekDispatch,
     toggleMute, toggleCrisp, heartText, canDispatch,
-    settleEnergy, spendEnergy, TASKS, taskPhase, claimTask, claimableCount,
+    TASKS, taskPhase, claimTask, claimableCount,
 } from './config/HomeBiz';
 
 /* ==========================================================================
@@ -304,6 +303,8 @@ class HomeController {
 
     private pets: PetRt[] = [];
     private presses: PressRt[] = [];
+    /** 点击回调里不能当场拆面板。触摸还在这个节点上，拆掉会直接抛错。 */
+    private later: Array<() => void> = [];
     private fogs: FogRt[] = [];
 
     /** 待机引导动效的目标（按钮箭头、提示条、宠物卡） */
@@ -358,8 +359,6 @@ class HomeController {
            它们绑的事件回调里会读 this.save（比如出战卡文案），
            先刷一遍能保证第一帧看到的就是真值。 */
         this.bindSave();
-        const settled = settleEnergy(this.save, Date.now());
-        if (settled !== this.save) this.commit(settled);
         this.syncLawn();
         this.applyPrefs();
         this.bindBadges();
@@ -564,12 +563,14 @@ class HomeController {
             }
         }
 
-        /* ---- 出门按钮副标题：原来烘死在 Label 里写着"带砂糖" ---- */
+        /* ---- 出门按钮副标题：原来烘死在 Label 里写着"带砂糖" ----
+           能量门禁删掉之后这里没有"还够不够出门"要报了，
+           换成这一趟最关键的两个数：几个人、饿到什么程度。 */
         const go = this.canvas.getChildByName('Dock')?.getChildByName('Btn-Go');
         const gl = go?.getChildByName('line')?.getComponent(Label);
         if (gl) {
             gl.overflow = Label.Overflow.SHRINK;
-            gl.string = `能量 ${s.energy}`;
+            gl.string = `${squadSize(s.cleared)} 只 · 饱食 ${Math.round(s.satiety)}`;
         }
         this.refreshTaskBtn();
 
@@ -1160,6 +1161,7 @@ class HomeController {
         this.dead = true;
         this.pets.length = 0;
         this.presses.length = 0;
+        this.later.length = 0;
         this.fogs.length = 0;
         this.arrow = this.tip = this.goCard = null;
         this.toastBox = null;
@@ -1187,11 +1189,20 @@ class HomeController {
         dt = Math.min(dt, 0.05);
         this.t += dt;
         this.pingDispatch();
-        this.tickEnergy(dt);
+
+        if (this.later.length) {
+            const jobs = this.later.splice(0);
+            for (const fn of jobs) fn();
+        }
 
         for (const p of this.pets) this.tickPet(p, dt);
 
-        for (const p of this.presses) {
+        for (let i = this.presses.length - 1; i >= 0; i--) {
+            const p = this.presses[i];
+            if (!p.node.isValid || !p.target.isValid) {
+                this.presses.splice(i, 1);
+                continue;
+            }
             const idle = p.pulse > 0
                 ? 1 + Math.sin((this.t / p.pulseDur) * Math.PI * 2 + p.ph) * p.pulse
                 : 1;
@@ -1318,10 +1329,16 @@ class HomeController {
 
         mkLabel(card, 'title', `苔原 ${Math.min(8, s.cleared + 1)} / 8`, 40, INK, 500, 56)
             .node.setPosition(0, 108, 0);
-        const enough = s.energy >= ENERGY_COST;
+        /* 副标题从"能量够不够"换成**这一关你打过多好**。
+           出门前是最适合告诉玩家"S 线在哪"的位置：他还没进去，
+           正好带着一个目标进去。没有战绩就说实话（还没打过）。 */
+        const stageIdx = Math.min(8, s.cleared + 1) - 1;
+        const bestHere = s.best[stageIdx] || '';
         mkLabel(card, 'sub',
-            `能量 ${s.energy}/${ENERGY_MAX} · 出发消耗 ${ENERGY_COST} · 回来按这一趟的收成给奖励`,
-            16, enough ? INK_SOFT : new Color(176, 72, 48, 255), 520, 36)
+            bestHere
+                ? `第 ${stageIdx + 1} 关 · 最好成绩 ${bestHere} · 再打一次看能不能刷到 S`
+                : `第 ${stageIdx + 1} 关 · 还没打过 · 回来按这一趟的收成给奖励`,
+            16, INK_SOFT, 520, 36)
             .node.setPosition(0, 66, 0);
 
         /* 分隔线 */
@@ -1400,8 +1417,6 @@ class HomeController {
         }
     }
 
-    private energyAcc = 0;
-
     /** 派出的那只暂时离开草地，收回来再出现 */
     private syncLawn() {
         const away = this.save.dispatch ? this.save.dispatch.id : '';
@@ -1464,7 +1479,7 @@ class HomeController {
         sg.fill();
         scrim.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
             e.propagationStopped = true;
-            this.closeSheet();
+            this.queue(() => this.closeSheet());
         });
 
         const card = new Node('card');
@@ -1557,14 +1572,22 @@ class HomeController {
         });
     }
 
+    private queue(fn: () => void) {
+        this.later.push(fn);
+    }
+
     private act(r: { ok: boolean; say: string; next?: SaveState }, reopen: () => void) {
         if (r.ok && r.next) {
             this.commit(r.next);
             this.applyPrefs();
         }
-        /* 失败也重画：派遣的倒计时、背包数字才跟得上刚点的那一下 */
-        reopen();
-        this.toast(r.say);
+        /* 失败也重画：派遣的倒计时、背包数字才跟得上刚点的那一下。
+           重画会拆掉正在被点的那一行，必须等这下触摸结束。 */
+        const say = r.say;
+        this.queue(() => {
+            reopen();
+            this.toast(say);
+        });
     }
 
     private openKitchen() {
@@ -1757,6 +1780,42 @@ class HomeController {
         mkLabel(card, 'sub', `已收服 ${owned} / ${PETS.length}`, 18, INK_SOFT, 400, 28)
             .node.setPosition(0, 154, 0);
 
+        /* ---- 战绩条：每关的最佳评级 ----
+         *
+         * 为什么放在图鉴里：图鉴是"我收集到哪了"的地方，关卡成绩属于同一类东西。
+         * 更要紧的是 —— 评级原来是**死数据**（算了、写内存、从不显示、重启归零），
+         * 把它挂在玩家一定会点进来的面板上，它才第一次变成"成绩"。
+         *
+         * 全空时不显示一排 0：那看着像坏了。改成一句说明，告诉玩家这里会有什么。
+         */
+        {
+            const cnt: Record<string, number> = { S: 0, A: 0, B: 0 };
+            for (const r of this.save.best) if (r === 'S' || r === 'A' || r === 'B') cnt[r]++;
+
+            const row = new Node('ranks');
+            row.parent = card;
+            row.addComponent(UITransform).setContentSize(560, 22);
+            /* y=129 / 高 22 是**量出来的唯一存活区间**：
+               副标题底在 140、第一行格子实际图形顶在 116（格心 40 + 圆顶 76），
+               中间只有 24px。再高一点压副标题，再低一点压宠物圆底。 */
+            row.setPosition(0, 129, 0);
+            const rg = row.addComponent(Graphics);
+            rg.fillColor = new Color(240, 226, 206, 255);
+            rg.roundRect(-280, -11, 560, 22, 11);
+            rg.fill();
+            rg.lineWidth = 2;
+            rg.strokeColor = new Color(198, 168, 136, 255);
+            rg.roundRect(-280, -11, 560, 22, 11);
+            rg.stroke();
+
+            const any = cnt.S + cnt.A + cnt.B > 0;
+            mkLabel(row, 'txt',
+                any
+                    ? `S ×${cnt.S}    A ×${cnt.A}    B ×${cnt.B}    已通 ${cleared} / 8 关`
+                    : `已通 ${cleared} / 8 关 · 结算会给 S / A / B，最好成绩记在这里`,
+                16, any ? INK : INK_SOFT, 540, 20).node.setPosition(0, 0, 0);
+        }
+
         /* 3 列 × 2 行。列宽 200、行高 160 —— 六个格子占满 600×320，
            四周留 50 的内边距，卡片边框不会被格子压到。 */
         const COL_X = [-200, 0, 200];
@@ -1809,8 +1868,6 @@ class HomeController {
     /** 出门入口。这就是「点了要有反应」的落点。 */
     private openDepart() {
         this.closeSheet();
-        const settled = settleEnergy(this.save, Date.now());
-        if (settled !== this.save) this.commit(settled);
         if (this.depart) {
             this.depart.destroy();
             this.depart = null;
@@ -1988,14 +2045,6 @@ class HomeController {
         lb.string = n > 0 ? `任务 ${n}` : '任务';
     }
 
-    private tickEnergy(dt: number) {
-        this.energyAcc += dt;
-        if (this.energyAcc < 1) return;
-        this.energyAcc = 0;
-        const next = settleEnergy(this.save, Date.now());
-        if (next !== this.save) this.commit(next);
-    }
-
     private openTasks() {
         const n = claimableCount(this.save);
         this.openSheet('任务', n > 0 ? `${n} 件可以领 · 做完就领，不每天刷新` : '做完就领，不每天刷新', (card) => {
@@ -2010,18 +2059,15 @@ class HomeController {
     }
 
     /**
-     * 进入战斗。能量够才扣；场景没打开就不扣。
+     * 进入战斗。**没有门槛** —— 能量门禁已删（见 HomeBiz 文件头）。
+     *
+     * 出门现在只做两件事：进场景、把这一趟的账挂到存档上。
+     * 节奏由饱食度管（每关 −16，饿了火力下降），不靠"等时间"。
      *
      * 用 tween 的 call 切场景，而不是 setTimeout：出发卡有 0.18s 淡出，
      * 立刻 loadScene 会把动画连同场景一起销毁（"闪一下"）。
      */
     private launchBattle() {
-        const paid = spendEnergy(this.save, Date.now());
-        if (!paid.ok) {
-            this.toast(paid.say);
-            return;
-        }
-        const ticket = paid.next;
         this.closeDepart(() => {
             /* 为什么不用 director.loadScene('Battle')：
                本工程 settings 里没有 scenes 注册表（program.json / builder.json
@@ -2037,7 +2083,6 @@ class HomeController {
                    所以先取出来判空，再交给回退分支处理。 */
                 const sc = asset instanceof SceneAsset ? asset.scene : null;
                 if (!err && sc) {
-                    this.commit(ticket);
                     director.runScene(sc);
                     return;
                 }
@@ -2045,10 +2090,9 @@ class HomeController {
                 director.loadScene('Battle', (e2) => {
                     if (e2) {
                         console.error('[HomeRuntime] 进入战斗失败：', e2);
-                        this.toast('苔原没打开，能量还在');
+                        this.toast('苔原没打开，再点一次');
                         return;
                     }
-                    this.commit(ticket);
                 });
             });
         });

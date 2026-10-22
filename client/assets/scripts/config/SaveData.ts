@@ -117,9 +117,20 @@ export interface SaveState {
     /** 没有派出时是 null */
     dispatch: DispatchJob | null;
     settings: HomePrefs;
-    /** 出门用的能量，0~100。和饱食不是一回事：饱食管火力，能量管能不能出门 */
+    /**
+     * 每关的最佳评价，长度恒为 8，下标 = 关卡序号，"" = 还没通过。
+     *
+     * **这是这个 30 分钟游戏唯一的重玩动机**，所以它必须落盘。
+     * 改造前 `best` 只活在推球的 `S.best` 里：算了、写内存、从不显示、
+     * 重启归零 —— 玩家刷完 S 拿不到任何凭证，等于白刷。
+     *
+     * 只进不退：A 打不出 A 就保留 S（比较在 `grove.html` 的 ORD2 里做，
+     * 这里只做合并，不判断谁更好 —— 判断逻辑只能有一处）。
+     */
+    best: string[];
+    /** 出门用的能量。**已废弃**（门禁删了），只为了读旧档不炸而保留读取路径 */
     energy: number;
-    /** 上次把能量结算到「现在」的时间戳。恢复按它算，不按帧 */
+    /** 上次把能量结算到「现在」的时间戳。**已废弃**，同上 */
     energyAt: number;
     /** 灶台成功喂过几次、工作台做成几次、派遣收回几次。任务读这些数 */
     feeds: number;
@@ -141,6 +152,9 @@ function blankPats(): Record<string, number> {
     return o;
 }
 
+/** 关卡数。与 `grove.html` 的 `LEVELS.length` 一致，`best` 的长度恒等于它 */
+export const LEVEL_COUNT = 8;
+
 export const DEFAULT_SAVE: SaveState = {
     cleared: 0,
     apples: 248,
@@ -153,6 +167,7 @@ export const DEFAULT_SAVE: SaveState = {
     bag: { ration: 0, basket: 0 },
     dispatch: null,
     settings: { mute: false, crisp: true },
+    best: new Array<string>(LEVEL_COUNT).fill(''),
     energy: 100,
     energyAt: 0,
     feeds: 0,
@@ -162,17 +177,35 @@ export const DEFAULT_SAVE: SaveState = {
     lastReward: '',
 };
 
-/** 默认档的深拷贝。浅拷贝会让调用方改到 `DEFAULT_SAVE` 里的 pats / bag。 */
+/** 默认档的深拷贝。浅拷贝会让调用方改到 `DEFAULT_SAVE` 里的 pats / bag / best。 */
 function freshSave(): SaveState {
     return {
         ...DEFAULT_SAVE,
         pats: { ...DEFAULT_SAVE.pats },
         bag: { ...DEFAULT_SAVE.bag },
         settings: { ...DEFAULT_SAVE.settings },
+        best: DEFAULT_SAVE.best.slice(),
         dispatch: null,
         claimed: [],
         energyAt: Date.now(),
     };
+}
+
+/**
+ * 读评级。只认 S/A/B 三个值，其余一律当"没通过"。
+ *
+ * 为什么要白名单而不是"是什么就存什么"：这个数组会被推球侧（`grove.html`）
+ * 写进来，而推球是能直接在浏览器里跑的 —— 存档是外部输入，
+ * 一个手改的 `"SSS"` 不该让图鉴上出现一行看不懂的字。
+ */
+function loadBest(raw: unknown): string[] {
+    const out = new Array<string>(LEVEL_COUNT).fill('');
+    if (!Array.isArray(raw)) return out;
+    for (let i = 0; i < LEVEL_COUNT; i++) {
+        const v = raw[i];
+        out[i] = v === 'S' || v === 'A' || v === 'B' ? v : '';
+    }
+    return out;
 }
 
 function loadPats(raw: unknown): Record<string, number> {
@@ -255,6 +288,7 @@ export function loadSave(): SaveState {
         bag: loadBag(o.bag),
         dispatch: loadDispatch(o.dispatch),
         settings: loadPrefs(o.settings),
+        best: loadBest(o.best),
         energy: Math.floor(clampNum(o.energy, DEFAULT_SAVE.energy, 0, 100)),
         energyAt: typeof o.energyAt === 'number' && isFinite(o.energyAt) && o.energyAt > 0 ? o.energyAt : Date.now(),
         feeds: Math.floor(clampNum(o.feeds, 0, 0, 999_999)),

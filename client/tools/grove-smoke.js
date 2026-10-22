@@ -2036,6 +2036,73 @@ console.log("\n=== 26. 地面层两端开口 / 上层反弹 ===");
   ok(B.end !== "out", "预瞄线：上层往左不会画出「出界」", "end=" + B.end);
 }
 
+/* ============================================================================
+ * 雪：从皮肤变成机制（2026-10-22）
+ * ----------------------------------------------------------------------------
+ * 这四条守的是"雪会不会只是换了个颜色"。
+ * 雪厚是**关卡级状态**，不属于任何一关的数值表，所以特别容易被后来的改动
+ * 悄悄弄丢（少一个 beginRun 重置就会飘到别的关）。
+ * ========================================================================== */
+{
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+  seed(S);
+
+  /* ① 非雪关不长雪 */
+  P._start(0, 0);
+  ok(P.THEMES[P.LEVELS[0].theme].snow !== true, "第 1 关不是雪原（后面几条的前提）");
+  for (let i = 0; i < 600; i++) P.tick(1 / 60);
+  ok(S.snowDepth === 0, "非雪关：雪厚恒为 0（跑 10 秒也不长）", String(S.snowDepth));
+
+  /* ② 雪关会越长越厚，但封顶在 1 */
+  P._start(0, 1);
+  ok(P.THEMES[P.LEVELS[1].theme].snow === true, "第 2 关是雪原");
+  const d0 = S.snowDepth;
+  for (let i = 0; i < 120; i++) P.tick(1 / 60);
+  const d1 = S.snowDepth;
+  ok(d1 > d0, "雪原：雪会随时间变厚", d0.toFixed(3) + " → " + d1.toFixed(3));
+  S.snowDepth = 1;
+  for (let i = 0; i < 60; i++) P.tick(1 / 60);
+  ok(S.snowDepth === 1, "雪厚封顶在 1，不会超过", String(S.snowDepth));
+
+  /* ③ 雪厚了敌人真的变慢 —— 直接比同一个敌人的 vx */
+  S.snowDepth = 0;
+  const foe = S.foes.find((f) => !f.dead && !f.fly && !f.isBoss);
+  if (foe) {
+    foe.stun = 0; foe.coat = 0; foe.dir = 1;
+    P.updateFoe(foe, 1 / 60);
+    const vDry = Math.abs(foe.vx);
+    S.snowDepth = 1;
+    foe.dir = 1;
+    P.updateFoe(foe, 1 / 60);
+    const vSnow = Math.abs(foe.vx);
+    ok(vDry > 0 && vSnow < vDry * 0.85,
+      "雪最厚时敌人比干地慢（至少 15%，设计值 30%）",
+      vDry.toFixed(1) + " → " + vSnow.toFixed(1));
+  } else {
+    ok(false, "雪地敌人减速：找不到可测的非飞行敌人");
+  }
+
+  /* ④ 雪太薄不留脚印（薄雪上踩不出坑） —— 顺便守住"脚印不会无限增长" */
+  S.footprints.length = 0;
+  S.snowDepth = 0.1;
+  const px0 = S.p.x;
+  S.p.x = px0;
+  P.leavePrints();
+  ok(S.footprints.length === 0, "薄雪（<0.25）不留脚印", String(S.footprints.length));
+
+  S.snowDepth = 1;
+  for (let i = 0; i < 40; i++) { S.p.x += 4; P.leavePrints(); }
+  ok(S.footprints.length > 0, "厚雪会留脚印", String(S.footprints.length));
+  ok(S.footprints.length <= 120, "脚印有上限，不会无限堆积", String(S.footprints.length));
+
+  /* ⑤ 切关必须清雪：不留的话雪会飘到暖金森林去 */
+  P._start(0, 0);
+  ok(S.snowDepth === 0 && S.footprints.length === 0,
+    "换关清雪和脚印（雪是关卡级状态）",
+    "depth=" + S.snowDepth + " prints=" + S.footprints.length);
+}
+
 console.log("\n" + "=".repeat(56));
 if (fail) {
   console.log("通过 " + pass + " · 失败 " + fail);

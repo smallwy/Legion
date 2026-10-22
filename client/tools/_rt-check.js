@@ -106,9 +106,13 @@ director.setScene(scene);
    `Badge-*-hot`，而且每开一次编辑器就多一批。 */
 const canvas0 = scene.getChildByName('Canvas');
 const badges0 = canvas0.getChildByName('Badges');
-ok(badges0.children.length === 10,
+/* 11 = 5 个圆徽（Badge-*）+ 4 个名字板（Cap-*）+ 1 个任务椭圆底板（TaskPlate）。
+   这个数写死是对的 —— 它测的正是"场景里有多少静态子节点"，
+   改场景就该动这个数（改错了会立刻红，不会悄悄放过一条残留）。 */
+const BADGES_STATIC = 11;
+ok(badges0.children.length === BADGES_STATIC,
     '场景文件里不含运行时残留节点',
-    `Badges children = ${badges0.children.length}（应为 10）`);
+    `Badges children = ${badges0.children.length}（应为 ${BADGES_STATIC}）`);
 
 /* require 即触发 HomeRuntime 顶层代码（对应引擎里的 prerequisite-imports） */
 require(path.join(__dirname, '_rt-build', 'HomeRuntime.js'));
@@ -284,9 +288,9 @@ director.setScene(scene2);
 require(path.join(__dirname, '_rt-build', 'HomeRuntime.js'));
 
 const badges2 = scene2.getChildByName('Canvas').getChildByName('Badges');
-ok(badges2.children.length === 10,
+ok(badges2.children.length === BADGES_STATIC,
     '编辑器模式下完全不介入场景（守卫生效）',
-    `Badges children = ${badges2.children.length}（应为 10）`);
+    `Badges children = ${badges2.children.length}（应为 ${BADGES_STATIC}）`);
 globalThis.__MOCK_EDITOR = false;
 
 /* --- 5.9 存档回流：家园显示的三组数字必须读自存档 ---

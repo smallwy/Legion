@@ -1842,54 +1842,76 @@ class HomeController {
         const btn = new Node('TaskBtn');
         btn.parent = badges;
         const box = btn.addComponent(UITransform);
-        /* 点击区 84×76：比视觉大一圈，因为底下是"牌子上的一行字"，
-           看着小但必须好点。视觉尺寸由 Label 自己定，和点击区分离。 */
+        /* 点击区 84×76：比视觉（54×26 的胶囊）大一圈。
+           视觉尺寸与点击区分离是硬规矩 —— 54×26 只有 1404px²，
+           手指按不准；84×76 是 6384px²，且四边仍在木牌范围内，
+           不会和旁边的「去苔原」热区抢触摸。 */
         box.setContentSize(84, 76);
         box.setAnchorPoint(0.5, 0.5);
-        /* 路标牌**中间那块**木板的正文中心。
-           用 tools/_grid-crop.js 在原图坐标系上量（不是看缩放后的截图）：
-             整块板 y 250..285、x 168..256；
-             去掉左侧箭头尖（x<190）和右侧缺口（x>252），
-             可放字的净区是 x 190..252 / y 254..282，中心 (221, 268)；
-             转到以画布中心为原点的 Cocos 坐标 —— 中心 (-419, 90)。
-           上一版写 (-416, 101)：右 3px、上 9px，字压在木牌的上沿高光线上，
-           看起来像"贴纸没贴正"而不是"牌子上写着字"。
-           实测校验：渲染后按墨色 (86,50,24) 取掩膜，字形框 x 208..234 /
-           y 262..275（27×14），中心 (221, 268.5) —— 与净区中心 (221,268) 差 0.5px。 */
-        btn.setPosition(-419, 90, 0);
+        /* 路标牌**中间那块**木板的牌面中心。
+           像素分段（tools/_home-rt-shot.js 渲染后逐列扫描，不是看缩放截图）：
+             整块板 x 166..254，其中 166..175 是左侧的厚度斜面（高光+暗边），
+             175..254 才是真正能放东西的牌面 —— 宽 79，中心 x=214.5；
+             纵向 250..290，中心 y=270。
+           上一版写 (-419, 90) = 屏幕 (221, 270)：那是按"净区 190..252"
+           算的中心，而 190 这个左界把斜面的一部分也算进去了 ——
+           两个字时看不出偏，加了 54 宽的椭圆底板就立刻读成"牌没钉正"。
+           改成 x=214.5 = 木牌正面中心，底板左右留白才对称。 */
+        btn.setPosition(-425, 90, 0);
 
-        /* **不画底，字直接写在木牌上。**
-           上一版是一个 72×36 的橙色胶囊浮在牌子右边：既不在牌子上
-           （用户第 1 条"任务我想在牌子上"），又正好压在"去苔原"那个
-           圆形徽标的位置上（用户第 2 条"很多重了"）。两条说的是同一件事。
+        /* **底板 = 场景里的 TaskPlate（54×26 椭圆胶囊），搬进 btn 下当底。**
+           前两版的历史：72×36 橙色胶囊浮在牌子右边（"任务我想在牌子上" +
+           压在"去苔原"圆徽上 → "很多重了"）→ 干脆去掉底板、字直接写在木牌上。
+           这一版是用户第三次收口："任务也要处理起来椭圆" —— 要的是**跟另外
+           四块名字板同一种形态**，不是再做一个橙色胶囊。
+           形状语言统一之后，任务读作"路标牌上钉的一块米白椭圆牌"。
 
-           现在没有底板：木牌本来的木色就是背景，字是深棕，
-           读作"牌子上写着任务"，而不是"一个按钮贴在牌子旁边"。
+           为什么底板走场景静态 Sprite、不在这里 resources.load：
+           HomeRuntime 全程是 Graphics 程序化绘制，唯一一次动态加载是
+           launchBattle 按 uuid 拉场景。为一块 54×26 的底引入 resources
+           目录 + 异步回调，会出现"第一帧没有底、第二帧才出现"的跳变；
+           场景里的静态 Sprite 是同步的，反序列化完就在。
+           搬进 btn 下（而不是留在 Badges 里各自定位）：位置真相只留
+           btn 一处，底板自动跟随，不会出现"按钮挪了底板没跟"的分裂。 */
+        const plate = badges.getChildByName('TaskPlate');
+        if (plate) {
+            plate.setParent(btn);
+            /* 局部位置归零 = 与按钮同心。搬过来的节点会带着场景里的 (-425, 90)，
+               不归零就会二次偏移（这个错很好犯，而且不会报错，只是在图上看不见底牌）。 */
+            plate.setPosition(0, 0, 0);
+            plate.setSiblingIndex(0);
+        }
 
-           按下反馈不能再用缩放（透明底缩放看不出来），改成在牌面上
-           压一层暖光 —— 相当于"按下去的时候那块木头被照亮了一点"。 */
-        /* 按下时的暖光块**不能超出木牌正文**：正文只有 62px 宽，
-           上一版的 84px 会盖到木牌两侧的描边上，读作"牌子被人用荧光笔涂了"。
-           66×24 正好比正文字宽 4px，四边都在木头里。 */
-        const g = btn.addComponent(Graphics);
-        const repaint = (a: number) => {
-            g.clear();
-            g.fillColor = new Color(255, 244, 206, a);
-            g.roundRect(-33, -12, 66, 24, 10);
-            g.fill();
+        /* 按下反馈 = 给底板做 tint，**不再叠一层暖光 Graphics**。
+           为什么 Graphics 不行：Graphics 是 btn 自己的组件，渲染顺序在
+           子节点之前；底板 plate 是 btn 的不透明子 Sprite，会把暖光整块
+           盖住 —— 离屏渲染图上看得出变化，真实引擎里按下态等于没有反馈。
+           tint 是乘在贴图颜色上的，不占层级，也不会被自己盖住。
+           色值 (255, 226, 168)：米白 (255, 252, 240) 乘上去偏淡黄，
+           读作"牌面被灯火照亮了一下"，而不是"牌面变成了黄色"。 */
+        const plateSprite = plate ? plate.getComponent(Sprite) : null;
+        const paintPress = (pressed: boolean) => {
+            if (!plateSprite) return;
+            plateSprite.color = pressed
+                ? new Color(255, 226, 168, 255)
+                : new Color(255, 255, 255, 255);
         };
-        repaint(0);
+        paintPress(false);
 
-        /* 15px：木牌正文净高 28px，15px 的字形实高约 15px（占 54%）。
-           13px 只占 43%，在 1280×720 的实机上看是"木牌上有个小logo"，
-           不是"木牌上写着字"。再加就顶到上下描边了。 */
-        mkLabel(btn, 'txt', '任务', 15, new Color(86, 50, 24, 255), 62, 20);
+        /* 13px / 行高 17，字色 #6B4025 —— 这三项**不是重新挑的**，是跟着
+           名字板抄的：名字板 24 高配 12px 字（字占 50%），任务胶囊 26 高
+           按同一比例该配 13px；字色与 Cap-* 的 (107,64,37) 完全一致。
+           上一版 15px 是"字直接写在木牌上"时定的 —— 没有底板，字就是主体，
+           笔画像要够重；加了底板之后字要退到"牌面上的字"，13px 才不顶描边：
+           26 高减两侧 3px 描边只剩 20px 内区，15px 的字上下各留 2.5px，
+           读作"字撑满了胶囊"。 */
+        mkLabel(btn, 'txt', '任务', 13, new Color(107, 64, 37, 255), 54, 20);
 
-        btn.on(Node.EventType.TOUCH_START, () => repaint(64));
-        btn.on(Node.EventType.TOUCH_CANCEL, () => repaint(0));
+        btn.on(Node.EventType.TOUCH_START, () => paintPress(true));
+        btn.on(Node.EventType.TOUCH_CANCEL, () => paintPress(false));
         btn.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
             e.propagationStopped = true;
-            repaint(0);
+            paintPress(false);
             this.openTasks();
         });
         this.refreshTaskBtn();

@@ -119,6 +119,12 @@ def main():
     plate(48, 48, 12, "badge-ring.png", hi_inset=10)
     plate(40, 24, 12, "badge-cap-2.png", hi_inset=8, hi_h=5)
     plate(52, 24, 12, "badge-cap-3.png", hi_inset=8, hi_h=5)
+    # 任务胶囊：名字板同族，但**大一档**（+2 宽 / +2 高 / 字 +1px）。
+    # 理由不是"任务更重要所以做大"，是它挂在背景图的路标上 ——
+    # 那块木牌本身只有 60×38 的可视面积，视觉上是全场最小的物件；
+    # 若与名字板同尺寸（52×24 / 12px），远看只剩一个米色点。
+    # 圆角取 13 = 高的一半 → 标准胶囊端头，与名字板同一种形状语言。
+    plate(54, 26, 13, "badge-task.png", hi_inset=8, hi_h=6)
     print("完成。注意：meta 里的 width/height/rawWidth/rawHeight 要同步（见 tools/set-meta-size.py）")
 
 

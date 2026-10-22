@@ -123,7 +123,7 @@ for (const cref of (raw[sceneIdx]._children || [])) build(cref.__id__, scene);
 director.setScene(scene);
 
 /* ---------- 跑起来 ---------- */
-const OPT = { out: '_home-rt', t: 1200, touch: null };
+const OPT = { out: '_home-rt', t: 1200, touch: null, press: null };
 for (const a of process.argv.slice(2)) {
     const m = /^--(\w+)=(.*)$/.exec(a);
     if (m) OPT[m[1]] = m[2];
@@ -135,16 +135,28 @@ require(path.join(__dirname, '_rt-build', 'HomeRuntime.js'));
 /* 推进几帧：能量结算、按下回弹都在 tick 里收敛 */
 for (let i = 0; i < 3; i++) { fakeNow += 16; director.emit('before-update'); }
 
+const findNode = (name) => (function find(n) {
+    if (n.name === name) return n;
+    for (const c of n.children) { const r = find(c); if (r) return r; }
+    return null;
+})(scene);
+
 if (OPT.touch) {
-    const hit = (function find(n) {
-        if (n.name === OPT.touch) return n;
-        for (const c of n.children) { const r = find(c); if (r) return r; }
-        return null;
-    })(scene);
+    const hit = findNode(OPT.touch);
     if (!hit) { console.error(`找不到节点 ${OPT.touch}`); process.exit(1); }
     hit.emitTouch('touch-start');
     hit.emitTouch('touch-end');
     for (let i = 0; i < 3; i++) { fakeNow += 16; director.emit('before-update'); }
+}
+
+/* `--press=X` 只发 touch-start、不发 touch-end：用来冻结"按下态"。
+   `--touch` 是完整点一下 —— start 之后立刻 end，暖光刚画上就被清掉，
+   渲染出来跟常态一模一样，按不下去的效果根本看不见。 */
+if (OPT.press) {
+    const hit = findNode(OPT.press);
+    if (!hit) { console.error(`找不到节点 ${OPT.press}`); process.exit(1); }
+    hit.emitTouch('touch-start');
+    for (let i = 0; i < 2; i++) { fakeNow += 16; director.emit('before-update'); }
 }
 
 /* ---------- 布局体检 ----------

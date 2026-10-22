@@ -107,6 +107,18 @@ class Node {
         this._parent = null;
     }
 
+    /* 真实引擎的 `setParent(n)` = 从旧父摘下 + 挂到新父。
+       `node.parent = n` 也能用，但两处语义不完全一样（引擎里 setParent 还会
+       保留/重置本地变换、处理激活状态），代码里既然写的是 setParent，
+       替身就得有同名方法 —— 少一个方法不会给出"找不到"的清晰报错，
+       而是 `plate.setParent is not a function`，看着像业务代码写错了。 */
+    setParent(p) {
+        if (this._parent === p) return;
+        this.removeFromParent();
+        this._parent = p || null;
+        if (p) p.children.push(this);
+    }
+
     setSiblingIndex(i) {        const p = this._parent;
         if (!p) return;
         const cur = p.children.indexOf(this);

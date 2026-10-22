@@ -511,6 +511,99 @@ const THEMES = {
     accent: "#FFE066",
   },
 };
+
+/* ----------------------------------------------------------------------------
+   派生的"空气透视"配色
+   ----------------------------------------------------------------------------
+   手写的 sky/hill/grass/wood 只够分物件，分不出**前后**。
+
+   上一版的远山直接用了主题里的 hill1/hill2 —— 那对颜色是从草地色派生的，
+   和天空同明度同色相（泥沼那关：暖黄天空 + 黄褐山），画上去等于没有，
+   整片背景读作"一块渐变色板"。这就是用户说的"像画出来的"。
+
+   空气透视的正解是**色相分离 + 明度递进**，两条都用程序算，八套主题自动一致：
+     · 远的往冷里走（混青蓝），近的回到草色 —— 色相上就分开了；
+     · 远的往天空里混得多（更亮更淡），近的混得少（更实）—— 明度上再分一次。
+   -------------------------------------------------------------------------- */
+
+const GRASS_DIM = 0.86;
+
+function hexDim(hex, k) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.min(255, Math.round(((n >> 16) & 255) * k));
+  const g2 = Math.min(255, Math.round(((n >> 8) & 255) * k));
+  const b = Math.min(255, Math.round((n & 255) * k));
+  return "#" + ((1 << 24) | (r << 16) | (g2 << 8) | b).toString(16).slice(1);
+}
+
+/** t = 0 → a，t = 1 → b */
+function hexMix(a, b, t) {
+  const na = parseInt(a.slice(1), 16), nb = parseInt(b.slice(1), 16);
+  const ch = (s) => {
+    const va = (na >> s) & 255, vb = (nb >> s) & 255;
+    return Math.min(255, Math.max(0, Math.round(va * (1 - t) + vb * t)));
+  };
+  return "#" + ((1 << 24) | (ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).slice(1);
+}
+
+/** 同一个颜色、指定的 alpha。做雾带时必须用它 ——
+ *  从 #RRGGBB 渐变到 rgba(0,0,0,0)，中间会插出灰黑，雾会变脏。 */
+function rgbaOf(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
+}
+
+/* 远景的统一冷调。偏青蓝，但不能太蓝（太蓝会像阴天，和"Q 版亮天空"冲突）。 */
+const COOL = "#5F86A8";
+
+for (const _tk of Object.keys(THEMES)) {
+  const T = THEMES[_tk];
+
+  /* 草地压一档 + 明度纵深三档
+     原来草地 L≈70、我方主体 L≈55，只差一档 —— 灰度下猫和草地糊在一起。
+     压 0.86 约等于 L 降 8，主体就跳出来了。
+     **只压 grass / grass2，不动 sky / hill / wood**：远山要"淡"（往天空靠），
+     平台要"靠描边和投影分离"，压暗它们只会把层次压平。
+     压同一个系数，草皮亮面与草地底色的相对关系不变 ——
+     两个色各压各的，草皮的"受光"会消失，地面就变成一块平涂。 */
+  T.grass2 = hexDim(T.grass2, GRASS_DIM);
+  T.grass = hexDim(T.grass, GRASS_DIM);
+
+  /* 地面自己也要有纵深：地平线附近发亮（远处受天光照）、画面底部最暗。 */
+  const cooled = hexMix(T.grass, COOL, 0.24);
+  T.grassLight = hexMix(T.grass2, T.sky2, 0.30);
+  T.grassDark = hexDim(T.grass, 0.74);
+
+  /* 远山两档：远的混天空多（更淡），近的混草色多（更实）。
+   *
+   * 0.48 / 0.72 不是 0.24 / 0.50 —— 混得太少的话山几乎等于天空色，
+   * 在暖色主题上（第 4 关：橙黄天空）整片远山直接消失，画面只剩"天 + 地"两块。
+   * 空气透视不是"把远山变淡到看不见"，是"变淡但仍能分出三段明度"。 */
+  T.hillFar = hexMix(T.sky2, cooled, 0.48);
+  T.hillNear = hexMix(T.sky2, cooled, 0.72);
+  /* 地平线雾带：天空色里渗一点点草绿，读作"远处的空气"。 */
+  T.horizon = hexMix(T.sky2, cooled, 0.14);
+
+  /* 树：近景树和草地同族但更亮，远景树退到远山那一档。
+   *
+   * **但要往叶绿锚一点（0.30）。** 八关八套色，其中第 4 关（slope）是纯暖橙：
+   * 草 "#D9764A"、木 "#C4703E"、山 "#E08A5E"。树的颜色原来完全从草派生，
+   * 于是那一关的树是橙褐色的 —— 和山坡、木头同一个色相，光看轮廓读不出"这是树"，
+   * 读成"一块鼓包"。
+   * 混 0.30 的叶绿之后，暖色关里它是橄榄绿：仍然在这个关的色域里（不跳），
+   * 但有"活的东西"这个读法。晚上、紫夜关同理，只会更沉，不会更艳。 */
+  const LEAF = "#6FB33F";
+  T.treeNear = hexDim(hexMix(hexMix(T.grass2, LEAF, 0.30), "#FFFFFF", 0.08), 0.97);
+  T.treeFar = hexMix(T.treeNear, T.hillFar, 0.28);
+  T.trunkNear = hexDim(T.wood2, 0.86);
+  T.trunkFar = hexMix(T.trunkNear, T.hillFar, 0.45);
+
+  /* 前景灌木：比草地再暗一档半，并且往冷里偏（蓝绿）。
+     只压暗不偏色的话，它和"草地暗部"同色，读作地上的影子，
+     读不出"挡在镜头前面"这层意思。 */
+  T.shrub = hexDim(hexMix(T.grass, COOL, 0.40), 0.54);
+}
+
 const THEME_ORDER = ["tundra", "swamp", "cliff", "slope", "bouncy", "well", "stairs", "tower"];
 
 const LEVELS = [
@@ -3303,34 +3396,79 @@ function drawHills(g, baseY, amp, color, seed, step) {
 }
 
 /** Q 版树：树干一个圆角方块，树冠三四个圆点，深色描边 */
+/**
+ * 一团树叶的**单条闭合轮廓**。
+ *
+ * 原来树冠是 3 个圆：`fill()` 三次（canvas 填的是并集，看起来没问题），
+ * 然后 `stroke()` 三次 —— **描边描的是三个整圈**，包括落在并集内部的那几段。
+ * 结果树冠上出现三条互相穿插的弧线，读作"线框气泡 / 维恩图"，不像树。
+ * 这是全场最"画出来"的一处，比平台材质更扎眼。
+ *
+ * canvas 没有"只描并集外轮廓"的 API（`destination-over` 那条路会把描边压到
+ * 整个 canvas 底下，连天空一起盖掉）。所以换思路：**用一条路径画出团块**。
+ * 按 13 个角度采样半径（两个不同频率的正弦错开，避免读成规则花边），
+ * 再用二次贝塞尔穿过相邻采样点的中点，得到一条平滑闭合曲线。
+ * 一条路径 fill、一条路径 stroke，内外永远一致。
+ */
+function blobPath(g, cx, cy, r, seed) {
+  /* **用密集采样 + 直线段，不用二次曲线穿中点。**
+   *
+   * 二次曲线穿中点的写法在采样点少的时候会把峰顶削成尖角：
+   * 13 个点、幅度 0.30 出来一张海星；把幅度收到 0.07 是圆了，但圆成一团气球。
+   * 两个极端都不对 —— 一片叶子既有起伏、又不该有尖角。
+   *
+   * 真因是采样密度：直线段只要够密，本身就看不出折角。
+   * 48 个点、半径按两个频率的正弦起伏（0.16 / 0.08 → 3 个大瓣 + 5 个小瓣），
+   * 得到的是"一团有起伏的叶子"，成本和二次曲线一样，只是循环次数多。
+   * x 方向拉 1.10、y 方向压 0.94：树冠横着长，不是正圆。
+   */
+  const N = 48;
+  g.beginPath();
+  for (let i = 0; i <= N; i++) {
+    const a = (i / N) * 6.283;
+    const k = 1 + 0.16 * Math.sin(a * 3 + seed) + 0.08 * Math.sin(a * 5 - seed * 1.7);
+    const px = cx + Math.cos(a) * r * k * 1.10;
+    const py = cy + Math.sin(a) * r * k * 0.94;
+    if (i === 0) g.moveTo(px, py); else g.lineTo(px, py);
+  }
+  g.closePath();
+}
+
 function drawTree(g, x, baseY, sc, back) {
   g.save();
-  g.globalAlpha = back ? 0.34 : 1;
+  /* 远景树不靠"变透明"退后。透明会和后面的草地混成脏色（0.34 的绿
+     压在一片绿上，读到的不是"远"，是"没画清"）。靠**换色**才干净：
+     往远山那一档靠，自带空气透视，还不用承担混色风险。 */
+  g.globalAlpha = back ? 0.88 : 1;
   const tw = 16 * sc, th = 40 * sc;
   // 树干
-  g.fillStyle = back ? "#5A4632" : "#8A5E3A";
+  g.fillStyle = back ? TH.trunkFar : TH.trunkNear;
   rr(g, x - tw / 2, baseY - th, tw, th + 4, 5 * sc);
   g.fill();
-  // 树冠
-  const cy = baseY - th, r = 30 * sc;
-  g.fillStyle = back ? "#6FAE84" : "#4FBF74";
-  g.beginPath();
-  g.arc(x - r * 0.52, cy - r * 0.10, r * 0.62, 0, 6.283);
-  g.arc(x + r * 0.52, cy - r * 0.14, r * 0.58, 0, 6.283);
-  g.arc(x, cy - r * 0.72, r * 0.70, 0, 6.283);
+  // 树冠：一团叶子，不是一个一个圆
+  const cy = baseY - th - 13 * sc, r = 31 * sc;
+  const seed = (x + (back ? 3.7 : 0)) * 0.031;
+  g.fillStyle = back ? TH.treeFar : TH.treeNear;
+  blobPath(g, x, cy, r, seed);
   g.fill();
+
   if (!back) {
-    g.strokeStyle = "rgba(30,64,44,.55)";
-    g.lineWidth = 2.4;
-    g.beginPath();
-    g.arc(x - r * 0.52, cy - r * 0.10, r * 0.62, 0, 6.283);
-    g.arc(x + r * 0.52, cy - r * 0.14, r * 0.58, 0, 6.283);
-    g.arc(x, cy - r * 0.72, r * 0.70, 0, 6.283);
+    // 统一描边语言：全场物件同一个墨色，只有粗细按"远近"分档。
+    // 原来是树 rgba(30,64,44,.55) 偏绿的 2.4px、平台 COL.outline 偏紫的 2.6px ——
+    // 同一张画面上两套描边系统，读作"拼的图"，正是用户说的"像贴上去的"。
+    g.strokeStyle = COL.ink;
+    g.lineWidth = sc > 1.4 ? 3.4 : 2.8;
+    blobPath(g, x, cy, r, seed);
     g.stroke();
-    // 高光：一大两小，位置固定，模拟左上来光
-    g.fillStyle = "rgba(220,255,220,.45)";
+
+    /* 受光面：一块**不描边**的浅色团。只有填充没有边线，所以不会又把树冠
+       切成两半 —— 有边线就退化成原来那三个圆的问题。 */
+    g.fillStyle = "rgba(226,255,222,.30)";
+    blobPath(g, x - r * 0.24, cy - r * 0.30, r * 0.52, seed + 1.9);
+    g.fill();
+    g.fillStyle = "rgba(240,255,236,.42)";
     g.beginPath();
-    g.arc(x - r * 0.22, cy - r * 0.95, r * 0.22, 0, 6.283);
+    g.arc(x - r * 0.30, cy - r * 0.42, r * 0.19, 0, 6.283);
     g.fill();
   }
   g.restore();
@@ -3348,21 +3486,34 @@ function drawForest(world) {
   drawCloud(g, 690 + Math.sin(S.t * 0.08 + 4) * 10, 104, 0.62, 0.62);
   drawCloud(g, 300 + Math.sin(S.t * 0.12 + 1) * 12, 122, 0.48, 0.45);
 
-  // 远山两层
-  drawHills(g, 300, 96, "rgba(255,255,255,.22)", 3, 210);
-  drawHills(g, 312, 62, TH.hill2, 7, 170);
-  drawHills(g, 326, 40, TH.hill1, 11, 130);
+  // 远山三层：最远一道近白的雾（只有轮廓）→ 远山 → 近山。
+  // 两层不够 —— 只有两级的话"远"和"中"挨在一起，读作同一片背景。
+  drawHills(g, 296, 104, rgbaOf("#FFFFFF", 0.20), 3, 224);
+  drawHills(g, 310, 72, TH.hillFar, 7, 178);
+  drawHills(g, 324, 46, TH.hillNear, 11, 134);
 
-  // 地面大色块：整片铺到 H，平台会盖在上面
+  // 地平线雾带：山脚到草地之间 54px 的天空色残余。
+  // 没有这一层，草地是"一刀切"压在山脚上的，读作两块色板拼接。
+  const hz = g.createLinearGradient(0, 298, 0, 352);
+  hz.addColorStop(0, rgbaOf(TH.horizon, 0.94));
+  hz.addColorStop(1, rgbaOf(TH.horizon, 0));
+  g.fillStyle = hz;
+  g.fillRect(0, 298, W, 54);
+
+  // 地面：明度纵深三档。地平线亮（远处受天光）、中段本色、画面底部最暗。
+  // 一整片同色读作"一张绿色纸"；压一道 26% 的明度落差，地面自己就有纵深了。
   const gr = g.createLinearGradient(0, 300, 0, H);
-  gr.addColorStop(0, TH.grass2);
-  gr.addColorStop(0.42, TH.grass);
-  gr.addColorStop(1, TH.grass);
+  gr.addColorStop(0, TH.grassLight);
+  gr.addColorStop(0.30, TH.grass2);
+  gr.addColorStop(0.68, TH.grass);
+  gr.addColorStop(1, TH.grassDark);
   g.fillStyle = gr;
   g.fillRect(0, 300, W, H - 300);
 
-  // 地面上的浅色条纹：给"深度"，但只在低对比度下出现
-  g.globalAlpha = 0.10;
+  // 地面上的浅色条纹：给"深度"，但只在低对比度下出现。
+  // 已经有三档明度了，条纹只是补充；alpha 从 0.10 收到 0.07，
+  // 否则每一道都是一条"横在战场上的白线"。
+  g.globalAlpha = 0.07;
   g.fillStyle = "#FFFFFF";
   for (let i = 0; i < 5; i++) {
     const y = 340 + i * 52;
@@ -3372,11 +3523,13 @@ function drawForest(world) {
   }
   g.globalAlpha = 1;
 
-  // 远景树：低透明度，只在画面两端与地平线上，不挡中间战场
-  for (let i = 0; i < 7; i++) {
-    const x = 40 + i * 145 + hash(i * 3.1) * 30;
-    const sc = 0.62 + hash(i * 1.7) * 0.3;
-    drawTree(g, x, 322 + hash(i * 5.3) * 10, sc, true);
+  // 中景树线：站在地平线上（底边 306~320），把"中景"这一层立起来。
+  // 原来底边压在 322~332、alpha 0.34 —— 树冠整个埋进草地色块里，
+  // 等于没有中景，背景只剩"天 + 地"两块，这就是"平"的全部原因。
+  for (let i = 0; i < 9; i++) {
+    const x = 18 + i * 118 + hash(i * 3.1) * 26;
+    const sc = 0.54 + hash(i * 1.7) * 0.28;
+    drawTree(g, x, 308 + hash(i * 5.3) * 12, sc, true);
   }
 
   // 两侧近景树：压住画面边缘，让视线收在中间
@@ -3421,6 +3574,13 @@ function drawForest(world) {
    肉眼读出来的就是"拼上去的"。 */
 const PLAT_TOP = 7;    // 顶面：俯视能看到的窄面带
 const PLAT_TK  = 33;   // 视觉总厚（从物理顶面 p.y 往下量）
+
+/* 平台由几层木板叠成。33 / 3 = 11，每层刚好够放一条层缝 + 一个年轮。
+   改这个数就要同步看 LAYER_SHIFT —— 层数是"错缝"的唯一来源。 */
+const LAYERS = 3;
+/* 每层拼缝的水平偏移。**必须互不相同且不成倍数**，否则三层缝会在
+   某些 x 上重合，一眼就看出是"同一根线复制了三遍"。 */
+const LAYER_SHIFT = [0, 16, 32];
 
 /** 某个平台端点是不是接了斜坡。端点用 (x, 顶面 y) 表示。
  *
@@ -3537,11 +3697,12 @@ function drawPlat(g, p) {
   // ① 影子：远影（落在背景/地面上）+ 贴地 AO。没有影子，平台就是贴纸
   const shX = p.x + (openL ? 8 : 0);
   const shW = p.w - (openL ? 8 : 0) - (openR ? 8 : 0);
-  g.fillStyle = "rgba(16,42,28,.16)";
-  rr(g, shX, p.y + 15, shW, TK + 4, R + 2);
+  // 远影压在下面更远、更扁：距离感就是"影子和物体的间距"。
+  g.fillStyle = "rgba(14,38,24,.22)";
+  rr(g, shX, p.y + 20, shW, TK - 2, R + 2);
   g.fill();
-  g.fillStyle = "rgba(16,42,28,.13)";
-  rr(g, p.x + 2, p.y + TK - 6, p.w - 4, 10, 5);
+  g.fillStyle = "rgba(14,38,24,.16)";
+  rr(g, p.x + 2, p.y + TK - 6, p.w - 4, 12, 6);
   g.fill();
 
   // ② 主体：一块整体渐变（顶亮 → 中调 → 底暗）
@@ -3554,45 +3715,74 @@ function drawPlat(g, p) {
   platPath(g, p.x, p.y, p.w, TK, R, flatL, flatR);
   g.fill();
 
-  // ③ 顶带 / 底带 / 木纹：全部 clip 在台体里，边缘才不会溢出成毛刺
+  // ③ 分层：一块台 = 3 层木板叠起来（33 / 3 = 11）。
+  //    用户对上一版的判断是"像画出来的"——病根在这里：整块 33px 只有一条渐变
+  //    和几道等距竖缝，读作"一块长了纹路的板"，不像木匠搭出来的东西。
+  //    真实堆叠木板的证据只有三条：**层缝（水平暗线）、错缝（上下拼缝不对齐）、
+  //    端头一层一个年轮**。三条都在，才读得作"叠"。
+  //    外轮廓仍然整圈一体的（下面 ④），所以不会散成三块飞板。
   g.save();
   platPath(g, p.x, p.y, p.w, TK, R, flatL, flatR);
   g.clip();
 
-  // 顶部亮带：厚度的"起点"，一条 6px 的受光面
+  const LH = TK / LAYERS;
+  // 顶部亮带：最上一层木板的受光面，比下面的层顶更宽更亮（天光直射）
   g.fillStyle = "rgba(255,255,255,.20)";
   g.fillRect(p.x, p.y, p.w, TOP);
-  // 最上面 2px 再压一道高光，顶边才"翻"得过来
-  g.fillStyle = "rgba(255,255,255,.42)";
+  g.fillStyle = "rgba(255,255,255,.46)";
   g.fillRect(p.x, p.y, p.w, 2);
   // 底部暗带：厚度的"终点"
-  g.fillStyle = "rgba(40,22,10,.28)";
+  g.fillStyle = "rgba(40,22,10,.30)";
   g.fillRect(p.x, p.y + TK - 6, p.w, 6);
 
-  // 木纹：竖向拼缝，只在中段，不碰顶带底带
-  g.strokeStyle = "rgba(52,30,16,.26)";
-  g.lineWidth = 1.2;
-  for (let x = p.x + 44; x < p.x + p.w - 32; x += 48) {
-    g.beginPath();
-    g.moveTo(x, p.y + TOP + 2);
-    g.lineTo(x, p.y + TK - 7);
-    g.stroke();
+  for (let L = 0; L < LAYERS; L++) {
+    const y0 = p.y + L * LH;
+
+    if (L > 0) {
+      // 层缝：上面一条细亮边（下层木板的受光）、下面一条暗缝。
+      // 只画暗线不画亮边，缝会读成"一条裂纹"；两条一起才是"两块板搭着"。
+      g.fillStyle = "rgba(255,255,255,.30)";
+      g.fillRect(p.x, y0, p.w, 1.8);
+      g.fillStyle = "rgba(34,18,8,.34)";
+      g.fillRect(p.x, y0 + 1.8, p.w, 1.6);
+    }
+
+    // 每层自己的底边暗收：这一层才是一个独立的"块"，
+    // 否则三条层缝只是把一块木头切了三刀。
+    g.fillStyle = "rgba(34,18,8,.15)";
+    g.fillRect(p.x, y0 + LH - 2.2, p.w, 2.2);
+
+    // 拼缝：**错缝**铺。三层错开 0 / 16 / 32，
+    // 对齐的话读作"一根根栅栏"，错开才读作"木匠随手叠的"。
+    const sh = LAYER_SHIFT[L % LAYER_SHIFT.length];
+    g.strokeStyle = "rgba(52,30,16,.24)";
+    g.lineWidth = 1.2;
+    for (let x = p.x + 40 + sh; x < p.x + p.w - 26; x += 48) {
+      g.beginPath();
+      g.moveTo(x, y0 + 2.4);
+      g.lineTo(x, y0 + LH - 3);
+      g.stroke();
+    }
   }
 
   // 端面：**只画真正的台头**。接坡那一端画年轮会读成"木头被锯断后再接上一块"。
+  // 年轮改成一层一个（原来一个占满 33px 高的椭圆，等于又把它读成一根整木）。
   const ends = [];
   if (openL) ends.push(p.x);
-  if (openR) ends.push(p.x + p.w - 15);
+  if (openR) ends.push(p.x + p.w - 13);
   for (const ex of ends) {
-    g.fillStyle = "rgba(40,22,10,.14)";
-    g.fillRect(ex, p.y, 15, TK);
-    const cx = ex + 7.5;
-    g.strokeStyle = "rgba(60,34,16,.26)";
+    g.fillStyle = "rgba(40,22,10,.13)";
+    g.fillRect(ex, p.y, 13, TK);
+    const cx = ex + 6.5;
+    g.strokeStyle = "rgba(60,34,16,.24)";
     g.lineWidth = 1;
-    for (let k = 0; k < 3; k++) {
-      g.beginPath();
-      g.ellipse(cx, p.y + TK / 2, 2.5, 8 + k * 3, 0, 0, 6.283);
-      g.stroke();
+    for (let L = 0; L < LAYERS; L++) {
+      const cy = p.y + L * LH + LH / 2;
+      for (let k = 0; k < 2; k++) {
+        g.beginPath();
+        g.ellipse(cx, cy, 1.7, LH * 0.30 - k * 1.7, 0, 0, 6.283);
+        g.stroke();
+      }
     }
   }
   g.restore();
@@ -3821,7 +4011,7 @@ function drawRamp(g, r) {
   band(0, (x) => off(x, TK));
   g.fill();
 
-  // ③ 顶带 / 底带 / 木纹，全部 clip 在路面里
+  // ③ 顶带 / 层缝 / 底带 / 拼缝，全部 clip 在路面里
   g.save();
   band(0, (x) => off(x, TK));
   g.clip();
@@ -3831,22 +4021,47 @@ function drawRamp(g, r) {
   g.fillStyle = "rgba(255,255,255,.20)";
   band(0, TOP);
   g.fill();
-  g.fillStyle = "rgba(255,255,255,.42)";
+  g.fillStyle = "rgba(255,255,255,.46)";
   band(0, 2);
   g.fill();
-  g.fillStyle = "rgba(40,22,10,.28)";
+  g.fillStyle = "rgba(40,22,10,.30)";
   band((x) => off(x, TK) - 6, (x) => off(x, TK));
   g.fill();
 
-  // 木纹：竖直拼缝，按该点的实际厚度铺，和浮空台同一套语言
-  g.strokeStyle = "rgba(52,30,16,.26)";
+  /* 分层：和浮空台同一套（3 层、层缝在 t = TK/3、2TK/3）。
+     **层缝必须沿曲线画**。用 fillRect 画水平线，在 40° 的坡上会直接穿出路面 ——
+     这是"坡"和"台阶"最容易被写混的一处：台阶的缝是水平的，坡的缝平行于路面。 */
+  const LHt = TK / LAYERS;
+  for (let L = 1; L < LAYERS; L++) {
+    const t = LHt * L;
+    g.fillStyle = "rgba(255,255,255,.30)";
+    band((x) => off(x, t), (x) => off(x, t) + 1.8);
+    g.fill();
+    g.fillStyle = "rgba(34,18,8,.34)";
+    band((x) => off(x, t) + 1.8, (x) => off(x, t) + 3.4);
+    g.fill();
+  }
+  for (let L = 0; L < LAYERS; L++) {
+    const t2 = LHt * (L + 1);
+    g.fillStyle = "rgba(34,18,8,.15)";
+    band((x) => off(x, t2) - 2.2, (x) => off(x, t2));
+    g.fill();
+  }
+
+  // 拼缝：每层一段，三层错开。贯穿全厚的竖线读作"一根木条"，
+  // 分段错开才读作"几块板搭在坡上"。
+  g.strokeStyle = "rgba(52,30,16,.24)";
   g.lineWidth = 1.2;
-  for (let x = x1 + 26; x < x2 - 16; x += 48) {
-    const y = yAt(x);
-    g.beginPath();
-    g.moveTo(x, y + TOP + 2);
-    g.lineTo(x, y + off(x, TK) - 6);
-    g.stroke();
+  for (let L = 0; L < LAYERS; L++) {
+    const t0 = LHt * L + 2.4, t1 = LHt * (L + 1) - 3;
+    const sh = LAYER_SHIFT[L % LAYER_SHIFT.length];
+    for (let x = x1 + 26 + sh; x < x2 - 16; x += 48) {
+      const y = yAt(x);
+      g.beginPath();
+      g.moveTo(x, y + off(x, t0));
+      g.lineTo(x, y + off(x, t1));
+      g.stroke();
+    }
   }
   g.restore();
 
@@ -3996,11 +4211,13 @@ function drawStump(g, s) {
   const sx = s.x + (s.shake > 0 ? Math.sin(S.t * 60) * 3 : 0);
   const top = s.y - s.h;
 
-  g.fillStyle = "#6B4A2E";
+  // 木桩用主题木色。原来写死 #6B4A2E / #4A3220 / #9A7048 ——
+  // 第八关是紫夜关，插一根棕色柱子在紫色草地上，是全场最刺眼的一处"外来物"。
+  g.fillStyle = TH.wood2;
   rr(g, sx - s.w / 2, top + 5, s.w, s.h - 5, 8);
   g.fill();
-  g.strokeStyle = "#4A3220";
-  g.lineWidth = 2;
+  g.strokeStyle = COL.ink;
+  g.lineWidth = 3.2;
   g.stroke();
 
   // 树皮竖纹
@@ -4014,14 +4231,14 @@ function drawStump(g, s) {
   }
 
   // 顶面切口：有它才读得出"这是被锯断的树"，没它就只是根棕色柱子
-  g.fillStyle = "#9A7048";
+  g.fillStyle = TH.wood3;
   g.beginPath();
   g.ellipse(sx, top + 5, s.w / 2, 8, 0, 0, 6.283);
   g.fill();
-  g.strokeStyle = "#4A3220";
-  g.lineWidth = 2;
+  g.strokeStyle = COL.ink;
+  g.lineWidth = 2.6;
   g.stroke();
-  g.strokeStyle = "rgba(70,44,24,.55)";
+  g.strokeStyle = rgbaOf(TH.wood2, 0.55);
   g.lineWidth = 1.3;
   for (let i = 1; i <= 3; i++) {
     g.beginPath();
@@ -4098,6 +4315,57 @@ function drawLevel() {
   for (const b of BOUNCERS) drawBouncer(g, b);
   for (const pt of PORTALS) drawPortal(g, pt);
   for (const s of S.stumps) drawStump(g, s);
+}
+
+/* 前景灌木：画面最底边一排压暗的剪影。
+ *
+ * 为什么需要这一层：现在天空、远山、树、草地、平台、角色全挂在同一个对比度上，
+ * 排在一起读作"一张插画上面摆了角色"。真实镜头里最近处一定有一层被压暗、
+ * 只留剪影的东西挡着画面下缘 —— 纵深就是靠"远淡 / 中实 / 近暗"这三档拉开的。
+ *
+ * 高度死线：顶端不得高于 GROUND_Y + 14（= 570）。
+ * 地面行走的视觉带一点都不能占，否则玩家分不清"球是落地了还是被草挡住了"。
+ * 这条死线写进算式（cy 按 r 反推），不靠调参运气。
+ */
+function drawForeground(g) {
+  const base = TH.shrub || TH.grass;
+  const DEAD = GROUND_Y - 4;       // 552：盖住草皮鼓包，只淹掉球底 4px
+  const N = 9;
+
+  for (let i = 0; i < N; i++) {
+    /* 三个随机量彼此独立：半径、横向抖动、顶端高度。
+       只抖半径不抖顶端，顶缘会连成一条平滑的波浪 —— 那读作"花边"，
+       不读作"几丛草"。这三条必须同时松开。 */
+    const r = 16 + hash(i * 3.7) * 20;                      // 16 ~ 36
+    const x = -24 + i * (W + 48) / (N - 1) + (hash(i * 4.7) - 0.5) * 58;
+    const top = DEAD + hash(i * 5.3) * 16;                  // 552 ~ 568，参差
+    const cy = top + r * 0.72;                              // 顶端 = top，天然守死线
+
+    g.fillStyle = base;
+    g.beginPath();
+    g.arc(x - r * 0.56, cy + r * 0.40, r * 0.62, 0, 6.283);
+    g.arc(x + r * 0.58, cy + r * 0.38, r * 0.58, 0, 6.283);
+    g.arc(x, cy, r * 0.72, 0, 6.283);
+    g.rect(x - r, cy, r * 2, H - cy + 10);
+    g.fill();
+
+    // 顶缘一道淡高光：纯剪影会读成"没画完的黑色块"，
+    // 一条 1.8px 的受光边就把这一丛变成有体积的球
+    g.strokeStyle = "rgba(255,255,255,.13)";
+    g.lineWidth = 1.8;
+    g.beginPath();
+    g.arc(x - r * 0.56, cy + r * 0.40, r * 0.62, Math.PI * 1.06, Math.PI * 1.92);
+    g.arc(x, cy, r * 0.72, Math.PI * 1.06, Math.PI * 1.92);
+    g.arc(x + r * 0.58, cy + r * 0.38, r * 0.58, Math.PI * 1.06, Math.PI * 1.92);
+    g.stroke();
+  }
+
+  // 再压一道从底边往上 34px 的暗角，把"镜头下沿"收住。
+  const vg = g.createLinearGradient(0, H - 40, 0, H);
+  vg.addColorStop(0, "rgba(10,24,18,0)");
+  vg.addColorStop(1, "rgba(10,24,18,.34)");
+  g.fillStyle = vg;
+  g.fillRect(0, H - 40, W, 40);
 }
 
 /* ============================================================================
@@ -4316,6 +4584,16 @@ function drawPet(g, x, footY, w, h, H, face, o) {
    （`ey = footY - bh` 再往上画）。猫 h=44，实际总高约 59。
    立绘要按"总高"对，所以 dh 取 h×1.35；宽度反推回来正好 0.64×59 ≈ 38 = HEROES.w。
    -------------------------------------------------------------------------- */
+/** 立绘的"体高 / 图高"。
+ *
+ *  美术管道（tools/prep_pets.py）出的六张是**统一体高**的：图高 640，
+ *  脚底到头顶（不含耳朵）占 420，其余是耳朵和留白。420 / 640 = 0.656。
+ *
+ *  这个数只在两个地方出现：prep_pets.py 的 BODY_H / PET_H，和这里。
+ *  改美术管道就要同步改 —— 不然六只的角色会集体变大或变小，
+ *  而且因为六只一起变，单看画面很难发现，只有跟小怪并排才露馅。 */
+const PET_BODY_K = 0.656;
+
 function drawPetSprite(g, img, x, footY, w, h, face, A, o) {
   // 影子：和代码图形同一套，贴地
   g.globalAlpha = 0.18 * A;
@@ -4325,7 +4603,13 @@ function drawPetSprite(g, img, x, footY, w, h, face, A, o) {
   g.fill();
 
   const sq = o.squash || 0;
-  const dh = h * 1.35 * (1 - sq * 0.14);
+  /* dh 按**体高**算，不是按图高。
+   *
+   * 六张立绘是美术管道统一出来的：图高 640，其中体高（脚底到头顶）只占 420，
+   * 顶上那 220 是耳朵和留给耳朵的留白。直接 `h * 1.35` 等于按图高缩，
+   * 画出来身体只有该有的 65.6% —— 换图那天六只集体缩水三分之一，
+   * 站在小怪旁边像只幼崽。 */
+  const dh = h * 1.35 / PET_BODY_K * (1 - sq * 0.14);
   const dw = dh * ((img.width || img.naturalWidth) / (img.height || img.naturalHeight)) * (1 + sq * 0.16);
 
   g.globalAlpha = 1 * A;
@@ -5631,6 +5915,70 @@ function drawNine(g, img, x, y, w, h, ds) {
   }
 }
 
+/* ----------------------------------------------------------------------------
+   奶白结算卡：**代码画，不贴图**
+   ----------------------------------------------------------------------------
+   上一版拿 ui-res.png 九宫格铺 620×520，整个卡面摊成了一颗蛋。
+
+   病根不在 ds，在这张资产本身：ui-res.png 的圆角半径实测 **≈150px**
+   （图高 420 的 36%）—— 它是一张"泡泡卡"。九宫格的前提是 ds ≥ 圆角半径；
+   ds=56 时边条会把这段圆弧**顺着边拉长**，卡面变成"小圆角 + 一条长肩线"，
+   就是蛋形。ds 提到 150 能让形状忠实，但圆角会变成 189px，读作胶囊。
+   结论：这张资产只能在它自己的 524×420 上待着，一变形就没救。
+
+   所以按 26px 圆角自己画。色值**全部取自资产**，不另起一套配色：
+     顶 #FFFCFB → 中 #FBF8ED → 底 #F3E9D6，描边 #754E2D，
+     另外资产顶部有一道 1.5px 的高光、底部有一圈内阴影 —— 这两笔是"纸感"的来源，
+     少了它卡面会变成一块纯色塑料。
+   -------------------------------------------------------------------------- */
+function creamCard(g, x, y, w, h, r) {
+  const R = r === undefined ? 26 : r;
+
+  // 投影：偏下 6px、不扩散，让卡"坐在"压暗层上而不是浮着
+  g.fillStyle = "rgba(24,14,6,.26)";
+  rr(g, x + 2, y + 7, w, h, R);
+  g.fill();
+
+  const gr = g.createLinearGradient(0, y, 0, y + h);
+  gr.addColorStop(0, "#FFFCFB");
+  gr.addColorStop(0.34, "#FBF8EE");
+  gr.addColorStop(0.80, "#F8F0DF");
+  gr.addColorStop(1, "#F3E9D6");
+  g.fillStyle = gr;
+  rr(g, x, y, w, h, R);
+  g.fill();
+
+  // 顶部高光：只在圆角内沿上方 1/3 走，长度收在中间，不顶到两端圆角
+  g.save();
+  g.beginPath();
+  rr(g, x, y, w, h, R);
+  g.clip();
+  const hl = g.createLinearGradient(0, y, 0, y + h * 0.30);
+  hl.addColorStop(0, "rgba(255,255,255,.85)");
+  hl.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = hl;
+  g.fillRect(x + R * 0.5, y + 3, w - R, h * 0.30);
+  // 底部内阴影：把卡"压"出厚度
+  const sh = g.createLinearGradient(0, y + h - 46, 0, y + h);
+  sh.addColorStop(0, "rgba(168,136,96,0)");
+  sh.addColorStop(1, "rgba(168,136,96,.30)");
+  g.fillStyle = sh;
+  g.fillRect(x, y + h - 46, w, 46);
+  g.restore();
+
+  /* 描边两条：外面一条实棕 #754E2D（3.4px，和 HUD 那套同一支笔），
+     里面再压一条 1.2px 的淡棕，作用是**把奶油底和描边分开** ——
+     只画一条实棕，深棕直接啃进白面，边缘读作"锯齿"。 */
+  g.strokeStyle = "#754E2D";
+  g.lineWidth = 3.4;
+  rr(g, x + 1.7, y + 1.7, w - 3.4, h - 3.4, Math.max(4, R - 1.7));
+  g.stroke();
+  g.strokeStyle = "rgba(138,100,64,.42)";
+  g.lineWidth = 1.2;
+  rr(g, x + 4.4, y + 4.4, w - 8.8, h - 8.8, Math.max(3, R - 4.4));
+  g.stroke();
+}
+
 /** 画一块面板底：有图贴图（九宫格），没图画原来的半透明圆角。 */
 function panelBg(g, key, x, y, w, h, ds, fallbackFill, fallbackRadius) {
   const img = artOf(key);
@@ -6526,6 +6874,9 @@ function render() {
 
   drawForest(false);
   drawLevel();
+  // 前景压在地面之后（它吃掉草皮下沿）、单位之前（绝不挡角色和球）。
+  // 顺序错了会直接毁掉玩法可读性：草挡住球，玩家就不知道球落没落地。
+  drawForeground(g);
 
   if (S.phase === "play" || S.phase === "clear" || S.phase === "fail") {
     // 预测线画在关卡之上、单位之下：它属于"地形信息"，不属于"角色"
@@ -6840,35 +7191,30 @@ function render() {
       // 压到 0.9 的话，后面那片森林全黑，一张奶白卡片浮在纯黑上，
       // 和主界面那套奶油风断成两个游戏。压到 0.62 还看得见"我在哪一关"。
       const K = hudSkin();
-      // 中性偏冷的暗色。用暖棕（14,12,10）压在这张橙黄天空上，
-      // 整块会读成"棕色板"，和奶油卡片的暖白撞在一起很脏。
-      g.fillStyle = K.cream
-        ? (ok ? "rgba(9,12,11,.52)" : "rgba(20,9,9,.56)")
-        : (ok ? "rgba(6,14,10,.90)" : "rgba(18,6,10,.92)");
+      /* 压暗必须是**两段**：先纯黑压明度，再冷调压色相。
+       *
+       * 单段半透明色压不掉色相 —— 这是这一版踩到的坑：`rgba(9,12,11,.52)`
+       * 单看是中性的，压在第四关的橙黄天空上算出来是 (86,76,61)，一片暖棕，
+       * 奶油卡（奶白）浮在上面，整块读成"棕色相框"，和主界面断成两个游戏。
+       *
+       * 顺序也不能倒：先冷调后黑，橙色被黑白 .35 一提亮，再叠冷色只会更灰；
+       * 先黑后冷，黑先把橙压到 (130,97,71)，冷调 .45 一盖，三通道收敛到 ≈(80,71,66)，
+       * 才是真的"中性暗"。 */
+      g.fillStyle = ok ? "rgba(0,0,0,.35)" : "rgba(14,0,0,.37)";
+      g.fillRect(0, 0, W, H);
+      g.fillStyle = ok ? "rgba(20,40,60,.45)" : "rgba(60,20,34,.45)";
       g.fillRect(0, 0, W, H);
 
       const cardY = CARD_Y, cardH = CARD_H;
-      const creamCard = panelBg(g, "ui-res", cx - 310, cardY, 620, cardH, 56,
-                                "rgba(20,34,28,.97)", 22);
-      if (!creamCard) {
-        // 代码底：描边 + 顶部彩条。有美术卡的时候这两样都不要 ——
-        // 奶白卡自己有一圈棕描边，再压一条亮绿/亮红彩条会像贴纸。
-        g.strokeStyle = ok ? "rgba(185,240,106,.34)" : "rgba(255,158,142,.32)";
-        g.lineWidth = 2;
-        rr(g, cx - 310, cardY, 620, cardH, 24);
-        g.stroke();
-        g.fillStyle = ok ? "#B9F06A" : "#FF9E8E";
-        rr(g, cx - 310, cardY, 620, 6, 3);
-        g.fill();
-      }
+      creamCard(g, cx - 310, cardY, 620, cardH, 26);
 
       g.textAlign = "center";
       g.textBaseline = "middle";
 
       /* 行距是量出来的，不是拍的。
-         ui-res 那张图 524×420 铺成 548×cardH 之后，圆角约 64px、边框约 15px ——
-         内容从 +32 起才不会被圆角咬掉；最后一行离卡底至少留 40，
-         否则按钮会压在边框上（上一版就是按钮骑在圆角上，读起来像"卡片裂了"）。 */
+         卡面现在是代码画的 26px 圆角（见 creamCard 的注释：ui-res 那张图
+         圆角 150px，铺上来会变成蛋形），内容从 +36 起就完全在圆角内侧；
+         最后一行离卡底留 32（按钮底 528 / 卡底 560），不会压描边。 */
       g.fillStyle = K.ink3;
       g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
       g.fillText("第 " + (S.stage + 1) + " / " + LEVELS.length + " 关   ·   " + st.sub, cx, cardY + 36);
@@ -7287,6 +7633,10 @@ window.GROVE = {
   hitSelect, pickHero, MOODS, DOOR_SLOTS, VOICE,
   goHome, bellyTier, sayLine, finishSay, settleBtns, inRect,
   recordClear, readHomeSave, FROM_HOME,
+  // 注入美术图。**只在调试/截图里用**：正片由 GroveBattle 走 resources.load
+  // 拿 ImageAsset 再注进来。导出它，截图脚本才能拍出"有 UI 图"的样子 ——
+  // 不导出的话 file:// 打开的 grove.html 永远是代码回退图形，截图和真机对不上。
+  setArt: groveSetArt,
   // 模拟按键：既要置"按住"状态，也要置"本帧按下"的边沿。
   // 只置 keys 的话，atk / dash / jump 这三个读边沿的动作全部不触发 ——
   // 表现是"按了没反应"，但按住方向走是正常的，很容易误判成动作逻辑坏了。

@@ -88,11 +88,31 @@ function runStage(P, S, maxFrames) {
   let stuck = 0, lastX = -1e9, stuckLog = [];
   let burned0 = 0, banked0 = 0, made0 = 0;
 
+  /* TRACE=1 打印玩家轨迹（每 2 秒一行）。
+     "超时 / 剩 1 只"这种结论不说明任何事 —— 得看人是**没动**还是**在循环**。
+     上一次就是靠这个发现"在 470~503 之间摆 200 秒"的。 */
+  const TRACE = !!process.env.TRACE;
+
   for (let f = 0; f < maxFrames; f++) {
     if (S.phase !== "play") break;
     botStep(P, S, mem);
     P.tick(1 / 60);
     const t = S.t;
+
+    if (TRACE && f % 120 === 0) {
+      const foes = S.foes.filter(x => !x.dead)
+        .map(x => x.def.name + "@" + x.x.toFixed(0) + "," + x.y.toFixed(0) +
+          "(coat" + (x.coat || 0) + ",hp" + (x.hp || 0) + ")").join(" ");
+      const t0 = S.foes.filter(x => !x.dead)
+        .sort((a, b) => Math.abs(a.x - S.p.x) - Math.abs(b.x - S.p.x))[0];
+      console.log("      " + t.toFixed(0).padStart(4) + "s p=" + S.p.x.toFixed(0) + "," + S.p.y.toFixed(0) +
+        " g=" + (S.p.ground ? S.p.ground.kind + ":" + S.p.ground.y.toFixed(0) : "空中") +
+        " 球=" + S.balls.length + " 弹=" + (S.shots ? S.shots.length : -1) +
+        " cd=" + (S.p.atkCd === undefined ? "-" : S.p.atkCd.toFixed(2)) +
+        " 清=" + S.killed + "/" + S.total +
+        " 近=" + (t0 ? (t0.x - S.p.x).toFixed(0) + "," + (t0.y - S.p.y).toFixed(0) : "-") +
+        " 中=" + S.stat.hits + "  " + foes);
+    }
 
     for (const b of S.balls) {
       if (!seen.has(b)) { seen.set(b, { x: b.x, y: b.y, bornT: t }); }

@@ -35,7 +35,12 @@ HEROES = {
     'fox': 'xing-xie-fox',
 }
 
-PET_H = 192          # 立绘目标高度
+PET_H = 292          # 立绘目标**图高**（不是体高）。
+                     # 新立绘按 640 高、体高 420 出图（见 tools/prep_pets.py），
+                     # 体高只占图高的 65.6%，所以图高要放到 292 才能让
+                     # 画出来的身体还是原来那么大（292 × 0.656 ≈ 192）。
+                     # 上一版这里写 192，是拿旧素材的口径（bbox 撑满图）套新图，
+                     # 结果六只集体缩水三分之一。
 HEAD_S = 96          # 圆头像边长
 UI_SIZES = {         # 小图标目标边长
     'ui-pip': 38,
@@ -77,6 +82,17 @@ def fit_h(src, h):
     return src.resize((max(1, round(w * h / hh)), h), Image.LANCZOS)
 
 
+def pet_scale(src, h):
+    """立绘**不裁 bbox**，整图等比缩。
+
+    预处理（tools/prep_pets.py）产出的六张已经是"统一图高、统一体高、脚底贴底"，
+    裁掉 bbox 等于把"留白"这个对齐基准扔掉 —— 又回到"兔子比仓鼠小一圈"。
+    头像走 fit_s 没关系：那六张是满圆的，bbox 本来就是全图。
+    """
+    k = h / src.height
+    return src.resize((max(1, round(src.width * k)), h), Image.LANCZOS)
+
+
 def fit_s(src, s):
     bb = src.getbbox()
     if bb:
@@ -91,7 +107,7 @@ rows = []
 
 for hid, art in HEROES.items():
     src = os.path.join(SRC, 'home', 'pets', art + '.png')
-    im = fit_h(Image.open(src).convert('RGBA'), PET_H)
+    im = pet_scale(Image.open(src).convert('RGBA'), PET_H)
     n = save(im, 'pet-' + hid)
     total += n
     rows.append(('pet-' + hid, im.size, n))

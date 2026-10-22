@@ -29,7 +29,21 @@ function layerExits(P, y) {
   // 走过去又走回来，永远掉不下去（高台实测：贴着 248 层的左边缘来回摆了 100 秒）。
   if (first.x > P.WALL_L + 6) outs.push(first.x - 34);
   if (last.x + last.w < P.WALL_R - 6) outs.push(last.x + last.w + 34);
-  return outs.length ? outs : null;
+
+  /* **被坡接住的"落口"不算落口。**
+   *
+   * 判据只有"这一层外面还有没有地方"，但外面可能是坡 —— 走过去不落地，
+   * 而是踩回坡面上。缓坡那关实测：350 台 150..300，坡从 300 起往下走，
+   * layerExits 报出 334（台面右端 +34），机器人在 299 一看"334 离我最近"就
+   * 往右走，踩上坡；坡上又判定"目标在左上，该往高端走"往左走，踩回台面。
+   * 两条规则各说各话，在 299~334 之间摆了 240 秒。
+   *
+   * 修法是把坡当成"地面"参与判断：坡盖住的位置没有落口。
+   */
+  const ramps = P.RAMPS || [];
+  const covered = (x) => ramps.some(r => x > r.x - 24 && x < r.x + r.w + 24);
+  const real = outs.filter(o => !covered(o));
+  return real.length ? real : null;
 }
 
 function nearest(x, arr) {
@@ -136,12 +150,66 @@ function downExit(P, p) {
   return null;                                  // 两边都能掉：交给调用方按目标选
 }
 
+/**
+ * 站在坡上时该往哪一端走。返回 x（坡的某一端）。
+ *
+ * **坡不能只会往下走。** `downExit` 对坡永远返回低端，这条规则是为了修
+ * "机器人朝着脚下目标左右摆"而加的，修好了那个、却把一个更基础的能力删掉了：
+ * 机器人从此不会沿坡往上。
+ *
+ * 缓坡那关实测：刺毛虫在 462 左台（26..180），要到那儿只有一条路 ——
+ * 沿坡走到高端 → 踏上 350 台（150..300）→ 从左边缘掉到 462。
+ * 只会往下走的机器人在坡上来回摆了 240 秒，最后剩那一只没打掉。
+ *
+ * 判据用"这一端离目标多近"，**端点 y 也算进去**：坡的两端分别接不同的层，
+ * 只比 x 会选到"横向近但高度差一大截"的那端，走上去发现还是够不着。
+ * 0.8 这个权重量出来的：缓坡左端 (300,350) → 目标 (100,462) 记 290，
+ * 右端 (794,556) 记 769，选左 —— 和玩家会走的路一致。
+ */
+function rampExit(P, p, tgtX, tgtY) {
+  const g = p.ground;
+  if (!g || g.kind !== "ramp") return null;
+  const r = (P.RAMPS || []).find(q => Math.abs(q.x - g.x) < 2 && Math.abs(q.w - g.w) < 2);
+  if (!r) return null;
+  const ends = [
+    { x: r.x - 2, y: r.yL },
+    { x: r.x + r.w + 2, y: r.yR },
+  ];
+  /* **已经贴着的那一端不算候选。**
+   *
+   * 台面和坡是接在一起的，机器人站在接口附近时两端的分差只剩几像素：
+   * 苔原入口实测 —— 462 台面右端 620 接坡，机器人站在 623，
+   * 目标在右下方地面 (644,556)。按距离算左端 618 只差 5px，永远赢；
+   * 于是它往左走一步踩回台面，台面那侧判定"该往右走到坡上"，再走回来。
+   * 两条规则在 618~623 之间对踢，240 秒一只地面虫没打掉。
+   *
+   * 44px 以内视为"我现在就在这儿"，强制换另一端 —— 这等价于玩家会做的
+   * "既然这条走不通，那就走到底看看"。 */
+  const live = ends.filter(e => Math.abs(e.x - p.x) > 44);
+  const pool = live.length ? live : ends;
+  let best = null, bd = 1e9;
+  for (const e of pool) {
+    const d = Math.abs(e.x - tgtX) + 0.8 * Math.abs(e.y - tgtY);
+    if (d < bd) { bd = d; best = e; }
+  }
+  return best ? best.x : null;
+}
+
 function botStep(P, S, mem) {
   mem = mem || {};
   const p = S.p;
   if (!p || p.dead) return;
 
-  S.keys.left = false; S.keys.right = false;
+  /* 每帧先复位三个"按住"键。
+   *
+   * **喷（atk）必须用 keys，不能用 press。** 游戏里喷是"按住连发"：
+   * `if (S.keys.atk && p.atkT <= 0) { ... H.fire(p) }`，节流交给 atkT。
+   * 机器人原来只置 `S.press.atk` —— 那是个**边沿表**，喷根本不读它，
+   * 于是这个机器人从上线起就一枪没开过。它的所有关卡战绩都是"只靠撞和推球"打出来的，
+   * 也就解释了为什么弹跳林那只刺毛虫跟它同层、距离 157，能对峙 200 秒：
+   * 它的攻击其实从来没发生。
+   */
+  S.keys.left = false; S.keys.right = false; S.keys.atk = false;
 
   _decide(P, S, mem);
 
@@ -225,7 +293,7 @@ function _decide(P, S, mem) {
         // 站在坡上时"往近的那端"是错的 —— 近的那端可能是上坡。
         if (p.onGround && p.ground) {
           const g = p.ground;
-          const de = downExit(P, p);
+          const de = g.kind === "ramp" ? rampExit(P, p, nb.x, nb.y) : downExit(P, p);
           const toL = p.x - g.x, toR = (g.x + g.w) - p.x;
           if (de != null && de > p.x + 4) S.keys.right = true;
           else if (de != null && de < p.x - 4) S.keys.left = true;
@@ -288,7 +356,9 @@ function _decide(P, S, mem) {
         // 机器人一路往左上坡、再折返下坡，在 470~503 之间摆了 200 秒）。
         const onRamp = p.ground.kind === "ramp";
         const outs = onRamp ? null : layerExits(P, p.y);
-        const ex = outs ? nearest(p.x, outs) : downExit(P, p);
+        // 坡：按目标选端（能上也能下）。非坡：缺口优先，其次下坡端。
+        const ex = outs ? nearest(p.x, outs)
+          : (onRamp ? rampExit(P, p, tgt.x, tgt.y) : downExit(P, p));
         if (ex != null) {
           if (ex > p.x + 6) { S.keys.right = true; mem.fallDir = 1; }
           else if (ex < p.x - 6) { S.keys.left = true; mem.fallDir = -1; }
@@ -365,6 +435,18 @@ function _decide(P, S, mem) {
   }
 
   // 4) 同层：保持距离喷；太近就撞开（撞的时候无敌）
+
+  /* 限球关的额度意识。
+   *
+   * "限球"的判据是「造出的球总数 > ballLimit 就算失败」，而造球 = 把一个敌人
+   * 糊满 3 层。机器人原来根本不知道有额度这回事，喷修好之后它一路糊，
+   * 断崖 / 阶梯塔（都是 limit 7）实测各造 7 颗，直接判失败 ——
+   * 不是打不动，是自己把额度用光了。
+   *
+   * 留一颗余量：额度用完就没法再收拾剩下的敌人了。
+   */
+  const stg = P.curStage ? P.curStage() : null;
+  const ballOk = !(stg && stg.goal === "limit" && S.stat.made >= stg.ballLimit - 1);
   const IDEAL = 175;
 
   // 子弹会被木桩挡住 —— 站在桩子这侧一直喷是打不到另一侧的。
@@ -390,8 +472,15 @@ function _decide(P, S, mem) {
     p.face = dx >= 0 ? 1 : -1;
   }
 
-  if (dist < 300) S.press.atk = true;
-  if (tgt.coat >= 2 && dist < 64 && p.dashCd <= 0) S.press.dash = true;
+  if (dist < 300 && ballOk) S.keys.atk = true;       // 按住，节流交给游戏内的 atkT
+  /* 糊满两层就撞成球 —— 但要**限量**。
+   *
+   * 喷修好之前这条线没暴露过：机器人几乎糊不上 coat 2，也就撞不出球。
+   * 修好之后它开始疯狂造球（双塔实测同时 16 颗、崩 6 颗），
+   * 一半收成是"自己造出来又没人推、漏气崩掉"的。
+   * 上限 2 颗：一颗在手上推、一颗在等，再多就是白造 ——
+   * 这也正是玩家会做的事，球是易耗品，不是越多越好。 */
+  if (tgt.coat >= 2 && dist < 64 && p.dashCd <= 0 && S.balls.length < 2 && ballOk) S.press.dash = true;
 }
 
-module.exports = { botStep, layerExits, nearest, pickPushDir };
+module.exports = { botStep, layerExits, nearest, pickPushDir, rampExit };

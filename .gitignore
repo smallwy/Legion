@@ -43,12 +43,5 @@ client/prototype/*.bak-*.html
 .playwright-mcp/
 client/prototype/_check2/
 
-# client/shots 是工具的**落点**，不是仓库的一部分。
-# 值得留的评审图一律人工归档到 client/art/04-review/ 再入库。
-# 之前是「按前缀忽略」，结果 _ab-* / _chk-* / _p-* 这些一次性的对比图
-# 攒了 150 多张进仓库，翻起来全是噪音。
-#
-# 只忽略内容、放行 README：目录本身必须存在（不少工具直接 writeFileSync，
-# 不自己 mkdir，新克隆少这个目录会直接崩），而且点进去要有人告诉它「这里可以随便删」。
-client/shots/*
-!client/shots/README.md
+# client/shots 已于 c6c06fc 定性为纯工具落点、零运行时引用，目录整体废弃不再保留。
+# 残留的 README 放行规则一并移除；今后所有评审图直接归档到 client/art/04-review/。

@@ -129,11 +129,35 @@ for (const a of process.argv.slice(2)) {
     if (m) OPT[m[1]] = m[2];
     else if (!a.startsWith('--')) OPT.out = a;
 }
-fakeNow = Number(OPT.t);
+fakeNow = 0;
+
+/* `--cleared=8` 把存档里的通关数顶到 8，六只全解锁 ——
+   改宠物布局时必须能一次看到六只挤在一起的样子，否则"聚没聚起来"只能靠脑补。
+   存档只给 cleared，其余字段走 SaveData 的默认值。 */
+if (OPT.cleared !== undefined) {
+    const mem = new Map();
+    mem.set('pawpack.save.v1', JSON.stringify({ cleared: Number(OPT.cleared) }));
+    globalThis.localStorage = {
+        getItem: (k) => (mem.has(k) ? mem.get(k) : null),
+        setItem: (k, v) => { mem.set(k, String(v)); },
+        removeItem: (k) => { mem.delete(k); },
+    };
+}
 
 require(path.join(__dirname, '_rt-build', 'HomeRuntime.js'));
-/* 推进几帧：能量结算、按下回弹都在 tick 里收敛 */
-for (let i = 0; i < 3; i++) { fakeNow += 16; director.emit('before-update'); }
+
+/* 从 0 一路推进到 `--t`，每 16ms 一帧。
+   ⚠ 原来是"把时钟拨到 t、然后只推 3 帧"——宠物连首次等待（0.6~2.2s）都没走完，
+   所以任何跟时间有关的动效（走动、原地姿势）在渲染图上永远是第 48ms 的样子。
+   要看走动就必须真的跑够帧数。 */
+{
+    const target = Number(OPT.t) || 1200;
+    let guard = 0;
+    while (fakeNow < target && guard++ < 20000) {
+        fakeNow += 16;
+        director.emit('before-update');
+    }
+}
 
 const findNode = (name) => (function find(n) {
     if (n.name === name) return n;
@@ -356,6 +380,15 @@ if (OPT.audit) audit();
                         else if (p[0] === 'moveTo') g.moveTo(p[1], p[2]);
                         else if (p[0] === 'lineTo') g.lineTo(p[1], p[2]);
                         else if (p[0] === 'circle') g.arc(p[1], p[2], p[3], 0, Math.PI * 2);
+                        /* 椭圆：canvas 没有原生 API，用 save + 缩放画一个单位圆。
+                           影子的接地投影全靠它，缺了这条渲染图上就看不到影子。 */
+                        else if (p[0] === 'ellipse') {
+                            g.save();
+                            g.translate(p[1], p[2]);
+                            g.scale(Math.max(0.01, p[3]), Math.max(0.01, p[4]));
+                            g.arc(0, 0, 1, 0, Math.PI * 2);
+                            g.restore();
+                        }
                         else if (p[0] === 'arc') g.arc(p[1], p[2], p[3], p[4], p[5]);
                         else if (p[0] === 'close') g.closePath();
                     }

@@ -126,54 +126,66 @@ function paintCard(g: Graphics, w: number, h: number) {
 }
 
 /* --------------------------------------------------------------------------
- * 宠物领地（设计坐标 0~1280，取自 game.src.html 的 PETS.roam，唯一真值）
+ * 六只在院子里的位置 —— **聚成一群**，锯齿错落
  *
- * 两条领地不许重叠：重叠就必然出现「走两步贴在一起」。
+ * 旧值是六个互不相干的领地：136~192 / 288~358 / 472~532 / 676~746 /
+ * 862~932 / 1106~1162，横跨整条 1280 宽的草地。每只在自己的小格子里走，
+ * 结果是院子看着空、六只看着像六个孤立的点，而不是"一窝宠物在院子里"。
  *
- * ⚠ 砂糖原来是 [120, 392] —— 那是「草地上只站一只」时期的写法：
- *   它独占整片草地，走动才看得出来。**六只同时在场之后，这 272px 直接盖住
- *   年糕的 [288, 358]**，两只必然走成一坨。现在改回原型的原始值 [136, 192]。
+ * 现在试过两种排法，第一种不行：
+ *   · 两排 3+3 对齐 → 中间那只必然挡住两侧的其中一只（实测白兔只剩耳朵）；
+ *   · **锯齿**（前后交替、x 等距）→ 每只只跟左右两只相邻，y 差 44 抵消掉
+ *     大半重叠，每只都能露出头和上半身。像一队跟一队，比排排坐更像活的。
+ *
+ * 为什么是 396~606 这一段：左边 350 是工作台，右边 620 是灶台，
+ * 中间这 210px 才是真空地；再往下会被底部 Dock 压住。
  * -------------------------------------------------------------------------- */
-const PET_ROAM: Record<string, [number, number]> = {
-    '砂糖': [136, 192],
-    '年糕': [288, 358],
-    '雪团': [472, 532],
-    '团子': [676, 746],
-    '豆奶': [862, 932],
-    '星屑': [1106, 1162],
+const PET_SLOT: Record<string, [number, number]> = {
+    '砂糖': [396, 552],
+    '年糕': [438, 600],
+    '雪团': [480, 552],
+    '团子': [522, 600],
+    '豆奶': [564, 556],
+    '星屑': [606, 600],
 };
 
 /**
- * 六只的落脚点（设计坐标 1280×720，y 向下）。
- *
- * 取值直接来自 `game.html` 的 `PETS.cx / PETS.footY` —— 那张表是排布的唯一真值，
- * 这里不重新设计，只搬过来。
- *
- * **`footY` 的五档（548/568/574/596/602/610）就是景深**：越靠下 = 离镜头越近、
- * 画得越大。六只全排在同一条 y 上会读成"一排贴纸贴在草地上"，而房子前面
- * 那片草地本来是有纵深的。
+ * 每只的横向溜达半径（设计像素）。
+ * 邻只 x 距 42、y 差 44 —— 靠 y 分离，所以横向领地可以小幅重叠，
+ * 但 26 已经足够看出"在动"，再大就会走进邻只的位置。
  */
-const PET_FOOT: Record<string, [number, number]> = {
-    '砂糖': [160, 548],
-    '年糕': [320, 602],
-    '雪团': [500, 574],
-    '团子': [700, 596],
-    '豆奶': [890, 610],
-    '星屑': [1130, 568],
+const PET_ROAM_R = 26;
+
+/** 群里最靠后 / 最靠前的落脚 y，用来把落脚点换算成 0~1 的群内深度 */
+const PET_Y_FAR = 552;
+const PET_Y_NEAR = 600;
+
+/**
+ * 视觉身高归一。**六张立绘的画布都是 292 高，但里面画的东西不一样高。**
+ *
+ * 实测 alpha 包围盒的内容高度：
+ *   猫 242 / 狗 216 / 狐 248 / 仓鼠 213 / 牛 225 / 兔 292
+ * 也就是说按同一个节点尺寸摆上去，兔子会比仓鼠高 37%。
+ * 六只散在 1300px 宽的草地上时看不出来，**聚到一起立刻变成"大小不齐"**。
+ *
+ * 系数 = 目标可见高 70 ÷ 当前可见高，仓鼠/牛这类矮胖角色封顶 1.12 ——
+ * 拉到完全齐会让仓鼠变成一只 87px 宽的球，反而更怪。
+ * 数值是量出来的，不是估的；换立绘必须重算。
+ */
+const PET_FIT: Record<string, number> = {
+    '砂糖': 1.01,   // 242 → 70
+    '年糕': 1.13,   // 216 → 70
+    '雪团': 0.83,   // 292 → 70（本来就顶满画布，要缩）
+    '团子': 1.12,   // 213 → 68（封顶，别把仓鼠拉成球）
+    '豆奶': 1.08,   // 225 → 70
+    '星屑': 0.98,   // 248 → 70
 };
 
 /**
- * 六只的落脚点。脚底锚点，坐标是画布中心系。
- *
- * 都站在屋前那条空地上，左右错开、深浅只差二十像素。
- * 第一只如果贴在前景大花里，会比房子还抢眼；后面解锁的再排成一排，
- * 就成了贴在镜头前的贴纸。空地装得下以后再来的同伴。
+ * 兜底落脚点：存档里出现 `PET_SLOT` 没登记的宠物时用（设计坐标，y 向下）。
+ * 落在群心上，不落进花里。
  */
-/**
- * 草地上只站当前这一只。脚底锚点，画布中心系。
- * 落在屋前空地、灶台和告示板之间，不挡门，也不站进花里。
- */
-const LAWN_SPOT: [number, number] = [170, -168];
+const LAWN_SPOT: [number, number] = [487, 592];
 
 /* --------------------------------------------------------------------------
  * 入口说明文案。没有 hover 的平台上只有 :hover 提示等于没有提示，
@@ -200,6 +212,21 @@ const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2,
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
 /** 帧率无关的指数平滑：dt 抖动不会改变收敛速度 */
 const smoothK = (dt: number, rate: number) => 1 - Math.exp(-dt * rate);
+
+/**
+ * 站着的时候做点什么。0 = 什么都不做。
+ *
+ * **"什么都不做"也要占 34%。** 六只各有各的节奏、还夹着静止，
+ * 才像一窝活物；每只都在不停动，反而像六个上了发条的玩具。
+ */
+function pickPose(): number {
+    const r = Math.random();
+    if (r < 0.34) return 0;   // 发呆
+    if (r < 0.55) return 1;   // 伸懒腰
+    if (r < 0.72) return 3;   // 舔毛
+    if (r < 0.86) return 4;   // 坐下
+    return 2;                 // 打滚
+}
 
 /** 设计坐标 x → Canvas 本地 x（Canvas 锚点 0.5/0.5，本地原点即屏幕中心） */
 const lx = (designX: number) => designX - W / 2;
@@ -276,8 +303,32 @@ type PetRt = {
     wt: number; wd: number;
     /** 走向 ±1，只用来决定身体朝哪边晃 */
     dir: number;
-    /** 步频相位。1 = 迈一步；24 只脚交替靠它算 */
+    /** 步频相位。1 = 迈一步；两只脚交替靠它算 */
     step: number;
+    /**
+     * 累计走过的距离（像素）。`step = walked / stride`。
+     *
+     * **不能再用 `step += dt * clamp(...)`。** 老写法的下限会卡住步频：
+     * 速度降下来了步子降不下去，腿在原地迈 —— 这就是"脚打滑"的成因。
+     * 由位移推相位，走多远迈多少，物理上不可能打滑。
+     */
+    walked: number;
+    /** 一步跨多远（像素）。速度 ÷ 步幅 = 步频 */
+    stride: number;
+    /** 平滑后的行走强度 0~1（起步/停步不要开关式跳变） */
+    gait: number;
+    /** 原地姿势：0 无 / 1 伸懒腰 / 2 打滚 / 3 舔毛 / 4 坐下 */
+    pose: number;
+    poseT: number;
+    poseDur: number;
+    /** 群内深度 0=后排(远) 1=前排(近)，决定基础缩放 */
+    depth: number;
+    /**
+     * 影子。**单独挂在 Pets 根下，不挂宠物节点下。**
+     * 挂宠物下面就会跟着 bob 一起上下 —— 影子跟着跳等于没有接地，
+     * 这正是当年"宠物像飘在水上"的根因（见 L893 那段注释）。
+     */
+    shadow: Node | null;
     /** 被点击后的弹跳剩余时间（秒） */
     pop: number;
     /** 按住（蹲下） */
@@ -722,6 +773,7 @@ class HomeController {
         if (!root) return;
 
         /* ⚠ 必须快照：下面会往 children 里加节点，直接遍历原数组会无限递归 */
+        let shadowIdx = 0;
         for (const n of root.children.slice()) {
             if (n.name.indexOf('-hot') >= 0) continue;
             /* 存档说了算：场景把六只都预置好了，但只有解锁的该出现在草地上。
@@ -742,37 +794,71 @@ class HomeController {
             n.active = on;
             if (!on) continue;
 
-            /* 站在**自己的落脚点**上，不再共用 LAWN_SPOT。
-             * LAWN_SPOT 是「草地只站一只」时代的单点，六只共用会叠成一坨，
-             * 而且叠出来的那只比房子还抢眼。
-             * `PET_FOOT` 是设计坐标（y 向下），换成画布中心系：
-             * x 走 `lx()`，y 是 `H/2 - footY`（Cocos 的 y 向上）。 */
-            const roam = PET_ROAM[n.name] ?? [120, 392];
-            const foot = PET_FOOT[n.name] ?? [LAWN_SPOT[0] + W / 2, H / 2 - LAWN_SPOT[1]];
-            n.setPosition(lx(foot[0]), H / 2 - foot[1], 0);
+            /* 站在**自己的群内落点**上（见 PET_SLOT）。
+             * 设计坐标转画布中心系：x 走 `lx()`，y 是 `H/2 - y`（Cocos 的 y 向上）。 */
+            const slot = PET_SLOT[n.name] ?? LAWN_SPOT;
+            n.setPosition(lx(slot[0]), H / 2 - slot[1], 0);
             const ut = n.getComponent(UITransform);
             const petH = ut ? ut.contentSize.height : 84;
+            const petW = ut ? ut.contentSize.width : 60;
+            /* 视觉身高归一（见 PET_FIT）：影子宽度要跟着一起变，
+               不然兔子 0.83 缩了、影子还是原宽，看起来像踩着别人的影子。 */
+            const fit = PET_FIT[n.name] ?? 1;
+
+            /* ---- 影子 ----
+               bindPets 可能重复跑（切场景回来），先清掉旧的再建，
+               否则 Pets 下会积一堆重名影子，越切越黑。 */
+            const oldSh = root.getChildByName(`${n.name}__shadow`);
+            if (oldSh && oldSh.isValid) { oldSh.removeFromParent(); oldSh.destroy(); }
+            const sh = new Node(`${n.name}__shadow`);
+            sh.parent = root;
+            sh.addComponent(UITransform).setContentSize(petW, 16);
+            const sg = sh.addComponent(Graphics);
+            /* alpha 92 而不是 40 —— 120px 缩到 640 宽的截图里，40 的投影会整条消失。
+               这是"接地"的唯一证据，宁可略重也不能看不见。 */
+            sg.fillColor = new Color(52, 36, 26, 92);
+            sg.ellipse(0, 0, petW * 0.46 * fit, 8);
+            sg.fill();
+            /* 排在宠物前面 —— 先画影子，宠物才会压在影子上面。
+               用递增计数器而不是 `n.getSiblingIndex()`：所有影子占 0..N，
+               宠物自然被顶到后面，而且不依赖"当前节点在第几位"（重复调用也稳）。 */
+            sh.setSiblingIndex(shadowIdx++);
+            sh.setPosition(n.position.x, n.position.y - 2, 0);
+
+            /* 群内深度 0~1：后排 576 → 前排 598。没有这一档，六只一样大，
+               弧线就只是一条横线，读不出前后。 */
+            const depth = clamp((slot[1] - PET_Y_FAR) / (PET_Y_NEAR - PET_Y_FAR), 0, 1);
 
             const rt: PetRt = {
                 node: n,
                 baseY: n.position.y,
-                left: lx(roam[0]),
-                right: lx(roam[1]),
-                /* 深度范围：往上是"走远"，往下是"走近"。正视图角色朝镜头走才成立，
-                   横向长距离位移无论怎么调都会读成"贴纸在滑"。 */
-                far: -20,
-                near: 8,
+                left: lx(slot[0] - PET_ROAM_R),
+                right: lx(slot[0] + PET_ROAM_R),
+                /* 前后只给 ±7：群要紧凑，走远了就不像一群了 */
+                far: -7,
+                near: 7,
                 ph: rand(0, Math.PI * 2),
                 dur: rand(2.8, 3.7),
                 moving: false,
-                /* 首次延迟错开，避免一进场景所有宠物同时起步 */
+                /* 首次延迟错开，避免一进场景六只同时起步 */
                 wait: rand(0.6, 2.2),
                 fx: 0, fy: 0, tx: 0, ty: 0, wt: 0, wd: 1, yOff: 0,
                 dir: 1,
                 step: rand(0, 1),
+                walked: rand(0, 40),
+                /* 24px 一步：84px 高的 Q 版宠物腿短，一步 24 刚好。
+                   速度 42~58px/s ÷ 24 ≈ 1.8~2.4 步/秒。 */
+                stride: 24,
+                gait: 0,
+                pose: 0, poseT: 0, poseDur: rand(0.8, 2.0),
+                depth,
+                shadow: sh,
                 pop: 0,
                 down: false,
-                sy: 1, sx: 1, rot: 0,
+                /* 直接给目标缩放：从 1 平滑过去会先演一段"长出来" */
+                sy: (0.96 + depth * 0.06) * fit,
+                sx: (0.96 + depth * 0.06) * fit,
+                rot: 0,
             };
             this.pets.push(rt);
 
@@ -799,49 +885,64 @@ class HomeController {
             });
             hot.on(Node.EventType.TOUCH_CANCEL, () => { rt.down = false; });
         }
+
+        /* 按群内深度重排绘制顺序：y 大的（近）必须**后**画。
+           不排的话顺序就是 PETS 的顺序 —— 后排的白兔会画在前排的仓鼠上面，
+           变成"远的盖住近的"，一眼假。影子已经占了 0..N-1，宠物从 N 开始。 */
+        this.pets
+            .slice()
+            .sort((a, b) => a.depth - b.depth)
+            .forEach((p, i) => p.node.setSiblingIndex(this.pets.length + i));
     }
 
     /**
-     * 起步走一段。**当前没有调用方。**
+     * 起步走一段。**已经接回 tickPet 了**（`p.wait <= 0` 那一行调用它）。
      *
-     * 单帧正面立绘试过三种动法，都站不住：
-     *   横移 → 贴纸在滑；蹦跳 → 撒欢；朝镜头走近走远 → 上下一窜，看起来还是跳。
-     * 行走序列帧（规格见 §14.4）补上之前，宠物站在原地，只留呼吸。
-     * 这段留着，是为了帧到了以后把 `tickPet` 里那一行调用接回去，而不是重写领地夹取。
+     * 当年这个方法被判了死刑，注释写的是「横移 → 贴纸在滑」。那次判断没错，
+     * 但缺的不是曲线，是**接地**：没有影子的时候，任何位移都读成"贴图被拖着走"。
+     * 影子补上之后，同一条横移才变回"脚踩在地上走"。
+     *
+     * 现在的组合是三层，缺一层就不成立：
+     *   1. 影子钉住地面（`shadow`，不跟 bob）；
+     *   2. 步频由位移推（`walked / stride`），脚不打滑；
+     *   3. 距离压到 18~44px —— 长距离会重新暴露"这是一张图"。
+     *
+     * 没做的一件：**左右翻转**。立绘是正面偏侧（光从左上打过来），
+     * 翻转会让高光跑到右边，比"不转身"更假。方向感交给 `sway`（左右倾）。
      */
     private startWalk(p: PetRt) {
         const curX = p.node.position.x;
-
         let tx = curX;
         let ty = p.yOff;
 
-        if (Math.random() < 0.6) {
-            /* 前后：深度变化，走近还会略微变大 */
-            ty = rand(p.far, p.near);
-            tx = clamp(curX + rand(-26, 26), p.left, p.right);
-        } else {
-            /* 横向：短距离。距离一长就会重新变成"滑"，所以压到 40~90px */
-            const dist = rand(40, 90) * (Math.random() < 0.5 ? -1 : 1);
+        if (Math.random() < 0.78) {
+            /* 横向：在自己的 ±26 领地里挑一个点。
+               距离压到 18~44px —— 再长就没有"一群"的紧凑感，也重新读成滑。 */
+            const dist = rand(18, 44) * (Math.random() < 0.5 ? -1 : 1);
             tx = clamp(curX + dist, p.left, p.right);
-            /* ⚠ 深度必须夹回地面带：横走这一支只是"顺带偏一点"，
-               不夹的话每段 ±5px 累加，30 秒就能漂到离草地 250px 的地方。 */
-            ty = clamp(p.yOff + rand(-5, 5), p.far, p.near);
+            ty = clamp(p.yOff + rand(-4, 4), p.far, p.near);
+        } else {
+            /* 前后：在两排之间挪一点（±7px 的深度带） */
+            ty = rand(p.far, p.near);
+            tx = clamp(curX + rand(-10, 10), p.left, p.right);
         }
         /* 两条支路都收一次口，保证永远站在草地这条带上 */
         ty = clamp(ty, p.far, p.near);
 
         const d = Math.hypot(tx - curX, ty - p.yOff);
         /* 走不出东西就换一个，不要把"原地抖"当成一次移动 */
-        if (d < 12) { p.wait = 0.4; return; }
+        if (d < 10) { p.wait = 0.4; return; }
 
         p.fx = curX; p.fy = p.yOff;
         p.tx = tx; p.ty = ty;
         p.wt = 0;
-        /* 速度 28~40 px/s：人的步行速度换算到 84px 高的角色上大约就是这个区间。
-           再快就没有"走"的节奏了，再慢会读成"飘"。 */
-        p.wd = clamp(d / rand(28, 40), 0.7, 3.2);
+        /* 42~58 px/s：84px 高的角色按人步速等比约 50px/s。
+           低于 40 读成"飘"，高于 65 读成"溜"。 */
+        p.wd = clamp(d / rand(42, 58), 0.55, 2.0);
         p.dir = tx >= curX ? 1 : -1;
         p.moving = true;
+        /* 起身：取消正在演的原地姿势，不然会一边伸懒腰一边走 */
+        p.pose = 0;
     }
 
     private tickPet(p: PetRt, dt: number) {
@@ -852,37 +953,66 @@ class HomeController {
         const pos = p.node.position;
         if (!pos) return;
 
-        let x = pos.x;
-        let yOff = p.yOff;
-        /** 行走强度 0~1：用来让"起步/停步"的碎步幅度自然衰减，而不是开关式跳变 */
-        let gait = 0;
+        const x0 = pos.x;
+        const y0 = p.yOff;
+        let x = x0;
+        let yOff = y0;
 
         if (p.moving) {
             p.wt += dt;
-            const k = clamp(p.wt / p.wd, 0, 1);
+            const raw = clamp(p.wt / p.wd, 0, 1);
 
-            /* smoothstep：两端速度为 0，天然对上"起步/停步"那两拍。
-               线性走会让起步瞬间像被推了一把。 */
-            const e = k * k * (3 - 2 * k);
+            /* 短距离用 smoothstep（画不出匀速段），长距离用梯形。
+               梯形 = 加速 12% + 匀速 72% + 减速 16%，中段速度几乎恒定 —— 那才是"走"。
+               smoothstep 两端速度都是 0，读起来是"被磁铁吸过去"。
+
+               分档按**距离**不是按时长：一步只走 24px 时，再精确的曲线
+               也画不出匀速段，不如让 smoothstep 软着落地。 */
+            const span = Math.abs(p.tx - p.fx);
+            let e: number;
+            if (span < 70) {
+                e = raw * raw * (3 - 2 * raw);
+            } else {
+                const A = 0.12, D = 0.16;
+                const AREA = 1 - A / 2 - D / 2;
+                if (raw <= A) e = (raw * raw) / (2 * A * AREA);
+                else if (raw >= 1 - D) e = (AREA - (1 - raw) * (1 - raw) / (2 * D)) / AREA;
+                else e = (A / 2 + (raw - A)) / AREA;
+            }
+
             x = p.fx + (p.tx - p.fx) * e;
             yOff = p.fy + (p.ty - p.fy) * e;
             p.yOff = yOff;
 
-            /* 归一化速度（smoothstep 的导数，峰值 1.5）
-               步频跟着速度走 —— 匀速步频 + 变速位移 = 脚在原地打滑。 */
-            const spd = 6 * k * (1 - k);
-            gait = clamp(spd * 0.75, 0, 1);
-            p.step += dt * clamp(spd * 2.4, 0.35, 2.2);
-
-            if (k >= 1) {
+            if (raw >= 1) {
                 p.moving = false;
                 /* 走完歇 0.9~2.6s：一直走像机器，停太久又像卡住 */
                 p.wait = rand(0.9, 2.6);
             }
         } else {
-            /* 不调用 startWalk。没有行走帧时，任何位移都会被读成滑或者跳。 */
-            p.wait = 0;
+            /* 站着：先演完一个原地姿势，再走下一步。
+               姿势和走动互斥 —— 同时开就会一边伸懒腰一边挪。 */
+            p.poseT += dt;
+            if (p.poseT >= p.poseDur) {
+                p.pose = pickPose();
+                p.poseT = 0;
+                p.poseDur = p.pose === 0 ? rand(0.8, 1.6) : rand(1.0, 2.2);
+            }
+            p.wait -= dt;
+            if (p.wait <= 0) this.startWalk(p);
         }
+
+        /* 步频 = 走过的距离 ÷ 步幅。
+           老写法 `p.step += dt * clamp(spd * 2.4, 0.35, 2.2)` 里那个**下限 0.35
+           就是"脚打滑"的元凶**：速度降下来了步频降不下去，腿还在原地迈。
+           现在直接由位移推相位 —— 走多远迈多少，物理上不可能打滑。 */
+        const moved = Math.abs(x - x0) + Math.abs(yOff - y0);
+        p.walked += moved;
+        p.step = p.walked / p.stride;
+
+        /* 行走强度平滑过渡：起步/停步那两拍不要开关式跳变 */
+        p.gait += ((p.moving ? 1 : 0) - p.gait) * smoothK(dt, 14);
+        const gait = p.gait;
 
         /* ---- 碎步：每步一次起伏 + 每步一次左右摇摆 ----
            起伏只有 1.2px、摇摆 1.5°，刻意做得很小 —— 大一点就会像"跳"。 */
@@ -890,13 +1020,30 @@ class HomeController {
         const bob = Math.sin(ph) * 1.2 * gait;
         const sway = Math.sin(p.step * Math.PI) * 1.5 * gait * p.dir;
 
-        /* **静止时完全不动。**
-           上一版给了 1.5px、周期 0.9~2.2 秒的"呼吸"，本意是让院子有生气；
-           实际读起来是"宠物飘在水上" —— 用户原话是"宠物在场景晃动不要了"。
-           锚点在脚底 (0.5, 0)，任何竖直位移都会被读成**脚离地**，1.5px 也够露馅，
-           因为没有影子跟着一起动。
-           交互反馈（点一下弹起来 + 冒心）保留：那是"回应"，不是"晃动"。 */
-        const breath = 0;
+        /* ---------- 原地姿势（D）：不加一张图，用变形演 ----------
+           "有生气"的观感主要来自**动作种类多**，不是来自"会移动"。
+           伸懒腰/打滚/舔毛/坐下全都不需要新素材，只动 scale 和 angle。
+           幅度必须小：压到 0.85 以下就开始像"被压扁"而不是"趴下"。
+
+           **静止时不做呼吸。** 上一版给了 1.5px、"呼吸"，读起来是"宠物飘在水上"
+           （用户原话："宠物在场景晃动不要了"）—— 锚点在脚底，任何竖直位移
+           都会被读成脚离地，而且呼吸本身没有信息量。这点预算全给姿势。 */
+        let psx = 1, psy = 1, prot = 0;
+        if (p.pose > 0 && gait < 0.5) {
+            const w = clamp(p.poseT / p.poseDur, 0, 1);
+            const bell = Math.sin(w * Math.PI);      // 进、出都是 0，中间最大
+            if (p.pose === 1) {                       // 伸懒腰：压扁 + 拉长
+                psy = 1 - 0.09 * bell; psx = 1 + 0.08 * bell;
+            } else if (p.pose === 2) {                // 打滚：先倒向一边再倒回来
+                prot = Math.sin(w * Math.PI * 2) * 10;
+                psy = 0.97;
+            } else if (p.pose === 3) {                // 舔毛：小幅度左右蹭
+                prot = Math.sin(p.poseT * 9) * 2.0 * bell;
+                psy = 0.98;
+            } else if (p.pose === 4) {                // 坐下：矮一点、胖一点
+                psy = 1 - 0.06 * bell; psx = 1 + 0.03 * bell;
+            }
+        }
 
         /* 点击弹跳：抛物线包络，跟碎步的 y 通道叠加 */
         let pop = 0;
@@ -907,11 +1054,17 @@ class HomeController {
 
         /* 近大远小：往远处走缩一点、往近处走放大一点。
            幅度只给 ±3% —— 再大就会暴露"这只是个贴纸在缩放"。 */
-        const depth = clamp(1 + yOff * 0.0016, 0.965, 1.035);
+        /* 群内深度：后排 0.96、前排 1.02。
+           只差 6% —— 差太多（第一版 0.94/1.04）会让前面那只高出 8px，
+           正好把后面那只的头压掉。
+           再乘 `PET_FIT`：立绘内容高不齐，靠它把六只的视觉身高拉平。 */
+        const fit = PET_FIT[p.node.name] ?? 1;
+        const base = (0.96 + p.depth * 0.06) * fit;
+        const depthK = clamp(1 + yOff * 0.0012, 0.99, 1.01);
 
         /* 每步一次轻微竖向压缩，落脚那一下有重量 */
-        let syT = depth * (1 - Math.max(0, Math.sin(ph)) * 0.012 * gait);
-        let sxT = depth * (1 + Math.max(0, Math.sin(ph)) * 0.006 * gait);
+        let syT = base * depthK * (1 - Math.max(0, Math.sin(ph)) * 0.012 * gait) * psy;
+        let sxT = base * depthK * (1 + Math.max(0, Math.sin(ph)) * 0.006 * gait) * psx;
 
         /* 按住 = 蹲下。和步态共用 scale 通道，所以在这里合并，不另开一条 tween。 */
         if (p.down) { syT *= 0.93; sxT *= 1.06; }
@@ -919,11 +1072,23 @@ class HomeController {
         const kk = smoothK(dt, 30);
         p.sy += (syT - p.sy) * kk;
         p.sx += (sxT - p.sx) * kk;
-        p.rot += (sway - p.rot) * kk;
+        p.rot += ((sway + prot) - p.rot) * kk;
 
-        p.node.setPosition(x, p.baseY + yOff + bob + breath + pop, pos.z);
+        const wy = p.baseY + yOff + bob + pop;
+        p.node.setPosition(x, wy, pos.z);
         p.node.setScale(p.sx, p.sy, 1);
         p.node.angle = p.rot;
+
+        /* ---------- 影子：只跟 x 和地面，不跟 bob ----------
+           **这是"飘不飘"的唯一开关。** 影子跟着 bob 一起上下，眼睛就找不到地面，
+           1.2px 的起伏都会被读成脚离地 —— 当年就是这么判定失败的。
+           离地越高影子越小，这也是"跳起来了"唯一的视觉提示。 */
+        if (p.shadow && p.shadow.isValid) {
+            p.shadow.setPosition(x, p.baseY + yOff - 3, 0);
+            const lift = Math.max(0, bob + pop);
+            const k2 = 1 - Math.min(0.32, lift * 0.028);
+            p.shadow.setScale(k2, 1, 1);
+        }
     }
 
     /** 冒一颗心上浮消失 —— 点击宠物要有回应，不能只是动一下就完 */

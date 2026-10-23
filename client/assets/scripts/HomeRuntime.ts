@@ -203,18 +203,21 @@ const PET_ART: Record<string, number> = {
 };
 
 /**
- * 走动开关。**现在是关的。**
+ * 走动开关。**已打开**（用户明确要求"宠物嬉戏玩耍"）。
  *
- * 上一版放开了"走两步"（±26 领地），单只看没问题；六只坐到同一块垫子上，
- * 走动就必然走进邻只的格子里 —— 而这次的要求是"互相不要遮挡"，位移与它直接冲突。
- * 生气改由**原地姿势**承担（坐 / 趴 / 舔毛 / 打滚），不需要一只脚离地。
+ * 历史包袱（留档）：上一版关掉它是因为六只坐在同一块垫子上，
+ * 位移与"互相不要遮挡"冲突。现在靠两条规矩把冲突解开：
+ *   · 活动边界是**绝对**的（slot ± PET_ROAM_R），不随当前位置累积漂移；
+ *   · 互动剧本（追逐/扑跳）的落点在出发前就算好，主动贴到对方边缘为止，
+ *     绝不进对方格子 —— 见 stageChase()。
  *
- * 行走序列帧到位以后把它打开，同时把 PET_ROAM_R 调回 20+，见 startWalk 注释。
+ * 剩下的一条硬约束没变：**立绘不翻转**（高光方向会露馅），方向感全靠 sway。
  */
-const PET_WALK = false;
+const PET_WALK = true;
 
-/** 横向溜达半径。PET_WALK 为 false 时不生效；打开后不得大于最小缝的一半 */
-const PET_ROAM_R = 6;
+/** 横向溜达半径（slot ± 20）。两排的中心距实测 ≥96px，
+ *  ±20 加上各自半宽最多 35px，极端情况下边缘仍留 6px 空隙 —— 不遮挡。 */
+const PET_ROAM_R = 20;
 
 /** 落点：名字 → 垫子上的位置 */
 type PetSlot = { name: string; x: number; y: number; depth: number };
@@ -331,6 +334,10 @@ function pickPose(): number {
 /** 设计坐标 x → Canvas 本地 x（Canvas 锚点 0.5/0.5，本地原点即屏幕中心） */
 const lx = (designX: number) => designX - W / 2;
 
+/** 宠物视觉宽度。立绘按 alpha 包围盒装进 PET_H 高的框，
+ *  宽度就是宽高比 × PET_H —— 互动剧本算"贴到对方边缘"要用它。 */
+const petW = (n: string) => (PET_ART[n] ?? 1) * PET_H;
+
 function mkLabel(
     parent: Node, name: string, text: string,
     size: number, color: Color, w = 400, h = 40,
@@ -380,6 +387,8 @@ type PressRt = {
 
 type PetRt = {
     node: Node;
+    /** 立绘名（PET_ART 的键）。互动剧本算"贴到对方边缘"要用宽度 */
+    name: string;
     baseY: number;
     /** 领地本地坐标（横向） */
     left: number;
@@ -433,6 +442,17 @@ type PetRt = {
     pop: number;
     /** 按住（蹲下） */
     down: boolean;
+    /**
+     * 扑跳（嬉戏主动作）：剩余总时长，0 = 没在扑。
+     * 三段固定节拍：蹲 0.26s（压到 0.84）→ 腾空 0.38s（抛物线 + 前冲）
+     * → 落地 0.30s（压到 0.88 回弹）。落点在出发前一次算好
+     * （pFx + pDx），不逐帧随机 —— 逐帧决定会刹不住车撞进邻只。
+     */
+    pounce: number;
+    pounceT: number;
+    pDir: number;
+    pDx: number;
+    pFx: number;
     /** 平滑后的姿态 */
     sy: number; sx: number; rot: number;
 };
@@ -445,6 +465,19 @@ type FogRt = {
     /** 只允许往上位移 0~amp，向下会露边 */
     amp: number;
     period: number;
+};
+
+/** 蝴蝶（Graphics 手绘，不占资源）。on=false 后节点保留、等下次复用，
+ *  节点无效（场景销毁）才置 null。 */
+type BfRt = {
+    node: Node;
+    g: Graphics;
+    on: boolean;
+    x: number; y: number; baseY: number;
+    dir: number;
+    t: number;
+    /** 这次飞行里已经扑过的宠物 —— 一只蝴蝶只许被同一只扑一次 */
+    chased: Set<PetRt>;
 };
 
 /* ==========================================================================
@@ -477,6 +510,14 @@ class HomeController {
     private presses: PressRt[] = [];
     /** 点击回调里不能当场拆面板。触摸还在这个节点上，拆掉会直接抛错。 */
     private later: Array<() => void> = [];
+
+    /** 嬉戏调度：倒计时到 0 就挑一个剧本演。间隔随机 —— 固定间隔读成节目单 */
+    private playCd = rand(2.5, 5);
+    /** 延时剧本队列：追逐是"逼近 → 反应 → 邀玩"的三拍时序，不是两条 tween */
+    private scriptQ: Array<{ at: number; fn: () => void }> = [];
+    /** 蝴蝶。首次起飞前靠 bfCd 倒计时 */
+    private bf: BfRt | null = null;
+    private bfCd = rand(5, 9);
     private fogs: FogRt[] = [];
 
     /** 待机引导动效的目标（按钮箭头、提示条、宠物卡） */
@@ -950,12 +991,13 @@ class HomeController {
 
             const rt: PetRt = {
                 node: n,
+                name: slot.name,
                 baseY: n.position.y,
                 left: lx(slot.x - PET_ROAM_R),
                 right: lx(slot.x + PET_ROAM_R),
-                /* 前后只给 ±5：PET_WALK 关着时用不到，打开后也别让它们走散 */
-                far: -5,
-                near: 5,
+                /* 前后 ±7：给"凑近一点玩"留深度余地，再大后排脚会顶到前排头顶 */
+                far: -7,
+                near: 7,
                 ph: rand(0, Math.PI * 2),
                 dur: rand(2.8, 3.7),
                 moving: false,
@@ -975,6 +1017,7 @@ class HomeController {
                 shadow: sh,
                 pop: 0,
                 down: false,
+                pounce: 0, pounceT: 0, pDir: 1, pDx: 0, pFx: 0,
                 /* 直接给目标缩放：从 1 平滑过去会先演一段"长出来" */
                 sy: 0.98 + depth * 0.04,
                 sx: 0.98 + depth * 0.04,
@@ -1034,9 +1077,9 @@ class HomeController {
      * 没做的一件：**左右翻转**。立绘是正面偏侧（光从左上打过来），
      * 翻转会让高光跑到右边，比"不转身"更假。方向感交给 `sway`（左右倾）。
      *
-     * 重新启用的前提：垫子上只放 1~2 只（那时横向有富余），
-     * 或者换成更大的场地。把 PET_WALK 打开、PET_ROAM_R 调到
-     * "最小缝的一半"以内即可，别直接调大。
+     * PET_WALK 已打开（用户要求嬉戏）。自由溜达照旧只走小步；
+     * 大幅度的位移全部来自互动剧本（stageChase / stagePounce），
+     * 它们的落点都是**预先算好、保证不进邻只格子**的。
      */
     private startWalk(p: PetRt) {
         const curX = p.node.position.x;
@@ -1044,33 +1087,243 @@ class HomeController {
         let ty = p.yOff;
 
         if (Math.random() < 0.78) {
-            /* 横向：在自己的 ±26 领地里挑一个点。
+            /* 横向：在自己的 ±PET_ROAM_R 领地里挑一个点。
                距离压到 18~44px —— 再长就没有"一群"的紧凑感，也重新读成滑。 */
             const dist = rand(18, 44) * (Math.random() < 0.5 ? -1 : 1);
             tx = clamp(curX + dist, p.left, p.right);
             ty = clamp(p.yOff + rand(-4, 4), p.far, p.near);
         } else {
-            /* 前后：在两排之间挪一点（±7px 的深度带） */
+            /* 前后：在深度带里挪一点 */
             ty = rand(p.far, p.near);
             tx = clamp(curX + rand(-10, 10), p.left, p.right);
         }
         /* 两条支路都收一次口，保证永远站在草地这条带上 */
         ty = clamp(ty, p.far, p.near);
 
-        const d = Math.hypot(tx - curX, ty - p.yOff);
         /* 走不出东西就换一个，不要把"原地抖"当成一次移动 */
-        if (d < 10) { p.wait = 0.4; return; }
+        if (Math.hypot(tx - curX, ty - p.yOff) < 10) { p.wait = 0.4; return; }
+
+        this.setWalkTarget(p, tx, ty, rand(42, 58));
+    }
+
+    /**
+     * 设定一次行走目标并起步。自由溜达和互动剧本共用同一条位移管线
+     * （梯形速度 + 步频锁位移）—— 剧本要是另写一套移动，脚就会打滑。
+     * spd 是期望的匀速段速度（px/s），实际时长由距离反推。
+     */
+    private setWalkTarget(p: PetRt, tx: number, ty: number, spd: number) {
+        if (!p.node || !p.node.isValid) return;
+        const curX = p.node.position.x;
+        tx = clamp(tx, p.left, p.right);
+        ty = clamp(ty, p.far, p.near);
 
         p.fx = curX; p.fy = p.yOff;
         p.tx = tx; p.ty = ty;
         p.wt = 0;
+        const d = Math.hypot(tx - curX, ty - p.yOff);
         /* 42~58 px/s：84px 高的角色按人步速等比约 50px/s。
            低于 40 读成"飘"，高于 65 读成"溜"。 */
-        p.wd = clamp(d / rand(42, 58), 0.55, 2.0);
+        p.wd = clamp(d / Math.max(24, spd), 0.35, 2.0);
         p.dir = tx >= curX ? 1 : -1;
         p.moving = true;
         /* 起身：取消正在演的原地姿势，不然会一边伸懒腰一边走 */
         p.pose = 0;
+    }
+
+    /* ------------------------------------------------------------------
+     * 嬉戏剧本
+     * 用户的原话是"嬉戏玩耍空间"。原地姿势是"活着"，剧本互动才是"玩耍"。
+     * 所有位移的落点都**预先算好**（贴边即停、钳进领地），
+     * 嬉戏绝不破坏"互相不遮挡"那条底线。
+     * ------------------------------------------------------------------ */
+
+    private petOk(q: PetRt): boolean {
+        return !!(q.node && q.node.isValid && q.node.active);
+    }
+
+    /** 延时剧本。用 this.t 排程而不是 setTimeout —— 测试环境没有真实的定时器 */
+    private script(delay: number, fn: () => void) {
+        this.scriptQ.push({ at: this.t + delay, fn });
+    }
+
+    private tickScript() {
+        if (!this.scriptQ.length) return;
+        const keep: Array<{ at: number; fn: () => void }> = [];
+        for (const s of this.scriptQ) {
+            if (this.t >= s.at) s.fn(); else keep.push(s);
+        }
+        this.scriptQ = keep;
+    }
+
+    private tickPlay(dt: number) {
+        this.tickScript();
+        this.playCd -= dt;
+        if (this.playCd <= 0) {
+            this.playCd = rand(4.5, 8.5);
+            this.stagePlay();
+        }
+        this.tickButterfly(dt);
+    }
+
+    /** 挑剧本：有伴优先追逐（互动最"嬉戏"），落单就自己扑一下 */
+    private stagePlay() {
+        const idle = this.pets.filter(q => this.petOk(q) && !q.moving && q.pounce === 0 && q.pop <= 0);
+        if (!idle.length) return;
+
+        if (idle.length >= 2 && Math.random() < 0.62) {
+            /* 同排相邻对：创建顺序 = 排位顺序（前排偶数位、后排奇数位），
+               同排相邻的索引差是 2。只挑相邻 —— 隔着两只去追，
+               中间那位就成了被无视线穿过的路人 */
+            const pairs: Array<[PetRt, PetRt]> = [];
+            for (let i = 0; i < this.pets.length - 2; i++) {
+                const a = this.pets[i], b = this.pets[i + 2];
+                if (this.petOk(a) && this.petOk(b) && !a.moving && !b.moving &&
+                    a.pounce === 0 && b.pounce === 0) pairs.push([a, b]);
+            }
+            if (pairs.length) {
+                const pick = pairs[Math.floor(Math.random() * pairs.length)];
+                this.stageChase(pick[0], pick[1]);
+                return;
+            }
+        }
+        this.stagePounce(idle[Math.floor(Math.random() * idle.length)]);
+    }
+
+    /** 追逐：a 逼近 → b 逃（或被追到墙角原地急跳）→ a 弓背邀玩。
+     *  a 的停点 = 贴到 b 的近侧边缘外 10px，**预先算好**，绝不进对方格子。 */
+    private stageChase(a: PetRt, b: PetRt) {
+        if (!this.petOk(a) || !this.petOk(b)) return;
+        const ax = a.node.position.x, bx = b.node.position.x;
+        const sign = bx >= ax ? 1 : -1;
+        const stopX = bx - sign * (petW(a.name) / 2 + petW(b.name) / 2 + 10);
+        if (Math.abs(stopX - ax) < 16) { this.stagePounce(a); return; }
+        /* 追逐比散步快一档：62 px/s。追逐读成散步是最常见的"假" */
+        this.setWalkTarget(a, stopX, a.yOff, 62);
+
+        /* 第二拍：b 反应。逃得掉就窜开（92 px/s，被追的必须更快）；
+           逃不掉（已经在自己领地边缘）就原地双跳 —— 那是"被堵住了"的读法 */
+        this.script(0.85, () => {
+            if (!this.petOk(b) || b.moving || b.pounce > 0) return;
+            const nbx = b.node.position.x;
+            const flee = nbx + sign * rand(26, 36);
+            const aNow = this.petOk(a) ? a.node.position.x : nbx;
+            const room = flee >= b.left && flee <= b.right &&
+                Math.abs(flee - aNow) > petW(a.name) / 2 + 6;
+            if (room) {
+                this.setWalkTarget(b, flee, b.yOff, 92);
+            } else {
+                b.pop = 0.42;
+                this.script(0.46, () => {
+                    if (this.petOk(b) && !b.moving && b.pounce === 0) b.pop = 0.42;
+                });
+            }
+        });
+        /* 第三拍：追到了，弓背邀玩（伸懒腰的短促版 —— 完整的 2.6s 太拖） */
+        this.script(1.6, () => {
+            if (!this.petOk(a) || a.moving || a.pounce > 0) return;
+            a.pose = 1; a.poseT = 0; a.poseDur = 0.9;
+        });
+    }
+
+    /** 扑跳。给 towardX 就朝那个方向扑（蝴蝶引导），否则随机 */
+    private stagePounce(p: PetRt, towardX?: number) {
+        if (!this.petOk(p) || p.moving || p.pounce > 0) return;
+        const curX = p.node.position.x;
+        const dir = towardX !== undefined ? (towardX >= curX ? 1 : -1)
+            : (Math.random() < 0.5 ? -1 : 1);
+        /* 落点：26~44px，钳进自己的领地。领地里够不着（贴边）就换反方向 ——
+           别把"扑不出"演成原地抖 */
+        let fx = clamp(curX + dir * rand(26, 44), p.left, p.right);
+        if (Math.abs(fx - curX) < 14) {
+            fx = clamp(curX - dir * rand(26, 44), p.left, p.right);
+        }
+        if (Math.abs(fx - curX) < 12) return;
+
+        p.moving = false;
+        p.pose = 0;
+        p.pDir = dir;
+        p.pDx = fx - curX;
+        p.pFx = curX;
+        p.pounce = 0.94;
+        p.pounceT = 0;
+        /* 步相位一次性推过这段距离：腾空时 gait≈0 看不见跳变，
+           落地后的碎步从正确相位继续 —— "走多远迈多少"这条铁律不破 */
+        p.walked += Math.abs(p.pDx);
+    }
+
+    /* ---------------- 蝴蝶：嬉戏的"借口" ----------------
+       宠物互玩需要由头。一只周期掠过垫子上空的蝴蝶给"扑"一个对象，
+       也给整个画面一个不属于宠物阵营的第三方动点 —— 画面因此有了纵深。 */
+
+    private tickButterfly(dt: number) {
+        const bf = this.bf;
+        if (!bf) {
+            if ((this.bfCd -= dt) <= 0) this.launchButterfly();
+            return;
+        }
+        if (!bf.node.isValid) { this.bf = null; return; }
+        if (!bf.on) return;
+
+        bf.t += dt;
+        bf.x += bf.dir * 74 * dt;
+        /* 蛾式的飘：主飞行是匀速直线，上下是正弦 —— 蝴蝶不走直线 */
+        bf.y = bf.baseY + Math.sin(bf.t * 3.4) * 13;
+        bf.node.setPosition(bf.x, bf.y, 0);
+        this.drawButterfly(bf);
+
+        for (const p of this.pets) {
+            if (!this.petOk(p) || bf.chased.has(p)) continue;
+            if (Math.abs(p.node.position.x - bf.x) < 44 &&
+                !p.moving && p.pounce === 0) {
+                bf.chased.add(p);
+                this.stagePounce(p, bf.x);
+            }
+        }
+
+        if ((bf.dir > 0 && bf.x > W / 2 + 70) || (bf.dir < 0 && bf.x < -W / 2 - 70)) {
+            bf.on = false;
+            bf.node.active = false;
+            this.bf = null;
+            this.bfCd = rand(7, 12);
+        }
+    }
+
+    private launchButterfly() {
+        const n = new Node('__butterfly');
+        n.parent = this.canvas;
+        n.addComponent(UITransform).setContentSize(48, 40);
+        const g = n.addComponent(Graphics);
+        /* 顶层：它是镜头前的活物，压在宠物上面 */
+        n.setSiblingIndex(this.canvas.children.length - 1);
+        const dir = Math.random() < 0.5 ? 1 : -1;
+        /* 飞行高度：设计 y≈700，在前排头顶（602+66=668）上方掠过 */
+        const baseY = H / 2 - 700;
+        this.bf = {
+            node: n, g, on: true,
+            x: dir > 0 ? -W / 2 - 50 : W / 2 + 50,
+            y: baseY, baseY, dir, t: 0,
+            chased: new Set<PetRt>(),
+        };
+    }
+
+    /** 每帧重画。两个翅膀同相位扑扇（蛾类），身体是深色小椭圆 + 两根触角 */
+    private drawButterfly(bf: BfRt) {
+        const g = bf.g;
+        g.clear();
+        const flap = Math.sin(bf.t * 21);
+        g.fillColor = new Color(255, 205, 96, 235);
+        g.ellipse(-5, 5, 5.5, 2.6 + 2.8 * flap);
+        g.fill();
+        g.ellipse(5, 5, 5.5, 2.6 + 2.8 * flap);
+        g.fill();
+        g.fillColor = new Color(64, 50, 38, 255);
+        g.ellipse(0, 2, 2.0, 3.2);
+        g.fill();
+        g.lineWidth = 1.2;
+        g.strokeColor = new Color(64, 50, 38, 255);
+        g.moveTo(-1, 4); g.lineTo(-3, 8);
+        g.moveTo(1, 4); g.lineTo(3, 8);
+        g.stroke();
     }
 
     private tickPet(p: PetRt, dt: number) {
@@ -1086,7 +1339,27 @@ class HomeController {
         let x = x0;
         let yOff = y0;
 
-        if (p.moving) {
+        /* ---------- 扑跳（嬉戏主动作）----------
+           三段固定节拍：蹲 0.26 / 腾空 0.38 / 落地 0.30。
+           扑跳期间**不走路、不摆姿势** —— 位移和姿势两条通道同时动，
+           就会变成"一边伸懒腰一边飞"，那不是嬉戏是抽搐。 */
+        let hop = 0;
+        if (p.pounce > 0) {
+            p.pounceT += dt;
+            const T = p.pounceT;
+            if (T >= 0.26 && T < 0.64) {
+                const k = (T - 0.26) / 0.38;
+                const e = 1 - (1 - k) * (1 - k);   // easeOut：起跳猛、落地缓
+                x = p.pFx + p.pDx * e;
+                /* 抛物线只给腾空段。15px 是身高的 23% ——
+                   再高就读成"跳高"，扑是贴地前扑的爆发。 */
+                hop = Math.sin(k * Math.PI) * 15;
+            }
+            if (T >= 0.94) {
+                p.pounce = 0;
+                p.wait = rand(0.8, 1.8);
+            }
+        } else if (p.moving) {
             p.wt += dt;
             const raw = clamp(p.wt / p.wd, 0, 1);
 
@@ -1185,6 +1458,21 @@ class HomeController {
             }
         }
 
+        /* 扑跳的三段形变（优先于原地姿势 —— 扑跳开始时姿势已被清零）：
+           蹲（压 0.84 预备）→ 腾空（拉长 1.07，"弹出去"）→ 落地（压 0.88 回弹）。 */
+        if (p.pounce > 0) {
+            const T = p.pounceT;
+            if (T < 0.26) {
+                const w = T / 0.26;
+                psy = 1 - 0.16 * w; psx = 1 + 0.08 * w;
+            } else if (T < 0.64) {
+                psy = 1.07; psx = 0.94;
+            } else {
+                const bell = Math.sin(clamp((T - 0.64) / 0.30, 0, 1) * Math.PI);
+                psy = 1 - 0.12 * bell; psx = 1 + 0.06 * bell;
+            }
+        }
+
         /* 点击弹跳：抛物线包络，跟碎步的 y 通道叠加 */
         let pop = 0;
         if (p.pop > 0) {
@@ -1210,7 +1498,7 @@ class HomeController {
         p.sx += (sxT - p.sx) * kk;
         p.rot += ((sway + prot) - p.rot) * kk;
 
-        const wy = p.baseY + yOff + bob + pop;
+        const wy = p.baseY + yOff + bob + pop + hop;
         p.node.setPosition(x, wy, pos.z);
         p.node.setScale(p.sx, p.sy, 1);
         p.node.angle = p.rot;
@@ -1218,10 +1506,11 @@ class HomeController {
         /* ---------- 影子：只跟 x 和地面，不跟 bob ----------
            **这是"飘不飘"的唯一开关。** 影子跟着 bob 一起上下，眼睛就找不到地面，
            1.2px 的起伏都会被读成脚离地 —— 当年就是这么判定失败的。
-           离地越高影子越小，这也是"跳起来了"唯一的视觉提示。 */
+           离地越高影子越小，这也是"跳起来了"唯一的视觉提示。
+           扑跳的腾空弧线（hop）同样计入离地量，扑出去时影子收小。 */
         if (p.shadow && p.shadow.isValid) {
             p.shadow.setPosition(x, p.baseY + yOff - 3, 0);
-            const lift = Math.max(0, bob + pop);
+            const lift = Math.max(0, bob + pop + hop);
             const k2 = 1 - Math.min(0.32, lift * 0.028);
             /* 横向跟身体一起变宽（坐/趴下去时身子变宽，接触面也确实更宽），
                但只跟一半 —— 跟满会让影子比身体还宽，那就成了水渍。 */
@@ -1533,6 +1822,11 @@ class HomeController {
         this.presses.length = 0;
         this.later.length = 0;
         this.fogs.length = 0;
+        /* 延时剧本里闭包持有的宠物全部失效了，留着只会演出鬼戏 */
+        this.scriptQ.length = 0;
+        /* 蝴蝶节点挂在 canvas 下，随场景销毁；这里只断引用。
+           bf.node 有效性不检查 —— dispose 本来就可能在场景销毁之后被调 */
+        this.bf = null;
         this.arrow = this.tip = this.goCard = null;
         this.toastBox = null;
         this.toastOp = null;
@@ -1565,6 +1859,8 @@ class HomeController {
             for (const fn of jobs) fn();
         }
 
+        /* 嬉戏剧本先于宠物步进：剧本设的行走目标，本帧就该被步进用上 */
+        this.tickPlay(dt);
         for (const p of this.pets) this.tickPet(p, dt);
 
         for (let i = this.presses.length - 1; i >= 0; i--) {

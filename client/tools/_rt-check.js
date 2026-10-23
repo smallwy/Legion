@@ -5,7 +5,7 @@
  * 编译后直接跑 HomeRuntime，然后用「派发触摸事件 + 推进帧」的方式断言：
  *
  *   1. 脚本能接管场景（说明顶层自启动这条路通）
- *   2. 宠物站在原地呼吸，不横移、不蹦跳
+ *   2. 宠物会走动会嬉戏（PET_WALK 开），但不出领地、影子不跟跳
  *   3. 每个入口都注册了点击监听（这是「点了有反应」的充要条件）
  *   4. 点出门 → 出发卡出现；点徽标 → 提示出现且有正确文案
  *
@@ -125,50 +125,49 @@ const petsRoot = canvas.getChildByName('Pets');
 const sugar = petsRoot && petsRoot.getChildByName('砂糖');
 ok(!!sugar, '找到宠物节点 Pets/砂糖');
 
-/* --- 5.1 宠物站着：没有行走帧，位移会被读成滑或者跳 --- */
+/* --- 5.1 宠物走动（PET_WALK 已打开，用户要求"嬉戏玩耍"）。
+   旧断言"站在原地"已作废 —— 那是走动被关掉时代的防抖回归。
+   新不变量：会走，但不出领地（slot ± PET_ROAM_R = ±20，放宽到 26 收噪声）。 */
 const x0 = sugar.position.x;
-let minX = Infinity, maxX = -Infinity;
+let minX = Infinity, maxX = -Infinity, maxDev = 0;
 
-/* 推进 20 秒。x 必须钉在出生点，允许浮点噪声，不允许溜达。 */
+/* 推进 20 秒。x 允许溜达，但不许漂出领地、也不许横穿整条垫子。 */
 for (let i = 0; i < 1200; i++) {
     fakeNow += 1000 / 60;
     director.emit(Director.EVENT_BEFORE_UPDATE);
     const x = sugar.position.x;
     minX = Math.min(minX, x);
     maxX = Math.max(maxX, x);
+    maxDev = Math.max(maxDev, Math.abs(x - x0));
 }
 
 const travel = maxX - minX;
-ok(travel < 1, '宠物站在原地（不横移）', `20 秒内跨度 ${travel.toFixed(2)}px`);
-ok(Math.abs(sugar.position.x - x0) < 1, '脚还在出生的那个点',
-    `x ${sugar.position.x.toFixed(1)}，出生 ${x0.toFixed(1)}`);
+ok(travel >= 6, '宠物真的会走动（PET_WALK 生效）',
+    `20 秒内跨度 ${travel.toFixed(2)}px`);
+ok(maxDev <= 26, '走动不越领地（slot ± 20）',
+    `最大偏离 ${maxDev.toFixed(2)}px（上限 26）`);
 
-/* --- 5.1b 也不上下窜。呼吸是 ±1.5px 的慢正弦，蹦跳是 0.4 秒内抬 9px 以上。 --- */
-let prevY = sugar.position.y;
-let maxStep = 0;
-const trace = [];
+/* --- 5.1b 影子仍然钉地。走动带来的竖直通道（碎步 bob ±1.2、
+   扑跳 hop 15、点击 pop 10）只许出现在**宠物**上 ——
+   影子 y 只由深度 yOff（±7）决定，跨度必须 < 16。
+   影子跟着跳 = 回到"飘在水上"，这条是当年的根因，永远要守。 */
+const shadow = petsRoot.getChildByName('砂糖__shadow');
+ok(!!shadow, '找到影子节点 砂糖__shadow');
+let sMinY = Infinity, sMaxY = -Infinity;
+let shOk = true;
 for (let i = 0; i < 1800; i++) {
     fakeNow += 1000 / 60;
     director.emit(Director.EVENT_BEFORE_UPDATE);
-    const y = sugar.position.y;
-    maxStep = Math.max(maxStep, Math.abs(y - prevY));
-    prevY = y;
-    trace.push(y);
+    sMinY = Math.min(sMinY, shadow.position.y);
+    sMaxY = Math.max(sMaxY, shadow.position.y);
+    /* 影子横向必须钉住宠物本体（误差 0.5px）—— 拖在后面就是"贴图被拖着走" */
+    if (Math.abs(shadow.position.x - sugar.position.x) > 0.5) shOk = false;
 }
-const bandMin = Math.min(...trace);
-const bandMax = Math.max(...trace);
-ok(bandMax - bandMin < 4, '没有蹦跳（整段高度差极小）',
-    `高度差 ${(bandMax - bandMin).toFixed(2)}px（蹦跳那版是 9~28px）`);
-/* ⚠ 这条以前断言的是"站着也有呼吸"（1.5px 正弦）。
-   用户否掉了：「宠物在场景晃动不要了」。锚点在脚底 (0.5,0)，
-   任何竖直位移都读成**脚离地**，因为没有影子跟着动。
-   现在断言反过来：静止就必须真的是 0。 */
-ok(bandMax - bandMin === 0, '静止时完全不晃（脚不离地）',
-    `高度差 ${(bandMax - bandMin).toFixed(2)}px（应为 0）`);
-ok(maxStep < 0.4, '没有蹬地那一下（单帧位移）',
-    `单帧最大 ${maxStep.toFixed(3)}px（蹦跳 1.5+）`);
+ok(shOk, '影子横向钉住宠物（不拖尾）');
+ok(sMaxY - sMinY < 16, '影子不跟跳（竖直只跟深度）',
+    `影子 y 跨度 ${(sMaxY - sMinY).toFixed(2)}px（上限 16）`);
 
-/* --- 5.2 静止时 y 必须恒定，scale 也必须恒定 --- */
+/* --- 5.2 姿势在动，y 也允许动（走动/扑跳都会带竖直分量）。 --- */
 const ys = [];
 const sxs = [];
 for (let i = 0; i < 600; i++) {
@@ -177,14 +176,8 @@ for (let i = 0; i < 600; i++) {
     ys.push(sugar.position.y);
     sxs.push(sugar.scale.x);
 }
-const yMin = Math.min(...ys), yMax = Math.max(...ys);
-ok(yMax - yMin === 0, '宠物静止时 y 恒定', `y 幅度 ${(yMax - yMin).toFixed(2)}px`);
-/* ⚠ 这条以前断言"静止时 scale 恒定（没有'呼吸缩放'）"。
-   现在静止时有**原地姿势**（坐 0.84 / 趴 0.74），scale 本来就该一路变 ——
-   恒定反而是 bug（说明姿势没生效）。
-   "呼吸"那一版真正的破绽是**竖直位移**，已经由上面的「y 幅度 === 0」守住；
-   scale 上单独加一点正弦根本读不出来。所以这里改为守姿势本身：
-   真的会变，而且不会把角色压成一张饼。 */
+/* 原地姿势（坐 0.84 / 趴 0.74）的 scale 本来就该一路变 ——
+   恒定反而是 bug（说明姿势没生效）。 */
 const sMin = Math.min(...sxs), sMax = Math.max(...sxs);
 ok(sMax - sMin > 0.04, '原地姿势真的改变了轮廓',
     `scale 幅度 ${(sMax - sMin).toFixed(3)}（应 > 0.04）`);

@@ -513,6 +513,22 @@ if (OPT.petbox) petBox();
                         's', sc.x.toFixed(3));
                 }
             }
+            /* Graphics 节点的笔画数：渲染图上"看不见但节点在"的层
+               （烟/鸟/蝴蝶）靠这条分辨是没画还是画了没显形 */
+            const gcomp = n.getComponent ? n.getComponent(Graphics) : null;
+            if (gcomp) {
+                /* 父链坐标 + 第一笔的实际颜色：这两样是"节点在、笔画在、
+                   像素没有"这类问题的分水岭 —— 坐标错了是树的问题，
+                   颜色错了是快照的问题。 */
+                const chain = [];
+                let q = n;
+                while (q) { chain.push(`${q.name}(${q.position.x.toFixed(0)},${q.position.y.toFixed(0)})`); q = q.parent; }
+                console.log('[gfx]', n.name, 'active', n.active,
+                    'paths', gcomp.paths.length,
+                    'chain', chain.join(' < '),
+                    'p0', JSON.stringify(gcomp.paths[0]),
+                    'p1', JSON.stringify(gcomp.paths[1]));
+            }
             for (const c of n.children || []) dump(c);
         };
         dump(scene);

@@ -219,6 +219,17 @@ const PET_WALK = true;
  *  ±20 加上各自半宽最多 35px，极端情况下边缘仍留 6px 空隙 —— 不遮挡。 */
 const PET_ROAM_R = 20;
 
+/** 扑跳开关。**现在是关的（2026-10-23 用户反馈"跳的也很奇怪，处理不了就下放"）。**
+ *
+ * 关它的原因很诚实：宠物是单帧立绘，没有腾空/落地/下蹲的动画帧，
+ * 扑跳只能靠 scale + 抛物线硬演 —— 蹲下是整体压扁、腾空是整体拉长，
+ * 观感是"一张贴纸在蹦"，不是"一只动物在跳"。这不是调参数能救的，
+ * 需要美术出 2~3 帧跳姿（蹲/腾空/落地）才有资格重开。
+ *
+ * 关掉后的嬉戏 = 自由溜达 + 追逐（追逐全程在走，被堵到边的反应改为不动），
+ * 蝴蝶照飞，只是没有谁扑它 —— 它仍是画面里的第三方动点。 */
+const PET_POUNCE = false;
+
 /** 落点：名字 → 垫子上的位置 */
 type PetSlot = { name: string; x: number; y: number; depth: number };
 
@@ -480,6 +491,24 @@ type BfRt = {
     chased: Set<PetRt>;
 };
 
+/** 一缕炊烟。自绘软圆：升起、变大、变淡。不是粒子系统，别往通用化做 */
+type PuffRt = {
+    x: number; y: number;
+    r: number;
+    life: number; max: number;
+    vx: number; vy: number;
+};
+
+/** 一只远处的飞鸟。两段线画的 V，扑扇 = 翅尖 y 振荡。远到看不清形态，反而真 */
+type BirdRt = {
+    x: number; y: number;
+    dir: number;
+    t: number;
+    sp: number;
+    ph: number;
+    s: number;
+};
+
 /* ==========================================================================
  * 控制器
  * ========================================================================== */
@@ -519,6 +548,16 @@ class HomeController {
     private bf: BfRt | null = null;
     private bfCd = rand(5, 9);
     private fogs: FogRt[] = [];
+
+    /** 炊烟。烟囱口在 bg.png (415,163) → 设计 (346,98) → 本地 (-294,262)。
+     *  bg 里烟囱上方本来就画了一缕淡烟，动态烟从同一个口续上、顺同一个风向。 */
+    private smoke: PuffRt[] = [];
+    private smokeG: Graphics | null = null;
+    private smokeCd = 1.0;
+    /** 远处飞鸟。8~15 秒一批（1~3 只）横穿天空 */
+    private birds: BirdRt[] = [];
+    private birdG: Graphics | null = null;
+    private birdCd = rand(2, 5);
 
     /** 待机引导动效的目标（按钮箭头、提示条、宠物卡） */
     private arrow: Node | null = null;
@@ -1165,7 +1204,7 @@ class HomeController {
         this.tickButterfly(dt);
     }
 
-    /** 挑剧本：有伴优先追逐（互动最"嬉戏"），落单就自己扑一下 */
+    /** 挑剧本：有伴就追逐。PET_POUNCE=false 时落单的保持自由溜达 */
     private stagePlay() {
         const idle = this.pets.filter(q => this.petOk(q) && !q.moving && q.pounce === 0 && q.pop <= 0);
         if (!idle.length) return;
@@ -1186,7 +1225,7 @@ class HomeController {
                 return;
             }
         }
-        this.stagePounce(idle[Math.floor(Math.random() * idle.length)]);
+        if (PET_POUNCE) this.stagePounce(idle[Math.floor(Math.random() * idle.length)]);
     }
 
     /** 追逐：a 逼近 → b 逃（或被追到墙角原地急跳）→ a 弓背邀玩。
@@ -1196,7 +1235,7 @@ class HomeController {
         const ax = a.node.position.x, bx = b.node.position.x;
         const sign = bx >= ax ? 1 : -1;
         const stopX = bx - sign * (petW(a.name) / 2 + petW(b.name) / 2 + 10);
-        if (Math.abs(stopX - ax) < 16) { this.stagePounce(a); return; }
+        if (Math.abs(stopX - ax) < 16) return;
         /* 追逐比散步快一档：62 px/s。追逐读成散步是最常见的"假" */
         this.setWalkTarget(a, stopX, a.yOff, 62);
 
@@ -1211,7 +1250,9 @@ class HomeController {
                 Math.abs(flee - aNow) > petW(a.name) / 2 + 6;
             if (room) {
                 this.setWalkTarget(b, flee, b.yOff, 92);
-            } else {
+            } else if (PET_POUNCE) {
+                /* 逃不掉（已经在自己领地边缘）就原地双跳 —— 那是"被堵住了"的读法。
+                   PET_POUNCE=false 时什么都不做：被堵住就站着看它追过来 */
                 b.pop = 0.42;
                 this.script(0.46, () => {
                     if (this.petOk(b) && !b.moving && b.pounce === 0) b.pop = 0.42;
@@ -1276,7 +1317,8 @@ class HomeController {
             if (Math.abs(p.node.position.x - bf.x) < 44 &&
                 !p.moving && p.pounce === 0) {
                 bf.chased.add(p);
-                this.stagePounce(p, bf.x);
+                /* PET_POUNCE=false：蝴蝶只是动点，没人扑它 */
+                if (PET_POUNCE) this.stagePounce(p, bf.x);
             }
         }
 
@@ -1324,6 +1366,119 @@ class HomeController {
         g.moveTo(-1, 4); g.lineTo(-3, 8);
         g.moveTo(1, 4); g.lineTo(3, 8);
         g.stroke();
+    }
+
+    /** 把节点插到背景之上（紧贴 BG 上面一层）。
+     *  **不能写死 setSiblingIndex(1)**：BG 本来就占着 Canvas 的第 1 位，
+     *  插到 1 会把 BG 顶到 2，自己反而落到 BG **下面** —— 整张背景盖住，
+     *  节点在、笔画在、日志全绿，像素上一个都没有。这个坑排查了很久，
+     *  记在这里：判断"画了没有"永远以像素为准，不以节点为准。 */
+    private aboveBg(n: Node) {
+        const kids = this.canvas.children;
+        for (let i = 0; i < kids.length; i++) {
+            if (kids[i].name === 'BG') { n.setSiblingIndex(i + 1); return; }
+        }
+        n.setSiblingIndex(1);
+    }
+
+    /* ---------------- 炊烟 ----------------
+       三条铁律决定"烟"读不读得成烟：半径必须单调变大（散开）、
+       alpha 必须单调变小（消散）、上升必须匀速（热浮力不是弹跳）。
+       任何一条破了就读成泡泡。峰值 alpha 只有 ~132：上面还压着雾层。 */
+    private tickSmoke(dt: number) {
+        if (!this.canvas || !this.canvas.isValid) return;
+        if (!this.smokeG || !this.smokeG.node.isValid) {
+            const n = new Node('__smoke');
+            n.parent = this.canvas;
+            n.addComponent(UITransform).setContentSize(90, 220);
+            this.smokeG = n.addComponent(Graphics);
+            this.aboveBg(n);
+        }
+        this.smokeCd -= dt;
+        if (this.smokeCd <= 0) {
+            this.smokeCd = rand(0.45, 0.8);
+            this.smoke.push({
+                x: -294 + rand(-3, 3), y: 262 + rand(-2, 2),
+                r: rand(3.4, 5),
+                life: 0, max: rand(4.2, 5.4),
+                /* 上升压慢：太快的话烟的后半生都在屏幕外，白升 */
+                vx: rand(7, 15), vy: rand(14, 20),
+            });
+            if (this.smoke.length > 10) this.smoke.shift();
+        }
+        let w = 0;
+        for (const q of this.smoke) {
+            q.life += dt;
+            if (q.life < q.max) this.smoke[w++] = q;
+        }
+        this.smoke.length = w;
+
+        const g = this.smokeG;
+        g.clear();
+        for (const q of this.smoke) {
+            const k = q.life / q.max;
+            /* 峰值 128：上面还罩着雾层（fog-top），76 的烟透过来就没了 */
+            const a = Math.round(132 * (1 - k) * (1 - k * 0.3));
+            const r = q.r + k * 11;
+            g.fillColor = new Color(252, 248, 240, a);
+            g.ellipse(q.x + q.vx * q.life, q.y + q.vy * q.life, r, r * 0.82);
+            g.fill();
+        }
+    }
+
+    /* ---------------- 远处的飞鸟 ----------------
+       零素材的纵深：天上是唯一还没放任何"活物"的层，一只慢速横穿的
+       小 V 形，比任何云的位移都更能说明"这个世界在镜头外面继续着"。
+       参数刻意压小：翅幅 ≤8px、速度 ≤60px/s、颜色比天空深一档 ——
+       它们是"远处的鸟"，不是"屏幕上的动画"。 */
+    private tickBirds(dt: number) {
+        if (!this.canvas || !this.canvas.isValid) return;
+        if (!this.birdG || !this.birdG.node.isValid) {
+            const n = new Node('__birds');
+            n.parent = this.canvas;
+            n.addComponent(UITransform).setContentSize(W, 240);
+            this.birdG = n.addComponent(Graphics);
+            this.aboveBg(n);
+        }
+        this.birdCd -= dt;
+        if (this.birdCd <= 0) {
+            this.birdCd = rand(8, 15);
+            const dir = Math.random() < 0.5 ? 1 : -1;
+            const y = rand(100, 230);   // 本地坐标：设计 y 130~260 的天空带
+            const n2 = 1 + Math.floor(Math.random() * 3);
+            let off = 0;
+            for (let i = 0; i < n2; i++) {
+                off += rand(22, 38);
+                this.birds.push({
+                    x: -dir * (W / 2 + 60) - dir * off,
+                    y: y + rand(-14, 14),
+                    dir, t: rand(0, 6), sp: rand(46, 60),
+                    ph: rand(0, 6.28), s: rand(0.75, 1.15),
+                });
+            }
+        }
+        let w = 0;
+        for (const b of this.birds) {
+            b.t += dt;
+            b.x += b.dir * b.sp * dt;
+            if ((b.dir > 0 && b.x < W / 2 + 80) || (b.dir < 0 && b.x > -W / 2 - 80)) {
+                this.birds[w++] = b;
+            }
+        }
+        this.birds.length = w;
+
+        const g = this.birdG;
+        g.clear();
+        g.lineWidth = 1.9;
+        g.strokeColor = new Color(118, 98, 102, 165);
+        for (const b of this.birds) {
+            const wy = Math.sin(b.t * 7.5 + b.ph) * 4.2 * b.s;
+            const x = b.x, y = b.y + Math.sin(b.t * 1.1 + b.ph) * 3;
+            g.moveTo(x - 6.5 * b.s, y + wy);
+            g.lineTo(x, y - 1.5 * b.s);
+            g.lineTo(x + 6.5 * b.s, y + wy);
+            g.stroke();
+        }
     }
 
     private tickPet(p: PetRt, dt: number) {
@@ -1827,6 +1982,8 @@ class HomeController {
         /* 蝴蝶节点挂在 canvas 下，随场景销毁；这里只断引用。
            bf.node 有效性不检查 —— dispose 本来就可能在场景销毁之后被调 */
         this.bf = null;
+        this.smoke.length = 0; this.smokeG = null;
+        this.birds.length = 0; this.birdG = null;
         this.arrow = this.tip = this.goCard = null;
         this.toastBox = null;
         this.toastOp = null;
@@ -1883,6 +2040,9 @@ class HomeController {
             f.node.setPosition(f.node.position.x, f.baseY - (s * 0.5 + 0.5) * f.amp, 0);
             if (f.op) f.op.opacity = Math.round(228 + s * 27);
         }
+
+        this.tickSmoke(dt);
+        this.tickBirds(dt);
 
         if (this.arrow) {
             this.arrow.setPosition(this.arrowBaseX + Math.sin(this.t * Math.PI * 2 / 1.9) * 3, this.arrow.position.y, 0);

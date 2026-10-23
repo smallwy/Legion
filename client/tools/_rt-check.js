@@ -167,10 +167,12 @@ ok(shOk, '影子横向钉住宠物（不拖尾）');
 ok(sMaxY - sMinY < 16, '影子不跟跳（竖直只跟深度）',
     `影子 y 跨度 ${(sMaxY - sMinY).toFixed(2)}px（上限 16）`);
 
-/* --- 5.2 姿势在动，y 也允许动（走动/扑跳都会带竖直分量）。 --- */
+/* --- 5.2 姿势在动，y 也允许动（走动/扑跳都会带竖直分量）。
+ *  40 秒而不是 10 秒：姿势触发是随机的，10 秒窗口可能一只都
+ *  没轮到大幅度姿势，断言就成了抽签。 --- */
 const ys = [];
 const sxs = [];
-for (let i = 0; i < 600; i++) {
+for (let i = 0; i < 2400; i++) {
     fakeNow += 1000 / 60;
     director.emit(Director.EVENT_BEFORE_UPDATE);
     ys.push(sugar.position.y);
@@ -503,6 +505,26 @@ const hots5 = badges5.children.filter((n) => n.name.indexOf('-hot') >= 0);
 ok(hots5.length === 1,
     '接管时清掉残留热区，只剩本代 1 个（自愈生效）',
     `残留 ${hots5.length} 个：${hots5.map((n) => n.name).join(', ')}`);
+
+/* --- 5.13 炊烟与飞鸟：环境生命层必须真的在画 ---
+ * 这层是"纯加法"——加错了顶多没画面，不会崩；所以最危险的失败模式是
+ * "节点在、paths 空"（每帧 clear 后什么都没画上去），离屏渲染看起来
+ * 一切正常但天上地上没有活物。这里直接查笔画数。 */
+const canvas5 = scene5.getChildByName('Canvas');
+for (let i = 0; i < 1500; i++) {
+    fakeNow += 1000 / 60;
+    director.emit(Director.EVENT_BEFORE_UPDATE);
+}
+const smokeN = canvas5.getChildByName('__smoke');
+const birdsN = canvas5.getChildByName('__birds');
+ok(!!smokeN, '炊烟节点存在', 'canvas 下没找到 __smoke');
+ok(!!birdsN, '飞鸟节点存在', 'canvas 下没找到 __birds');
+if (smokeN && birdsN) {
+    const sg = smokeN.getComponent(cc.Graphics);
+    const bgc = birdsN.getComponent(cc.Graphics);
+    ok(!!sg && sg.paths.length > 0, '炊烟有笔画', `paths=${sg ? sg.paths.length : '无组件'}`);
+    ok(!!bgc && bgc.paths.length > 0, '飞鸟有笔画', `paths=${bgc ? bgc.paths.length : '无组件'}`);
+}
 
 delete globalThis.localStorage;
 

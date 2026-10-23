@@ -496,6 +496,18 @@ function onGroundLane(b) { return b.y >= GROUND_Y - 24; }
 /** 同屏最多几颗球。超过就不许再造 —— 见 coatFoe 里的理由 */
 const MAX_BALLS = 2;
 
+/* 波次预告时长（秒）。
+ *
+ * 波次是"场上 ≤1 只就补下一波"——不是清完才刷，这是为了不让人赶路。
+ * 但代价是玩家读成"我打完反而变多了"：1.1 秒的预告在盯场上的时候根本
+ * 注意不到（第 8 关体验评审第 5 条）。所以做三件事：
+ *   ① 预告拉长到 2 秒；
+ *   ② 从场上剩 2 只开始，HUD 常驻一个闪烁小标（见 drawTrail 末尾）；
+ *   ③ 目标卡把总数显式化成「已送 4 / 10」——总数固定一旦可见，
+ *      "变多"的错觉自己就消失。这一条比加动画管用。
+ */
+const WAVE_GAP = 2.0, WAVE_GAP_BOSS = 1.9;
+
 /* ----------------------------------------------------------------------------
    关卡线（8 关，推关制）
    ----------------------------------------------------------------------------
@@ -1302,34 +1314,58 @@ const LEVELS = [
    目标数字全部拿机器人跑 `tools/grove-diag.js` 量过，不是拍脑袋。
    ========================================================================== */
 
+/* ---------------------------------------------------------------------------
+   目标文案：**`name` 是系统词，`title` 是给玩家看的话。**
+
+   两张表分开是没办法的事：
+     · `name` 被冒烟脚本打印成战绩表格（2 字宽度排得整整齐齐），
+       还会被 `goalProgress()` 拿去拼 "清场 4 / 12" 这种断言吃得到的地方。
+       改它一行，表格就歪、断言就红。
+     · 而 HUD 上真的写"清场"两个字，玩家得先翻译一遍才知道要干什么 ——
+       "清场"是策划的术语，不是玩家的话。
+
+   所以 HUD 只读 `title` + `brief`，其余一切照旧读 `name`。
+
+   `brief` 的口径这次也改了：**写"往哪推"和"推到哪"，不写"怎么推都行"。**
+   上一版「把 12 只全送走，怎么推都行」把自由度当成了信息量 ——
+   玩家读完仍然不知道"送走"这个动词的落点是什么（营地？火坑？出屏？）。
+   现在每句都必须出现一个具体去处或具体数，读完就能动。
+   --------------------------------------------------------------------------- */
 const GOALS = {
   clear: {
     id: "clear", name: "清场", verb: "送走全部",
-    brief: (st, n) => "把 " + n + " 只全送走，怎么推都行",
+    title: "全部送回家",
+    brief: (st, n) => n + " 只一只不留，推进营地或火坑都算",
   },
   limit: {
     id: "limit", name: "限球", verb: "只用 ",
-    brief: (st) => "最多造 " + st.ballLimit + " 颗球，多出来的都靠「卷」",
+    title: "省着点用",
+    brief: (st) => "最多造 " + st.ballLimit + " 颗球，不够就让它们互相滚",
   },
   chain: {
     id: "chain", name: "连锁", verb: "一球 ",
-    brief: (st) => "有一颗球里要装够 " + st.chain + " 只",
+    title: "一网打尽",
+    brief: (st) => "有一颗球里要装够 " + st.chain + " 只小怪",
   },
   bank: {
     id: "bank", name: "落袋", verb: "走营地 ",
-    brief: (st) => "至少 " + st.bank + " 只要从营地送走（火坑不算）",
+    title: "走正门回去",
+    brief: (st) => "至少 " + st.bank + " 只要滚进营地，火坑不算数",
   },
   collect: {
     id: "collect", name: "收成", verb: "攒够 ",
-    brief: (st) => "收成攒到 " + st.collect + " —— 火坑 ×2，是唯一够快的路子",
+    title: "攒够口粮",
+    brief: (st) => "攒到 " + st.collect + " 份口粮，火坑给双份，快得多",
   },
   intact: {
     id: "intact", name: "零崩", verb: "不许崩",
-    brief: () => "一颗球都不许漏气崩开 —— 推得慢就是输",
+    title: "一个都别碎",
+    brief: () => "球一颗都不许崩开，慢一点推稳",
   },
   nohit: {
     id: "nohit", name: "无伤", verb: "不许挨打",
-    brief: () => "一次都不能被碰到 —— 预瞄线要用来躲，不只是用来推",
+    title: "一根毛都别掉",
+    brief: () => "一次都不能被碰到，按住 Shift 看预瞄线躲",
   },
 };
 
@@ -1448,6 +1484,16 @@ const S = {
   settleT: 0,
   best: new Array(LEVELS.length).fill(null),   // 每关最佳评价（"S"/"A"/"B"/null）
   rankPrev: "",         // 打这一关**之前**的最佳评价。结算面板用它判断"是不是新纪录"
+  /* 这一局通关瞬间到家的伙伴（heroId 数组，多数关是空数组）。
+   * 名字查 `HERO_CN[id]`。
+   *
+   * 为什么要存在 S 上：结算卡是**独立于 recordClear 的一次绘制**，
+   * 而 recordClear 只在通关那一刻算得出"刚刚跨过了哪条阈值"。
+   * 上一版 recordClear 的返回值被直接丢掉了 —— 于是"通第 8 关 = 星屑到家"
+   * 这件事全程只靠一条 3.6 秒就消失的 DOM 提示，玩家推开一场硬仗、
+   * 屏幕上什么都没发生，回主界面才发现多了一只。
+   * 现在算一次、存在这儿、结算卡和横幅都读它。 */
+  unlocked: [],
   /* 雪厚 0..1。**只有雪原关会长**，其余关恒为 0 —— 这是"雪是机制"的总开关。
      长满要 90 秒，而第 2 关的 par 是 60 秒：也就是说多数人在它最厚之前就打完了，
      重打的人才会吃到"整片白 + 敌人冻僵"。
@@ -1842,6 +1888,9 @@ function beginRun(i) {
      落雪drawSnowfall 会自己 return，但脚印是数组，不会自己消失）。 */
   S.snowDepth = 0;
   S.footprints.length = 0;
+  /* 上一关到家那几只不许跟到下一关的结算卡上 —— 结算卡的横幅是
+     "刚刚发生的事"，留着上一关的名字就会变成"这一关也在解锁谁"。 */
+  S.unlocked = [];
   S.progress = Math.max(S.progress, S.stage);
   const SI = curStage();
   loadLevel(S.stage);
@@ -1862,7 +1911,14 @@ function beginRun(i) {
     dead: false,
   };
   S.phase = "play";
-  addText(W / 2, 150, "第 " + (S.stage + 1) + " 关  " + SI.name + "  ·  " + curGoal().name,
+  /* 开场大字只报**关卡名**，不重复报目标。
+   *
+   * 「第 8 关 双塔 · 全部送回家」这句里的目标名，右上角卡片第一行**已经写着**
+   * 同样的四个字，而且卡片是常驻的、字更大、旁边还有进度。
+   * 同一句话说两遍不会让人更清楚，只会让"全部送回家"这行字看起来
+   * 像关卡名字的一部分 —— 玩家读成「这关叫'双塔·全部送回家'」。
+   */
+  addText(W / 2, 150, "第 " + (S.stage + 1) + " 关  " + SI.name,
           "#FFFFFF", 26, 1.6);
   // 全饿的第一关必须说明白。不说的话，玩家按 K 没反应只会觉得游戏坏了
   if (bellyTier() === 0) {
@@ -2316,7 +2372,30 @@ function updateFoe(f, dt) {
       f.face = sign(dx);
     }
     f.x += f.vx * dt;
-    f.y = f.homeY + Math.sin(f.bob * 0.8) * 18;
+    /* ---- 悬停高度：这是"半天打不着"的真正病根 ----
+     *
+     * 关卡表里乌鸦的出生 y 填的是 300。而玩家在 350 层台面平推时，
+     * 球心在 `350 - r` = 328（普通球 r=22）；碰撞阈值是 `b.r + f.h/2` = 22+16 = 38。
+     * 也就是说**鸦心必须 ≥ 290，即 y ≥ 306 才撞得到**。
+     * y 的基准是 300 → 它整个摆动周期里大部分时间飘在打不到的高度上。
+     *
+     * 走过的弯路（留在这里防再踩）：先把摆幅从 18 收到 7，结果**更打不着**——
+     * 摆幅是让它偶尔"低下来"进判定区的唯一手段，收窄等于把这个机会也砍掉了
+     * （实测第 8 关机器人从 79s 达标直接变 240s 超时、造球数 38→156）。
+     * 摆幅是美术参数，**悬停高度才是那个要动的数**。
+     *
+     * 还有一条：摆幅收到 7 **即使配上正确的下沉量**也会把机器人拖死
+     * （乌鸦几乎贴在判定线上一动不动，机器人反复糊它 → 撞 MAX_BALLS 上限
+     * → 卡在"想造球造不出来"的循环里，240s 清不了场）。
+     * 摆幅 18 保留的那点错开节奏，反而让"糊人 / 造球 / 球滚走"错得开。
+     * **这不是鸟的问题，是节奏不能压成常数。**
+     *
+     * 现在：基准 300 下沉 18（落到 318），摆幅保持 18。
+     * y ∈ [300, 336] → 鸦心 ∈ [284, 320] → dy ∈ [8, 44]。
+     * 阈值 38 只要求鸦心 ≥ 290（y ≥ 306），即**约 83% 的周期可打**（原来 39%）。
+     * 视觉上它仍然在台面上方低飞，不会贴到台面。 */
+    const FLY_DROP = 18;
+    f.y = f.homeY + FLY_DROP + Math.sin(f.bob * 0.8) * 18;
     f.x = clamp(f.x, WALL_L + f.w / 2, WALL_R - f.w / 2);
     return;
   }
@@ -2464,7 +2543,12 @@ function updateBoss(f, dt) {
         S.foes.push(l);
         for (let k = 0; k < 8; k++) addFrag(lx + rand(-9, 9), f.y - 10, 5, "#D8F09A");
       }
-      addText(f.x, f.y - f.h - 26, "钻出两只幼虫", "#D8F09A", 19);
+      /* 文案要说明"它是干嘛的"。
+       * 原来只写"钻出两只幼虫"，玩家看到的就是"又冒出两只虫"，
+       * 而它的真实作用是爬回 BOSS 身边被吃掉、给 BOSS 补一层壳 ——
+       * 不写出来，这一整套繁殖闭环在玩家眼里就是"敌人凭空变多"
+       * （体验评审第 5 条）。 */
+      addText(f.x, f.y - f.h - 26, "幼虫钻出 · 回巢给 BOSS 补壳", "#D8F09A", 17);
       S.shake = Math.max(S.shake, 6);
     }
     if (f.breeding <= 0) { f._born = false; f.spawnT = 7.5; }
@@ -2836,6 +2920,14 @@ function updateBalls(dt) {
       for (let i = 0; i < 6; i++) {
         addFrag(hx, b.y - b.r * 1.4, 5, i % 2 ? "#C98A50" : "#8B5A32");
       }
+      /* 方向指向。木屑 + 震屏已经给了"有东西被撞了"，但没有给"往哪弹"——
+       * 第 8 关两塔各 314 宽、八关里球道最窄，球半秒就撞一次墙，
+       * 玩家看到的是"球在乱飞"，读成弹簧bug（体验评审第 4 条）。
+       * 只在真撞（impact ≥ 200）时才出字：贴墙慢慢蹭的时候
+       * 每帧都弹一下会刷满屏幕，那比不写更糟。 */
+      if (impact >= 200) {
+        addText(left ? WALL_L + 40 : WALL_R - 40, b.y - b.r * 2 - 4, "弹!", "#FFD8A0", 15);
+      }
       if (impact > 200 && b.pushed) {
         b.wallHits = (b.wallHits || 0) + 1;
         if (b.wallHits >= 3) { burstBall(b, "撞散了…"); continue; }
@@ -2948,6 +3040,10 @@ function updateBalls(dt) {
       for (const f of S.foes) {
         if (f.dead || f.coat >= (f.cm || 3)) continue;
         const dx = Math.abs(b.x - f.x), dy = Math.abs((b.y - b.r) - (f.y - f.h / 2));
+        /* 这里**不加**飞行单位的判定容差。
+         * 试过 `+10`，但那是"隔空撞到"——玩家看到球还没碰到鸟它就变球了，
+         * 比打不着更糟。正确做法是把鸟的悬停高度压进判定区（见 fly 分支的
+         * FLY_DROP），让它在物理上真的够得着，而不是放宽判定去凑。 */
         if (dx > b.r + f.w / 2 || dy > b.r + f.h / 2) continue;
 
         // BOSS：球撞上去糊一层，然后**弹回来**。
@@ -6885,9 +6981,100 @@ function drawFoe(g, f) {
   const foeImg = artOf("foe-" + foeKey);
   if (foeImg) {
     const ih = d.vh || bh, iw = ih * (foeImg.width / foeImg.height);
-    const walkBob = f.kind === "walk" || f.kind === "charge"
-      ? Math.abs(Math.sin(t * 8 + (f.bob || 0))) * 1.2 : 0;
-    g.drawImage(foeImg, -iw / 2, bh / 2 - ih - walkBob, iw, ih);
+
+    /* ---------------- 贴图敌人的行走姿态：伸 → 缩 → 顿 ----------------
+     *
+     * 前四版全部失败，前三版是参数没给够，**第四版是方法错了**，
+     * 而且错的地方很具体：用 `sin` 做**连续**形变。
+     *
+     * 连续变化里**没有一帧是静止的**。人眼对这种信号的解读不是"走了一步"，
+     * 而是"这个东西在抖" —— 这正是你说的"一直往前抖动，不是蠕动"。
+     * 爬行也好、四足也好，落脚之后**必然有一段身体不动的支撑相**，
+     * 那段静止才是"一步"这个单位能被看见的原因。跳舞才是一刻不停的。
+     *
+     * 所以这里不用 sin，改成相位切三段（一个周期 = 一步）：
+     *
+     *   0.00 ~ 0.34   伸：身体沿轴线拉长变薄 + 沿朝向前探  (smoothstep 加速)
+     *   0.34 ~ 0.50   缩：挤回短厚 + 收回到位             (smoothstep 减速)
+     *   0.50 ~ 1.00   顿：形变**完全回到 1**，一动不动
+     *
+     * 一半时间静止，是这一版和前三版最根本的差别。
+     *
+     * 频率也必须降。上一版 `6.5 + 8×速度` rad/s → **3~7 步/秒**，
+     * 那个频率下不管什么形变都只会读作抖。现在：
+     *   毛毛虫 0.62s 一步（1.6 步/秒）—— 慢，黏，贴地；
+     *   野猪   0.45s 一步（2.2 步/秒）—— 快一点，因为它是四足冲锋。
+     *
+     * 竖直位移只给野猪，而且只有 2.6px、只出现在"伸"的那一段（蹬地一抬）。
+     * 给虫子加竖直起伏试过：它是贴地爬的东西，一抬就露馅成"跳"。
+     * 野猪那张图本身就是四腿腾空的奔跑姿态，不抬反而不对。
+     *
+     * **伸缩的轴必须是身体轴（水平），不是竖直。**
+     * 前几版一直在缩放 `sqY` —— 那是"变高变瘦"，读作长个儿/呼吸，
+     * 和"爬行"没有任何关系。毛毛虫蠕动、四足跑动，身体都是**沿前进方向**
+     * 一伸一缩：蹿出去的时候身体变长变薄，落定的时候挤回来变短变厚。
+     * 这一条错了，幅度给多大都不对 —— 这是"抖动感"最后的根。
+     *
+     * 前倾只有野猪有，而且只在"伸"的那一段出现（0.085 rad ≈ 4.9°）。
+     * 上一版是常驻 0.11 rad：一张站着画的图被恒定掰斜 6°，读作"要摔倒"。
+     */
+    const spdK = Math.min(1, Math.abs(f.vx || 0) / 60);
+    const walker = f.kind === "walk" || f.kind === "charge";
+
+    let lean = 0, sqX = 1, sqY = 1, fwd = 0, hop = 0;
+
+    if (walker) {
+      const isBoar = f.kind === "charge";
+      /* 步频：虫子慢、野猪快。`f.bob` 是出生时给每只的随机相位（弧度），
+         换算成 0~1 的圈内偏移 —— 同一个波次的敌人不能同手同脚。 */
+      const stepT = isBoar ? 0.45 : 0.62;
+      const ph0 = ((f.bob || 0) / 6.2832) % 1;
+      const cyc = (t / stepT + ph0) % 1;
+
+      /* 形变强度不跟速度线性走：慢速的小怪也要看得出在爬，
+         所以给 0.55 的地板；完全停下（spdK≈0）时才收干净。 */
+      const amp = Math.max(0.55, spdK);
+
+      /* stretch ∈ [-1, 1]：+1 蹿到最长，-1 挤到最短，0 是原始比例 */
+      let stretch = 0;
+      let lift = 0;        // "伸"的进行度 0~1，只给前探和前倾用
+
+      if (cyc < 0.34) {
+        const k = cyc / 0.34;
+        const e = k * k * (3 - 2 * k);
+        stretch = e;
+        lift = e;
+      } else if (cyc < 0.50) {
+        const k = (cyc - 0.34) / 0.16;
+        const e = k * k * (3 - 2 * k);
+        stretch = 1 - 2 * e;      // +1 → -1
+        lift = Math.max(0, 1 - 2 * e);
+      }
+      /* cyc ≥ 0.50：stretch / lift 都保持 0 —— 静止段。 */
+
+      /* 水平是主通道：虫子 ±13%、野猪 ±10%。
+         竖直方向只做**反相补偿**（伸长时变薄），幅度是水平的三分之一左右 ——
+         体积守恒的直觉，也让"伸"看起来是肉在拉长而不是图被压扁。 */
+      const ampS = isBoar ? 0.100 : 0.130;
+      sqX = 1 + ampS * stretch * amp;
+      sqY = 1 - ampS * 0.38 * stretch * amp;
+      fwd = (isBoar ? 3.0 : 2.6) * lift * amp;
+      lean = (isBoar ? 0.085 : 0.020) * lift * amp;
+      /* 四足还有蹬地那一抬：**只在伸的时候**，落下就贴回地面。
+         它不是"跳"，幅度只有 2.6px，配合落地压扁读作"跑起来有重量"。 */
+      hop = isBoar ? -2.6 * lift * amp : 0;
+    }
+
+    g.save();
+    /* 前探沿**局部 +x**：外层已经 `g.scale(f.face,1)` 镜像过，
+       所以朝左的敌人不用再取反，这里是它自己的前方。 */
+    g.translate(fwd, hop);
+    g.translate(0, bh / 2);
+    g.rotate(lean);
+    g.scale(sqX, sqY);
+    g.translate(0, -bh / 2);
+    g.drawImage(foeImg, -iw / 2, bh / 2 - ih, iw, ih);
+    g.restore();
   } else if (f.larva) drawLarva(g, f, bw, bh, t);
   else if (f.kind === "fly") drawCrow(g, f, bw, bh, t);
   else if (f.kind === "charge") drawBoar(g, f, bw, bh, t);
@@ -7467,6 +7654,10 @@ function goalProgress() {
     return {
       text: "球 " + S.stat.made + " / " + st.ballLimit + (done ? "" : " · 已清 " + S.killed + "/" + S.total),
       frac: S.stat.made / st.ballLimit, done,
+      /* cells/filled = HUD 画"一颗豆子代表一颗球"用。
+       * 只给计数类目标（总数 ≤14、玩家能一眼数清）—— 收成 70 份画 70 颗粒子
+       * 是噪点不是信息，那些关继续走连续条（cells 留空）。 */
+      cells: st.ballLimit, filled: Math.min(S.stat.made, st.ballLimit),
     };
   }
   if (st.goal === "chain") {
@@ -7481,6 +7672,7 @@ function goalProgress() {
       text: "落袋 " + S.stat.bankHolds + " / " + st.bank + (done ? "" : " · 已清 " + S.killed + "/" + S.total),
       frac: S.stat.bankHolds / st.bank,
       done: S.stat.bankHolds >= st.bank,
+      cells: st.bank, filled: Math.min(S.stat.bankHolds, st.bank),
     };
   }
   if (st.goal === "collect") {
@@ -7505,10 +7697,32 @@ function goalProgress() {
       done: S.stat.hits === 0,
     };
   }
+  // 两头都显式化：左边"送走几只 / 总共几只"，右边"造了几颗 / 标准几颗"。
+  //
+  // 原来写的是 `"剩余 N 只 · 球 " + S.stat.made` —— `S.stat.made` 是**累加器**
+  // （makeBallFrom 里 `S.stat.made++`），也就是"已经造了几颗"，不是剩余球数。
+  // 玩家 100% 读成"我还剩 6 颗球"，然后一直不敢造球。这是纯读数错误。
+  //
+  // 同时把总数摆到屏幕上：波次补位（场上 ≤1 只就刷下一波）会让场上人数
+  // 反复回升，玩家读成"打完反而变多"。**总数固定这件事一旦可见，错觉就没** ——
+  // 这一条比加任何动画都管用。
   return {
-    text: "剩余 " + (S.total - S.killed) + " 只 · 球 " + S.stat.made,
+    text: "已送 " + S.killed + " / " + S.total + " · 造球 " + S.stat.made + " / " + st.par.made,
+    // `inner` 是叠在进度条里侧的字。只有"按比例推进"的目标给，
+    // 其他目标（限球/连锁/落袋…）的 frac 含义不同，叠上去就是错的。
+    inner: S.killed + " / " + S.total,
     frac: S.killed / Math.max(1, S.total), done,
+    // 一颗豆子 = 一只被送走的小怪。总数就是 S.total，是这关真实的人数。
+    cells: S.total, filled: Math.min(S.killed, S.total),
   };
+}
+
+/** 定宽文字截断。卡片宽度是写死的，brief 长短不一，溢出去会压到卡片外面。 */
+function fitText(g, txt, maxW) {
+  if (g.measureText(txt).width <= maxW) return txt;
+  let s = txt;
+  while (s.length > 1 && g.measureText(s + "…").width > maxW) s = s.slice(0, -1);
+  return s + "…";
 }
 
 /** 结算评价：时间达标 +1 分，球数达标 +1 分。2 分 S，1 分 A，0 分 B */
@@ -7596,6 +7810,36 @@ function drawTrail(g) {
       g.stroke();
     }
   }
+
+  /* ---- 下一波 · 常驻预警 ----
+   * 波次规则是"场上 ≤1 只就补下一波"（为了不让人赶路）。原来唯一的提示是
+   * drawWaveGap 那 1.1 秒的地面三圈 + 一行字 —— 玩家正在盯场面的时候
+   * 根本注意不到，读成"我打完反而变多了"（体验评审第 5 条）。
+   *
+   * 现在从场上剩 2 只开始就挂一个闪烁小标："要来了"这件事是持续的，
+   * 不是一个 1 秒的偶发事件。玩家看到它就知道不是打不完，是下一波要来了。
+   * 挂在进度点下面（y 63~84），不占卡片也不压关卡名。 */
+  const nxWv = WAVES[S.wave + 1] || [];
+  if (nxWv.length && S.waveGap <= 0 && S.foes.length <= 2) {
+    const bossNext = nxWv.some(sp => sp.foe === "boss");
+    const wTxt = bossNext ? "BOSS 要来" : "下一波 " + nxWv.length + " 只";
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.font = "bold 13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+    const wW = g.measureText(wTxt).width;
+    g.globalAlpha = 0.55 + 0.45 * Math.sin(S.t * 7);
+    rr(g, cx - wW / 2 - 9, 63, wW + 18, 21, 10.5);
+    g.fillStyle = bossNext ? "rgba(120,30,20,.60)" : "rgba(20,34,26,.50)";
+    g.fill();
+    g.lineWidth = 3;
+    g.strokeStyle = "rgba(6,16,12,.55)";
+    g.strokeText(wTxt, cx, 74);
+    g.fillStyle = bossNext ? "#FFB08A" : "#FFE9A8";
+    g.fillText(wTxt, cx, 74);
+    g.globalAlpha = 1;
+    g.textAlign = "left";
+    g.textBaseline = "middle";
+  }
 }
 
 /** 下一波预告：地上画三圈扩散的标记 + 一行倒计时。看不见的刷新最气人 */
@@ -7603,7 +7847,7 @@ function drawWaveGap(g) {
   if (S.waveGap <= 0) return;
   const nx = WAVES[S.wave + 1] || [];
   const boss = nx.some(sp => sp.foe === "boss");
-  const k = 1 - S.waveGap / (boss ? 1.6 : 1.1);
+  const k = 1 - S.waveGap / (boss ? WAVE_GAP_BOSS : WAVE_GAP);
 
   g.save();
   g.textAlign = "center";
@@ -7898,81 +8142,186 @@ function drawHUD(g) {
     g.fill();
   }
 
-  // 右上：目标 + 进度
-  // 底色 0.72 不是随手定的：这一块正好压在顶部树冠上，0.55 的时候
-  // 树冠的黑影会透过来，目标名读不清（截图里第一眼就发现了）
-  panelBg(g, "ui-cream", W - 268, 14, 252, 100, 26, "rgba(12,26,20,.72)", 14);
+  /* ---------------- 目标卡（右上） ----------------
+   *
+   * 版式从"两行字 + 一条胶囊 + 一行小字"改成四段：
+   *   ① 玩家语言的目标名（`title`，不是 `name`）
+   *   ② 一句能照着做的说明（往哪推、推到哪）
+   *   ③ **一颗豆子 = 一只小怪** 的进度阵列
+   *   ④ 绝对数 + 手上的口粮
+   *
+   * ③ 是这次改版的核心。上一版是一根连续填充条、条内印 10px 的字：
+   * "已送 4 / 12" 是**这一局唯一的目标读数**，却被压进 14px 高的胶囊里，
+   * 字号只能给到 10px —— 玩家得凑近才读得出，读不出就只能猜"我还差几个"。
+   * 拆成十几颗豆子之后，"还剩几个空圈"是扫一眼就有的答案，根本不用读字。
+   *
+   * 卡片尺寸没动（272×118）。压着顶部树冠，再高就盖住关卡名了 ——
+   * 改版只重排内部四段的 y，不加高度。
+   */
+  panelBg(g, "ui-cream", W - 288, 14, 272, 130, 26, "rgba(12,26,20,.72)", 14);
 
-  // 卡片里**不放关卡名**。顶部正中已经有「第 2 / 8 关 泥沼」，
-  // 同一句话在一屏上说两遍，卡片第一行就白占了 —— 这里只留目标。
+  const GX = W - 270, GW = 236;
+  const pr = goalProgress();
+
+  // ① 目标名（玩家语言）
   g.textAlign = "left";
   g.textBaseline = "middle";
   g.fillStyle = K.hi;
   g.font = "bold 19px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.fillText(curGoal().name, W - 250, 40);
+  g.fillText(curGoal().title || curGoal().name, GX, 32);
 
-  // 进度条：目标数值 / 当前值。四关共用一条，字换，形状不换。
-  // 底板用美术的胶囊条，填充仍用代码画 —— 填充要按百分比变长，
-  // 贴图做不到"裁一半"，除非再切一张图。
-  const pr = goalProgress();
-  const progArt = artOf("ui-prog");
-  const BX = W - 250, BY = 58, BW = 216, BH = 14;
-  // 次序：先贴美术胶囊（它内部是不透明的奶油白 + 一圈棕描边），
-  // 再在里侧 3px 铺一层暗色当"空槽"，最后才是橙色填充。
-  // 上一版把暗槽画在美术**前面**，被那张不透明的内芯整个盖掉了 ——
-  // 0% 的时候进度条只剩一圈描边，读起来像"一个输入框"。
-  if (progArt) {
-    // 整图拉伸，不走九宫格：这张图 456×72，目标是 216×14，九宫格会把
-    // 两端的圆头压成两个针尖。整图拉伸的圆头变成扁椭圆，反而更像一条胶囊。
-    g.drawImage(progArt, BX, BY, BW, BH);
-  } else {
-    g.fillStyle = K.cream ? "rgba(122,92,60,.55)" : "rgba(255,255,255,.20)";
-    rr(g, BX, BY, BW, BH, BH / 2);
-    g.fill();
-  }
-  // 空槽的对比度是量出来的：0.34 的时候这条读不出"槽"，只剩一根浅线 ——
-  // 玩家看不到"还差多少"，进度条就退化成一条装饰线。
-  g.fillStyle = K.cream ? "rgba(96,66,40,.52)" : "rgba(255,255,255,.16)";
-  rr(g, BX + 3, BY + 3, BW - 6, BH - 6, (BH - 6) / 2);
-  g.fill();
-  if (pr.frac > 0) {
-    g.fillStyle = pr.done ? K.barDone : K.barOn;
-    rr(g, BX + 3, BY + 3, Math.max(5, (BW - 6) * clamp(pr.frac, 0, 1)), BH - 6, (BH - 6) / 2);
-    g.fill();
-  }
-
-  // 进度文字里去掉和目标名重复的前缀。
-  // goalProgress() 给的是 "收成 0 / 12 · 已清 0/8"，而上面的大字已经写着"收成"——
-  // 逐字重复的标题读起来像表单，不像 HUD。只在这一处剥，函数本身不动
-  // （结算和冒烟断言都吃它的原文）。
-  let gline = pr.text;
-  const gname = curGoal().name;
-  if (gline.indexOf(gname + " ") === 0) gline = gline.slice(gname.length + 1);
-
-  g.fillStyle = pr.done ? K.good : K.ink2;
-  g.font = "12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.fillText(gline, BX, 85);
-
-  // 收成挪到这一行的右端，不再单占一行。
-  // 单占一行时它写的是「收成 0」，而进度行（收成关）读的是同一个数 S.food ——
-  // 上下两行同一个数字，玩家会以为看错了。现在左边是"目标和打到哪了"，
-  // 右边是"手上有多少"，是两件事。
+  // 口粮挪到第一行右端。它和信息行是两件事（"这局要什么" / "我身上有多少"），
+  // 挤在同一行末尾会和"造球 3 / 10"连成一串数字。
   const coinArt = artOf("ui-coin");
   const coinTxt = "" + S.food;
   g.font = "bold 14px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
   const cw = g.measureText(coinTxt).width;
   const cxRight = W - 34;
   if (coinArt) {
-    g.drawImage(coinArt, cxRight - cw - 19, 78, 15, 15);
+    g.drawImage(coinArt, cxRight - cw - 19, 24, 15, 15);
   } else {
     g.fillStyle = "#FFD86B";
     g.beginPath();
-    g.arc(cxRight - cw - 12, 85, 6.5, 0, 6.283);
+    g.arc(cxRight - cw - 12, 32, 6.5, 0, 6.283);
     g.fill();
   }
   g.textAlign = "right";
   g.fillStyle = K.hi;
-  g.fillText(coinTxt, cxRight, 85);
+  g.fillText(coinTxt, cxRight, 32);
+  g.textAlign = "left";
+
+  // ② 说明。fitText 兜底：七套 brief 长短不一，最长那句在 236 宽里会顶出去。
+  g.fillStyle = K.ink2;
+  g.font = "11.5px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  g.fillText(fitText(g, curGoal().brief(curStage(), S.total), GW), GX, 51);
+
+  // ③ 进度：能数清的关走豆子，数不清的关（收成 70 份）走连续条
+  const BX = GX, BY = 76, BW = GW, BH = 16;
+  if (pr.cells > 0) {
+    /* 一颗豆子 = 一只小怪（或一颗球）。**固定豆径、整体居中**：
+     * 按 N 均分宽度会让 8 只的关豆子散得像省略号、14 只的关挤成一串珠子。
+     * 豆径写死 5.2，间距上限 20 —— 少的时候居中排，多的自动收窄。 */
+    const n = Math.min(pr.cells, 16);
+    const dr = 5.8;
+    const step = Math.min(21, (BW - dr * 2) / Math.max(1, n - 1));
+    const totalW = dr * 2 + step * (n - 1);
+    const x0 = BX + (BW - totalW) / 2 + dr;
+    for (let i = 0; i < n; i++) {
+      const dx = x0 + i * step;
+      const on = i < pr.filled;
+      // 底 + 描边 + 高光三层。只填一个实心圆的话，在奶油底上读作"一排点"，
+      // 分不出"已送 / 未送"；描边一给，未送的那几颗变成"空圈"，对比立刻就出来。
+      g.fillStyle = on ? "#F5B93C" : (K.cream ? "rgba(122,92,60,.34)" : "rgba(255,255,255,.20)");
+      g.beginPath();
+      g.arc(dx, BY + 1, dr, 0, 6.283);
+      g.fill();
+      g.strokeStyle = on ? "#8A5208" : (K.cream ? "rgba(122,92,60,.62)" : "rgba(255,255,255,.34)");
+      g.lineWidth = on ? 1.9 : 1.3;
+      g.beginPath();
+      g.arc(dx, BY + 1, dr, 0, 6.283);
+      g.stroke();
+      if (on) {
+        g.fillStyle = "rgba(255,255,255,.66)";
+        g.beginPath();
+        g.arc(dx - dr * 0.30, BY + 1 - dr * 0.34, dr * 0.34, 0, 6.283);
+        g.fill();
+      }
+    }
+  } else {
+    // 连续条（收成 / 连锁 / 零崩 / 无伤）：这些目标的 frac 不是"数了几只"，
+    // 画豆子只会骗人，所以保留一条连续填充。
+    const progArt = artOf("ui-prog");
+    if (progArt) {
+      g.drawImage(progArt, BX, BY, BW, BH);
+    } else {
+      g.fillStyle = K.cream ? "rgba(122,92,60,.55)" : "rgba(255,255,255,.20)";
+      rr(g, BX, BY, BW, BH, BH / 2);
+      g.fill();
+    }
+    g.fillStyle = K.cream ? "rgba(96,66,40,.52)" : "rgba(255,255,255,.16)";
+    rr(g, BX + 3, BY + 3, BW - 6, BH - 6, (BH - 6) / 2);
+    g.fill();
+    if (pr.frac > 0) {
+      g.fillStyle = pr.done ? K.barDone : K.barOn;
+      rr(g, BX + 3, BY + 3, Math.max(5, (BW - 6) * clamp(pr.frac, 0, 1)), BH - 6, (BH - 6) / 2);
+      g.fill();
+    }
+    if (pr.inner) {
+      g.textAlign = "center";
+      g.font = "bold 10px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+      g.lineWidth = 3;
+      g.strokeStyle = "rgba(34,22,10,.62)";
+      g.strokeText(pr.inner, BX + BW / 2, BY + BH / 2 + 0.5);
+      g.fillStyle = "#FFF8E8";
+      g.fillText(pr.inner, BX + BW / 2, BY + BH / 2 + 0.5);
+      g.textAlign = "left";
+    }
+  }
+
+  /* ④ 信息行：左「已送 / 还差」，右「造球 n / S 线」
+   *
+   * **左侧一律给"还差几只"而不是"已送几只"。**
+   * 玩家站在场上问的问题是"我还要推几次"，不是"我推了几次"——
+   * 后者是复盘用的，前者才是能立刻变成动作的。豆子阵列已经表达了绝对进度，
+   * 这里补一句倒数的中文，两种读法互相兜底。 */
+  const pendingInBall = S.killed >= S.total && S.balls.length > 0;
+  const leftTxt = pendingInBall
+    ? "把球里剩下的送走！"
+    : pr.done ? "全送走了 ✓"
+    : "还差 " + Math.max(0, S.total - S.killed) + " 只";
+
+  g.fillStyle = pendingInBall ? "#FFB060" : (pr.done ? K.good : K.ink);
+  g.font = (pendingInBall ? "bold " : "") +
+    "12.5px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  g.fillText(fitText(g, leftTxt, 118), GX, 97);
+
+  /* 右侧是 S 评级的用球条件。写「造球 3 / 10」而不是「球 3」——
+   * 后面那个 10 是**拿 S 的标准**，不给它一个"标准"的说法，玩家会以为
+   * 那是上限（上一版就有人以为超过 10 颗就输了）。 */
+  g.textAlign = "right";
+  g.fillStyle = K.ink2;
+  g.font = "11.5px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  g.fillText("造球 " + S.stat.made + " / " + curStage().par.made, W - 34, 97);
+  g.textAlign = "left";
+  g.textBaseline = "middle";
+
+  /* ---------------- 本关奖励（卡片内最后一行） ----------------
+   *
+   * 上一版把它挂在**卡片外面**（y=140 一条独立白胶囊）。
+   * 那个位置正好压在第 3 层台面（156）边缘上，玩家读成"场地里的一个物件"，
+   * 而不是 HUD —— 悬在 HUD 与场地之间的东西，默认归类为场地。
+   *
+   * 现在收回卡内：奖励和目标本来就是同一件事（打这关能挣到什么），
+   * 拆成两个容器放反而割裂。卡片 118 → 138 就是为它留的那一行。
+   *
+   * **不闪、不动、不弹。** 奖励是一条"事实"，不是"事件"；
+   * 事件留给结算卡上方那条横幅。挂在这里是为了让人**打之前**就知道在挣什么。
+   */
+  const reward = stageUnlockReward(S.stage);
+  if (reward) {
+    const ry = 119;
+    /* 头像圆片。玩家认脸比认字快，而"到家的是谁"本来就是个脸的问题 ——
+     * 只有名字的话，"星屑"对还没见过它的玩家是一个没有形状的词。 */
+    const hd = artOf("head-" + reward.id);
+    if (hd) {
+      g.save();
+      g.beginPath();
+      g.arc(GX + 8.5, ry, 8.5, 0, 6.283);
+      g.clip();
+      g.drawImage(hd, GX, ry - 8.5, 17, 17);
+      g.restore();
+    } else {
+      g.fillStyle = "#F5B93C";
+      g.beginPath();
+      g.arc(GX + 8.5, ry, 8.5, 0, 6.283);
+      g.fill();
+    }
+    g.textAlign = "left";
+    g.textBaseline = "middle";
+    g.fillStyle = "#8A4A18";
+    g.font = "bold 11.5px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+    g.fillText("通这关 · " + reward.name + " 到家", GX + 22, ry);
+  }
   g.textAlign = "left";
 
   // 卡片里不再挂"ESC 回选 · R 重来 · Shift 预测线"。
@@ -8560,7 +8909,7 @@ function tick(dt) {
       const trigger = nextBoss ? alive === 0 : alive <= 1;
       // 3.5 秒的呼吸：一球卷三只会瞬间清场，不缓一下的话玩家还没看清
       // 数字就进下一波了，节奏上是"被推着走"，不是"自己在推"。
-      if (trigger && S.waveT > 3.5) S.waveGap = nextBoss ? 1.6 : 1.1;
+      if (trigger && S.waveT > 3.5) S.waveGap = nextBoss ? WAVE_GAP_BOSS : WAVE_GAP;
     }
     if (S.waveGap > 0) {
       S.waveGap -= dt;
@@ -8573,7 +8922,10 @@ function tick(dt) {
       if (checkGoal()) {
         S.phase = "clear";
         S.food += 3;   // 清场奖励
-        recordClear(S.stage);   // 给主界面解锁用的一笔账
+        /* 记账顺手把"谁刚到家"接住。**返回值不能丢** ——
+         * 丢了的话，解锁这件事就只剩 recordClear 内部那条 3.6 秒的 DOM 提示
+         * （而且还只在 ?from=home 时才弹）。结算卡要靠这份数据画横幅。 */
+        S.unlocked = recordClear(S.stage);
         // ---- 一趟的账 ----
         // loot 累加、倍率涨一档、肚子掉一档。**重打同一关不会重复计**，
         // 因为只有 checkGoal 通过（真的过关）才走到这里，失败重打时 S.food 是 0。
@@ -8937,11 +9289,19 @@ function render() {
       const k = clamp(t.life / t.max, 0, 1);
       g.globalAlpha = k < 0.3 ? k / 0.3 : 1;
       g.font = "bold " + t.size + "px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+      /* 浮字不许出屏。锚点是敌人/事件位置，靠边的敌人（BOSS 站在左上角、
+         营地里的小怪）会把整句推出屏幕外 —— 长文案直接少半句。
+         `幼虫钻出 · 回巢给 BOSS 补壳` 这种 13 字的尤其明显：
+         BOSS 在 x=150 时字头已经贴到 x=40，在 x=100 时就出界了。
+         字比屏幕还宽时退化成居中，否则 clamp 的 lo>hi 会算出负数。 */
+      const halfW = g.measureText(t.txt).width / 2;
+      const lo = halfW + 10, hi = W - halfW - 10;
+      const tx = lo > hi ? W / 2 : clamp(t.x, lo, hi);
       g.lineWidth = 4;
       g.strokeStyle = "rgba(18,26,20,.82)";
-      g.strokeText(t.txt, t.x, t.y);
+      g.strokeText(t.txt, tx, t.y);
       g.fillStyle = t.color;
-      g.fillText(t.txt, t.x, t.y);
+      g.fillText(t.txt, tx, t.y);
     }
     g.globalAlpha = 1;
 
@@ -9009,6 +9369,77 @@ function render() {
       g.textAlign = "center";
       g.textBaseline = "middle";
 
+      /* ---------------- 新伙伴到家（挂在卡片上方） ----------------
+       *
+       * **为什么在卡片外面。** 卡里 570×412 已经排满了：
+       *   24 角标 / 50 关卡名 / 70 分隔线 / 140 评级 / 214 三星 /
+       *   252 它说 / 276 分隔线 / 302+326 数据 / 350+ 按钮
+       * 硬挤一行进去只能压评级区，而评级是这一页的主角。
+       * 挂在卡片上方不动任何已有元素，而且那里全屏最靠上 ——
+       * 底下是压暗层（深色），金底贴纸的对比度天然够。
+       *
+       * 这是整局游戏里**唯一会主动说"你刚多了一个伙伴"的地方**。
+       * recordClear 那条 DOM 提示只在 ?from=home 弹、3.6 秒消失，
+       * 而推关模式（nextLevel 直接进下一关）根本不回主界面 ——
+       * 玩家通了第 8 关、星屑到家，屏幕上却什么都没发生。
+       *
+       * 贴纸语言和「新纪录」一致（斜贴），但角度只有 -0.055 rad：
+       * 那是标签的角度，不是横幅的角度，歪太多读起来像贴歪了。
+       */
+      if (ok && S.unlocked && S.unlocked.length) {
+        const nm = S.unlocked.map(id => HERO_CN[id] || id).join(" · ");
+        const txt = "新伙伴到家 · " + nm;
+        g.font = "bold 15px " + FONT;
+        const tw = g.measureText(txt).width;
+        const bw = tw + 78, bh = 34;              // 78 = 头位 + 左右内边距
+        const by = cardY - 42;
+
+        g.save();
+        g.translate(cx, by + bh / 2);
+        g.rotate(-0.055);
+
+        // 投影 → 金底 → 深棕描边 → 顶部高光
+        g.fillStyle = "rgba(56,32,8,.34)";
+        rr(g, -bw / 2, -bh / 2 + 4, bw, bh, bh / 2);
+        g.fill();
+        g.fillStyle = "#FFCE56";
+        rr(g, -bw / 2, -bh / 2, bw, bh, bh / 2);
+        g.fill();
+        g.strokeStyle = "#8A5208";
+        g.lineWidth = 2.4;
+        rr(g, -bw / 2, -bh / 2, bw, bh, bh / 2);
+        g.stroke();
+        g.fillStyle = "rgba(255,248,200,.60)";
+        rr(g, -bw / 2 + 6, -bh / 2 + 3, bw - 12, bh * 0.40, bh * 0.20);
+        g.fill();
+
+        // 头像：只放第一只。一次通关最多跨过一个阈值（UNLOCK_AT 里没有相邻数），
+        // 所以这里实际上恒为 1 只，写 "第一只" 是做兜底。
+        const hd = artOf("head-" + S.unlocked[0]);
+        const hx = -bw / 2 + 17;
+        if (hd) {
+          g.save();
+          g.beginPath();
+          g.arc(hx, 1, 11, 0, 6.283);
+          g.clip();
+          g.drawImage(hd, hx - 11, -10, 22, 22);
+          g.restore();
+          g.strokeStyle = "#8A5208";
+          g.lineWidth = 1.8;
+          g.beginPath();
+          g.arc(hx, 1, 11, 0, 6.283);
+          g.stroke();
+        }
+
+        g.textAlign = "left";
+        g.fillStyle = "#5A3407";
+        g.font = "bold 15px " + FONT;
+        g.fillText(txt, hx + 18, 1);
+        g.restore();
+        g.textAlign = "center";
+        g.textBaseline = "middle";
+      }
+
       // ---- 顶部两个角标：第几关 / 这一趟连走了几关 ----
       g.fillStyle = K.ink3;
       g.font = "12px " + FONT;
@@ -9023,7 +9454,7 @@ function render() {
       g.textAlign = "center";
       g.fillStyle = K.ink;
       g.font = "bold 21px " + FONT;
-      g.fillText(st.name + "　·　" + curGoal().name, cx, cardY + 50);
+      g.fillText(st.name + "　·　" + (curGoal().title || curGoal().name), cx, cardY + 50);
 
       g.strokeStyle = K.cream ? "rgba(120,92,64,.22)" : "rgba(255,255,255,.10)";
       g.lineWidth = 1;
@@ -9445,6 +9876,30 @@ function recordClear(idx) {
     showUnlockTip(fresh.map(id => HERO_CN[id]));
   }
   return fresh;   // 返回这次刚好跨过阈值的那几只（测试与外部复查用）
+}
+
+/* ---------------------------------------------------------------------------
+   本关通关会解锁谁 —— 给 HUD 画"这一关的奖励"用。
+
+   判定口径必须和 recordClear 逐字一致，差一格就会"预告了但没给"：
+     recordClear 里  after = 去重后 cleared 的长度 + 1（且只在这一关是新的时才 +1）
+     UNLOCK_AT[id] === after  →  这只就是这一关送的
+
+   所以这里用 `done.size + 1`，**不是** `S.progress + 1`。
+   后者会把"重打老关"也算成解锁点 —— 玩家重打第 1 关，HUD 挂着
+   "通这关 · 年糕到家"，打完什么也没有。挂着不兑现比不挂更伤。
+
+   重打已通关的关直接返回 null：那一只早就到家了。
+   --------------------------------------------------------------------------- */
+function stageUnlockReward(idx) {
+  const s = readHomeSave();
+  const done = Array.isArray(s.cleared) ? s.cleared.filter(Number.isInteger) : [];
+  if (done.indexOf(idx) >= 0) return null;         // 这关打过了
+  const will = new Set(done).size + 1;             // 通关后一共几关
+  for (const id in UNLOCK_AT) {
+    if (UNLOCK_AT[id] === will) return { id: id, name: HERO_CN[id] || id };
+  }
+  return null;
 }
 
 let unlockTipTimer = 0;

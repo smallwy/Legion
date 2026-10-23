@@ -50,7 +50,7 @@ const H_SMALL = 180;                 // 尺寸行高 = 最大档位（180），�
 (async () => {
   const imgs = {};
   for (const r of ROSTER) {
-    imgs[r.f] = await loadImage("client/shots/ai/" + r.f + ".png");
+    imgs[r.f] = await loadImage("client/art/03-candidate/01-pets/" + r.f + ".png");
   }
 
   const Y_MAIN = 96, Y_SIL = 452, Y_SMALL = 690;

@@ -1,7 +1,7 @@
 const path=require("path"),fs=require("fs");
 const {createCanvas,loadImage}=require("@napi-rs/canvas");
-const AI="D:/Legion/client/shots/ai";
-const OUT=path.join(AI,"head");
+const AI="D:/Legion/client/art/03-candidate/01-pets";
+const OUT="D:/Legion/client/shots/head";
 if(!fs.existsSync(OUT)) fs.mkdirSync(OUT,{recursive:true});
 const files=["sugar-stand","nian-gao-dog","tuan-zi-ham","xue-tuan-rab","dou-nai-ox","xing-xie-fox"];
 (async()=>{

@@ -47,4 +47,8 @@ client/prototype/_check2/
 # 值得留的评审图一律人工归档到 client/art/04-review/ 再入库。
 # 之前是「按前缀忽略」，结果 _ab-* / _chk-* / _p-* 这些一次性的对比图
 # 攒了 150 多张进仓库，翻起来全是噪音。
-client/shots/
+#
+# 只忽略内容、放行 README：目录本身必须存在（不少工具直接 writeFileSync，
+# 不自己 mkdir，新克隆少这个目录会直接崩），而且点进去要有人告诉它「这里可以随便删」。
+client/shots/*
+!client/shots/README.md

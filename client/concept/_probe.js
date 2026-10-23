@@ -1,3 +1,6 @@
+/* ⚠ 输入基准图已不存在（2026-10-23 美术资源整理时清理）。
+   本脚本是一次性测量工具，当年用 AI 背景图读栅格坐标；
+   实测结论已写进 home2-shot.js / kit2.js 的坐标常量，此处仅作历史留存，不再可运行。 */
 const {createCanvas,loadImage}=require("@napi-rs/canvas");
 const BG="D:/Legion/client/shots/_ai-bench/Keep_this_EXACT_children_s_sto_2026-10-21T06-31-25.png";
 const SRC={x:0,y:48,w:1536,h:864}, W=1280,H=720;

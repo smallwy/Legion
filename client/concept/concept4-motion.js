@@ -134,7 +134,7 @@ const H = ROW2 + H_ART + 372;
 
 (async () => {
   const imgs = {};
-  for (const a of ACTS) imgs[a.f] = await loadImage("client/shots/ai/" + a.f + ".png");
+  for (const a of ACTS) imgs[a.f] = await loadImage("client/art/03-candidate/01-pets/" + a.f + ".png");
 
   const cv = createCanvas(W, H);
   const g = cv.getContext("2d");

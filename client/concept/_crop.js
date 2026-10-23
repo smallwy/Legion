@@ -1,7 +1,7 @@
 const {createCanvas,loadImage}=require("@napi-rs/canvas");
 const fs=require("fs");
 (async()=>{
-  const img=await loadImage("D:/Legion/client/shots/home-layout@v2.png");
+  const img=await loadImage("D:/Legion/client/art/04-review/02-home/home-layout@v2.png");
   const args=process.argv.slice(2);
   const [x,y,w,h,scale,out]=[+args[0],+args[1],+args[2],+args[3],+args[4],args[5]];
   const cv=createCanvas(w*scale,h*scale), g=cv.getContext("2d");

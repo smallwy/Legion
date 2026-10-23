@@ -5,7 +5,7 @@ const K = require("./kit2.js");
 
 (async () => {
   const ai = await loadImage(
-    "D:/Legion/client/shots/ai/sugar-stand@v1.png"
+    "D:/Legion/client/art/03-candidate/01-pets/sugar-stand@v1.png"
   );
   const W = 1280, H = 780;
   const cv = createCanvas(W, H);

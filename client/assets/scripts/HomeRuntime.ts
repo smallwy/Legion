@@ -50,6 +50,7 @@ import {
 } from 'cc';
 import { EDITOR } from 'cc/env';
 import { MAX_SQUAD, PETS, petGap, squadSize, unlockedPets } from './config/Roster';
+import type { PetDef } from './config/Roster';
 import { loadSave, saveSave } from './config/SaveData';
 import type { SaveState } from './config/SaveData';
 import { SATIETY } from './config/BattleConfig';
@@ -126,66 +127,146 @@ function paintCard(g: Graphics, w: number, h: number) {
 }
 
 /* --------------------------------------------------------------------------
- * 六只在院子里的位置 —— **聚成一群**，锯齿错落
+ * 六只**坐在屋前那块粉色垫子上**（派遣绿牌左边），前后两排、零遮挡
  *
- * 旧值是六个互不相干的领地：136~192 / 288~358 / 472~532 / 676~746 /
- * 862~932 / 1106~1162，横跨整条 1280 宽的草地。每只在自己的小格子里走，
- * 结果是院子看着空、六只看着像六个孤立的点，而不是"一窝宠物在院子里"。
+ * 上一版把六只摆在房子正前方 396~606 —— 那不是垫子，是草地中央：
+ * 六只挤成一坨、互相挡脸，而旁边真正的垫子和派遣牌一直空着。
  *
- * 现在试过两种排法，第一种不行：
- *   · 两排 3+3 对齐 → 中间那只必然挡住两侧的其中一只（实测白兔只剩耳朵）；
- *   · **锯齿**（前后交替、x 等距）→ 每只只跟左右两只相邻，y 差 44 抵消掉
- *     大半重叠，每只都能露出头和上半身。像一队跟一队，比排排坐更像活的。
+ * 垫子在渲染图里的实际范围（1280×720 一像素等于一个设计单位，直接量）：
+ *   木框（含编织边）x 768..1038 / y 495..618
+ *   粉色软垫      x 792..1010 / y 498..600
+ *   派遣绿牌      x 979..1107 / y 455..575
  *
- * 为什么是 396~606 这一段：左边 350 是工作台，右边 620 是灶台，
- * 中间这 210px 才是真空地；再往下会被底部 Dock 压住。
+ * **右边界必须停在 971**：绿牌是立在垫子右侧的，宠物站上去会挡掉
+ * 半个入口（那块绿芯是"派遣"的可点热区）。所以可用带是 770..979，共 209px。
  * -------------------------------------------------------------------------- */
-const PET_SLOT: Record<string, [number, number]> = {
-    '砂糖': [396, 552],
-    '年糕': [438, 600],
-    '雪团': [480, 552],
-    '团子': [522, 600],
-    '豆奶': [564, 556],
-    '星屑': [606, 600],
+const PET_BAND_X = 770;
+const PET_BAND_W = 209;
+
+/**
+ * 宠物统一可见高（设计像素）。
+ *
+ * 60 是**算出来的，不是挑的**：可用带宽 209，最宽的那一排三只
+ * （砂糖 49.6 + 团子 76.6 + 豆奶 63，按宽高比折算）合计 189，
+ * 剩 20 分给两道缝 —— 每道 10px。H 再大它们就会贴在一起，
+ * 而"贴住"和"遮挡"在玩家眼里是同一件事。
+ */
+const PET_H = 60;
+
+/**
+ * 后排 / 前排的落脚 y。**差 68 > 宠物高 60，就是零遮挡的全部秘密。**
+ *
+ * 前后两排不遮挡只有两种办法：横向错开超过半只身宽（垫子放不下六只），
+ * 或者纵向错开超过整只身高。这里选后者：610 - 542 = 68 > 60 ——
+ * 后排的脚落在前排头顶**之上**，两张图在屏幕上不重叠一个像素。
+ *
+ * 这也是**为什么不能"两排 3+3 对齐"** —— 那样两排 y 只能差 40 左右
+ * （再大就顶出垫子后沿/压到 Dock），后排会被前排切掉下半身，
+ * 只剩一排脑袋。上一版实测就是这个结果：白兔只剩耳朵。
+ */
+const PET_Y_BACK = 532;
+const PET_Y_FRONT = 600;
+
+/** 只解锁 1~3 只时的单排中线（垫子正中） */
+const PET_Y_SOLO = 566;
+
+/**
+ * 每只立绘的**可见宽高比**（w ÷ h）。
+ *
+ * 量法：alpha 包围盒。六张画布都是 209~272 × 292，但内容高度从 213 到 292，
+ * 宽高比从 0.74（兔子，又高又瘦）到 1.28（仓鼠，又矮又胖）。
+ *
+ * **必须用这个比例去定 contentSize，不能沿用场景里的旧尺寸** ——
+ * 场景里那六个 UITransform 是历次手调留下的（53.7×84 / 108.9×148 /
+ * 110×138 / 55.8×128 / 120.5×138 / 73.3×112），彼此既不等高也不等比
+ * （雪团甚至被横向压窄了 40%）。散着看不出来，坐到一块就是
+ * "大小不齐 + 变形"，而那两样恰好是"贴纸感"最直接的来源。
+ */
+const PET_ART: Record<string, number> = {
+    '砂糖': 0.864,
+    '年糕': 1.000,
+    '团子': 1.277,
+    '雪团': 0.740,
+    '豆奶': 1.053,
+    '星屑': 0.956,
 };
 
 /**
- * 每只的横向溜达半径（设计像素）。
- * 邻只 x 距 42、y 差 44 —— 靠 y 分离，所以横向领地可以小幅重叠，
- * 但 26 已经足够看出"在动"，再大就会走进邻只的位置。
+ * 走动开关。**现在是关的。**
+ *
+ * 上一版放开了"走两步"（±26 领地），单只看没问题；六只坐到同一块垫子上，
+ * 走动就必然走进邻只的格子里 —— 而这次的要求是"互相不要遮挡"，位移与它直接冲突。
+ * 生气改由**原地姿势**承担（坐 / 趴 / 舔毛 / 打滚），不需要一只脚离地。
+ *
+ * 行走序列帧到位以后把它打开，同时把 PET_ROAM_R 调回 20+，见 startWalk 注释。
  */
-const PET_ROAM_R = 26;
+const PET_WALK = false;
 
-/** 群里最靠后 / 最靠前的落脚 y，用来把落脚点换算成 0~1 的群内深度 */
-const PET_Y_FAR = 552;
-const PET_Y_NEAR = 600;
+/** 横向溜达半径。PET_WALK 为 false 时不生效；打开后不得大于最小缝的一半 */
+const PET_ROAM_R = 6;
+
+/** 落点：名字 → 垫子上的位置 */
+type PetSlot = { name: string; x: number; y: number; depth: number };
 
 /**
- * 视觉身高归一。**六张立绘的画布都是 292 高，但里面画的东西不一样高。**
+ * 把"这一局在场的宠物"排到垫子上，返回 名字 → 落点。
  *
- * 实测 alpha 包围盒的内容高度：
- *   猫 242 / 狗 216 / 狐 248 / 仓鼠 213 / 牛 225 / 兔 292
- * 也就是说按同一个节点尺寸摆上去，兔子会比仓鼠高 37%。
- * 六只散在 1300px 宽的草地上时看不出来，**聚到一起立刻变成"大小不齐"**。
+ * 必须是个函数而不是一张写死的坐标表，因为**在场的只数是变的**：
+ * 通关 3 关只有一只、8 关六只全到。写死六个位置的话，一只的时候
+ * 它会站在最左边（那是"给六只排的位置"里的第 0 个），看着像排漏了。
  *
- * 系数 = 目标可见高 70 ÷ 当前可见高，仓鼠/牛这类矮胖角色封顶 1.12 ——
- * 拉到完全齐会让仓鼠变成一只 87px 宽的球，反而更怪。
- * 数值是量出来的，不是估的；换立绘必须重算。
+ * 规则：
+ *   · 1~3 只 → 单排，居中；
+ *   · 4~6 只 → 前后两排，按**原顺序奇偶**分（前排 1/3/5、后排 2/4/6）。
+ *     不按宽度排序分排，是因为那样"谁站哪儿"会随立绘尺寸变化，说不清；
+ *     按原顺序分，两排的宽度天然接近（210 vs 178），已经够用。
+ *   · 每排内部按各自剩余宽度均分缝隙，上限 30px（两只时别拉到垫子两头），
+ *     下限 6px（再小就贴住了）。
  */
-const PET_FIT: Record<string, number> = {
-    '砂糖': 1.01,   // 242 → 70
-    '年糕': 1.13,   // 216 → 70
-    '雪团': 0.83,   // 292 → 70（本来就顶满画布，要缩）
-    '团子': 1.12,   // 213 → 68（封顶，别把仓鼠拉成球）
-    '豆奶': 1.08,   // 225 → 70
-    '星屑': 0.98,   // 248 → 70
-};
+function layoutPets(names: string[]): Map<string, PetSlot> {
+    const out = new Map<string, PetSlot>();
+    if (names.length === 0) return out;
+
+    const wOf = (n: string) => (PET_ART[n] ?? 1) * PET_H;
+
+    /** 横向摆好一排，整排居中于可用带 */
+    const row = (list: string[]) => {
+        const ws = list.map(wOf);
+        const sum = ws.reduce((a, b) => a + b, 0);
+        const n = list.length;
+        const gap = n > 1 ? clamp((PET_BAND_W - sum) / (n - 1), 6, 30) : 0;
+        const total = sum + gap * (n - 1);
+        let x = PET_BAND_X + Math.max(0, (PET_BAND_W - total) / 2);
+        return list.map((name, i) => {
+            const cx = x + ws[i] / 2;
+            x += ws[i] + gap;
+            return { name, x: cx };
+        });
+    };
+
+    if (names.length <= 3) {
+        for (const r of row(names)) {
+            out.set(r.name, { name: r.name, x: r.x, y: PET_Y_SOLO, depth: 0.5 });
+        }
+        return out;
+    }
+
+    const front = names.filter((_, i) => i % 2 === 0);
+    const back = names.filter((_, i) => i % 2 === 1);
+    for (const r of row(back)) {
+        out.set(r.name, { name: r.name, x: r.x, y: PET_Y_BACK, depth: 0 });
+    }
+    for (const r of row(front)) {
+        out.set(r.name, { name: r.name, x: r.x, y: PET_Y_FRONT, depth: 1 });
+    }
+    return out;
+}
 
 /**
- * 兜底落脚点：存档里出现 `PET_SLOT` 没登记的宠物时用（设计坐标，y 向下）。
- * 落在群心上，不落进花里。
+ * 兜底落脚点：存档里出现 `PET_ART` 没登记的宠物时用（设计坐标，y 向下）。
+ * 落在垫子正中，不落进花里。
  */
-const LAWN_SPOT: [number, number] = [487, 592];
+const LAWN_SPOT: [number, number] = [874, 578];
 
 /* --------------------------------------------------------------------------
  * 入口说明文案。没有 hover 的平台上只有 :hover 提示等于没有提示，
@@ -219,12 +300,20 @@ const smoothK = (dt: number, rate: number) => 1 - Math.exp(-dt * rate);
  * **"什么都不做"也要占 34%。** 六只各有各的节奏、还夹着静止，
  * 才像一窝活物；每只都在不停动，反而像六个上了发条的玩具。
  */
+/**
+ * 换一个原地姿势。
+ *
+ * 权重不是平均分的：**坐和趴占 64%**。六只待在家里的垫子上，
+ * 大部分时间本来就该是休息态 —— 平均分会让它们像一套循环播放的小动画。
+ * 发呆（0）也留了一档，因为"什么都不做"本身是一种休息。
+ */
 function pickPose(): number {
     const r = Math.random();
-    if (r < 0.34) return 0;   // 发呆
-    if (r < 0.55) return 1;   // 伸懒腰
-    if (r < 0.72) return 3;   // 舔毛
-    if (r < 0.86) return 4;   // 坐下
+    if (r < 0.14) return 0;   // 发呆
+    if (r < 0.50) return 4;   // 坐下
+    if (r < 0.64) return 5;   // 趴下
+    if (r < 0.80) return 3;   // 舔毛
+    if (r < 0.92) return 1;   // 伸懒腰
     return 2;                 // 打滚
 }
 
@@ -317,7 +406,7 @@ type PetRt = {
     stride: number;
     /** 平滑后的行走强度 0~1（起步/停步不要开关式跳变） */
     gait: number;
-    /** 原地姿势：0 无 / 1 伸懒腰 / 2 打滚 / 3 舔毛 / 4 坐下 */
+    /** 原地姿势：0 发呆 / 1 伸懒腰 / 2 打滚 / 3 舔毛 / 4 坐下 / 5 趴下 */
     pose: number;
     poseT: number;
     poseDur: number;
@@ -772,38 +861,58 @@ class HomeController {
         const root = this.canvas.getChildByName('Pets');
         if (!root) return;
 
+        /* bindPets 会重复跑（切场景回来 / 派遣前后来回），先清掉运行时状态 */
+        this.pets.length = 0;
+
         /* ⚠ 必须快照：下面会往 children 里加节点，直接遍历原数组会无限递归 */
-        let shadowIdx = 0;
-        for (const n of root.children.slice()) {
-            if (n.name.indexOf('-hot') >= 0) continue;
-            /* 存档说了算：场景把六只都预置好了，但只有解锁的该出现在草地上。
-               未解锁的连热区都不建 —— 一只看不见的宠物能点出 toast 是 bug。 */
+        const kids = root.children.slice().filter((n) => n.name.indexOf('-hot') < 0);
+
+        /* ---- 第一遍：定下谁在场 ----
+           存档说了算：场景把六只都预置好了，但只有解锁的该出现在垫子上。
+           未解锁的连热区都不建 —— 一只看不见的宠物能点出 toast 是 bug。
+
+           判据是「通关数够不够它回家」，**不是**「它是不是已解锁里最新那一只」。
+           原来写的是 `def.id === lead.id`（lead = 已解锁中 at 最大的那只），
+           后果不是「新解锁的不出现」，而是**更严重的一种**：
+           解锁雪团的那一刻 lead 换成雪团，砂糖/年糕/团子同时 active=false ——
+           院子里立刻只剩一只，而且以后再解锁谁，上一只就消失。
+           玩家看到的现象正是「我明明解锁了几只，主界面还是只有一个」。
+
+           这条判据在 bindPets 和 syncLawn 各写了一份，两处必须一起改，
+           否则派出去/收回来一次，垫子又回到一只。 */
+        const onKinds: { n: Node; def: PetDef }[] = [];
+        for (const n of kids) {
             const def = PETS.find((p) => p.name === n.name);
-            /* 判据是「通关数够不够它回家」，**不是**「它是不是已解锁里最新那一只」。
-             *
-             * 原来写的是 `def.id === lead.id`（lead = 已解锁中 at 最大的那只），
-             * 后果不是「新解锁的不出现」，而是**更严重的一种**：
-             * 解锁雪团的那一刻 lead 换成雪团，砂糖/年糕/团子同时 active=false ——
-             * 院子里立刻只剩一只，而且以后再解锁谁，上一只就消失。
-             * 玩家看到的现象正是「我明明解锁了几只，主界面还是只有一个」。
-             *
-             * 这条判据在 bindPets 和 syncLawn 各写了一份，两处必须一起改，
-             * 否则派出去/收回来一次，草地又回到一只。
-             */
             const on = !!def && this.save.cleared >= def.at;
             n.active = on;
-            if (!on) continue;
+            if (on && def) onKinds.push({ n, def });
+        }
 
-            /* 站在**自己的群内落点**上（见 PET_SLOT）。
-             * 设计坐标转画布中心系：x 走 `lx()`，y 是 `H/2 - y`（Cocos 的 y 向上）。 */
-            const slot = PET_SLOT[n.name] ?? LAWN_SPOT;
-            n.setPosition(lx(slot[0]), H / 2 - slot[1], 0);
+        /* ---- 第二遍：排座位 ----
+           **必须等"谁在场"全都知道了再排**：落点是按在场只数算的。
+           一边遍历一边排，就会按"遍历到第几个"算 —— 只解锁一只时
+           它会站在最左边（那是给六只排的位置里的第 0 个）。 */
+        const slots = layoutPets(onKinds.map((k) => k.n.name));
+
+        let shadowIdx = 0;
+        for (const { n, def } of onKinds) {
+            const slot = slots.get(n.name)
+                ?? { name: n.name, x: LAWN_SPOT[0], y: LAWN_SPOT[1], depth: 0.5 };
+
+            /* 设计坐标转画布中心系：x 走 `lx()`，y 是 `H/2 - y`（Cocos 的 y 向上） */
+            n.setPosition(lx(slot.x), H / 2 - slot.y, 0);
+
+            /* ---- 尺寸归一：按**宽高比**重设 contentSize ----
+               场景里那六个 UITransform 是历次手调的（既不等高也不等比，
+               雪团被横向压窄了 40%），六只坐到一块就是"大小不齐 + 变形"。
+               这是**唯一一处**把它们拉回同一把尺子的地方：
+                 · 高统一 = PET_H → 视觉体重一致；
+                 · 宽 = PET_H × 原图宽高比 → 等比，不拉伸；
+                 · 图片内容贴底（六张 bottom-gap 都是 0）→ 脚底正好落在锚点上。 */
+            const art = PET_ART[n.name] ?? 1;
+            const petW = PET_H * art;
             const ut = n.getComponent(UITransform);
-            const petH = ut ? ut.contentSize.height : 84;
-            const petW = ut ? ut.contentSize.width : 60;
-            /* 视觉身高归一（见 PET_FIT）：影子宽度要跟着一起变，
-               不然兔子 0.83 缩了、影子还是原宽，看起来像踩着别人的影子。 */
-            const fit = PET_FIT[n.name] ?? 1;
+            if (ut) ut.setContentSize(petW, PET_H);
 
             /* ---- 影子 ----
                bindPets 可能重复跑（切场景回来），先清掉旧的再建，
@@ -814,10 +923,11 @@ class HomeController {
             sh.parent = root;
             sh.addComponent(UITransform).setContentSize(petW, 16);
             const sg = sh.addComponent(Graphics);
-            /* alpha 92 而不是 40 —— 120px 缩到 640 宽的截图里，40 的投影会整条消失。
+            /* alpha 110 而不是 92：六只现在统一缩到 60px 高，影子只有
+               25×14，92 的投影在明亮的草地上几乎读不出来。
                这是"接地"的唯一证据，宁可略重也不能看不见。 */
-            sg.fillColor = new Color(52, 36, 26, 92);
-            sg.ellipse(0, 0, petW * 0.46 * fit, 8);
+            sg.fillColor = new Color(52, 36, 26, 110);
+            sg.ellipse(0, 0, petW * 0.46, 7);
             sg.fill();
             /* 排在宠物前面 —— 先画影子，宠物才会压在影子上面。
                用递增计数器而不是 `n.getSiblingIndex()`：所有影子占 0..N，
@@ -825,18 +935,16 @@ class HomeController {
             sh.setSiblingIndex(shadowIdx++);
             sh.setPosition(n.position.x, n.position.y - 2, 0);
 
-            /* 群内深度 0~1：后排 576 → 前排 598。没有这一档，六只一样大，
-               弧线就只是一条横线，读不出前后。 */
-            const depth = clamp((slot[1] - PET_Y_FAR) / (PET_Y_NEAR - PET_Y_FAR), 0, 1);
+            const depth = slot.depth;
 
             const rt: PetRt = {
                 node: n,
                 baseY: n.position.y,
-                left: lx(slot[0] - PET_ROAM_R),
-                right: lx(slot[0] + PET_ROAM_R),
-                /* 前后只给 ±7：群要紧凑，走远了就不像一群了 */
-                far: -7,
-                near: 7,
+                left: lx(slot.x - PET_ROAM_R),
+                right: lx(slot.x + PET_ROAM_R),
+                /* 前后只给 ±5：PET_WALK 关着时用不到，打开后也别让它们走散 */
+                far: -5,
+                near: 5,
                 ph: rand(0, Math.PI * 2),
                 dur: rand(2.8, 3.7),
                 moving: false,
@@ -850,14 +958,15 @@ class HomeController {
                    速度 42~58px/s ÷ 24 ≈ 1.8~2.4 步/秒。 */
                 stride: 24,
                 gait: 0,
-                pose: 0, poseT: 0, poseDur: rand(0.8, 2.0),
+                /* 姿势从随机态起步：六只同时伸懒腰比"都不动"更假 */
+                pose: pickPose(), poseT: 0, poseDur: rand(0.8, 2.0),
                 depth,
                 shadow: sh,
                 pop: 0,
                 down: false,
                 /* 直接给目标缩放：从 1 平滑过去会先演一段"长出来" */
-                sy: (0.96 + depth * 0.06) * fit,
-                sx: (0.96 + depth * 0.06) * fit,
+                sy: 0.98 + depth * 0.04,
+                sx: 0.98 + depth * 0.04,
                 rot: 0,
             };
             this.pets.push(rt);
@@ -867,7 +976,7 @@ class HomeController {
             const hot = new Node(`${n.name}-hot`);
             hot.parent = n;
             hot.addComponent(UITransform).setContentSize(HOT_MIN, HOT_MIN);
-            hot.setPosition(0, petH / 2, 0);
+            hot.setPosition(0, PET_H / 2, 0);
 
             hot.on(Node.EventType.TOUCH_START, (e: EventTouch) => {
                 e.propagationStopped = true;
@@ -896,19 +1005,27 @@ class HomeController {
     }
 
     /**
-     * 起步走一段。**已经接回 tickPet 了**（`p.wait <= 0` 那一行调用它）。
+     * 起步走一段。**当前没有被调用** —— `PET_WALK` 是 false。
      *
-     * 当年这个方法被判了死刑，注释写的是「横移 → 贴纸在滑」。那次判断没错，
-     * 但缺的不是曲线，是**接地**：没有影子的时候，任何位移都读成"贴图被拖着走"。
-     * 影子补上之后，同一条横移才变回"脚踩在地上走"。
+     * 关掉的原因不是这套动作不对，是**场地变了**：六只现在坐在同一块
+     * 直径 209px 的垫子上，任何位移都会走进邻只的格子，而
+     * "互相不要遮挡"是这一版的第一要求。位移和它直接冲突，只能二选一。
      *
-     * 现在的组合是三层，缺一层就不成立：
+     * 方法本身留着，因为它已经跨过了当年那道坎。当年它被判死刑，
+     * 注释写的是「横移 → 贴纸在滑」。那次判断没错，但缺的不是曲线，
+     * 是**接地**：没有影子的时候，任何位移都读成"贴图被拖着走"。
+     *
+     * 现在它成立靠三层，缺一层就不成立：
      *   1. 影子钉住地面（`shadow`，不跟 bob）；
      *   2. 步频由位移推（`walked / stride`），脚不打滑；
      *   3. 距离压到 18~44px —— 长距离会重新暴露"这是一张图"。
      *
      * 没做的一件：**左右翻转**。立绘是正面偏侧（光从左上打过来），
      * 翻转会让高光跑到右边，比"不转身"更假。方向感交给 `sway`（左右倾）。
+     *
+     * 重新启用的前提：垫子上只放 1~2 只（那时横向有富余），
+     * 或者换成更大的场地。把 PET_WALK 打开、PET_ROAM_R 调到
+     * "最小缝的一半"以内即可，别直接调大。
      */
     private startWalk(p: PetRt) {
         const curX = p.node.position.x;
@@ -990,16 +1107,25 @@ class HomeController {
                 p.wait = rand(0.9, 2.6);
             }
         } else {
-            /* 站着：先演完一个原地姿势，再走下一步。
+            /* 坐着：演完一个原地姿势，再换下一个。
                姿势和走动互斥 —— 同时开就会一边伸懒腰一边挪。 */
             p.poseT += dt;
             if (p.poseT >= p.poseDur) {
                 p.pose = pickPose();
                 p.poseT = 0;
-                p.poseDur = p.pose === 0 ? rand(0.8, 1.6) : rand(1.0, 2.2);
+                /* 坐 / 趴 是"休息"，得坐得住：2.6~5.2 秒；
+                   伸懒腰 / 打滚是"活动一下"，短：0.9~1.8 秒。
+                   节奏差是"活着"的一半 —— 全都 1.5 秒一轮就读成动画机。 */
+                p.poseDur = (p.pose === 4 || p.pose === 5)
+                    ? rand(2.6, 5.2)
+                    : p.pose === 0 ? rand(1.4, 2.6) : rand(0.9, 1.8);
             }
-            p.wait -= dt;
-            if (p.wait <= 0) this.startWalk(p);
+            /* **PET_WALK 关着就是不走。** 六只坐同一块垫子，
+               任何位移都会走进邻只的格子 —— 而这次的第一要求是"不遮挡"。 */
+            if (PET_WALK) {
+                p.wait -= dt;
+                if (p.wait <= 0) this.startWalk(p);
+            }
         }
 
         /* 步频 = 走过的距离 ÷ 步幅。
@@ -1022,26 +1148,29 @@ class HomeController {
 
         /* ---------- 原地姿势（D）：不加一张图，用变形演 ----------
            "有生气"的观感主要来自**动作种类多**，不是来自"会移动"。
-           伸懒腰/打滚/舔毛/坐下全都不需要新素材，只动 scale 和 angle。
-           幅度必须小：压到 0.85 以下就开始像"被压扁"而不是"趴下"。
+           六只坐在垫子上时位移是禁忌（会撞邻只），生气全押在这里。
 
-           **静止时不做呼吸。** 上一版给了 1.5px、"呼吸"，读起来是"宠物飘在水上"
-           （用户原话："宠物在场景晃动不要了"）—— 锚点在脚底，任何竖直位移
-           都会被读成脚离地，而且呼吸本身没有信息量。这点预算全给姿势。 */
+           锚点在脚底 (0.5, 0)，所以**压扁就是坐下 / 趴下**：脚不动、头顶下沉，
+           这正是真宠物坐下去的样子。影子不跟着缩 —— 身体矮了，地面没矮。
+
+           幅度：坐 0.84、趴 0.74。上一版只压到 0.94，
+           120px 宽的截图里根本看不出它在坐 —— "坐着休息"必须看得见。 */
         let psx = 1, psy = 1, prot = 0;
         if (p.pose > 0 && gait < 0.5) {
             const w = clamp(p.poseT / p.poseDur, 0, 1);
             const bell = Math.sin(w * Math.PI);      // 进、出都是 0，中间最大
             if (p.pose === 1) {                       // 伸懒腰：压扁 + 拉长
-                psy = 1 - 0.09 * bell; psx = 1 + 0.08 * bell;
+                psy = 1 - 0.10 * bell; psx = 1 + 0.07 * bell;
             } else if (p.pose === 2) {                // 打滚：先倒向一边再倒回来
-                prot = Math.sin(w * Math.PI * 2) * 10;
+                prot = Math.sin(w * Math.PI * 2) * 9;
                 psy = 0.97;
             } else if (p.pose === 3) {                // 舔毛：小幅度左右蹭
                 prot = Math.sin(p.poseT * 9) * 2.0 * bell;
                 psy = 0.98;
-            } else if (p.pose === 4) {                // 坐下：矮一点、胖一点
-                psy = 1 - 0.06 * bell; psx = 1 + 0.03 * bell;
+            } else if (p.pose === 4) {                // 坐下：蹲下来，略宽
+                psy = 1 - 0.16 * bell; psx = 1 + 0.04 * bell;
+            } else if (p.pose === 5) {                // 趴下：缩成一团
+                psy = 1 - 0.26 * bell; psx = 1 + 0.08 * bell;
             }
         }
 
@@ -1052,14 +1181,10 @@ class HomeController {
             pop = Math.sin((1 - p.pop / 0.42) * Math.PI) * 10;
         }
 
-        /* 近大远小：往远处走缩一点、往近处走放大一点。
-           幅度只给 ±3% —— 再大就会暴露"这只是个贴纸在缩放"。 */
-        /* 群内深度：后排 0.96、前排 1.02。
-           只差 6% —— 差太多（第一版 0.94/1.04）会让前面那只高出 8px，
-           正好把后面那只的头压掉。
-           再乘 `PET_FIT`：立绘内容高不齐，靠它把六只的视觉身高拉平。 */
-        const fit = PET_FIT[p.node.name] ?? 1;
-        const base = (0.96 + p.depth * 0.06) * fit;
+        /* 群内深度：后排 1.00、前排 1.03。
+           高度已经由 contentSize 统一成 PET_H 了，这里只留 3% 的近大远小 ——
+           再大就会把后排的脚顶到前排头顶上去（那正是"遮挡"回来的方式）。 */
+        const base = 1.0 + p.depth * 0.03;
         const depthK = clamp(1 + yOff * 0.0012, 0.99, 1.01);
 
         /* 每步一次轻微竖向压缩，落脚那一下有重量 */
@@ -1087,7 +1212,10 @@ class HomeController {
             p.shadow.setPosition(x, p.baseY + yOff - 3, 0);
             const lift = Math.max(0, bob + pop);
             const k2 = 1 - Math.min(0.32, lift * 0.028);
-            p.shadow.setScale(k2, 1, 1);
+            /* 横向跟身体一起变宽（坐/趴下去时身子变宽，接触面也确实更宽），
+               但只跟一半 —— 跟满会让影子比身体还宽，那就成了水渍。 */
+            const kw = 1 + (p.sx / base - 1) * 0.5;
+            p.shadow.setScale(k2 * kw, 1, 1);
         }
     }
 

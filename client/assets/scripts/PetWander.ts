@@ -7,7 +7,7 @@
  * 这个组件只剩 `tween` 平移：没有影子、没有步态、没有朝向、没有原地动作，
  * 而且 `quadInOut` 对走路本身就是错的曲线。**挂上去的观感就是"贴纸在滑"。**
  * 留着只为存档下面那条领地经验（"领地不许重叠"仍然成立，只是现在
- * 改由 `PET_SLOT` + `PET_ROAM_R` 表达）。
+ * 改由 `HomeRuntime.layoutPets` + `PET_ROAM_R` 表达，而且 `PET_WALK` 已经关掉）。
  *
  * 原说明（历史）：
  * PetWander —— 家园里宠物的自主走动（Cocos Creator 3.8）

@@ -179,9 +179,17 @@ for (let i = 0; i < 600; i++) {
 }
 const yMin = Math.min(...ys), yMax = Math.max(...ys);
 ok(yMax - yMin === 0, '宠物静止时 y 恒定', `y 幅度 ${(yMax - yMin).toFixed(2)}px`);
-ok(Math.max(...sxs) - Math.min(...sxs) < 1e-6,
-    '宠物静止时 scale 恒定（没有"呼吸缩放"）',
-    `scale 幅度 ${(Math.max(...sxs) - Math.min(...sxs)).toFixed(6)}`);
+/* ⚠ 这条以前断言"静止时 scale 恒定（没有'呼吸缩放'）"。
+   现在静止时有**原地姿势**（坐 0.84 / 趴 0.74），scale 本来就该一路变 ——
+   恒定反而是 bug（说明姿势没生效）。
+   "呼吸"那一版真正的破绽是**竖直位移**，已经由上面的「y 幅度 === 0」守住；
+   scale 上单独加一点正弦根本读不出来。所以这里改为守姿势本身：
+   真的会变，而且不会把角色压成一张饼。 */
+const sMin = Math.min(...sxs), sMax = Math.max(...sxs);
+ok(sMax - sMin > 0.04, '原地姿势真的改变了轮廓',
+    `scale 幅度 ${(sMax - sMin).toFixed(3)}（应 > 0.04）`);
+ok(sMin > 0.6, '姿势不会把角色压扁（趴下最扁 0.74）',
+    `最小 scale ${sMin.toFixed(3)}`);
 
 /* --- 5.3 每个入口都注册了点击 --- */
 function collectClickable(root, acc = []) {
@@ -260,8 +268,11 @@ const sheetScrim = sheetNode.getChildByName('scrim');
 ok(!!sheetCard && !!sheetCard.getComponent(cc.Graphics), '面板卡片已绘制（paintCard）');
 ok(!!sheetScrim && !!sheetScrim.getComponent(cc.Graphics), '面板有全屏遮罩');
 
-/* 点遮罩应当关掉面板 —— 这是唯一的关闭路径，必须测 */
+/* 点遮罩应当关掉面板 —— 这是唯一的关闭路径，必须测。
+   ⚠ closeSheet 走的是 `queue()`（下一帧才执行），不推一帧就永远读到没关。 */
 sheetScrim.emitTouch(Node.EventType.TOUCH_END);
+fakeNow += 1000 / 60;
+director.emit(Director.EVENT_BEFORE_UPDATE);
 ok(!canvas.getChildByName('__Sheet'), '点遮罩能关掉面板');
 
 /* 再开一次，确认"关了还能开"，不是一次性的 */
@@ -412,18 +423,18 @@ ok(progTxt === '3 / 8 关', '关卡进度读自存档', `txt-prog = ${progTxt}`)
 
 const goLine = dock3.getChildByName('Btn-Go').getChildByName('line')
     .getComponent(cc.Label).string;
-/* ⚠ 副标题在改版里换成了**能量**（`能量 100`），不再是"带 N 只 · 苔原 4 / 8"。
-   按钮同时只有 248×76，「带几只 + 第几关」塞不下；而"这一下要花多少能量"
-   是点之前最需要知道的数。原断言留着只会一直红。 */
-ok(/^能量 \d+$/.test(goLine), '出门按钮显示本次消耗的能量', `line = ${goLine}`);
+/* 副标题现在是"带几只 + 当前饱食"（`3 只 · 饱食 52`）。
+   中间试过换成「能量 100」，但按钮上"这一下带谁出门"比"花多少能量"
+   更先被读到，又换回来了 —— 断言跟着实现走，别再写死某一种文案。 */
+ok(/^\d+ 只 · 饱食 \d+$/.test(goLine), '出门按钮显示带几只 + 当前饱食', `line = ${goLine}`);
 
-/* 宠物：草地**只站当前伙伴一只**（其余在 Dock 的槽位里）。
-   这条以前断言 cleared=3 时砂糖/年糕/团子三只都站草地上 ——
-   后来改成"只站一只"，测试没跟。 */
+/* 宠物：**已解锁的全部在场**（`cleared >= at`），不是"只站一只"。
+   这条断言在历史上翻过两次面（三只 → 一只 → 全部），跟着实现走。 */
 const pets3 = c3.getChildByName('Pets');
 const petOn = (n) => pets3.getChildByName(n).active;
 const onGrass = ['砂糖', '年糕', '团子', '雪团', '豆奶', '星屑'].filter(petOn);
-ok(onGrass.length === 1, '草地上只有一只伙伴', `站着的是 ${onGrass.join('/') || '(无)'}`);
+ok(onGrass.length === 3, '在场宠物 = 已解锁数',
+    `cleared=3 时站着的是 ${onGrass.join('/') || '(无)'}`);
 ok(!petOn('雪团') && !petOn('豆奶') && !petOn('星屑'),
     '未解锁的宠物不出现（预置但 active=false）',
     `雪团=${petOn('雪团')} 豆奶=${petOn('豆奶')} 星屑=${petOn('星屑')}`);

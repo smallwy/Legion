@@ -418,6 +418,28 @@ if (OPT.audit) audit();
        Canvas 自己挂在 (640,360) —— 这一层别当成"已经在中心"了，
        否则整张图会整体右移 640、上移 360。 */
     await draw(scene, 0, H, 1);
+
+    /* `--dbg` 打印 Pets 下每只的落点与尺寸：调布局时"差 25px 看不出来"，
+       目测截图会一路调错。设计坐标 = x + 640 / 360 - y。 */
+    if (OPT.dbg) {
+        const dump = (n) => {
+            if (n.name === 'Pets') {
+                for (const c of n.children) {
+                    const ut = c.getComponent(UITransform);
+                    const sc = c.scale;
+                    console.log('[pet]', c.name,
+                        'x', (c.position.x + 640).toFixed(1),
+                        'y', (360 - c.position.y).toFixed(1),
+                        'w', ut ? (ut.contentSize.width * sc.x).toFixed(1) : '-',
+                        'h', ut ? (ut.contentSize.height * sc.y).toFixed(1) : '-',
+                        's', sc.x.toFixed(3));
+                }
+            }
+            for (const c of n.children || []) dump(c);
+        };
+        dump(scene);
+    }
+
     fs.writeFileSync(OUT, cv.toBuffer('image/png'));
     console.log(`✓ ${path.relative(CLIENT, OUT)}  Sprite ${nSprite} / Label ${nLabel} / Graphics ${nGraph}` +
         (missed.length ? `  缺贴图 ${missed.length}` : ''));

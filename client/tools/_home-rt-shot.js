@@ -63,7 +63,20 @@ const sfToPng = new Map();
         try {
             const m = JSON.parse(fs.readFileSync(p, 'utf8'));
             const sf = (m.subMetas || {}).f9941;
-            if (sf && sf.uuid) sfToPng.set(sf.uuid, p.replace(/\.meta$/, ''));
+            if (sf && sf.uuid) {
+                const u = sf.userData || {};
+                /* **只存裁剪框，不存整张图。**
+                   引擎在 sizeMode=CUSTOM 下把 `spriteFrame.rect`（裁剪后的内容）
+                   铺满节点矩形，透明边根本不参与。原来这里整张 PNG 直接拉进节点，
+                   宠物立绘（rawHeight 640 / height 525）就被纵向压扁 18%、
+                   横向撑宽 22% —— 截图里看着"矮胖"，真机其实是对的。
+                   这种"截图骗人"比没截图更糟：尺寸判断全建立在错的画面上。 */
+                sfToPng.set(sf.uuid, {
+                    file: p.replace(/\.meta$/, ''),
+                    tx: u.trimX || 0, ty: u.trimY || 0,
+                    tw: u.width || 0, th: u.height || 0,
+                });
+            }
         } catch (err) { /* 目录 meta */ }
     }
 })(ASSETS);
@@ -127,7 +140,10 @@ const OPT = { out: '_home-rt', t: 1200, touch: null, press: null };
 for (const a of process.argv.slice(2)) {
     const m = /^--(\w+)=(.*)$/.exec(a);
     if (m) OPT[m[1]] = m[2];
-    else if (!a.startsWith('--')) OPT.out = a;
+    /* 无值开关：--petbox / --dbg / --audit 这种写法原来会被**静默丢掉**，
+       表现是明明加了参数却没输出，很容易怀疑到别的地方去。 */
+    else if (a.startsWith('--')) OPT[a.slice(2)] = '1';
+    else OPT.out = a;
 }
 fakeNow = 0;
 
@@ -253,10 +269,67 @@ function audit() {
     console.log(hits ? `  共 ${hits} 处` : '  无');
 }
 
+/* ---------- 宠物遮挡体检 ----------
+   "六只互不遮挡"这件事不能靠看截图：一张 1280 宽的图缩到 640 显示，
+   叠掉的耳朵和没叠掉的耳朵长得几乎一样。这里直接算每只的屏幕矩形
+   （锚点 0.5,0 = 脚底中心，矩形 = [x-w/2, x+w/2] × [y-h, y]），两两求交。
+   只有"零相交"才是真的零遮挡。 */
+function petBox() {
+    const root = (function find(n) {
+        if (n.name === 'Pets') return n;
+        for (const c of n.children) { const r = find(c); if (r) return r; }
+        return null;
+    })(scene);
+    if (!root) { console.log('[petbox] 找不到 Pets 节点'); return; }
+
+    const boxes = [];
+    const walk = (n, ox, oy, sc) => {
+        if (!n.active) return;
+        const px = ox + n._pos.x * sc;
+        const py = oy - n._pos.y * sc;
+        const s = sc * (n._scale ? n._scale.x : 1);
+        const ut = n.getComponent(UITransform);
+        if (n.parent === root && ut && n._comps.some((c) => c instanceof Sprite) &&
+            n.name.indexOf('-hot') < 0 && n.name.indexOf('shadow') < 0) {
+            const w = ut.contentSize.width * sc * (n._scale ? n._scale.x : 1);
+            const h = ut.contentSize.height * sc * (n._scale ? n._scale.y : 1);
+            boxes.push({ name: n.name, x0: px - w / 2, x1: px + w / 2, y0: py - h, y1: py, w, h });
+        }
+        for (const c of n.children) walk(c, px, py, s);
+    };
+    /* 必须从 scene 起算 —— Pets / Canvas 都有位移，从 Pets 起算会丢掉
+       Canvas 的 (640,360)，坐标直接跑到画面外（y 800+）。 */
+    walk(scene, 0, H, 1);
+
+    console.log('\n=== 宠物矩形（屏幕坐标，锚点 0.5,0）===');
+    for (const b of boxes) {
+        console.log(`  ${b.name.padEnd(4)} x ${b.x0.toFixed(1).padStart(7)}..${b.x1.toFixed(1).padStart(7)}` +
+            `  y ${b.y0.toFixed(1).padStart(6)}..${b.y1.toFixed(1).padStart(6)}` +
+            `  ${b.w.toFixed(1)}×${b.h.toFixed(1)}`);
+    }
+    let worst = Infinity, hit = 0;
+    for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+            const a = boxes[i], b = boxes[j];
+            const ox = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
+            const oy = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+            if (ox > 0 && oy > 0) {
+                hit++;
+                console.log(`  ✗ 相交 ${a.name} × ${b.name}: ${ox.toFixed(1)}×${oy.toFixed(1)}px`);
+            }
+            /* 最近间距：横向分开就记横距，纵向分开就记纵距 */
+            const gap = (ox <= 0 || oy <= 0) ? Math.max(-ox, -oy) : Math.min(-ox, -oy);
+            if (gap < worst) worst = gap;
+        }
+    }
+    console.log(hit ? `  ✗ ${hit} 对相交` : `  ✓ 零相交，最近间距 ${worst.toFixed(1)}px`);
+}
+
 const W = 1280, H = 720, CX = W / 2, CY = H / 2;
 const OUT = path.join(CLIENT, 'shots', OPT.out + '.png');
 
 if (OPT.audit) audit();
+if (OPT.petbox) petBox();
 
 /* ---------- 渲染 ---------- */
 
@@ -307,19 +380,24 @@ if (OPT.audit) audit();
         for (const comp of n._comps) {
             if (comp instanceof Sprite) {
                 const uuid = comp.spriteFrame && comp.spriteFrame.__uuid__;
-                const file = sfToPng.get(uuid);
-                if (!file) { missed.push(n.name + ' ← ' + uuid); continue; }
-                const im = await img(file);
+                const rec = sfToPng.get(uuid);
+                if (!rec) { missed.push(n.name + ' ← ' + uuid); continue; }
+                const im = await img(rec.file);
                 const w = (ut ? ut.contentSize.width : im.width) * s;
                 const h = (ut ? ut.contentSize.height : im.height) * s;
                 const ax = ut ? ut._anchorPoint.x : 0.5;
                 const ay = ut ? ut._anchorPoint.y : 0.5;
                 const col = comp.color;
                 const src = (col.r !== 255 || col.g !== 255 || col.b !== 255)
-                    ? await tint(file, col) : im;
+                    ? await tint(rec.file, col) : im;
                 g.save();
                 g.globalAlpha = alpha * (col.a / 255);
-                g.drawImage(src, px - ax * w, py - (1 - ay) * h, w, h);
+                if (rec.tw && rec.th) {
+                    g.drawImage(src, rec.tx, rec.ty, rec.tw, rec.th,
+                        px - ax * w, py - (1 - ay) * h, w, h);
+                } else {
+                    g.drawImage(src, px - ax * w, py - (1 - ay) * h, w, h);
+                }
                 g.restore();
                 nSprite++;
             }

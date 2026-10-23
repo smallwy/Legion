@@ -735,6 +735,12 @@ function renderSlots() {
   const rest = PETS.filter(p => p.id !== active.id);
   const unAt = PETS.filter(isUnlocked).map(p => p.at);
   const newestAt = unAt.length ? Math.max(...unAt) : -1;
+  /* 锁着的槽位写「差 N 关」，不写「第 N 关」。
+     原来的「第7关」是个**没有动词的名词短语** —— 玩家看到槽位下面三个字
+     "第7关"，第一反应是"这是第 7 关的宠"或者"我要去打第 7 关"，
+     而不是"我还差 2 关"。"差 N 关"直接把距离写在脸上，是唯一的可执行读法。
+     8px 字号、40px 槽宽，"差2关" 22px，放得下。 */
+  const ccNow = clearCount();
 
   $('slots').innerHTML = rest.map((p, i) => {
     const left = 506 + i * 46;
@@ -746,8 +752,8 @@ function renderSlots() {
          <div class="tag">待命</div>
          ${isNew ? '<div class="new">新</div>' : ''}`
       : `<div class="av" style="background:#FFF6E4 url(data:image/webp;base64,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) center/58% no-repeat;"></div>
-         <div class="tag">第${p.at}关</div>`;
-    return `<div class="${cls}" style="left:${left}px" data-slot="${p.id}" title="${un ? p.name : `通关第 ${p.at} 关解锁`}">${inner}</div>`;
+         <div class="tag">差${Math.max(1, p.at - ccNow)}关</div>`;
+    return `<div class="${cls}" style="left:${left}px" data-slot="${p.id}" title="${un ? p.name : `再通关 ${Math.max(1, p.at - ccNow)} 关解锁 · ${p.name}`}">${inner}</div>`;
   }).join('');
 
   // 出战标记

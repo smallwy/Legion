@@ -128,17 +128,38 @@ function paintCard(g: Graphics, w: number, h: number) {
 /* --------------------------------------------------------------------------
  * 宠物领地（设计坐标 0~1280，取自 game.src.html 的 PETS.roam，唯一真值）
  *
- * 初始只解锁砂糖，它独占房子前那片草地（120~392），所以领地给得宽，
- * 走动才看得出来。其余五只等解锁后按各自位置收窄，避免两只走到一起。
  * 两条领地不许重叠：重叠就必然出现「走两步贴在一起」。
+ *
+ * ⚠ 砂糖原来是 [120, 392] —— 那是「草地上只站一只」时期的写法：
+ *   它独占整片草地，走动才看得出来。**六只同时在场之后，这 272px 直接盖住
+ *   年糕的 [288, 358]**，两只必然走成一坨。现在改回原型的原始值 [136, 192]。
  * -------------------------------------------------------------------------- */
 const PET_ROAM: Record<string, [number, number]> = {
-    '砂糖': [120, 392],
+    '砂糖': [136, 192],
     '年糕': [288, 358],
     '雪团': [472, 532],
     '团子': [676, 746],
     '豆奶': [862, 932],
     '星屑': [1106, 1162],
+};
+
+/**
+ * 六只的落脚点（设计坐标 1280×720，y 向下）。
+ *
+ * 取值直接来自 `game.html` 的 `PETS.cx / PETS.footY` —— 那张表是排布的唯一真值，
+ * 这里不重新设计，只搬过来。
+ *
+ * **`footY` 的五档（548/568/574/596/602/610）就是景深**：越靠下 = 离镜头越近、
+ * 画得越大。六只全排在同一条 y 上会读成"一排贴纸贴在草地上"，而房子前面
+ * 那片草地本来是有纵深的。
+ */
+const PET_FOOT: Record<string, [number, number]> = {
+    '砂糖': [160, 548],
+    '年糕': [320, 602],
+    '雪团': [500, 574],
+    '团子': [700, 596],
+    '豆奶': [890, 610],
+    '星屑': [1130, 568],
 };
 
 /**
@@ -539,12 +560,18 @@ class HomeController {
         this.setResVal('Res-Log', s.logs);
         this.setResVal('Res-Coin', s.coins);
 
-        const lead = PETS.find((p) => s.cleared >= p.at);
+        /* 院子里现在可能站着好几只，提示不能再只报一只的名字 ——
+           「星屑 在院子里」配着草地上三只宠物，读起来像另外两只是走丢的。 */
+        const home = unlockedPets(s.cleared);
         const tipTxt = this.canvas.getChildByName('HUD')
             ?.getChildByName('HudTip')
             ?.getChildByName('txt')
             ?.getComponent(Label);
-        if (tipTxt && lead) tipTxt.string = `${lead.name} 在院子里`;
+        if (tipTxt && home.length) {
+            tipTxt.string = home.length === 1
+                ? `${home[0].name} 在院子里`
+                : `${home.length} 位伙伴在院子里`;
+        }
 
         /* ---- 关卡进度（苔原 x / 8 + 8 个关卡格）---- */
         const prog = this.canvas.getChildByName('HUD')?.getChildByName('HudProgress');
@@ -700,13 +727,29 @@ class HomeController {
             /* 存档说了算：场景把六只都预置好了，但只有解锁的该出现在草地上。
                未解锁的连热区都不建 —— 一只看不见的宠物能点出 toast 是 bug。 */
             const def = PETS.find((p) => p.name === n.name);
-            const lead = PETS.find((p) => this.save.cleared >= p.at);
-            const on = !!def && !!lead && def.id === lead.id;
+            /* 判据是「通关数够不够它回家」，**不是**「它是不是已解锁里最新那一只」。
+             *
+             * 原来写的是 `def.id === lead.id`（lead = 已解锁中 at 最大的那只），
+             * 后果不是「新解锁的不出现」，而是**更严重的一种**：
+             * 解锁雪团的那一刻 lead 换成雪团，砂糖/年糕/团子同时 active=false ——
+             * 院子里立刻只剩一只，而且以后再解锁谁，上一只就消失。
+             * 玩家看到的现象正是「我明明解锁了几只，主界面还是只有一个」。
+             *
+             * 这条判据在 bindPets 和 syncLawn 各写了一份，两处必须一起改，
+             * 否则派出去/收回来一次，草地又回到一只。
+             */
+            const on = !!def && this.save.cleared >= def.at;
             n.active = on;
             if (!on) continue;
 
-            n.setPosition(LAWN_SPOT[0], LAWN_SPOT[1], 0);
+            /* 站在**自己的落脚点**上，不再共用 LAWN_SPOT。
+             * LAWN_SPOT 是「草地只站一只」时代的单点，六只共用会叠成一坨，
+             * 而且叠出来的那只比房子还抢眼。
+             * `PET_FOOT` 是设计坐标（y 向下），换成画布中心系：
+             * x 走 `lx()`，y 是 `H/2 - footY`（Cocos 的 y 向上）。 */
             const roam = PET_ROAM[n.name] ?? [120, 392];
+            const foot = PET_FOOT[n.name] ?? [LAWN_SPOT[0] + W / 2, H / 2 - LAWN_SPOT[1]];
+            n.setPosition(lx(foot[0]), H / 2 - foot[1], 0);
             const ut = n.getComponent(UITransform);
             const petH = ut ? ut.contentSize.height : 84;
 
@@ -1017,7 +1060,30 @@ class HomeController {
             const need = def ? petGap(this.save.cleared, def.id) : 0;
 
             const op = n.getComponent(UIOpacity) ?? n.addComponent(UIOpacity);
-            op.opacity = 140;
+            /* 已解锁的槽位必须**亮起来**。
+             *
+             * 原来这里对**所有** Slot 一律 `opacity = 140`（55% 透明）——
+             * 玩家把宠物接回家了，底部那一格还是灰的，读成"根本没解锁"。
+             * 这是「解锁了主界面没有」最直观的那一刀：草地上的判据错了是看不见，
+             * 槽位这里错了是**看得见的灰**，杀伤更大。
+             *
+             * 140 = 未解锁（必须灰，否则玩家以为能换出战位）；
+             * 255 = 已到家（原色，和旁边资源卡同一亮度档）。 */
+            op.opacity = need > 0 ? 140 : 255;
+
+            /* tag 是场景里**写死**的「第N关」，HomeRuntime 从来没人改过它。
+             *
+             * 两个后果叠在一起，就是玩家看到的「解锁了但主界面没有」：
+             *   ① 文字永远是「第1关 / 第3关」这种名词短语，玩家读成关卡编号，
+             *      而不是「我还差几关」；
+             *   ② 已到家的那几格也还挂着「第N关」，加上 55% 灰 ——
+             *      看起来和没解锁的一模一样。
+             *
+             * 已到家 → 写宠物名（这一格从此是「我的伙伴」，不是「待办」）；
+             * 未到家 → 写「差N关」，把距离写在脸上。
+             * 口径和 game.html 的 `.tag` 保持一致，两边读起来是同一句话。 */
+            const tag = n.getChildByName('tag')?.getComponent(Label);
+            if (tag) tag.string = need > 0 ? `差${need}关` : pet;
 
             this.press(n, 0.94);
             n.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
@@ -1426,11 +1492,13 @@ class HomeController {
     /** 派出的那只暂时离开草地，收回来再出现 */
     private syncLawn() {
         const away = this.save.dispatch ? this.save.dispatch.id : '';
-        const lead = PETS.find((p) => this.save.cleared >= p.at);
+        /* 和 bindPets 同一套判据（`cleared >= at`，逐个判断）。
+           不能再用「只留 lead 一只」—— 派遣一次回来，草地又只剩一只，
+           玩家会以为自己的解锁被吞了。 */
         for (const p of this.pets) {
             const def = PETS.find((x) => x.name === p.node.name);
             if (!def) continue;
-            p.node.active = !!lead && def.id === lead.id && def.id !== away;
+            p.node.active = this.save.cleared >= def.at && def.id !== away;
         }
     }
 

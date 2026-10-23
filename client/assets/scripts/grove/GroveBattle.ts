@@ -129,6 +129,8 @@ export class GroveBattle extends Component {
     private _ready = false;
     /** 收工只入账一次。钩子和销毁都可能再进来 */
     private _paid = false;
+    /** 上一帧的 grove phase，用来抓「刚通关」那一帧 */
+    private _lastPhase = '';
 
     onLoad(): void {
         if (typeof document === 'undefined' || !document.createElement || !document.body) {
@@ -170,6 +172,29 @@ export class GroveBattle extends Component {
         // 和原型 frame() 同一个上限：切标签页回来不要一次跳半秒
         groveTick(Math.min(dt, 0.034));
         groveRender();
+        this._syncOnClear();
+    }
+
+    /**
+     * 通关瞬间就把进度写回主界面。
+     *
+     * `_syncProgressToHome` 原来只在「收工回主界面」时调（`_backHome`），
+     * 而推关模式是 grove 内部的 `nextLevel()` 直接 `beginRun(stage+1)`，
+     * **根本不经过 exitHook**。于是玩家连过五关、一只只伙伴到家，
+     * 主界面存档的 `cleared` 还停在进战斗前那个旧值 ——
+     * 这就是「解锁了但主界面没有」的第二条断点（第一条是 bindPets 的判据）。
+     *
+     * 挂在 `phase` 的上升沿而不是每帧调：两个回写函数内部都有 no-op 保护，
+     * 但每帧 JSON 序列化一次存档是纯浪费。
+     */
+    private _syncOnClear(): void {
+        const S = (GROVE as any)?.S;
+        const ph = S ? String(S.phase || '') : '';
+        if (ph === this._lastPhase) return;
+        this._lastPhase = ph;
+        if (ph !== 'clear') return;
+        this._syncProgressToHome();
+        this._syncRanksToHome();
     }
 
     /* ------------------------------------------------------------------ 美术 */
@@ -423,7 +448,14 @@ export class GroveBattle extends Component {
             const homeRaw = store.getItem('pawpack.save.v1');
             const home = homeRaw ? (JSON.parse(homeRaw) as Record<string, unknown>) : {};
             const prev = typeof home.cleared === 'number' ? home.cleared : 0;
-            const next = Math.max(prev, arr.length);
+            /* 用**去重后的关数**，不是数组长度。
+             *
+             * 数组里可能重复（重打同一关会再 push 一次索引），长度就会虚高；
+             * 而主界面 `unlockedPets(cleared)` 的语义是「通了几关」，
+             * 口径必须和 game.html 的 `new Set(save.cleared).size` 逐字一致，
+             * 否则同一份存档在两边解锁出不同数量的伙伴。 */
+            const done = new Set(arr).size;
+            const next = Math.max(prev, done);
             if (next === prev) return;
 
             home.cleared = next;

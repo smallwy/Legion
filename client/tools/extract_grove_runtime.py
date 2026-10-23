@@ -189,6 +189,16 @@ def main():
         raise SystemExit('鼠标监听没切干净：' + seg[:200])
     body = body[:i] + seg + body[j:]
 
+    # ⑤ 纯 JS 里没有 `as` 断言。但 S.stumps 初始是 []，TS 会把它推成 never[]，
+    #    循环体里每一处 s.hp / s.x 都报 TS2339 "does not exist on type 'never'"。
+    #    在原型里写成 JSDoc 注解（JS 完全合法、可读），抽取时换成 TS 断言 ——
+    #    两边各自的语言检查都不再吵，也不用为了迁就类型去改运行时代码。
+    body = must(body, '/** @type {any[]} */ (S.stumps)', '(S.stumps as any[])')
+    #    同理：S.p 初值是 null，TS 把它推成 "p: null"，任何 S.p.x 都是 TS2339。
+    body = must(body, '/** @type {any} */ (S.p)', '(S.p as any)')
+    #    新函数的形参在 .ts 里会报 implicit any（原型里其余函数是历史遗留，同理）。
+    body = must(body, 'function nudgeOutOfStumps(f) {', 'function nudgeOutOfStumps(f: any): void {')
+
     out = HEADER + '\n' + body.rstrip() + TAIL
 
     os.makedirs(os.path.dirname(OUT), exist_ok=True)

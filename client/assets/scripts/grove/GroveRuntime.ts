@@ -1092,7 +1092,11 @@ const LEVELS = [
       ],
       [
         { foe: "bug",  x: 500, y: 350 },
-        { foe: "boar", x: 650, y: 350 },
+        // **不能写 650。** 这一关的木桩就在 (650, 350)，野猪半宽 28、
+        // 木桩半宽 22 —— 出生点和桩心完全重合，会被 stepBody 每帧顶到
+        // 桩外侧同一个位置（x=700），hitWall 帧帧为 -1，它就在那儿钉死不动。
+        // 表现是"开局卡在木桩那儿半天"，直到玩家把桩打碎才挪窝。
+        { foe: "boar", x: 580, y: 350 },
         { foe: "bug",  x: 560, y: 248 },
         { foe: "bug",  x: 700, y: 248 },
       ],
@@ -1751,7 +1755,7 @@ function foeFromSpec(sp, fromSky) {
   const lv = sp.lv || 1;
   const w = isBoss ? 78 + lv * 6 : def.w;
   const h = isBoss ? 84 + lv * 6 : def.h;
-  return {
+  const f = {
     def, kind: isBoss ? "charge" : def.kind,
     isBoss: !!isBoss, lv,
     x: sp.x, y: fromSky ? -140 : sp.y,
@@ -1768,6 +1772,12 @@ function foeFromSpec(sp, fromSky) {
     onGround: !sp.fly && !fromSky, ground: null,
     fly: !!sp.fly, homeY: sp.y,
     stun: 0, hitT: 0, bob: rand(0, 6.28),
+    /* 步态相位：**出生定死，永不推进**。
+       `bob` 和它必须分成两个字段，混用是这个游戏最长寿的一个 bug：
+       `bob` 在 updateFoe 里每秒 +3.2（给乌鸦悬停 / BOSS 呼吸用的累加器），
+       而绘制步态拿 `S.t + f.bob` 当相位 —— 等于相位被推进 1+3.2 = 4.2 倍。
+       野猪 stepT=0.45 本该 2.2 步/秒，实测 9.3 步/秒，读出来就是"原地抽"。 */
+    ph: rand(0, 6.28),
     dir: S.rng() < 0.5 ? -1 : 1,
     chargeT: rand(1.2, 3.2), charging: 0,
     // 落地 1.2 秒就砸第一次（不是 2.6）：2.6 秒的空窗里玩家已经把它糊成球了，
@@ -1785,6 +1795,48 @@ function foeFromSpec(sp, fromSky) {
     dropT: fromSky ? 99 : 0,
     skyDrop: !!fromSky,
   };
+  nudgeOutOfStumps(f);
+  return f;
+}
+
+/**
+ * 出生点压在实心木桩里 → 当场推到桩外侧。
+ *
+ * 为什么必须在"出生"这一刻解决：stepBody 的木桩判定是"重叠了就顶到桩外侧"，
+ * 而敌人的朝向每帧由玩家位置重写。两者一叠加就是死循环 ——
+ * 顶出去 → 下帧又朝玩家（也就是朝桩）走 → 又被顶回同一个位置。
+ * 实测第 5 关的野猪：8 秒 480 帧，x 恒为 700，hitWall 帧帧 -1，一步没动。
+ * 玩家看到的就是"开局卡在木头那儿半天"，直到把桩打碎它才挪窝。
+ *
+ * 推向哪一侧：**朝玩家那一侧**。推到背后的话，它下一帧又要朝玩家走回来，
+ * 等于原地转圈；推到玩家这一侧，它一出生就是畅通的直线。
+ */
+function nudgeOutOfStumps(f: any): void {
+  /* BOSS 不动。它的站位是关卡设计的一部分（砸地/产卵的落点都按那个 x 算），
+     而且它体积大、可能和桩半重叠是"看起来像站在桩后面"，不是卡死。
+     实测把 BOSS 挪开 77px 会让它的五发弹幕有 4 发直接撞进平台，
+     扇形机制整个失效 —— 这类对象不该被一条防卡死的保险顺手改位置。 */
+  if (f.isBoss) return;
+  /* JSDoc 注解不是装饰：S.stumps 初始是 []，TS 会把它推成 never[]，
+     循环体里每个 s.hp / s.x 都变成 "does not exist on type 'never'"。
+     加一行 any[] 让类型检查闭嘴，同时这行在纯 JS 里也完全合法。 */
+  const stumps = (S.stumps as any[]);
+  for (const s of stumps) {
+    if (s.hp <= 0) continue;
+    const top = s.y - s.h;
+    if (f.y <= top + 4) continue;           // 站在桩顶上
+    if (f.y - f.h >= s.y - 2) continue;     // 在桩底下面（下一层）
+    const l = s.x - s.w / 2, r = s.x + s.w / 2;
+    if (!(f.x + f.w / 2 > l && f.x - f.w / 2 < r)) continue;
+    /* 优先朝玩家那侧；玩家位置拿不到（开局第一帧）就按它自己偏向哪边推。 */
+    const p0 = (S.p as any);
+    const toPlayer = p0 ? sign(p0.x - s.x) : 0;
+    const side = toPlayer || sign(f.x - s.x) || -1;
+    f.x = side > 0 ? r + f.w / 2 + 1 : l - f.w / 2 - 1;
+    f.x = clamp(f.x, WALL_L + f.w / 2, WALL_R - f.w / 2);
+    /* 普通怪用 dir 定朝向，一出生就该朝着玩家走，别对着墙。 */
+    f.dir = -side;
+  }
 }
 
 /** 铺第 i 波。i=0 是开场，不打标题 —— 开场就弹字会盖住选人界面的余韵 */
@@ -2405,7 +2457,10 @@ function updateFoe(f, dt) {
   if (f.kind === "charge") {
     const p = S.p;
     f.chargeT -= dt;
-    if (p && !p.dead && Math.abs(p.y - f.y) < 60) {
+    /* 转向要留死区。玩家正好站在它身上（|dx| 个位数）时，`sign(p.x - f.x)`
+       会随着双方抖动逐帧翻转 —— 翻一次朝向就整体镜像一次，是肉眼可见的抽搐。
+       8px 以内当作"已经贴身"，不重新判断朝向。 */
+    if (p && !p.dead && Math.abs(p.y - f.y) < 60 && Math.abs(p.x - f.x) > 8) {
       f.face = sign(p.x - f.x);
     }
     if (f.charging > 0) {
@@ -7011,7 +7066,11 @@ function drawFoe(g, f) {
   const cx = f.x, cy = f.y - f.h / 2;
   const bw = f.w, bh = f.h;
   const squash = f.hitT > 0 ? f.hitT / 0.20 : 0;
-  const t = S.t + (f.bob || 0);
+  /* 步态相位用 `f.ph`（出生定死的偏移），**不是 `f.bob`**。
+     `f.bob` 会被 updateFoe 每秒 +3.2，写成 `S.t + f.bob` 之后整条曲线被提速
+     4.2 倍 —— 野猪从设计的 2.2 步/秒变成 9.3 步/秒，人眼读作"在原地抽"。
+     `f.bob` 只留给乌鸦悬停（下面 Math.sin(f.bob)*2.5）和 BOSS 呼吸。 */
+  const t = S.t + (f.ph || 0);
 
   // 影子
   if (!f.fly) {
@@ -7098,10 +7157,10 @@ function drawFoe(g, f) {
 
     if (walker) {
       const isBoar = f.kind === "charge";
-      /* 步频：虫子慢、野猪快。`f.bob` 是出生时给每只的随机相位（弧度），
+      /* 步频：虫子慢、野猪快。`f.ph` 是出生时给每只的固定相位（弧度），
          换算成 0~1 的圈内偏移 —— 同一个波次的敌人不能同手同脚。 */
       const stepT = isBoar ? 0.45 : 0.62;
-      const ph0 = ((f.bob || 0) / 6.2832) % 1;
+      const ph0 = ((f.ph || 0) / 6.2832) % 1;
       const cyc = (t / stepT + ph0) % 1;
 
       /* 形变强度不跟速度线性走：慢速的小怪也要看得出在爬，

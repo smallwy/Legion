@@ -35,7 +35,7 @@ async function decodeArt() {
   const art = {};
   for (const k of KEYS) {
     const isFoe = ["bug", "crow", "boar", "larva"].includes(k);
-    const f = path.join(RES, (isFoe ? "foe-" : "pet-") + k + ".png");
+    const f = path.join(RES, isFoe ? "foe" : "pet", k + ".png");   /* 资源已按用途分目录 */
     if (!fs.existsSync(f)) { console.warn("  缺图：" + f); continue; }
     art[(isFoe ? "foe-" : "pet-") + k] = await loadImage(f);
   }

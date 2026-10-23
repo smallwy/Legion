@@ -33,7 +33,7 @@ const KEYS = ["bug", "crow", "boar", "larva"];
 async function decodeArt() {
   const art = {};
   for (const k of KEYS) {
-    const f = path.join(RES, "foe-" + k + ".png");
+    const f = path.join(RES, "foe", k + ".png");   /* 资源已按用途分目录 */
     if (!fs.existsSync(f)) continue;
     art["foe-" + k] = await loadImage(f);
   }

@@ -10,7 +10,7 @@
   2. 牌面纯色 = 纸片。厚度来自三件套：竖向渐变 + 深描边 + 落影，缺一件就塌。
 
 跑法（在 client/ 下）：
-  python tools/_ui-mock.py shots/_home-rt.png shots/ui-bench/22-主界面-设计感改后.png
+  python tools/_ui-mock.py shots/_home-rt.png art/04-review/03-ui/改后.png
 """
 import os
 import sys

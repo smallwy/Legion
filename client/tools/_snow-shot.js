@@ -29,11 +29,11 @@ async function decodeArt() {
   const pets = ["cat", "dog", "ham", "rab", "ox", "fox"];
   const foes = ["bug", "crow", "boar", "larva"];
   for (const k of pets) {
-    const f = path.join(RES, "pet-" + k + ".png");
+    const f = path.join(RES, "pet", k + ".png");   /* 资源已按用途分目录 */
     if (fs.existsSync(f)) art["pet-" + k] = await loadImage(f);
   }
   for (const k of foes) {
-    const f = path.join(RES, "foe-" + k + ".png");
+    const f = path.join(RES, "foe", k + ".png");
     if (fs.existsSync(f)) art["foe-" + k] = await loadImage(f);
   }
   return art;

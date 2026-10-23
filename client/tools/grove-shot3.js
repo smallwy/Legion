@@ -42,12 +42,14 @@ if (!args.length) { console.log("给个 tag，例如 s1 / clear:3"); process.exi
       "ui-arrow", "ui-belly", "ui-btn", "ui-coin", "ui-cream", "ui-pip",
       "ui-pip-on", "ui-prog", "ui-res", "ui-ring", "ui-star", "ui-tip",
     ];
+    /* 资源按用途分目录：pet-cat -> grove/pet/cat.png。
+       只替换第一个 '-'，'ui-pip-on' 才会变成 ui/pip-on 而不是 ui/pip/on。 */
     const base = "../assets/resources/grove/";
     await Promise.all(names.map((n) => new Promise((res) => {
       const im = new Image();
       im.onload = () => { window.GROVE.setArt(n, im); res(); };
       im.onerror = () => res();
-      im.src = base + n + ".png";
+      im.src = base + n.replace("-", "/") + ".png";
     })));
   });
   await sleep(400);

@@ -87,38 +87,43 @@ const KEY_MAP: Readonly<Record<number, string>> = {
  * 美术图清单：注入键 → resources 下的路径。
  *
  * 图是 client/tools/gen_grove_art.py 从 ui/home/ 收缩出来的副本
- * （立绘高 192、头像 96，合计 395KB）。
+ * （立绘高 292、头像 96，合计约 1MB）。
+ * 目录按用途分：`grove/pet/` `grove/head/` `grove/foe/` `grove/ui/` ——
+ * 以前 28 张平铺在一个文件夹里，找图只能靠前缀扫。
+ * 改任何一行都要跑 `node tools/check-resources.js`：路径写错**不会报错**，
+ * 只会静默退回代码图形，画面变丑但看不出原因。
+ *
  * 为什么不直接引用 ui/ 下的原图：那些文件主界面是**场景直连 spriteFrame**，
  * 而动过的才放进 resources 才能用 resources.load 动态加载。
  *
  * 加载失败只 warning、不中断 —— 绘制侧有回退分支，没图就画代码图形。
  */
 const ART_MANIFEST: ReadonlyArray<readonly [string, string]> = [
-    ...HERO_IDS.map((id) => ['pet-' + id, 'grove/pet-' + id] as const),
-    ...HERO_IDS.map((id) => ['head-' + id, 'grove/head-' + id] as const),
+    ...HERO_IDS.map((id) => ['pet-' + id, 'grove/pet/' + id] as const),
+    ...HERO_IDS.map((id) => ['head-' + id, 'grove/head/' + id] as const),
     /* 敌人立绘（client/tools/prep_foes.py 产出，4x）。
        键名约定 foe-<FOES 的 id>；绘制侧靠 `artOf('foe-' + key)` 取，
        取不到就回退到三档色代码图形 —— 所以这里少一项也不会白屏，
        只会那一种敌人退回旧画法（画风断层又回来一格，但玩法不受影响）。 */
-    ['foe-bug', 'grove/foe-bug'],
-    ['foe-crow', 'grove/foe-crow'],
-    ['foe-boar', 'grove/foe-boar'],
-    ['foe-larva', 'grove/foe-larva'],
-    ['ui-pip', 'grove/ui-pip'],
-    ['ui-pip-on', 'grove/ui-pip-on'],
-    ['ui-coin', 'grove/ui-coin'],
+    ['foe-bug', 'grove/foe/bug'],
+    ['foe-crow', 'grove/foe/crow'],
+    ['foe-boar', 'grove/foe/boar'],
+    ['foe-larva', 'grove/foe/larva'],
+    ['ui-pip', 'grove/ui/pip'],
+    ['ui-pip-on', 'grove/ui/pip-on'],
+    ['ui-coin', 'grove/ui/coin'],
     // 战斗 HUD / 结算面板。这几张是"奶油风"的唯一来源 ——
     // 缺了它们 hudSkin() 会返回 cream: false，整块退回深色玻璃风，
     // 不会出现"奶白底 + 浅绿字"那种读不出来的组合。
-    ['ui-tip', 'grove/ui-tip'],
-    ['ui-cream', 'grove/ui-cream'],
-    ['ui-prog', 'grove/ui-prog'],
-    ['ui-res', 'grove/ui-res'],
-    ['ui-belly', 'grove/ui-belly'],
-    ['ui-btn', 'grove/ui-btn'],
-    ['ui-ring', 'grove/ui-ring'],
-    ['ui-star', 'grove/ui-star'],
-    ['ui-arrow', 'grove/ui-arrow'],
+    ['ui-tip', 'grove/ui/tip'],
+    ['ui-cream', 'grove/ui/cream'],
+    ['ui-prog', 'grove/ui/prog'],
+    ['ui-res', 'grove/ui/res'],
+    ['ui-belly', 'grove/ui/belly'],
+    ['ui-btn', 'grove/ui/btn'],
+    ['ui-ring', 'grove/ui/ring'],
+    ['ui-star', 'grove/ui/star'],
+    ['ui-arrow', 'grove/ui/arrow'],
 ];
 
 @ccclass('GroveBattle')

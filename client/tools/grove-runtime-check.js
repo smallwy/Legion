@@ -47,6 +47,12 @@ function toJs(ts) {
         ['function onCanvasMove(loc: any): void {', 'function onCanvasMove(loc) {'],
         ['function onCanvasDown(loc: any): void {', 'function onCanvasDown(loc) {'],
         ['function grovePointer(kind: "move" | "down", x: number, y: number): void {', 'function grovePointer(kind, x, y) {'],
+        /* nudgeOutOfStumps 是防卡死的保险。它带 `f: any` 与两处 `as any` ——
+           都不合法于 JS，必须跟着剥。注意这里剥的是**形参标注**，
+           不是把整个函数删掉：这个函数本身要被真的跑到。 */
+        ['function nudgeOutOfStumps(f: any): void {', 'function nudgeOutOfStumps(f) {'],
+        ['const stumps = (S.stumps as any[]);', 'const stumps = S.stumps;'],
+        ['const p0 = (S.p as any);', 'const p0 = S.p;'],
     ];
     for (const [a, b] of subs) {
         if (s.indexOf(a) < 0) throw new Error('剥类型失败，找不到：' + a);

@@ -89,15 +89,29 @@ function pose(P, S, opt) {
  */
 async function injectArt(P) {
   const dir = path.join(ROOT, "assets/resources/grove");
-  const files = fs.readdirSync(dir).filter((f) => f.endsWith(".png"));
+  /* 资源按用途分了 pet/ head/ foe/ ui/ 四个子目录。
+     注入键仍沿用老约定 `目录-文件名`（pet/cat.png -> pet-cat），
+     因为绘制侧 artOf("foe-bug") 那些键名没变，变的只是磁盘布局。 */
+  const walk = (d) => {
+    const out = [];
+    for (const f of fs.readdirSync(d)) {
+      const full = path.join(d, f);
+      if (fs.statSync(full).isDirectory()) { out.push(...walk(full)); continue; }
+      if (f.endsWith(".png")) out.push(full);
+    }
+    return out;
+  };
+  const files = walk(dir);
   let n = 0;
-  for (const f of files) {
+  for (const full of files) {
     try {
-      const img = await loadImage(path.join(dir, f));
-      P.setArt(f.replace(/\.png$/, ""), img);
+      const rel = path.relative(dir, full).replace(/\.png$/, "").split(path.sep);
+      const key = rel.join("-");
+      const img = await loadImage(full);
+      P.setArt(key, img);
       n++;
     } catch (e) {
-      console.warn("载入失败 " + f, e.message);
+      console.warn("载入失败 " + full, e.message);
     }
   }
   return n;

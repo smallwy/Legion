@@ -43,12 +43,22 @@ const ART_SRC = path.join(ROOT, 'assets/resources/grove');
 const ART_OUT = path.join(OUT, 'art');
 fs.mkdirSync(ART_OUT, { recursive: true });
 let artCount = 0;
+/* 资源已按用途分成 grove/pet|head|foe|ui 四个子目录，
+   所以拷的时候要保持相对结构 —— 扁平拷会让 pet/cat 和 head/cat 撞成同一个文件。 */
 if (fs.existsSync(ART_SRC)) {
-    for (const f of fs.readdirSync(ART_SRC)) {
-        if (!f.endsWith('.png')) continue;
-        fs.copyFileSync(path.join(ART_SRC, f), path.join(ART_OUT, f));
-        artCount++;
-    }
+    const walk = (d) => {
+        for (const f of fs.readdirSync(d)) {
+            const full = path.join(d, f);
+            if (fs.statSync(full).isDirectory()) { walk(full); continue; }
+            if (!f.endsWith('.png')) continue;
+            const rel = path.relative(path.join(ROOT, 'assets/resources'), full);
+            const dst = path.join(ART_OUT, rel);
+            fs.mkdirSync(path.dirname(dst), { recursive: true });
+            fs.copyFileSync(full, dst);
+            artCount++;
+        }
+    };
+    walk(ART_SRC);
 }
 
 /* ---- ① cc 桩 ---- */
@@ -103,7 +113,8 @@ export const resources = {
     const img = new Image();
     img.onload = () => cb(null, { data: img });
     img.onerror = () => cb(new Error('404 ' + path), null);
-    img.src = './art/' + path.split('/').pop() + '.png';
+    /* path 是 resources 相对路径（grove/pet/cat），art/ 下按同样的结构存 */
+    img.src = './art/' + path + '.png';
   },
 };
 

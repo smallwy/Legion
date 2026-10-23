@@ -165,7 +165,8 @@ node client/tools/grove-dom-harness.js
 操作：`←→` 走 · `空格` 跳 · `J` 喷 · `K` 冲刺（冲刺撞两层以上的敌人直接成球）· `R` 重开
 
 自测：`node tools/grove-smoke.js`（**314 项断言**，含一个会自己打的机器人；`ALL9=1` 时加八关巡回 → 324 项）
-出图：`node tools/grove-shot.js` → `shots/grove-01-门口.png` / `grove-01b-出门.png` / `grove-02~06` / `grove-06-地形-0~7`
+出图：`node tools/grove-shot.js` → `shots/grove-01-门口.png` 等（`shots/` 是工具落点，已 gitignore）。
+归档版在 `art/04-review/01-battle/`
 
 ### `forest.html`（当前要玩的是这个）
 
@@ -416,9 +417,13 @@ client/
 │           ├── BattleHud.ts         #   血量心 + **饱食度条/经验条** + 波次文字（10Hz 节流）
 │           ├── UpgradePanel.ts      #   ★ 三选一强化卡（1/2/3 键）
 │           └── SettlementPanel.ts   #   结算面板
-├── art-source/                 # 历史版本归档（不入包；回滚用）
-│   ├── 256px/                  #   原始 AI 厚涂稿
-│   └── 24px-autotrace/         #   第一版自动降采样产物（已废弃，方法论错误）
+├── art/                        # 不进引擎的美术资料（详见 art/README.md）
+│   ├── 01-source/              #   素材源：256px 厚涂稿 / 24px 自动描边 / 背景分层原图 / 风格选型
+│   ├── 02-concept/             #   概念图：宠物 / 敌人 / 战斗界面
+│   ├── 03-candidate/           #   AI 出图候选（含六只 @v1）
+│   ├── 04-review/              #   评审截图：战斗 / 主界面 / UI / 背景 / 质感 / 派遣
+│   └── 05-archive/             #   被取代的版本（v1 糖果纸、v1 背景、行走序列帧、被否立绘）
+├── shots/                      # 工具出图落点（已 gitignore，随便删）
 ├── docs/
 │   ├── pixel-preview.png       #   新旧对比图（放大 8 倍）
 │   └── pixel-preview-ingame.png#   ★ 游戏内实际尺寸（64px）可读性验证
@@ -511,7 +516,7 @@ client/
 > 32px 版显存比 24px 版高（16 KB vs 9 KB），这是**为可读性付的必要代价**——4 张共 16 KB
 > 在任何平台上都可以忽略，认不出来的贴图才是真浪费。
 >
-> 原始 256px 厚涂稿与 24px 中间版都已归档（`client/art-source/`，**归档≠删除**，可回滚）。
+> 原始 256px 厚涂稿与 24px 中间版都已归档（`client/art/01-source/`，**归档≠删除**，可回滚）。
 
 ---
 

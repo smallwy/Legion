@@ -15,7 +15,7 @@ FR = "C:/Windows/Fonts/msyh.ttc"
 BAR = 46
 W, H = 1280, 720
 
-before = Image.open(os.path.join(CLIENT, "shots/17-主界面-运行时改后.png")).convert("RGB")
+before = Image.open(os.path.join(CLIENT, "art/04-review/00-早期截图/17-主界面-运行时改后.png")).convert("RGB")
 after = Image.open(os.path.join(CLIENT, "shots/_home-rt.png")).convert("RGB")
 
 out = Image.new("RGB", (W, (BAR + H) * 2 + 16), (30, 24, 20))
@@ -42,6 +42,6 @@ for i, (img, (tag, note, col)) in enumerate(zip([before, after], titles)):
 mid = BAR + H + 2
 d.rectangle([0, mid, W, mid + 4], fill=(20, 16, 13))
 
-p = os.path.join(CLIENT, "shots/ui-bench/23-改前改后对比.png")
+p = os.path.join(CLIENT, "art/04-review/03-ui/质感基准/23-改前改后对比.png")
 out.save(p, quality=95)
 print("✓", os.path.relpath(p, CLIENT), out.size)

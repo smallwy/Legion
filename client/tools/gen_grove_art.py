@@ -67,7 +67,13 @@ os.makedirs(OUT, exist_ok=True)
 
 
 def save(img, name):
-    path = os.path.join(OUT, name + '.png')
+    """name 用 `父目录/文件名` 的形式：资源已按用途分成 pet/head/foe/ui 四类。
+    这里的落盘路径必须和 GroveBattle.ts 的 ART_MANIFEST 一字不差，
+    改完跑 `node tools/check-resources.js` 对一遍。"""
+    path = os.path.join(OUT, *name.split('/')) + '.png'
+    d = os.path.dirname(path)
+    if d and not os.path.isdir(d):
+        os.makedirs(d)
     img.save(path, 'PNG', optimize=True)
     return os.path.getsize(path)
 
@@ -108,14 +114,14 @@ rows = []
 for hid, art in HEROES.items():
     src = os.path.join(SRC, 'home', 'pets', art + '.png')
     im = pet_scale(Image.open(src).convert('RGBA'), PET_H)
-    n = save(im, 'pet-' + hid)
+    n = save(im, 'pet/' + hid)
     total += n
     rows.append(('pet-' + hid, im.size, n))
 
 for hid, art in HEROES.items():
     src = os.path.join(SRC, 'home', 'heads-circle', art + '.png')
     im = fit_s(Image.open(src).convert('RGBA'), HEAD_S)
-    n = save(im, 'head-' + hid)
+    n = save(im, 'head/' + hid)
     total += n
     rows.append(('head-' + hid, im.size, n))
 
@@ -129,7 +135,7 @@ for name, src_rel in [
 ]:
     src = os.path.join(SRC, *src_rel.split('/'))
     im = fit_s(Image.open(src).convert('RGBA'), UI_SIZES[name])
-    n = save(im, name)
+    n = save(im, 'ui/' + name[3:])   # 'ui-pip' -> 'ui/pip'
     total += n
     rows.append((name, im.size, n))
 
@@ -143,7 +149,7 @@ for name, src_rel in [
 ]:
     src = os.path.join(SRC, *src_rel.split('/'))
     im = fit_h(Image.open(src).convert('RGBA'), PANEL_SIZES[name]['h'])
-    n = save(im, name)
+    n = save(im, 'ui/' + name[3:])   # 'ui-pip' -> 'ui/pip'
     total += n
     rows.append((name, im.size, n))
 

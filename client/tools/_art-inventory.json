@@ -1,0 +1,1902 @@
+{
+ "used": [
+  {
+   "path": "assets/resources/art/enemy-flyer.png",
+   "uuid": "f902dab8-5784-440e-bc4c-5f2855cd267b",
+   "size": 525,
+   "hits": [
+    "<resources 路径> art/enemy-flyer"
+   ]
+  },
+  {
+   "path": "assets/resources/art/enemy-tank.png",
+   "uuid": "d6cd3994-a70a-44ac-9d18-21f2b7eb0148",
+   "size": 465,
+   "hits": [
+    "<resources 路径> art/enemy-tank"
+   ]
+  },
+  {
+   "path": "assets/resources/art/enemy-walker.png",
+   "uuid": "21056d05-c813-4d10-8a29-9d898283737a",
+   "size": 479,
+   "hits": [
+    "<resources 路径> art/enemy-walker"
+   ]
+  },
+  {
+   "path": "assets/resources/art/pet.png",
+   "uuid": "8add0ba4-a277-482c-aca2-da7007168c46",
+   "size": 446,
+   "hits": [
+    "<resources 路径> art/pet"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/foe/boar.png",
+   "uuid": "541ab95b-c831-4963-824c-f665384981a5",
+   "size": 97400,
+   "hits": [
+    "<resources 路径> grove/foe/boar"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/foe/bug.png",
+   "uuid": "bf4f3a1a-b3eb-428b-addc-766e62b55070",
+   "size": 30448,
+   "hits": [
+    "<resources 路径> grove/foe/bug"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/foe/crow.png",
+   "uuid": "c5165a6f-8f69-436c-963f-137200cad2db",
+   "size": 35525,
+   "hits": [
+    "<resources 路径> grove/foe/crow"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/foe/larva.png",
+   "uuid": "0fe9695a-19b8-4721-a6e0-b7d53c9cb138",
+   "size": 15809,
+   "hits": [
+    "<resources 路径> grove/foe/larva"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/head/cat.png",
+   "uuid": "d5ba6cde-6019-44d3-b8de-a6ea218c9685",
+   "size": 16669,
+   "hits": [
+    "<resources 路径> grove/head/*"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/head/dog.png",
+   "uuid": "d1027562-9c6e-4808-9cc6-fa897a25cefe",
+   "size": 12509,
+   "hits": [
+    "<resources 路径> grove/head/*"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/head/fox.png",
+   "uuid": "fae4d6e4-4c6e-4c3a-8d45-9ef00da6b6f1",
+   "size": 15686,
+   "hits": [
+    "<resources 路径> grove/head/*"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/head/ham.png",
+   "uuid": "ddae6405-1775-4779-85a8-4a2d71422cfe",
+   "size": 12863,
+   "hits": [
+    "<resources 路径> grove/head/*"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/head/ox.png",
+   "uuid": "e99e51b2-fdb2-4ea8-a2fb-a42d5410c7e1",
+   "size": 15152,
+   "hits": [
+    "<resources 路径> grove/head/*"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/head/rab.png",
+   "uuid": "1466829b-b13e-4131-ad9d-1ae7cbc1dfd5",
+   "size": 14209,
+   "hits": [
+    "<resources 路径> grove/head/*"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/pet/cat.png",
+   "uuid": "09ef9d40-6bd7-44e8-bfd7-60d1d1782ea7",
+   "size": 70265,
+   "hits": [
+    "<resources 路径> grove/pet/*"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/pet/dog.png",
+   "uuid": "57dca45f-f954-4363-93fd-0c70b653495f",
+   "size": 47653,
+   "hits": [
+    "<resources 路径> grove/pet/*"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/pet/fox.png",
+   "uuid": "abe012b4-3e15-4d92-a64f-4dde4745c462",
+   "size": 77855,
+   "hits": [
+    "<resources 路径> grove/pet/*"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/pet/ham.png",
+   "uuid": "02fee319-e21a-462d-9962-52b0d424508a",
+   "size": 62407,
+   "hits": [
+    "<resources 路径> grove/pet/*"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/pet/ox.png",
+   "uuid": "3573b338-7c25-4264-880f-341b94c6fcfc",
+   "size": 73490,
+   "hits": [
+    "<resources 路径> grove/pet/*"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/pet/rab.png",
+   "uuid": "514d347b-65f5-45a2-ab0a-25fef2441545",
+   "size": 76588,
+   "hits": [
+    "<resources 路径> grove/pet/*"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/ui/arrow.png",
+   "uuid": "a7578f04-a9da-40e7-8265-328512d303d9",
+   "size": 2132,
+   "hits": [
+    "<resources 路径> grove/ui/arrow"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/ui/belly.png",
+   "uuid": "0a9f2a4d-d88b-49d5-9557-52f7a1e1d331",
+   "size": 4737,
+   "hits": [
+    "<resources 路径> grove/ui/belly"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/ui/btn.png",
+   "uuid": "0bf24e9b-3501-4b7c-9c92-13a4bc38be91",
+   "size": 9727,
+   "hits": [
+    "<resources 路径> grove/ui/btn"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/ui/coin.png",
+   "uuid": "7a61332b-f28d-45f6-a7d5-a704fb5d5b32",
+   "size": 2402,
+   "hits": [
+    "<resources 路径> grove/ui/coin"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/ui/cream.png",
+   "uuid": "66e9d9f6-cc67-4763-a102-9acd4a8f8c85",
+   "size": 3181,
+   "hits": [
+    "<resources 路径> grove/ui/cream"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/ui/pip-on.png",
+   "uuid": "3c3bbedc-bdfd-4ad9-9d4f-8ae2b2fedf68",
+   "size": 1387,
+   "hits": [
+    "<resources 路径> grove/ui/pip-on"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/ui/pip.png",
+   "uuid": "9438ab43-2ca6-4f66-894f-6faf49309252",
+   "size": 1218,
+   "hits": [
+    "<resources 路径> grove/ui/pip"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/ui/prog.png",
+   "uuid": "9c1d6e93-955a-4b91-9bfe-9bc06ef39f88",
+   "size": 8239,
+   "hits": [
+    "<resources 路径> grove/ui/prog"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/ui/res.png",
+   "uuid": "988a7508-6b33-42e9-8a12-ed55a6a2322d",
+   "size": 67172,
+   "hits": [
+    "<resources 路径> grove/ui/res"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/ui/ring.png",
+   "uuid": "ea4eeb17-4105-4e68-acc5-9b68b2cd01e0",
+   "size": 9746,
+   "hits": [
+    "<resources 路径> grove/ui/ring"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/ui/star.png",
+   "uuid": "6b2a94aa-64c3-4358-a2c7-2dfab7ac4789",
+   "size": 3719,
+   "hits": [
+    "<resources 路径> grove/ui/star"
+   ]
+  },
+  {
+   "path": "assets/resources/grove/ui/tip.png",
+   "uuid": "fdc6d963-aef9-4ac4-a3f8-2a7438de7fec",
+   "size": 15882,
+   "hits": [
+    "<resources 路径> grove/ui/tip"
+   ]
+  },
+  {
+   "path": "assets/resources/ui/post-overlay.png",
+   "uuid": "8f3c1d0a-7b52-4e6a-9c11-2d5a0ef71b33",
+   "size": 230822,
+   "hits": [
+    "<resources 路径> ui/post-overlay"
+   ]
+  },
+  {
+   "path": "assets/ui/home/badge-cap-2.png",
+   "uuid": "48a81cef-c2ec-4d97-aa78-65c8f4728832",
+   "size": 1837,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/badge-cap-3.png",
+   "uuid": "ae20b62c-cd34-440e-9b55-f474ce53b13f",
+   "size": 1963,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/badge-ring.png",
+   "uuid": "944a5e26-ffe2-4753-a4d0-496549a99b18",
+   "size": 2552,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/badge-task.png",
+   "uuid": "7865a7e2-1a7e-4c98-af30-6c6c1a67d970",
+   "size": 2240,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/belly-bar.png",
+   "uuid": "30b8d976-8095-4445-bc39-d56959840c1b",
+   "size": 1910,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/bg.png",
+   "uuid": "9a6cc1c0-f096-49f4-9a3b-08fd5c5c25b1",
+   "size": 2294722,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/btn-go.png",
+   "uuid": "c4f3df14-491c-47df-8094-df92f8b13e04",
+   "size": 21881,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/fog-bot.png",
+   "uuid": "2236d4e6-b819-487d-89e3-a5269599ed6f",
+   "size": 11198,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/fog-top.png",
+   "uuid": "268845f7-5231-4550-9feb-092d3bca7f79",
+   "size": 5327,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/heads-circle/sugar-stand.png",
+   "uuid": "af7e1566-12f6-4f1e-a506-69e62c648758",
+   "size": 224349,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/ico-btn.png",
+   "uuid": "5d14cfa4-fd77-41dc-af3e-c7bc9915e332",
+   "size": 12521,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/panel-go-card.png",
+   "uuid": "f1c95a4b-0af3-43b0-8484-27ef201c5bda",
+   "size": 15239,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/panel-hud-prog.png",
+   "uuid": "661dd2dc-0531-4bee-bfe3-7ea9afe42448",
+   "size": 16979,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/panel-hud-tip.png",
+   "uuid": "82957438-07e8-49c8-9be3-651330d513b2",
+   "size": 10800,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/panel-res.png",
+   "uuid": "937c02db-3479-45c3-b91f-3eb5063a6427",
+   "size": 13967,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/panel-slot-locked.png",
+   "uuid": "f14ba90c-3370-44ed-872b-bc7975e5f445",
+   "size": 11992,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/pets/dou-nai-ox.png",
+   "uuid": "117b85e2-96e8-4606-b63b-b1d1e0c858fa",
+   "size": 287521,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/pets/nian-gao-dog.png",
+   "uuid": "bdb44f9b-cf04-4a9e-968c-63200c753625",
+   "size": 169926,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/pets/sugar-stand.png",
+   "uuid": "509e61ab-92d8-4ddc-b52a-6690622e1335",
+   "size": 276049,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/pets/tuan-zi-ham.png",
+   "uuid": "bc488af5-e66b-4256-bee5-5fad46a4a72e",
+   "size": 240357,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/pets/xing-xie-fox.png",
+   "uuid": "781a5052-ae97-4829-a8e6-a2e459498757",
+   "size": 300142,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/pets/xue-tuan-rab.png",
+   "uuid": "e4e8a965-2948-462f-94f9-7be29b0b73e4",
+   "size": 306329,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/pip.png",
+   "uuid": "3b6f5e14-ff76-4b60-925e-48eadb784d57",
+   "size": 1933,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/star.png",
+   "uuid": "97f571c8-ee7f-4be5-9108-a0104ca59f7b",
+   "size": 1970,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/home/tip-arrow.png",
+   "uuid": "8fb448a7-8440-4f4d-8977-b13341f499c5",
+   "size": 863,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/icons/apple.png",
+   "uuid": "7d4c6c11-b284-42fa-937e-b0f67c64cc98",
+   "size": 5401,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/icons/coin.png",
+   "uuid": "c7e24cfc-7176-487a-bc67-53edf3c6af36",
+   "size": 7371,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/icons/flag.png",
+   "uuid": "6db85bf6-7459-4aa7-90de-916f143d0852",
+   "size": 1347,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/icons/gear.png",
+   "uuid": "f81dcedd-fb5c-43e7-ac0b-aa26c6e15e2a",
+   "size": 4291,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/icons/hammer.png",
+   "uuid": "07430c46-a7a8-4c23-8cbc-155cbca0d2f5",
+   "size": 2379,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/icons/lock.png",
+   "uuid": "0d277409-bd2b-495d-a1cf-77a574db1ed2",
+   "size": 2222,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/icons/log.png",
+   "uuid": "f3fa5618-f582-4afb-a65d-900d838c4002",
+   "size": 2553,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/icons/mail.png",
+   "uuid": "5d3d23e8-3355-4e79-8ed3-c21f151e507d",
+   "size": 2270,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/icons/paw-red.png",
+   "uuid": "4de5169b-2d94-4364-97e0-a95f7d756863",
+   "size": 2566,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/icons/paw.png",
+   "uuid": "3c1e6b67-4dda-4154-a844-ab1d75067ae7",
+   "size": 2591,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  },
+  {
+   "path": "assets/ui/icons/pot.png",
+   "uuid": "1abc62e3-d52e-4511-8f06-7bfff8b80ddc",
+   "size": 2778,
+   "hits": [
+    "assets\\scenes\\Home.scene"
+   ]
+  }
+ ],
+ "unused": [
+  {
+   "path": "art/01-source/01-pets/24px-autotrace/enemy-flyer.png",
+   "uuid": null,
+   "size": 761,
+   "hits": []
+  },
+  {
+   "path": "art/01-source/01-pets/24px-autotrace/enemy-tank.png",
+   "uuid": null,
+   "size": 921,
+   "hits": []
+  },
+  {
+   "path": "art/01-source/01-pets/24px-autotrace/enemy-walker.png",
+   "uuid": null,
+   "size": 779,
+   "hits": []
+  },
+  {
+   "path": "art/01-source/01-pets/24px-autotrace/pet.png",
+   "uuid": null,
+   "size": 750,
+   "hits": []
+  },
+  {
+   "path": "art/01-source/01-pets/enemy-flyer.png",
+   "uuid": null,
+   "size": 81925,
+   "hits": []
+  },
+  {
+   "path": "art/01-source/01-pets/enemy-tank.png",
+   "uuid": null,
+   "size": 76820,
+   "hits": []
+  },
+  {
+   "path": "art/01-source/01-pets/enemy-walker.png",
+   "uuid": null,
+   "size": 84076,
+   "hits": []
+  },
+  {
+   "path": "art/01-source/01-pets/pet.png",
+   "uuid": null,
+   "size": 54412,
+   "hits": []
+  },
+  {
+   "path": "art/01-source/03-bg/2D_横版游戏前景遮挡层_foreground_framin_2026-10-22T02-43-58.png",
+   "uuid": null,
+   "size": 1731440,
+   "hits": []
+  },
+  {
+   "path": "art/01-source/03-bg/2D_横版游戏战斗背景的__最远层___暖秋黄昏天空_淡金__2026-10-22T02-43-12.png",
+   "uuid": null,
+   "size": 1874062,
+   "hits": []
+  },
+  {
+   "path": "art/01-source/03-bg/2D_横版游戏的__地面横条___地面层__正面平视_无透视_2026-10-22T02-44-20.png",
+   "uuid": null,
+   "size": 2353831,
+   "hits": []
+  },
+  {
+   "path": "art/01-source/03-bg/2D_横版游戏背景的__中景层___一排粗细不一的老树干_树_2026-10-22T02-43-37.png",
+   "uuid": null,
+   "size": 2250379,
+   "hits": []
+  },
+  {
+   "path": "art/01-source/05-style/style-chunky.png",
+   "uuid": null,
+   "size": 561,
+   "hits": []
+  },
+  {
+   "path": "art/01-source/05-style/style-compare.png",
+   "uuid": null,
+   "size": 33347,
+   "hits": []
+  },
+  {
+   "path": "art/01-source/05-style/style-pixel.png",
+   "uuid": null,
+   "size": 455,
+   "hits": []
+  },
+  {
+   "path": "art/01-source/05-style/style-q-vector.png",
+   "uuid": null,
+   "size": 6501,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/01-pets/Cute_chibi_chubby_slate_blue_C_2026-10-21T23-30-41.png",
+   "uuid": null,
+   "size": 1143354,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/01-pets/Cute_chibi_cream_colored_PUPPY_2026-10-21T23-30-00.png",
+   "uuid": null,
+   "size": 597445,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/01-pets/Cute_chibi_orange_red_FOX_game_2026-10-21T23-30-54.png",
+   "uuid": null,
+   "size": 831655,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/01-pets/Cute_chibi_orange_tabby_CAT_ga_2026-10-21T23-29-35.png",
+   "uuid": null,
+   "size": 677466,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/01-pets/Cute_chibi_pale_pink_white_RAB_2026-10-21T23-30-28.png",
+   "uuid": null,
+   "size": 862028,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/01-pets/Cute_chibi_very_round_chubby_g_2026-10-21T23-30-15.png",
+   "uuid": null,
+   "size": 524896,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/02-foes/Q_version_hand_painted_waterco_2026-10-22T08-36-39.png",
+   "uuid": null,
+   "size": 1747794,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/02-foes/Q_version_hand_painted_waterco_2026-10-22T08-37-11.png",
+   "uuid": null,
+   "size": 2061443,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/02-foes/Q_version_hand_painted_waterco_2026-10-22T08-44-08.png",
+   "uuid": null,
+   "size": 1711742,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/02-foes/Q_version_hand_painted_waterco_2026-10-22T08-44-53.png",
+   "uuid": null,
+   "size": 1906438,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/02-foes/Q_version_hand_painted_waterco_2026-10-22T08-45-20.png",
+   "uuid": null,
+   "size": 1636175,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/04-battle/concept2-0-立绘谱.png",
+   "uuid": null,
+   "size": 332368,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/04-battle/concept2-1-家园.png",
+   "uuid": null,
+   "size": 259426,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/04-battle/concept2-2-战斗-草甸.png",
+   "uuid": null,
+   "size": 135867,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/04-battle/concept2-3-战斗-深井.png",
+   "uuid": null,
+   "size": 158197,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/04-battle/concept2-4-战斗-高塔.png",
+   "uuid": null,
+   "size": 134856,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/04-battle/concept2-5-结算.png",
+   "uuid": null,
+   "size": 106647,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/04-battle/concept3-1-家园-AI混合.png",
+   "uuid": null,
+   "size": 1306280,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/04-battle/concept4-动效分解.png",
+   "uuid": null,
+   "size": 874500,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/04-battle/concept5-1-战斗背景-森林空地.png",
+   "uuid": null,
+   "size": 2408826,
+   "hits": []
+  },
+  {
+   "path": "art/02-concept/04-battle/concept5-2-战斗背景-浅栈道.png",
+   "uuid": null,
+   "size": 2371559,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/01-pets/_roster.png",
+   "uuid": null,
+   "size": 862234,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/01-pets/dou-nai-ox@v1.png",
+   "uuid": null,
+   "size": 1325631,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/01-pets/nian-gao-dog@v1.png",
+   "uuid": null,
+   "size": 1493486,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/01-pets/raw/Use_the_reference_image_ONLY_f_2026-10-21T05-27-12.png",
+   "uuid": null,
+   "size": 1635774,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/01-pets/raw/Use_the_reference_image_ONLY_f_2026-10-21T05-27-44.png",
+   "uuid": null,
+   "size": 1425931,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/01-pets/raw/Use_the_reference_image_ONLY_f_2026-10-21T05-28-12.png",
+   "uuid": null,
+   "size": 1252237,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/01-pets/raw/Use_the_reference_image_ONLY_f_2026-10-21T05-28-40.png",
+   "uuid": null,
+   "size": 1415115,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/01-pets/raw/Use_the_reference_image_ONLY_f_2026-10-21T05-29-41.png",
+   "uuid": null,
+   "size": 1650956,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/01-pets/sugar-stand@v1.png",
+   "uuid": null,
+   "size": 1447183,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/01-pets/tuan-zi-ham@v1.png",
+   "uuid": null,
+   "size": 1340186,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/01-pets/xing-xie-fox@v1.png",
+   "uuid": null,
+   "size": 1469620,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/01-pets/xue-tuan-rab@v1.png",
+   "uuid": null,
+   "size": 955751,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/02-heads/_head-strip.png",
+   "uuid": null,
+   "size": 90767,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/02-heads/dou-nai-ox-head@v1.png",
+   "uuid": null,
+   "size": 73480,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/02-heads/nian-gao-dog-head@v1.png",
+   "uuid": null,
+   "size": 79406,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/02-heads/sugar-stand-head@v1.png",
+   "uuid": null,
+   "size": 92033,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/02-heads/tuan-zi-ham-head@v1.png",
+   "uuid": null,
+   "size": 84091,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/02-heads/xing-xie-fox-head@v1.png",
+   "uuid": null,
+   "size": 87939,
+   "hits": []
+  },
+  {
+   "path": "art/03-candidate/02-heads/xue-tuan-rab-head@v1.png",
+   "uuid": null,
+   "size": 64144,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/01-开场全景.png",
+   "uuid": null,
+   "size": 172591,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/02-冲到目标身前.png",
+   "uuid": null,
+   "size": 187171,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/03-命中瞬间.png",
+   "uuid": null,
+   "size": 186637,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/04-走回格子.png",
+   "uuid": null,
+   "size": 183873,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/05-打了六秒.png",
+   "uuid": null,
+   "size": 176289,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/06-boss层.png",
+   "uuid": null,
+   "size": 169567,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/07-boss交手.png",
+   "uuid": null,
+   "size": 178564,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/08-战斗HUD.png",
+   "uuid": null,
+   "size": 360042,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/09-结算面板.png",
+   "uuid": null,
+   "size": 349549,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/10-向左施法.png",
+   "uuid": null,
+   "size": 355943,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/11-向右施法.png",
+   "uuid": null,
+   "size": 351032,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/12-推球瞬间.png",
+   "uuid": null,
+   "size": 362559,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/13-战斗HUD-描边加粗.png",
+   "uuid": null,
+   "size": 259429,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/14-结算面板-重排.png",
+   "uuid": null,
+   "size": 274464,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/15-向右施法-朝向修正.png",
+   "uuid": null,
+   "size": 256162,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/16-向左施法-朝向修正.png",
+   "uuid": null,
+   "size": 255704,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/17-主界面-运行时改后.png",
+   "uuid": null,
+   "size": 1174407,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/18-出发卡-白卡统一.png",
+   "uuid": null,
+   "size": 48038,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/19-任务落在木牌上.png",
+   "uuid": null,
+   "size": 77504,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/20-工作台徽标让开路标.png",
+   "uuid": null,
+   "size": 106941,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/00-早期截图/21-Dock-填满出门按钮的空档.png",
+   "uuid": null,
+   "size": 284342,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/fire-seq.png",
+   "uuid": null,
+   "size": 320041,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/foe-bug-scale.png",
+   "uuid": null,
+   "size": 177446,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/foe-ingame-compare.png",
+   "uuid": null,
+   "size": 529294,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-01-门口.png",
+   "uuid": null,
+   "size": 345392,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-01b-出门.png",
+   "uuid": null,
+   "size": 355150,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-02-开场.png",
+   "uuid": null,
+   "size": 359445,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-02-第1关-苔原入口.png",
+   "uuid": null,
+   "size": 329719,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-03-战斗中期.png",
+   "uuid": null,
+   "size": 363529,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-03-预瞄线.png",
+   "uuid": null,
+   "size": 342187,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-04-火坑.png",
+   "uuid": null,
+   "size": 374528,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-04-第2关-泥沼.png",
+   "uuid": null,
+   "size": 327622,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-05-第3关-断崖.png",
+   "uuid": null,
+   "size": 338217,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-05-结算.png",
+   "uuid": null,
+   "size": 242433,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-06-地形-0-苔原入口.png",
+   "uuid": null,
+   "size": 348328,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-06-地形-1-泥沼.png",
+   "uuid": null,
+   "size": 356419,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-06-地形-2-断崖.png",
+   "uuid": null,
+   "size": 365069,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-06-地形-3-缓坡.png",
+   "uuid": null,
+   "size": 362129,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-06-地形-4-弹菇.png",
+   "uuid": null,
+   "size": 359384,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-06-地形-5-深井.png",
+   "uuid": null,
+   "size": 363280,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-06-地形-6-阶梯塔.png",
+   "uuid": null,
+   "size": 359105,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-06-地形-7-双塔.png",
+   "uuid": null,
+   "size": 358177,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-06-第4关-缓坡.png",
+   "uuid": null,
+   "size": 336630,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-07-第5关-弹跳林.png",
+   "uuid": null,
+   "size": 326872,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-08-第6关-深井.png",
+   "uuid": null,
+   "size": 338268,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-09-第7关-阶梯塔.png",
+   "uuid": null,
+   "size": 337462,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-10-第8关-双塔.png",
+   "uuid": null,
+   "size": 332889,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-11-武器-溜溜球.png",
+   "uuid": null,
+   "size": 327516,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-12-武器-飞刀.png",
+   "uuid": null,
+   "size": 324425,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-13-武器-影分身.png",
+   "uuid": null,
+   "size": 327714,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-14-BOSS.png",
+   "uuid": null,
+   "size": 330796,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-15-BOSS砸地.png",
+   "uuid": null,
+   "size": 339476,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-16-波次预告.png",
+   "uuid": null,
+   "size": 310493,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-17-宝箱.png",
+   "uuid": null,
+   "size": 319096,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-18-结算.png",
+   "uuid": null,
+   "size": 210524,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-19-BOSS产卵.png",
+   "uuid": null,
+   "size": 340557,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-20-BOSS散射.png",
+   "uuid": null,
+   "size": 334660,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-21-冰壳球.png",
+   "uuid": null,
+   "size": 335186,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-22-球撞球连滚.png",
+   "uuid": null,
+   "size": 342418,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-23-结算面板.png",
+   "uuid": null,
+   "size": 254607,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-24-饿了.png",
+   "uuid": null,
+   "size": 393049,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/01-battle/grove-25-屋前果子.png",
+   "uuid": null,
+   "size": 347358,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/cocos-runtime.png",
+   "uuid": null,
+   "size": 1039641,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/dyn-01-battle.png",
+   "uuid": null,
+   "size": 872194,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/dyn-02-home-play.png",
+   "uuid": null,
+   "size": 1173939,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/game-shot.png",
+   "uuid": null,
+   "size": 842952,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/game-shotall.png",
+   "uuid": null,
+   "size": 913860,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/home-layout@v1.png",
+   "uuid": null,
+   "size": 218475,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/home-layout@v2.png",
+   "uuid": null,
+   "size": 1243939,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/home-satiety-tiers.png",
+   "uuid": null,
+   "size": 46803,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/home-v27.png",
+   "uuid": null,
+   "size": 1161593,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/live-01-home-smoke.png",
+   "uuid": null,
+   "size": 1179290,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/live-02-chimney-closeup.png",
+   "uuid": null,
+   "size": 90504,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/live-03-birds.png",
+   "uuid": null,
+   "size": 68210,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/pets-mat-6.png",
+   "uuid": null,
+   "size": 1175195,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/pets-mat-count.png",
+   "uuid": null,
+   "size": 1093984,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/pets-mat-widen.png",
+   "uuid": null,
+   "size": 489894,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-hop.png",
+   "uuid": null,
+   "size": 874785,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-hop0.png",
+   "uuid": null,
+   "size": 1160417,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-hop1.png",
+   "uuid": null,
+   "size": 1160386,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-hop10.png",
+   "uuid": null,
+   "size": 1160944,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-hop11.png",
+   "uuid": null,
+   "size": 1160610,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-hop2.png",
+   "uuid": null,
+   "size": 1160889,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-hop3.png",
+   "uuid": null,
+   "size": 1160925,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-hop4.png",
+   "uuid": null,
+   "size": 1160990,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-hop5.png",
+   "uuid": null,
+   "size": 1161025,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-hop6.png",
+   "uuid": null,
+   "size": 1160956,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-hop7.png",
+   "uuid": null,
+   "size": 1161021,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-hop8.png",
+   "uuid": null,
+   "size": 1161105,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-hop9.png",
+   "uuid": null,
+   "size": 1161101,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-t00.png",
+   "uuid": null,
+   "size": 1160485,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-t04.png",
+   "uuid": null,
+   "size": 1160176,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-t09.png",
+   "uuid": null,
+   "size": 1160742,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-t15.png",
+   "uuid": null,
+   "size": 1160355,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/rt-walk.png",
+   "uuid": null,
+   "size": 840782,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/sign-move-bg.png",
+   "uuid": null,
+   "size": 180711,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/task-after.png",
+   "uuid": null,
+   "size": 1166377,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/task-before.png",
+   "uuid": null,
+   "size": 1166418,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/task-plate-compare.png",
+   "uuid": null,
+   "size": 418727,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/02-home/task-press.png",
+   "uuid": null,
+   "size": 1165986,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/03-ui/ui-fit-bench.png",
+   "uuid": null,
+   "size": 510339,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/03-ui/ui-fit-codex.png",
+   "uuid": null,
+   "size": 533768,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/03-ui/ui-fit-go.png",
+   "uuid": null,
+   "size": 505526,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/03-ui/ui-fit-home.png",
+   "uuid": null,
+   "size": 1098068,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/03-ui/ui-fit-send.png",
+   "uuid": null,
+   "size": 520109,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/03-ui/ui-fit-set.png",
+   "uuid": null,
+   "size": 508660,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/03-ui/ui-fit-stove.png",
+   "uuid": null,
+   "size": 515770,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/03-ui/ui-fit-task.png",
+   "uuid": null,
+   "size": 462000,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/03-ui/质感基准/23-改前改后对比.png",
+   "uuid": null,
+   "size": 2153232,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/03-ui/质感基准/28-四方向对比.png",
+   "uuid": null,
+   "size": 1642820,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/03-ui/质感基准/29-质感基准-挂牌四态.png",
+   "uuid": null,
+   "size": 2195879,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/03-ui/质感基准/30-质感基准-按钮与木牌.png",
+   "uuid": null,
+   "size": 1687470,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/03-ui/质感基准/32-定稿-C暖奶油-椭圆名字-模拟.png",
+   "uuid": null,
+   "size": 1047988,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/03-ui/质感基准/33-徽标-实机渲染.png",
+   "uuid": null,
+   "size": 514977,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/03-ui/质感基准/34-徽标-单牌特写.png",
+   "uuid": null,
+   "size": 291422,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/04-bg/bg-compare.png",
+   "uuid": null,
+   "size": 860156,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/04-bg/bg-layered-960x540.png",
+   "uuid": null,
+   "size": 831986,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/04-bg/bg-layers.png",
+   "uuid": null,
+   "size": 558763,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/04-bg/bg-q-1-full.png",
+   "uuid": null,
+   "size": 849392,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/04-bg/bg-q-2-closeups.png",
+   "uuid": null,
+   "size": 298888,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/04-bg/bg-q-3-stage7.png",
+   "uuid": null,
+   "size": 431233,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/04-bg/bg-review-v2.png",
+   "uuid": null,
+   "size": 1677187,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/04-bg/bg-v3-1-full.png",
+   "uuid": null,
+   "size": 897601,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/04-bg/bg-v3-2-ends.png",
+   "uuid": null,
+   "size": 415205,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/04-bg/bg-v3-3-stage4.png",
+   "uuid": null,
+   "size": 479837,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/04-bg/bg-v4-1-full.png",
+   "uuid": null,
+   "size": 920301,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/04-bg/bg-v4-2-ends.png",
+   "uuid": null,
+   "size": 260130,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/_cmp-cocos-上下.png",
+   "uuid": null,
+   "size": 705280,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/_cmp-cocos-叠加.png",
+   "uuid": null,
+   "size": 1250017,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/_cmp-cocos-条带.png",
+   "uuid": null,
+   "size": 1002055,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/_cmp-final-上下.png",
+   "uuid": null,
+   "size": 718363,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/_cmp-final-叠加.png",
+   "uuid": null,
+   "size": 1254506,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/_cmp-final-条带.png",
+   "uuid": null,
+   "size": 1067812,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/_cmp-rt-上下.png",
+   "uuid": null,
+   "size": 706405,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/_cmp-rt-叠加.png",
+   "uuid": null,
+   "size": 1184953,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/_cmp-rt-条带.png",
+   "uuid": null,
+   "size": 834160,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/_cmp-rt2-上下.png",
+   "uuid": null,
+   "size": 720742,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/_cmp-rt2-叠加.png",
+   "uuid": null,
+   "size": 1263295,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/_cmp-rt2-条带.png",
+   "uuid": null,
+   "size": 1075429,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/_cmp-上下.png",
+   "uuid": null,
+   "size": 680649,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/_cmp-叠加.png",
+   "uuid": null,
+   "size": 1251850,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/_cmp-条带.png",
+   "uuid": null,
+   "size": 985544,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/quality-01-battle-ab.png",
+   "uuid": null,
+   "size": 1237095,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/quality-02-snow-ab.png",
+   "uuid": null,
+   "size": 1256207,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/quality-03-night-ab.png",
+   "uuid": null,
+   "size": 1199821,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/05-quality/quality-04-home-ab.png",
+   "uuid": null,
+   "size": 2398500,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/06-dispatch/dispatch-01-home-ab.png",
+   "uuid": null,
+   "size": 1372107,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/06-dispatch/dispatch-02-card-ab.png",
+   "uuid": null,
+   "size": 132479,
+   "hits": []
+  },
+  {
+   "path": "art/04-review/06-dispatch/dispatch-03-signleft-experiment.png",
+   "uuid": null,
+   "size": 2308586,
+   "hits": []
+  },
+  {
+   "path": "art/05-archive/v1-糖果纸/concept-0-立绘谱.png",
+   "uuid": null,
+   "size": 196103,
+   "hits": []
+  },
+  {
+   "path": "art/05-archive/v1-糖果纸/concept-1-主界面.png",
+   "uuid": null,
+   "size": 170373,
+   "hits": []
+  },
+  {
+   "path": "art/05-archive/v1-糖果纸/concept-2-战斗UI.png",
+   "uuid": null,
+   "size": 112414,
+   "hits": []
+  },
+  {
+   "path": "art/05-archive/v1-糖果纸/concept-3-结算.png",
+   "uuid": null,
+   "size": 100447,
+   "hits": []
+  },
+  {
+   "path": "art/05-archive/v1-背景/home-bg@v2.png",
+   "uuid": null,
+   "size": 2182611,
+   "hits": []
+  },
+  {
+   "path": "art/05-archive/v1-行走序列/walk-contact.png",
+   "uuid": null,
+   "size": 708490,
+   "hits": []
+  },
+  {
+   "path": "art/05-archive/v1-行走序列/walk-frames-zoom.png",
+   "uuid": null,
+   "size": 177109,
+   "hits": []
+  },
+  {
+   "path": "art/05-archive/v1-行走序列/游戏角色行走动画序列图_sprite_sheet__横向并排_2026-10-21T10-39-40.png",
+   "uuid": null,
+   "size": 1906599,
+   "hits": []
+  },
+  {
+   "path": "assets/ui/home/heads-circle/dou-nai-ox.png",
+   "uuid": "a34ba982-eed9-4ff2-a71c-dc5c51558652",
+   "size": 203483,
+   "hits": []
+  },
+  {
+   "path": "assets/ui/home/heads-circle/nian-gao-dog.png",
+   "uuid": "50b78c3d-1968-4fb9-89c5-9f7c51307947",
+   "size": 128466,
+   "hits": []
+  },
+  {
+   "path": "assets/ui/home/heads-circle/tuan-zi-ham.png",
+   "uuid": "ebb7f20a-bf93-495e-ba6c-f616e28c61d8",
+   "size": 147100,
+   "hits": []
+  },
+  {
+   "path": "assets/ui/home/heads-circle/xing-xie-fox.png",
+   "uuid": "0130836b-4e69-4f0f-997c-8af60d5068a6",
+   "size": 202728,
+   "hits": []
+  },
+  {
+   "path": "assets/ui/home/heads-circle/xue-tuan-rab.png",
+   "uuid": "e2cf4b11-f130-4874-b50a-2656eafe05d1",
+   "size": 182080,
+   "hits": []
+  },
+  {
+   "path": "assets/ui/home/panel-cream.png",
+   "uuid": "5027ccc7-9add-4d6f-a407-619bd4da0763",
+   "size": 3299,
+   "hits": []
+  },
+  {
+   "path": "assets/ui/home/pip-on.png",
+   "uuid": "f76f362b-1e07-4559-bc1a-767758c65eb3",
+   "size": 2092,
+   "hits": []
+  },
+  {
+   "path": "concept/2D_side_view_platformer_battle_2026-10-21T23-15-54.png",
+   "uuid": null,
+   "size": 2464042,
+   "hits": []
+  },
+  {
+   "path": "concept/Game_UI_kit_sheet_for_a_cute_c_2026-10-21T23-16-22.png",
+   "uuid": null,
+   "size": 2048077,
+   "hits": []
+  },
+  {
+   "path": "docs/pixel-preview-ingame.png",
+   "uuid": null,
+   "size": 5990,
+   "hits": []
+  },
+  {
+   "path": "docs/pixel-preview.png",
+   "uuid": null,
+   "size": 21826,
+   "hits": []
+  }
+ ]
+}

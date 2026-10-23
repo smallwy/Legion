@@ -22,11 +22,13 @@ client/tools/_rt-build/
 
 # ---- 沙箱侧临时产物 ----
 client/tools/*.log
+# art-inventory.py 的输出明细：纯生成物，而且里面全是 uuid ——
+# 一旦留在仓库里，下次扫引用时会被自己"引用"到，把每张图都判成在用（踩过）
+client/tools/_art-inventory.json
 /tmp/
 
 # ---- 原型备份 / 过期截图（本地留档，不入库）----
 client/prototype/*.bak-*.html
-client/shots/_old/
 
 # ---- 编辑器 ----
 .vscode/
@@ -40,6 +42,9 @@ client/shots/_old/
 # ---- 验证轮次产物（随时可重跑生成）----
 .playwright-mcp/
 client/prototype/_check2/
-client/shots/_*.png
-# 预览/接触表目录（_rt-bg-preview.py、prep_foes.py 等工具的中间产物）
-client/shots/_*/
+
+# client/shots 是工具的**落点**，不是仓库的一部分。
+# 值得留的评审图一律人工归档到 client/art/04-review/ 再入库。
+# 之前是「按前缀忽略」，结果 _ab-* / _chk-* / _p-* 这些一次性的对比图
+# 攒了 150 多张进仓库，翻起来全是噪音。
+client/shots/

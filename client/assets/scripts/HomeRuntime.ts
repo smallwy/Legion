@@ -47,6 +47,7 @@ import {
     Node, UITransform, UIOpacity, Label, Sprite, Graphics, Color,
     EventTouch, Vec3, tween, director, Director, game,
     assetManager, SceneAsset,
+    resources, SpriteFrame,
 } from 'cc';
 import { EDITOR } from 'cc/env';
 import { MAX_SQUAD, PETS, petGap, squadSize, unlockedPets } from './config/Roster';
@@ -2524,7 +2525,52 @@ function tryBoot() {
 
     bootedScene = sc as unknown as Node;
     ctrl = new HomeController(canvas);
+    attachPostOverlay(canvas);
     console.log('[HomeRuntime] 已接管主界面：宠物待机 / 点击反馈 / 出发卡 全部就绪');
+}
+
+/* ==========================================================================
+ * 镜头叠加层（暗角 + 颗粒）
+ * ==========================================================================
+ * 为什么主界面和战斗用了两套完全不同的做法：
+ * 战斗是 canvas 2D 画的，后期可以在同一张画布上逐帧算（见 grove.html 的
+ * drawPost）；主界面是 Cocos 的 Sprite 场景，没有后处理管线，为了实时算一层
+ * 泛光得挂一整套自定义 pipeline —— 不值。
+ *
+ * 而暗角和颗粒恰好是**静态**的：它们不随画面内容变化。烤成一张 PNG
+ * （生成脚本 tools/build-post-overlay.js），运行时只多一个 Sprite、一次混合。
+ *
+ * 它的收益不在"更好看"，在"更像被拍下来的"：
+ * 主界面每个元素都做了柔光和暖色，唯独没有一处是"脏"的 ——
+ * 四角和中心一样亮，每个像素一样干净。这两点本身就是"这是画出来的"的读数。
+ */
+function attachPostOverlay(canvas: Node): void {
+    /* 路径必须带 /spriteFrame。Cocos 的图片在 resources 里是三层：
+       ImageAsset → Texture2D → SpriteFrame。直接取 'ui/post-overlay'
+       拿到的是 ImageAsset，赋给 Sprite.spriteFrame 在运行时静默失败 ——
+       不报错、也不显示，最难查的一类。 */
+    resources.load('ui/post-overlay/spriteFrame', SpriteFrame, (err: Error | null, sf: SpriteFrame) => {
+        /* 图丢了就静默跳过。这一层是锦上添花 ——
+           少一层暗角玩家不会觉得不对，主界面白屏他会。
+           而且这里是异步回调：回来的时候场景可能已经切走了，
+           所以必须再验一次 canvas.isValid。 */
+        if (err || !sf || !canvas.isValid) return;
+        if (canvas.getChildByName('__PostOverlay')) return;
+
+        const n = new Node('__PostOverlay');
+        n.parent = canvas;
+        const ut = n.addComponent(UITransform);
+        ut.setContentSize(W, H);
+        const sp = n.addComponent(Sprite);
+        sp.spriteFrame = sf;
+        sp.sizeMode = Sprite.SizeMode.CUSTOM;
+        sp.type = Sprite.Type.SIMPLE;
+        n.setPosition(0, 0, 0);
+        /* 排到当前最上层（它盖的是"整帧画面"），但**不抢占之后弹出的
+           出发卡 / 图鉴** —— 那些是 UI 里的"纸"，不该被镜头暗角压暗。
+           所以只排到最后一位，后建的弹窗自然还在它上面。 */
+        n.setSiblingIndex(canvas.children.length - 1);
+    });
 }
 
 /**

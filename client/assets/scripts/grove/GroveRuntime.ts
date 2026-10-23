@@ -1819,6 +1819,7 @@ function setupLevel() {
   S.shots = [];
   S.balls = [];
   S.frags = [];
+  S.dust = [];
   S.texts = [];
   S.food = 0;
   S.killed = 0;
@@ -2754,6 +2755,12 @@ function warnBallFull() {
 /** 被滚球卷进去：球变大变重，人从场上消失 */
 function absorbIntoBall(f, b) {
   f.dead = true;
+  /* 吸入反馈：之前 f.dead = true 直接消失，玩家只看到"敌人没了"。
+     一蓬叶绿尘土留在原地，"被卷走"才有个过程。
+     注意不能用 addFrag —— 它吃 S.rng，这条路径原来不消耗随机数，
+     加进去整局掉落序列就变了（冒烟的清场断言就是这么被打挂的）。 */
+  addDust(f.x, f.y - f.h * 0.45, 9, 0.9, "rgba(168,214,110,");
+  addDust(f.x, f.y - 3, 3, 0.7);
   b.packed.push(f.def);
   b.holds = b.packed.length;
   b.r = 20 + Math.min(16, b.holds * 2.8);
@@ -2778,6 +2785,8 @@ function absorbIntoBall(f, b) {
 function makeBallFrom(f, vx, vy) {
   if (f.dead) return;
   f.dead = true;
+  /* 裹成球：原地一蓬尘土。敌人变球是个"大动作"，静默发生就读不出变了什么 */
+  addDust(f.x, f.y - 4, 6, 1.0);
   S.stat.made++;
   S.stat.maxHolds = Math.max(S.stat.maxHolds, 1);
   // BOSS 球更大更重：滚得慢，但推一次值 14 倍收成。
@@ -2858,6 +2867,16 @@ function updateBalls(dt) {
     // 玩家必须提前决定，而不是跟在球屁股后面慢慢修 —— 这正是想要的手感。
     b.x += b.vx * dt;
     b.spin += b.vx * dt * 0.05;
+    /* 滚动扬尘：只在贴地且够快时冒。节流 0.07s 一粒 —— 每帧都冒
+       会糊成一条尾巴（拖尾已经有一条了，尘土再连成线就是双重残影）。
+       出尘点在球**后脚跟**（运动反方向 0.6r），球往前滚、土往后扬。 */
+    if (b.onGround && Math.abs(b.vx) > 150) {
+      b._dc = (b._dc || 0) - dt;
+      if (b._dc <= 0) {
+        addDust(b.x - Math.sign(b.vx) * b.r * 0.6, b.y - 2, 1, 0.55);
+        b._dc = 0.07;
+      }
+    }
     // 撞墙反弹。推出去的球最多弹一次 —— 第二次撞墙就地散掉，
     // 这是"底层不出现来回溜达的球"的最后一道闸。
     /* 撞墙反弹。
@@ -2944,7 +2963,12 @@ function updateBalls(dt) {
           if (!best || p.y < best.y) best = p;
         }
       }
-      if (best) { b.y = best.y; b.vy = 0; b.onGround = true; b.ground = best; }
+      if (best) {
+        /* 落地反馈：之前这里只有物理（vy 清零），视觉上是"球悬浮到位"。
+           尘土量按**这帧之前的下落速度**给 —— 轻放不扬灰，砸下来才有。 */
+        if (b._fallVy > 130) addDust(b.x, best.y - 2, Math.min(7, 2 + b._fallVy / 90), Math.min(1.5, b._fallVy / 380));
+        b.y = best.y; b.vy = 0; b.onGround = true; b.ground = best;
+      }
     }
 
     // ---- 斜坡（第 4 关）
@@ -2953,6 +2977,7 @@ function updateBalls(dt) {
     // 速度变化用重力沿坡面的分量：上坡掉速、下坡加速 —— 这是物理，不是摩擦。
     const rp = rampAt(b.x);
     if (rp && b.vy >= -40 && onRampSurface(b.y, rp, prevY, 20)) {
+      if (b._fallVy > 150 && !b.onGround) addDust(b.x, rp.y - 2, 4, 0.9);
       b.y = rp.y;
       b.vy = 0;
       b.onGround = true;
@@ -3726,6 +3751,29 @@ function addFrag(x, y, n, color) {
   if (S.frags.length > 320) S.frags.splice(0, S.frags.length - 320);
 }
 
+/** 尘土：不是碎片。碎片是"东西被撞碎了"，尘土是"有重量的东西落地/擦地"。
+ *  两套并存的原因：尘土没有重力弹跳，是慢慢升起、变淡、变大的软圆 ——
+ *  用碎片的抛物线运动做尘土，读出来是"地上蹦渣"，不是扬灰。
+ *  pow 控制初速与尺寸量级：落地按下落速度给，滚动给小值。
+ *
+ *  **必须用 Math.random，不许用 rand()**：rand 消耗 S.rng（固定种子），
+ *  而尘土挂在落地/滚动这些高频路径上 —— 每粒尘土消耗一次随机数，
+ *  整局的敌人 AI、掉落序列就全变了。实测把"150 秒清场"的冒烟断言
+ *  直接打到超时。视觉特效与玩法随机序列严格隔离。 */
+function addDust(x, y, n, pow, col) {
+  pow = pow || 1;
+  for (let i = 0; i < n; i++) {
+    S.dust.push({
+      x: x + (Math.random() * 12 - 6) * pow, y: y + (Math.random() * 4 - 2),
+      vx: (Math.random() * 92 - 46) * pow, vy: (Math.random() * 42 - 58) * pow,
+      life: 0.34 + Math.random() * 0.28, max: 0.62,
+      r: (2.4 + Math.random() * 2.6) * Math.min(1.6, 0.7 + pow * 0.5),
+      col: col || "rgba(196,178,138,",
+    });
+  }
+  if (S.dust.length > 200) S.dust.splice(0, S.dust.length - 200);
+}
+
 function addText(x, y, txt, color, size, life) {
   S.texts.push({ x, y, txt, color, size: size || 18, life: life || 0.9, max: life || 0.9 });
   if (S.texts.length > 24) S.texts.splice(0, S.texts.length - 24);
@@ -3748,6 +3796,18 @@ function tickFx(dt) {
   let w = 0;
   for (let i = 0; i < S.frags.length; i++) if (S.frags[i].life > 0) S.frags[w++] = S.frags[i];
   S.frags.length = w;
+
+  /* 尘土：升、减速、微涨。没有重力 —— 尘土不该往下掉，
+     往下掉就成碎石了。横向阻力大（0.9^dt 量级）让它很快停住，
+     只剩"冒出来又散了"的那一下。 */
+  for (const d of S.dust) {
+    d.life -= dt;
+    d.x += d.vx * dt; d.y += d.vy * dt;
+    d.vx *= 0.90; d.vy *= 0.86;
+  }
+  w = 0;
+  for (let i = 0; i < S.dust.length; i++) if (S.dust[i].life > 0) S.dust[w++] = S.dust[i];
+  S.dust.length = w;
 
   for (const t of S.texts) { t.life -= dt; t.y -= dt * 42; }
   w = 0;
@@ -6626,6 +6686,19 @@ function drawFoeShots(g) {
   }
 }
 
+/** 尘土画在前景之后、单位之前：它属于地面 —— 盖住角色的脚就成烟雾了。
+ *  用 addColorStop 式的透明度串而不是 globalAlpha 累乘：颜色里带 alpha，
+ *  一条 fill 就完事，省掉 save/restore。 */
+function drawDust(g) {
+  for (const d of S.dust) {
+    const k = clamp(1 - d.life / d.max, 0, 1);
+    g.fillStyle = d.col + (0.42 * (1 - k)).toFixed(3) + ")";
+    g.beginPath();
+    g.arc(d.x, d.y, d.r * (1 + k * 1.5), 0, 6.283);
+    g.fill();
+  }
+}
+
 function drawShocks(g) {
   for (const s of S.shocks) {
     const k = clamp(s.t / s.life, 0, 1);
@@ -9123,12 +9196,18 @@ function drawPost(g) {
     bc.filter = "none";
 
     g.globalCompositeOperation = "screen";
-    /* 0.38。
-       第一版 0.46 拍出来是"整屏蒙了一层奶油色"；收到 0.18 又**彻底看不见**——
-       实测泛光层的平均亮度只有 27/255，screen 之后在草地上只抬 0.007 亮度，
-       等于没做。这个数的正确量级是"草地只亮一点点、太阳那圈明显在发光"，
-       38% 是实测出来的转折点。 */
-    g.globalAlpha = 0.38;
+    /* 强度分主题给，不是一个常数：
+     *   普通关 0.38 / 雪原 0.28 / 夜关 0.20
+     *
+     * 为什么必须分开：泛光的强度实际取决于"画面里有多少接近白的东西"。
+     * 雪原的雪面和夜关的月光都是大面积高光，用 0.38 会把整片雪 / 整个夜空
+     * 一起推亮 —— 雪地失去起伏读成"一块白"，夜关被提亮成"傍晚"，两个都不是
+     * 这张图想要的。给得低一点，只让最亮的那一小块溢出。
+     *
+     * 普通关反而可以给足：草地亮度只有 0.65，离阈值远，0.38 才能在太阳、
+     * 火苗、法球上看出光晕。
+     */
+    g.globalAlpha = TH.night ? 0.20 : TH.snow ? 0.28 : 0.38;
     g.drawImage(P.bloom, 0, 0, W, H);
     g.globalAlpha = 1;
 
@@ -9338,6 +9417,10 @@ function render() {
   // 前景压在地面之后（它吃掉草皮下沿）、单位之前（绝不挡角色和球）。
   // 顺序错了会直接毁掉玩法可读性：草挡住球，玩家就不知道球落没落地。
   drawForegroundSoft(g);
+
+  // 尘土：属于地面，必须在单位之前。画在球后面 = 球压着尘土滚过去，
+  // 画在球前面 = 烟雾糊脸 —— 后者看起来像特效坏了。
+  drawDust(g);
 
   if (S.phase === "play" || S.phase === "clear" || S.phase === "fail") {
     // 预测线画在关卡之上、单位之下：它属于"地形信息"，不属于"角色"

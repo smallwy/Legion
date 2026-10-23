@@ -56,13 +56,21 @@ const stages = args.length ? args.map((a) => parseInt(a, 10)) : [0, 1, 3];
 for (const st of stages) {
   const { P, S, canvas } = boot();
   P._start(0, st);
+  /* 后期合成开关（POST=0 关掉）。调参时要能看"没有泛光/调色/颗粒"的原帧，
+     否则永远分不清某个观感是后期带来的还是背景本身画出来的。 */
+  if (process.env.POST === "0") S.post = false;
+  if (process.env.VIG === "0") S.vignette = false;
   /* 走 40 帧：HUD 的淡入、宠物的呼吸、浮尘都动起来了。
      但它们会挡住背景 —— 调背景时干脆把角色/敌人/HUD 全清掉，
      只看"空场"长什么样。 */
   for (let i = 0; i < 40; i++) P.tick(1 / 60);
-  S.foes.length = 0;
-  S.balls.length = 0;
-  S.shots.length = 0;
+  /* KEEP=1 保留敌人和球：只看空场永远判断不出"角色和背景是不是一体的"，
+     而"贴图感"恰恰是角色和背景的关系问题，不是背景本身的问题。 */
+  if (process.env.KEEP !== "1") {
+    S.foes.length = 0;
+    S.balls.length = 0;
+    S.shots.length = 0;
+  }
   S.hudT = 99;
   P.render();
   const f = path.join(OUT, (process.env.PREFIX || "_bg-") + "s" + st + ".png");

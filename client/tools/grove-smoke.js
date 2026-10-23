@@ -70,6 +70,21 @@ function mkCtx() {
     fillRect: noop, strokeRect: noop, clearRect: noop,
     fillText: noop, strokeText: noop,
     setLineDash: noop, drawImage: noop,
+    /* 后期合成层（drawPost）用到的那几个：transform 重置、画布级滤镜、
+       图案填充。桩缺方法时只会在"真的去渲染"的测试里炸 —— 上次 rect 就是
+       这样藏了一整轮。这里的 filter 用普通属性而非访问器：真 canvas 上
+       赋一个不支持的串也只是被忽略，桩没必要更严格。 */
+    setTransform: noop, resetTransform: noop,
+    filter: "", createPattern: () => ({}),
+    createImageData: (w, h) => ({
+      data: new Uint8ClampedArray((w | 0) * (h | 0) * 4),
+      width: w | 0, height: h | 0,
+    }),
+    getImageData: (x, y, w, h) => ({
+      data: new Uint8ClampedArray((w | 0) * (h | 0) * 4),
+      width: w | 0, height: h | 0,
+    }),
+    putImageData: noop,
     measureText: (t) => ({ width: String(t).length * 7 }),
     createLinearGradient: () => ({ addColorStop: noop }),
     createRadialGradient: () => ({ addColorStop: noop }),

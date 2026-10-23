@@ -1569,6 +1569,10 @@ const S = {
   hoverStage: -1,
   hoverBtn: -1,         // 结算面板：0 继续 / 1 收工 / -1 没指
   vignette: true,
+  /* 后期合成总开关（泛光 / 分离色调 / 颗粒）。
+     暗角不归它管（vignette 单独一个）—— 暗角是构图工具，
+     泛光调色颗粒是"显影"，调参时要能分开关。 */
+  post: true,
   log: [],
 };
 
@@ -4929,13 +4933,26 @@ function drawPlat(g, p) {
   const openL = flatL ? 0 : 1;     // 1 = 这一端是真正的台头，要圆角 + 年轮
   const openR = flatR ? 0 : 1;
 
-  // ① 影子：远影（落在背景/地面上）+ 贴地 AO。没有影子，平台就是贴纸
+  /* ① 影子：远影（落在背景/地面上）+ 贴地 AO。没有影子，平台就是贴纸。
+   *
+   * 三层叠出柔边，不用 blur：每个平台每帧做一次全尺寸模糊，
+   * 四条平台就是四次 —— 这个代价在手机上是白给的帧。
+   * 三层逐次外扩 + 逐层变淡，出来的边缘已经读作"软"了。
+   *
+   * 整体左移 9px：和角色同一套光源（太阳在右上 700,74）。
+   * 上一版影子在正下方，和角色的正下方影子"互相印证"，
+   * 于是画面里有一套自洽的、错误的光照 —— 比不一致更糟。 */
   const shX = p.x + (openL ? 8 : 0);
   const shW = p.w - (openL ? 8 : 0) - (openR ? 8 : 0);
-  // 远影压在下面更远、更扁：距离感就是"影子和物体的间距"。
-  g.fillStyle = "rgba(14,38,24,.22)";
-  rr(g, shX, p.y + 20, shW, TK - 2, R + 2);
-  g.fill();
+  g.fillStyle = "rgba(14,38,24,1)";
+  for (let i = 2; i >= 0; i--) {
+    const k = i / 2;
+    g.globalAlpha = 0.13 * (1 - k * 0.55);
+    rr(g, shX - 9 - k * 5, p.y + 20 + k * 2.5, shW + k * 10, TK - 2 + k * 3, R + 2 + k * 5);
+    g.fill();
+  }
+  g.globalAlpha = 1;
+  // 贴地 AO：紧贴平台底面的一条实心暗带，负责"这是接触面"。
   g.fillStyle = "rgba(14,38,24,.16)";
   rr(g, p.x + 2, p.y + TK - 6, p.w - 4, 12, 6);
   g.fill();
@@ -6371,12 +6388,33 @@ const WALK_CUT = {
 };
 
 function drawPetSprite(g, img, x, footY, w, h, face, A, o, id) {
-  // 影子：和代码图形同一套，贴地
-  g.globalAlpha = 0.18 * A;
-  g.fillStyle = "#16261C";
+  /* 影子：**径向渐变 + 朝左下偏移**，不是一块纯色椭圆。
+   *
+   * 两个问题一次修掉：
+   * ① 纯色椭圆是硬边的。真实影子从接触点往外是渐隐的 ——
+   *    硬边影子贴在任何背景上都读作"贴纸下面垫了个灰椭圆"。
+   * ② 原来影子在正下方。但这一套背景的太阳固定右上 (700,74)，
+   *    光从右上来，影子必然偏左下。正下方的影子等于宣告
+   *    "这个角色身上的光和背景的光不是同一个光"—— 这一条比任何细节
+   *    都更让角色像"抠图贴上去的"。
+   *
+   * 偏移量只给 w*0.15：再大，玩家会读不准"它的脚在哪"，
+   * 而脚的位置直接关系到推球时的站位判断。视觉服从玩法。 */
+  const shx = x - w * 0.15;
+  g.save();
+  g.translate(shx, footY + 2);
+  g.scale(1, 0.20);
+  const shg = g.createRadialGradient(0, 0, 1, 0, 0, w * 0.54);
+  shg.addColorStop(0, "rgba(14,34,24,.30)");
+  shg.addColorStop(0.52, "rgba(14,34,24,.15)");
+  shg.addColorStop(1, "rgba(14,34,24,0)");
+  g.globalAlpha = A;
+  g.fillStyle = shg;
   g.beginPath();
-  g.ellipse(x, footY + 2, w * 0.44, 5, 0, 0, 6.283);
+  g.arc(0, 0, w * 0.54, 0, 6.283);
   g.fill();
+  g.restore();
+  g.globalAlpha = 1;
 
   const sq = o.squash || 0;
   /* dh 按**体高**算，不是按图高。
@@ -8995,6 +9033,338 @@ function inRect(p, r) {
   return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
 }
 
+/* ============================================================================
+   16.5 后期合成（Post Pass）
+   ============================================================================
+   起因是一句话："整体偏静态贴图、层次感弱、美术感觉很弱"。
+
+   先说清楚病在哪 —— 不是单个物件画得糙。天空有太阳光晕和斜光柱，远山有三档
+   混色，地面有三档明度加草纹理，平台是两根圆木带受光弧，角色有接地影子。
+   每一件单独看都在及格线以上。
+
+   问题是它们**没有被同一个镜头拍下来**：
+
+     ① 亮的东西不发光。太阳是一块纯白圆、火坑是一团橙、法球是一圈绿 ——
+        每一样都"是那个颜色"，但没有一样在**溢出**。真实画面里高光的能量
+        会糊到周围去，这是"光"和"涂了一块亮色"的唯一区别。
+     ② 明暗没有全局方向。每件东西的明暗都是自己写死的（平台的上亮下暗、
+        角色高光在左上），彼此不构成一个统一的光场。看的人读不出"光从哪来"，
+        就会把每个物件读成一张独立的贴纸。
+     ③ 暗部不冷、亮部不暖。八套主题只管了"这一关的主色"，没人管**同一张图内
+        的色彩关系** —— 于是白云、绿草、棕木、橙猫全停在一个色温上，
+        画面读作"一盒蜡笔"。
+     ④ 每个像素都太干净。程序化图形的边缘是数学精确的，没有噪点。
+        真实镜头一定带颗粒（感光噪声）；干净到零噪声 = 一眼矢量。
+
+   这四条都是**整幅画**的性质。靠在 drawXxx 里继续补细节完全无解 ——
+   补得越多，越像"一张细节很足的贴纸"。唯一的办法是：等所有东西画完，
+   把这一帧当成一张已经拍下来的照片，再走一遍显影。
+
+   顺序不能换，换了互相打架：
+      泛光 → 提对比 → 分离色调 → 颗粒 → 暗角
+   ① 泛光必须在调色之前：调色会压暗部，先泛光才有"光本身亮"的读数。
+   ② 颗粒必须在暗角之前：暗角是全屏乘法。先压暗再撒颗粒，四角的颗粒会
+      一起被压没；反过来才是"四角颗粒更明显"的真实分布。
+   ③ 暗角必须最后：它是唯一一层盖住 HUD 的层，也必须是最后盖上去的那层。
+   ========================================================================== */
+
+/* 噪点图的边长。256 是权衡：128 平铺在 960 宽上会看出 7 次重复的接缝，
+   512 要生成 26 万像素、每帧首帧明显卡一下。 */
+const GR_N = 256;
+
+/* 离屏画布**惰性创建**。
+   不放模块顶层：Cocos 里要等 groveAttachCanvas 才有 cv，而且 359 项冒烟断言
+   绝大多数不渲染，顶层分配三张位图纯属浪费。 */
+let _post = null;
+function postGet(g) {
+  if (_post) return _post;
+  const mk = (w, h) => {
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    return c;
+  };
+  /* 泛光用 1/4 分辨率。全分辨率的泛光没人看得出区别，
+     但每帧多搬 3 倍的像素 —— 手机上是直接掉帧的量级。 */
+  const bloom = mk(W >> 2, H >> 2);
+  /* 调色用的全屏缓存。只为了给 contrast/saturate 一个作用对象 ——
+     canvas 的 filter 只能作用在 **drawImage 的源**上，不能对现有像素施加。
+     所以想给"整个画面"提对比，只能整体搬一次。960×600 是一次全屏位块传输，
+     比多画十棵树的代价还低。 */
+  const grade = mk(W, H);
+  _post = {
+    bloom: bloom, bc: bloom.getContext("2d"),
+    grade: grade, gc: grade.getContext("2d"),
+    pat: null,
+  };
+  return _post;
+}
+
+/* 生成三张噪声图案。三张而不是一张：一张固定不动的噪声读作
+   "屏幕上落了一层灰"，会跟着镜头一起静止 —— 那是脏，不是颗粒。
+   每 2 帧轮换一张，观感上就是"每格胶片各自的感光噪声"。 */
+function postBuildGrain(P, g) {
+  P.pat = [];
+  for (let k = 0; k < 3; k++) {
+    const c = document.createElement("canvas");
+    c.width = c.height = GR_N;
+    const gc = c.getContext("2d");
+    const img = gc.createImageData(GR_N, GR_N);
+    const d = img.data;
+    for (let i = 0, n = GR_N * GR_N; i < n; i++) {
+      /* 两个 hash 相加再减 1 = 三角分布，不是均匀分布。
+         均匀白噪的观感是"电视雪花"；三角分布大部分像素贴近中灰、
+         少数才明显偏亮/偏暗，这才是胶片颗粒的分布。 */
+      const v = 128 + (hash(i * 1.37 + k * 311.7) + hash(i * 2.71 + k * 97.3) - 1) * 54;
+      d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v;
+      d[i * 4 + 3] = 255;
+    }
+    gc.putImageData(img, 0, 0);
+    P.pat.push(g.createPattern(c, "repeat"));
+  }
+}
+
+/**
+ * 把一帧当成照片显影一遍。**在 render() 的最后、g.restore() 之前调**。
+ *
+ * 全程用 setTransform(1,0,0,1,0,0) 重置变换：render() 开头有震屏的 translate，
+ * 这一层如果跟着抖，泛光和暗角会露出画面外的黑边 —— 那是"镜头在抖"变成
+ * "屏幕在抖"，两回事。
+ */
+function drawPost(g) {
+  const P = postGet(g);
+  if (!P.pat) postBuildGrain(P, g);
+
+  g.save();
+  g.setTransform(1, 0, 0, 1, 0, 0);
+
+  /* ---- ① 泛光：抽亮部 → 模糊 → screen 叠回 ----
+   *
+   * 阈值走 brightness(0.55) + contrast(4.6)，不是"提亮后模糊"：
+   *   草地亮度 ≈ 0.70 → 压到 0.39 → contrast 后 ≈ 0（完全不进泛光）
+   *   天空 0.92 → 0.51 → 0.55（进一半，天空本来就该在发光）
+   *   太阳 / 白高光 1.00 → 0.55 → 0.73（大半个进来，糊开就是光晕）
+   * 只用 contrast（比如 3.0）不压 brightness 的话，草地会被整片推亮，
+   * 全屏起一层雾 —— 那不是泛光，是"镜头脏了"。
+   *
+   * blur 半径 5px 建在 1/4 分辨率上，等价全屏 20px。
+   * 这个尺度才读作"光晕"；3px 读作"边缘发虚"，8px 读作"整块糊了"。
+   */
+  if (S.post !== false) {
+    const BW = P.bloom.width, BH = P.bloom.height;
+    const bc = P.bc;
+    bc.setTransform(1, 0, 0, 1, 0, 0);
+    bc.globalCompositeOperation = "source-over";
+    bc.clearRect(0, 0, BW, BH);
+    bc.filter = "brightness(0.55) contrast(4.6) blur(5px)";
+    bc.drawImage(cv, 0, 0, BW, BH);
+    bc.filter = "none";
+
+    g.globalCompositeOperation = "screen";
+    /* 强度分主题给，不是一个常数：
+     *   普通关 0.38 / 雪原 0.28 / 夜关 0.20
+     *
+     * 为什么必须分开：泛光的强度实际取决于"画面里有多少接近白的东西"。
+     * 雪原的雪面和夜关的月光都是大面积高光，用 0.38 会把整片雪 / 整个夜空
+     * 一起推亮 —— 雪地失去起伏读成"一块白"，夜关被提亮成"傍晚"，两个都不是
+     * 这张图想要的。给得低一点，只让最亮的那一小块溢出。
+     *
+     * 普通关反而可以给足：草地亮度只有 0.65，离阈值远，0.38 才能在太阳、
+     * 火苗、法球上看出光晕。
+     */
+    g.globalAlpha = TH.night ? 0.20 : TH.snow ? 0.28 : 0.38;
+    g.drawImage(P.bloom, 0, 0, W, H);
+    g.globalAlpha = 1;
+
+    /* ---- ② 对比与饱和：把"每一件都刚刚好"拉开成"有明有暗" ----
+     *
+     * 这是最关键的一步，也最容易漏掉。
+     *
+     * 程序化画出来的东西有个共同病：每一件都合理地取了一个中间调 ——
+     * 草地 0.65、树冠 0.55、木头 0.58、云 0.92。单看每个都"对"，
+     * 摆在一起就**没有一处是暗的**，画面于是读作"平"，读作"贴纸"。
+     * 真实照片里一定有被压到 0.15 以下的暗部（背光的树根、平台底面、
+     * 石头缝），正是这些暗部把亮部衬出来。
+     *
+     * 所以这一步不是"调色"，是**补上缺失的明暗跨度**：
+     * contrast 1.14 让暗的下去、亮的上来，saturate 1.10 让推开的颜色不发灰
+     * （提对比一定掉饱和，这两个必须一起动；只动一个，画面要么发灰要么发艳）。
+     */
+    const gc = P.gc;
+    gc.setTransform(1, 0, 0, 1, 0, 0);
+    gc.globalCompositeOperation = "copy";
+    gc.filter = "contrast(1.14) saturate(1.10)";
+    gc.drawImage(cv, 0, 0);
+    gc.filter = "none";
+    g.globalCompositeOperation = "copy";
+    g.drawImage(P.grade, 0, 0);
+    g.globalCompositeOperation = "source-over";
+
+    /* ---- ③ 分离色调：亮部往暖、暗部往冷 ----
+     *
+     * 这是"电影感"最便宜也最有效的一条：它不改任何物体的形状，
+     * 只规定"这张图里的暗部属于哪个色温、亮部属于哪个色温"。
+     * 两个色温一旦分开，整张图就有统一的"光"，物件之间自动粘住。
+     *
+     * 冷的那层也用 soft-light，**不用 multiply**。
+     * 第一版按"压暗部"的思路用了 multiply 铺蓝：蓝 × 绿 = 灰橄榄，
+     * 整个下半屏的草地直接脏掉。multiply 只适合"压暗"，不适合"染色"——
+     * 它改的是每个通道的乘积，绿色通道高的地方乘蓝必然掉饱和。
+     * soft-light 的性质是"暗部推色、亮部几乎不动、中灰不变"，
+     * 这才是分离色调要的东西：它不改变明度结构，只标注色温归属。
+     *
+     * 暖的那层同样 soft-light，只给受光面加温。
+     * 位置和天空的太阳同一个坐标，否则"光"和"光源"对不上，
+     * 观感上会变成"右上角被染黄了"而不是"光从右上来"。
+     */
+    const cool = g.createLinearGradient(0, 0, 0, H);
+    cool.addColorStop(0, "rgba(48,76,148,0)");
+    cool.addColorStop(0.52, "rgba(48,76,148,.16)");
+    cool.addColorStop(1, "rgba(38,62,130,.42)");
+    g.globalCompositeOperation = "soft-light";
+    g.fillStyle = cool;
+    g.fillRect(0, 0, W, H);
+
+    const sx = TH.night ? 858 : 700, sy = TH.night ? 214 : 74;
+    const warm = g.createRadialGradient(sx, sy, 40, sx, sy, 620);
+    /* 夜关的"暖"换成冷月光，且只给一半强度 ——
+       紫夜上叠橙光会把整片天染成脏粉，那是第 8 关的老毛病。 */
+    if (TH.night) {
+      warm.addColorStop(0, "rgba(176,196,255,.30)");
+      warm.addColorStop(0.55, "rgba(150,170,240,.10)");
+      warm.addColorStop(1, "rgba(140,160,230,0)");
+    } else {
+      /* 0.34 / 0.11 而不是 0.52 / 0.17。
+         第一版把暖光铺到全屏（半径 780），苔原关本身就是黄昏金天空，
+         再叠一层橙 = 整幅画只剩一个色相，云和远山全糊在一起。
+         暖光的职责是"在受光面加温"，不是"给画面套一个橙色滤镜"——
+         半径收到 620、强度减半之后，它才只在太阳那一圈和受光边缘可见。 */
+      warm.addColorStop(0, "rgba(255,186,96,.34)");
+      warm.addColorStop(0.55, "rgba(255,172,82,.11)");
+      warm.addColorStop(1, "rgba(255,150,60,0)");
+    }
+    g.globalCompositeOperation = "soft-light";
+    g.fillStyle = warm;
+    g.fillRect(0, 0, W, H);
+
+    /* ---- ④ 颗粒 ----
+     *
+     * overlay + 中灰 128 = 不变；偏亮的像素提亮、偏暗的压暗。
+     * alpha 0.075 是"看得见但说不出"的量级 ——
+     * 0.03 完全看不见（白做），0.15 就开始像加了滤镜的噪点照片。
+     *
+     * 用 S.t 决定用哪张图，不用 Math.random：截图工具要能复现同一帧。
+     * 每 2 帧换一张，配 60fps 就是 30Hz，接近胶片的 24Hz 观感。
+     */
+    g.globalCompositeOperation = "overlay";
+    g.globalAlpha = 0.075;
+    g.fillStyle = P.pat[Math.floor(S.t * 30) % 3];
+    g.fillRect(0, 0, W, H);
+    g.globalAlpha = 1;
+
+    /* ---- ④b 镜头光斑 ----
+     *
+     * 画面上飘着几个大而虚的亮斑。它们**不是**粒子特效 ——
+     * 是镜头前空气里被阳光照亮的浮尘，虚焦之后就是一个亮斑。
+     *
+     * 有它和没它的区别，是"这张图被拍下来"和"这张图被画出来"的区别：
+     * 前面四层都在处理"颜色和明暗"，只有这一层在画面里放进了
+     * **镜头本身**这个物体 —— 观众看不到镜头，但能通过散景知道它在那儿。
+     *
+     * 必须虚：半径 14~50、中心 alpha 只有 0.05~0.11、边缘完全透明。
+     * 画实了就变成"天上飘着几个白点"，是雪花特效，不是散景。
+     * 用 screen 而不是 source-over：光斑是**加光**，不是盖一层白。
+     */
+    g.globalCompositeOperation = "screen";
+    for (let i = 0; i < 7; i++) {
+      const sp = 0.05 + hash(i * 3.1) * 0.045;
+      const ph = S.t * sp + hash(i * 7.7) * 6.283;
+      const bx = (hash(i * 1.3) * W + Math.sin(ph) * 96 + W) % W;
+      const by = 40 + hash(i * 5.9) * 400 + Math.cos(ph * 0.8) * 46;
+      const br = 14 + hash(i * 9.1) * 36;
+      const ba = (0.055 + hash(i * 2.3) * 0.055) * (0.62 + 0.38 * Math.sin(S.t * 0.6 + i * 1.7));
+      const rg = g.createRadialGradient(bx, by, br * 0.15, bx, by, br);
+      const tint = TH.night ? "190,206,255" : "255,246,214";
+      rg.addColorStop(0, "rgba(" + tint + "," + ba.toFixed(3) + ")");
+      rg.addColorStop(0.62, "rgba(" + tint + "," + (ba * 0.45).toFixed(3) + ")");
+      rg.addColorStop(1, "rgba(" + tint + ",0)");
+      g.fillStyle = rg;
+      g.beginPath();
+      g.arc(bx, by, br, 0, 6.283);
+      g.fill();
+    }
+    g.globalAlpha = 1;
+  }
+
+  /* ---- ⑤ 暗角 ----
+   * 椭圆而不是正圆：960×600 是 16:10，正圆暗角在上下两边会切得比左右狠，
+   * 读作"画面上下被裁了"。椭圆按宽高比拉，四角的衰减才是均匀的。
+   *
+   * 中心半径 0.46H、外沿 1.0W：外沿收到屏幕宽的一半之外，
+   * 四角才是"完全压到底"，而不是中途就截断成一条硬边。
+   * 颜色偏冷绿（#101C16 而不是纯黑）：纯黑暗角会吸掉草地原本的色相，
+   * 读作"镜头上加了个黑框"。
+   */
+  if (S.vignette !== false) {
+    g.save();
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.translate(W / 2, H / 2);
+    g.scale(1, H / W);            // 把正圆压成椭圆（按宽高比）
+    const R = W * 0.52;
+    const vg = g.createRadialGradient(0, 0, R * 0.52, 0, 0, R);
+    vg.addColorStop(0, "rgba(16,28,22,0)");
+    vg.addColorStop(0.62, "rgba(16,28,22,.10)");
+    vg.addColorStop(1, "rgba(10,20,15,.46)");
+    g.fillStyle = vg;
+    g.fillRect(-W, -W, W * 2, W * 2);
+    g.restore();
+  }
+
+  g.restore();
+}
+
+/* ---- 前景景深：把最前面那层灌木模糊掉 ----
+ *
+ * 为什么这一条比"再加细节"重要得多：
+ * 真实镜头只有一个焦平面。这一关的焦平面在中景（平台和角色所在的那一档），
+ * 最前面那丛灌木离镜头不到一米，物理上必然糊。现在它和角色一样锐利 ——
+ * 这等于告诉观众"这里没有镜头，只是一堆图叠在一起"。
+ *
+ * 半径只给 2.4px。5px 读作"背景虚化"（前景会跑到远处去），1px 看不出来。
+ * 2~3px 恰好是"我知道我在看一个很近的东西"。
+ *
+ * 遮罩层里的每一件都还是 drawForeground 原样画出来的，
+ * 这一层只改**清晰度**，不改造型和配色 —— 所以它不会和玩法可读性打架。
+ */
+let _fg = null;
+function drawForegroundSoft(g) {
+  if (S.dof === false) { drawForeground(g); return; }
+  if (!_fg) {
+    const c = document.createElement("canvas");
+    c.width = W;
+    c.height = H;
+    _fg = { cv: c, ctx: c.getContext("2d") };
+  }
+  const fc = _fg.ctx;
+  fc.setTransform(1, 0, 0, 1, 0, 0);
+  fc.globalCompositeOperation = "source-over";
+  fc.clearRect(0, 0, W, H);
+  drawForeground(fc);
+
+  g.save();
+  /* 先垫一份清晰的，再叠一份模糊的。
+     只画模糊版的话，blur 会把画布外的透明一起采样进来，
+     灌木轮廓会整体向内缩一圈并且变淡 —— 前景层薄了一层，看起来像"褪色"。
+     垫底之后轮廓位置和浓度都对，模糊只作用在边缘。 */
+  g.drawImage(_fg.cv, 0, 0);
+  g.globalAlpha = 0.80;
+  g.filter = "blur(2.4px)";
+  g.drawImage(_fg.cv, 0, 0);
+  g.filter = "none";
+  g.globalAlpha = 1;
+  g.restore();
+}
+
 function render() {
   const g = ctx;
   g.save();
@@ -9011,7 +9381,7 @@ function render() {
   drawPrints(g);
   // 前景压在地面之后（它吃掉草皮下沿）、单位之前（绝不挡角色和球）。
   // 顺序错了会直接毁掉玩法可读性：草挡住球，玩家就不知道球落没落地。
-  drawForeground(g);
+  drawForegroundSoft(g);
 
   if (S.phase === "play" || S.phase === "clear" || S.phase === "fail") {
     // 预测线画在关卡之上、单位之下：它属于"地形信息"，不属于"角色"
@@ -9736,14 +10106,10 @@ function render() {
     drawSelect(g);
   }
 
-  if (S.vignette !== false) {
-    // 压暗四边，把视线收回中心
-    const vg = g.createRadialGradient(W / 2, H / 2, H * 0.42, W / 2, H / 2, H * 0.95);
-    vg.addColorStop(0, "rgba(0,0,0,0)");
-    vg.addColorStop(1, "rgba(6,14,10,.42)");
-    g.fillStyle = vg;
-    g.fillRect(0, 0, W, H);
-  }
+  /* 后期合成：泛光 / 分离色调 / 颗粒 / 暗角。
+     它必须在 **所有东西之后**（包括 HUD 和结算卡）——
+     它盖的是"整帧画面"，不是"场景"。见 drawPost 上方那段说明。 */
+  drawPost(g);
 
   g.restore();
 }

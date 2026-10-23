@@ -200,6 +200,17 @@ CR-019 的守家回合制版本，用户反馈"主线应该是野外觅食"后�
 
 ## 一、5 分钟组装步骤
 
+> ⚠ **本章及 §二～§十 描述的是已冻结的「割草切片（mow）」玩法。**
+> 2026-10-21 起 `BattleBoot.MODE` 写死 `'grove'`，站场的是推球（见上面 ★ 章节）。
+> 当前工程的组装与运行**以 ★ 章节为准**；本章只作「日后切回 mow 时怎么搭」的存档保留。
+>
+> 连带变化：`assets/resources/art/` 那 4 张占位精灵已于 **2026-10-23 删除** ——
+> 它们只被 `MODE='mow'` 分支的 `SpriteAssets` 加载，`'grove'` 下运行时永远读不到，
+> 留着白占包体还会让人误以为这套美术仍在用。
+> 要恢复：`python tools/pixelart_gen.py`（纯代码画，不依赖源图）
+> 或 `python tools/preprocess_sprites.py`（源图在仓库根 `assets/placeholder/`）。
+> 下文中凡是提到这 4 张图的操作步骤，按「已移除、可重出」理解。
+
 ### 1. 建空项目
 Cocos Dashboard → **新建项目** → 选 **Empty (2D)** 模板，命名如 `MunchLegion`，**引擎版本 3.8.x**。
 （必须 3.8+：本项目用到的 `screen` 属性、`Graphics` 合批语义均以 3.8.0 引擎源码核实。）
@@ -383,11 +394,13 @@ Squash & Stretch（蓄力蹲下 / 出手弹起 / 落地压扁）、圆润形状�
 ```
 client/
 ├── assets/
-│   ├── resources/art/          # 占位精灵（真像素：32px、9~11 色、1px 描边、显示 ×2）
-│   │   ├── pet.png             #   英雄（圆滚猪，3 只共用同一贴图 → 合批）
-│   │   ├── enemy-walker.png    #   步行虫（绿）
-│   │   ├── enemy-flyer.png     #   飞虫（红，远程施法）
-│   │   └── enemy-tank.png      #   甲虫（灰蓝，厚血）
+│   ├── resources/
+│   │   ├── grove/              # 战斗贴图（28 张，按用途分四个子目录）
+│   │   │   ├── pet/            #   六只宠物立绘（高 192）
+│   │   │   ├── head/           #   六只圆头像（96）
+│   │   │   ├── foe/            #   四种敌人（bug / crow / boar / larva）
+│   │   │   └── ui/             #   战斗 HUD 与结算面板（奶油风那套）
+│   │   └── ui/post-overlay.png # 主界面后期叠加层（暗角 + 颗粒，烤好的）
 │   └── scripts/
 │       ├── GameBootstrap.ts    # ★ 唯一入口组件（挂场景上）
 │       ├── config/BattleConfig.ts   # ★★ 全部可调数值（调参只改这里）
@@ -488,7 +501,7 @@ client/
 
 | # | 设置 | 位置 | 不做的后果 |
 |---|---|---|---|
-| 1 | **Filter Mode = Point** | 选中 `resources/art/` 里 4 张图 → 属性检查器 → `Filter Mode` 改 **Point** | 默认 Bilinear 会把像素插值成糊块，32px 变成"毛玻璃" |
+| 1 | **Filter Mode = Point** | 选中 `resources/art/` 里 4 张图（**2026-10-23 已删，需 `pixelart_gen.py` 重出**）→ 属性检查器 → `Filter Mode` 改 **Point** | 默认 Bilinear 会把像素插值成糊块，32px 变成"毛玻璃" |
 | 2 | **关闭 Mipmap**（如开启） | 同上，`Generate Mip Maps` 取消勾选 | 远景自动降采样，像素颗粒随机跳变 |
 
 > 为什么不用代码调：Cocos 3.8 的 `Filter` 枚举公共导出路径在不同小版本上不一致
@@ -708,7 +721,9 @@ node tools/fx-smoke/run.js       # 编译 FxSystem → 跑 14 条断言
 ## 十、动手前请确认
 
 - [ ] 引擎是 **3.8.x**（不是 3.7 及以下）——本项目 API 按 3.8.0 核实。
-- [ ] `assets/resources/art/` 4 张图已导入（否则走程序化兜底，也能跑，但看不到形象美术）。
+- [ ] 若真要跑 mow（`BattleBoot.MODE` 改回 `'mow'`）：先 `python tools/pixelart_gen.py`
+      重出 `assets/resources/art/` 那 4 张占位图，否则走程序化兜底（能跑，但没有形象美术）。
+      跑 grove（默认）不需要这一步。
 - [ ] 场景里只挂了 `GameBootstrap`，且 `Game` 节点在场景根下（不要嵌套在 Canvas 里）。
 - [ ] 首轮跑完把 **Profiler 的 FPS / DrawCall** 读数发我，作为 Day 1 验收凭据。
 

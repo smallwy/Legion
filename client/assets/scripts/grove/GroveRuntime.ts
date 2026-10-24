@@ -2501,6 +2501,9 @@ let TH = THEMES[LEVELS[0].theme];
 function loadLevel(i) {
   const L = LEVELS[i] || LEVELS[0];
   TH = THEMES[L.theme] || THEMES.tundra;
+  /* 场景族跟着主题走。**必须在这里重置** —— 忘了的话，
+     上一个产地的形状会跟到下一个产地（第 9 屏还在画第 8 屏的岩柱）。 */
+  SCAPE = SCAPE_OF_THEME[L.theme] || "hills";
   PLATS = L.plats;
   PITS = L.pits;
   STUMPS = L.stumps || [];
@@ -5619,6 +5622,142 @@ function drawHills(g, baseY, amp, color, seed, step) {
   g.fill();
 }
 
+/* ===========================================================================
+ * 场景形状语言（2026-10-24 第三批）
+ * ===========================================================================
+ *
+ * 病根：**27 屏共用同一套远景** —— 4 朵云、3 层圆顶山、一条光柱，
+ * 位置参数全部写死，27 屏只换颜色。
+ * 用户原话：「为什么不是在空间设计上多去思考 比如场景上的」。
+ * 他是对的：**配色只能说明"这是哪个产地"，形状才能说明"这是另一个地方"。**
+ *
+ * 三族的形状语言必须彼此**不能混**，否则玩家读成"同一个地方换了滤镜"：
+ *   hills  —— 圆顶、连续、水平起伏   （苔原 / 雪原 / 缓坡 / 井 / 塔）
+ *   cliffs —— 垂直、断裂、尖角       （断崖 / 枯木三产地）
+ *   marsh  —— 无山、一条水平线 + 细长竖直（沼泽三产地）
+ *
+ * cliffs 和 marsh 里都有"竖直"，区别是：cliffs 是**块**（宽 40~130，顶部是尖的），
+ * marsh 是**线**（宽 2~4，成排）。块和线在缩到 30% 的缩略图里也不会混。
+ * ------------------------------------------------------------------------- */
+
+/** 主题 → 场景族。**不放 THEMES 里**：那 14 个主题块是配色，
+ *  形状是另一条正交的轴，混在一起以后改配色会不小心改掉形状。 */
+const SCAPE_OF_THEME = {
+  tundra: "hills", snow: "hills", slope: "hills", bouncy: "hills",
+  well: "hills", stairs: "hills", tower: "hills",
+  cliff: "cliffs", wither1: "cliffs", wither2: "cliffs", wither3: "cliffs",
+  marsh1: "marsh", marsh2: "marsh", marsh3: "marsh",
+};
+let SCAPE = "hills";
+
+/**
+ * 岩柱。**垂直**是这一族全部的辨识度来源 —— 圆顶山是"一条连续起伏的边"，
+ * 岩柱是"一排彼此断开、顶上带尖的竖块"。两者的轮廓在缩略图里完全分得开。
+ *
+ * 三个参数不许省：
+ *  - `lean`：顶点相对中轴的偏移。全是正立的矩形会读成"一排楼"，
+ *    偏一点点才是自然岩石。
+ *  - 尖顶上的小台阶：只有尖角的话是"一堆三角形"，加一级断崖才是"岩层"。
+ *  - 柱身竖缝：不画的话整根柱子是纯色块，缩到 30% 读成背景贴纸。
+ */
+function drawCliffs(g, base, color, hMin, hMax, wMin, wMax, seed, n, alpha) {
+  g.save();
+  g.globalAlpha = alpha;
+  /* 受光棱：**岩柱的辨识度一半来自这条棱，不来自填色。**
+     没有它，柱子是一块和天空同族的紫色，缩到 30% 直接消失
+     （第一版就是这样：截图里只有一片模糊的竖纹）。
+     棱走左侧 —— 光源在右上，左侧是背光面，所以受光的那条边其实是**右**棱。
+     这里按"右上光源"统一：右缘亮、左缘暗。 */
+  const rim = hexMix(color, "#FFFFFF", 0.34);
+  g.fillStyle = color;
+  for (let i = 0; i < n; i++) {
+    const h1 = hash(i * 2.31 + seed);
+    const h2 = hash(i * 5.17 + seed * 3);
+    const h3 = hash(i * 7.79 + seed * 7);
+    /* 位置不均匀：`h1 * 0.60` 让每个柱子的落点在格内浮动 60%。
+       均分（i/n）会排成栅栏，而栅栏是"人造物"的形状语言。 */
+    const cx = -70 + (W + 140) * ((i + 0.20 + h1 * 0.60) / n);
+    const w = wMin + (wMax - wMin) * h2;
+    const h = hMin + (hMax - hMin) * h3;
+    const top = base - h;
+    const lean = (h1 - 0.5) * w * 0.34;
+    const l = cx - w / 2, r = cx + w / 2;
+
+    g.beginPath();
+    g.moveTo(l, base + 24);
+    g.lineTo(l + w * 0.05, top + h * 0.16);
+    g.lineTo(cx + lean - w * 0.12, top);
+    /* 尖顶下面那一级台阶：`top + h*0.06` 而不是同高，
+       读作"被风化掉一角的岩层"，不是"三角形的腰"。 */
+    g.lineTo(cx + lean + w * 0.06, top + h * 0.09);
+    g.lineTo(r - w * 0.03, top + h * 0.26);
+    g.lineTo(r, base + 24);
+    g.closePath();
+    g.fill();
+
+    /* 右缘受光棱：从尖顶沿右侧刃下来。
+       宽度按柱子走（2~4px），太粗会读成"描边"，太细在 30% 缩略图里消失。 */
+    g.strokeStyle = rim;
+    g.lineWidth = Math.max(1.8, w * 0.055);
+    g.beginPath();
+    g.moveTo(cx + lean + w * 0.06, top + h * 0.09);
+    g.lineTo(r - w * 0.03, top + h * 0.26);
+    g.lineTo(r, base + 24);
+    g.stroke();
+
+    /* 柱身竖缝：一条从尖顶往下 55% 的暗线，宽度随柱子走。
+       它是"这块石头有厚度"唯一的证据 —— 没有它，柱子是纯色块。 */
+    g.fillStyle = "rgba(0,0,0,.10)";
+    g.fillRect(cx + lean * 0.5 - 1, top + h * 0.10, Math.max(1.6, w * 0.045), h * 0.55);
+    g.fillStyle = color;
+  }
+  g.restore();
+}
+
+/**
+ * 芦苇。这一族**没有山** —— 地平线压得很低，画面大半是天空和雾，
+ * 远景只有一排细长的竖线。这是和 hills 差距最大的一点：
+ * 有山 / 没山，是两种完全不同的空间感受。
+ */
+function drawReeds(g, base, color, hMin, hMax, seed, n, alpha) {
+  g.save();
+  g.globalAlpha = alpha;
+  g.strokeStyle = color;
+  g.fillStyle = color;
+  g.lineCap = "round";
+  for (let i = 0; i < n; i++) {
+    const h1 = hash(i * 3.13 + seed);
+    const h2 = hash(i * 6.71 + seed * 2);
+    const h3 = hash(i * 9.37 + seed * 5);
+    const x = -24 + (W + 48) * ((i + h1 * 0.9) / n);
+    const h = hMin + (hMax - hMin) * h2;
+    /* 倾斜 ±0.30：全垂直的话，一排竖线读成"下雨"或者"栅栏"。
+       自然界里没有一根芦苇是直的。 */
+    const lean = (h3 - 0.5) * 0.60;
+    const tipX = x + lean * h * 0.42;
+    const tipY = base - h;
+
+    g.lineWidth = 1.5 + h3 * 1.2;
+    g.beginPath();
+    g.moveTo(x, base + 8);
+    g.quadraticCurveTo(x + lean * h * 0.10, base - h * 0.55, tipX, tipY);
+    g.stroke();
+
+    /* 穗：顶端一个斜的小椭圆。**必须有**，否则 60 根等长的线
+       只读作"一片竖线"，读不出"这是植物"。 */
+    if (h1 > 0.28) {
+      g.save();
+      g.translate(tipX, tipY - 4);
+      g.rotate(lean * 0.9);
+      g.beginPath();
+      g.ellipse(0, 0, 2.6 + h2 * 1.6, 7.5 + h3 * 4, 0, 0, 6.283);
+      g.fill();
+      g.restore();
+    }
+  }
+  g.restore();
+}
+
 /** Q 版树：树干一个圆角方块，树冠三四个圆点，深色描边 */
 /**
  * 一团树叶的**单条闭合轮廓**。
@@ -5681,6 +5820,101 @@ function blobPath(g, cx, cy, r, seed, cont) {
  * 退后不靠"调低 globalAlpha"（透明会和后面的绿混成脏色，读作"没画清"），
  * 靠**换色**：往地平线雾色里混。混得越多越像在雾里，这正是空气透视。
  */
+/**
+ * 枯木：**没有树冠，只有扭曲的枝干**。
+ *
+ * 这是 cliffs 族的植被语言。它和 drawTree 的区别不在"颜色更灰"，
+ * 而在**轮廓里有没有那个圆团**：
+ *   drawTree   = 一根杆 + 一团叶 → 轮廓上半是圆的
+ *   drawDeadTree = 一根弯杆 + 几根尖枝 → 轮廓上半全是刺
+ * 缩到 30% 之后颜色差别全没了，能留下的只有"圆 / 刺"这两个形状。
+ *
+ * 枝干要**向上分叉并逐渐变细**：等粗的分叉读作"晾衣架"。
+ * 顶端不封口（不画小圆点）—— 枯枝的末端是断的，封口就成了"棒棒糖"。
+ */
+/* 背景植被的统一入口。
+ *
+ * **造型**和**数量**必须一起分派，只分派一个是不够的：
+ *   - 只换造型（枯木）、数量照旧 30 棵 → 一屏全是刺，岩柱被切碎
+ *   - 只减数量、造型照旧圆冠 → 稀稀拉拉一片圆树，"断崖"读不出来
+ * 两件事绑在一个地方改，才不会改一半。
+ */
+function drawBgTree(g, x, baseY, sc, back, dim) {
+  if (SCAPE === "cliffs") drawDeadTree(g, x, baseY, sc, dim);
+  else drawTree(g, x, baseY, sc, back, dim);
+}
+
+/** 按场景族从树表里挑子集。 */
+function bgTreeRow(arr) {
+  if (SCAPE === "cliffs") return arr.filter((_, i) => i % 3 === 0);   // 15 → 5
+  if (SCAPE === "marsh") return arr.filter((_, i) => i % 5 !== 4);    // 15 → 12
+  return arr;
+}
+
+function drawDeadTree(g, x, baseY, sc, dim) {
+  const D = dim === undefined ? 1 : dim;
+  /* 74 → 96：第一版按 74 出来，中景枯木只有 37~56px 高，
+     比球（44）高不了多少 —— 一屏"几根小木棍"，读不出"枯木林"。
+     枯木没有树冠，**只能靠高度和枝展**撑住体量。 */
+  const h = 96 * sc;
+  g.save();
+  g.globalAlpha = 0.55 + D * 0.45;
+  const col = hexMix(hexMix(TH.trunkFar, TH.trunkNear, D), TH.horizon, (1 - D) * 0.45);
+  const colDark = hexMix(col, "#20140B", 0.34);
+
+  // 投影（和 drawTree 同一条规则：没有落影就是贴纸）
+  g.fillStyle = "rgba(28,56,30," + (0.08 + D * 0.13).toFixed(3) + ")";
+  g.beginPath();
+  g.ellipse(x, baseY + 1.5, 16 * sc, 3.6 * sc + 1.5, 0, 0, 6.283);
+  g.fill();
+
+  g.lineCap = "round";
+  // 主杆：一条微微 S 形的曲线，比直线"活"
+  const bend = (hash(x * 0.71) - 0.5) * 13 * sc;
+  g.strokeStyle = colDark;
+  g.lineWidth = 9 * sc;
+  g.beginPath();
+  g.moveTo(x, baseY);
+  g.quadraticCurveTo(x + bend, baseY - h * 0.55, x + bend * 1.25, baseY - h);
+  g.stroke();
+  // 受光的一侧细高光：只给左缘，压在暗杆上
+  g.strokeStyle = col;
+  g.lineWidth = 3.2 * sc;
+  g.beginPath();
+  g.moveTo(x - 2.4 * sc, baseY - 2);
+  g.quadraticCurveTo(x + bend - 2.4 * sc, baseY - h * 0.55, x + bend * 1.25 - 2 * sc, baseY - h * 0.94);
+  g.stroke();
+
+  /* 分叉：4 根，从杆身的 38%~92% 处伸出。
+     `sgn` 交替（+1/-1）保证左右都有，不然全偏一侧读作"被风吹歪"。
+     长度按出发高度递减（越高枝越短）—— 真实的树枝是这个规律，
+     反过来就像倒插的扫帚。 */
+  const BRANCH = [[0.38, 0.52], [0.56, 0.44], [0.72, 0.36], [0.88, 0.26]];
+  for (let i = 0; i < BRANCH.length; i++) {
+    const [at, len] = BRANCH[i];
+    const sgn = i % 2 ? 1 : -1;
+    const bx = x + bend * at * 1.1;
+    const by = baseY - h * at;
+    const tx = bx + sgn * h * len * 0.62;
+    const ty = by - h * len * 0.72;
+    g.strokeStyle = colDark;
+    g.lineWidth = (5.4 - i * 0.9) * sc;
+    g.beginPath();
+    g.moveTo(bx, by);
+    g.quadraticCurveTo(bx + sgn * h * len * 0.30, by - h * len * 0.36, tx, ty);
+    g.stroke();
+    // 次生小枝：只在最下面两根上加，否则树冠会"长满"，失去枯的感觉
+    if (i < 2) {
+      g.lineWidth = 2.2 * sc;
+      g.beginPath();
+      g.moveTo((bx + tx) / 2, (by + ty) / 2);
+      g.lineTo((bx + tx) / 2 + sgn * h * len * 0.26, (by + ty) / 2 - h * len * 0.30);
+      g.stroke();
+    }
+  }
+  g.restore();
+}
+
 function drawTree(g, x, baseY, sc, back, dim) {
   const D = dim === undefined ? 1 : dim;
   g.save();
@@ -5914,25 +6148,123 @@ function drawSnowfall(g) {
   g.restore();
 }
 
-function drawForest(world) {
-  const g = ctx;
-  g.clearRect(0, 0, W, H);
+/**
+ * 云按场景族分派。
+ *
+ * hills 保留原来的四朵（那个位置是量过的：x=690 会压住太阳）。
+ * cliffs 只留两朵、压得很高、拉得很扁 —— 岩柱已经占满竖向，
+ * 云再"竖"就糊成一片；高空长条卷云和柱状岩体是互补的形状。
+ * marsh **不画云**，画雾。阴天的沼泽没有一朵一朵的云，
+ * 只有一层贴在地平线上的白 —— 这一条比换颜色更能说明"这里气氛不一样"。
+ */
+function drawClouds(g) {
+  if (SCAPE === "marsh") {
+    /* 低雾：地平线上 0..46px 的一条，两头淡。用圆角矩形拼比用渐变便宜，
+       而且雾的**边缘**本来就不该是数学上的平滑衰减。 */
+    for (let i = 0; i < 7; i++) {
+      const h1 = hash(i * 4.7 + 13);
+      const h2 = hash(i * 8.3 + 41);
+      const x = -60 + (W + 120) * ((i + h1 * 0.7) / 7);
+      const y = 262 + h2 * 22;
+      g.save();
+      g.globalAlpha = 0.10 + h1 * 0.11;
+      g.fillStyle = TH.cloud;
+      g.beginPath();
+      g.ellipse(x, y, 90 + h1 * 130, 9 + h2 * 15, 0, 0, 6.283);
+      g.fill();
+      g.restore();
+    }
+    return;
+  }
 
-  drawSky(g);
+  if (SCAPE === "cliffs") {
+    // 高空卷云：拉扁的椭圆叠成一条，比 drawCloud 更"横"
+    for (let i = 0; i < 2; i++) {
+      const cx = (i ? 640 : 250) + Math.sin(S.t * (i ? 0.09 : 0.12) + i * 2) * 16;
+      const cy = i ? 58 : 90;
+      g.save();
+      g.globalAlpha = i ? 0.44 : 0.30;
+      g.fillStyle = TH.cloud;
+      for (let k = 0; k < 4; k++) {
+        g.beginPath();
+        g.ellipse(cx + k * 34 - 50, cy + (k % 2) * 5, 46 - k * 5, 8 - k * 1.2, 0, 0, 6.283);
+        g.fill();
+      }
+      g.restore();
+    }
+    return;
+  }
 
-  // 云：远慢近快，三朵。位置用 hash 固定，不用随机 —— 每帧随机会闪。
+  // 云：远慢近快，四朵。位置用 hash 固定，不用随机 —— 每帧随机会闪。
   // x=690 那朵原来正好压在太阳上（太阳默认 700,74），整颗太阳被吃掉，
   // 只剩一圈光晕 —— 于是"有光没太阳"。向左让出 110。
   drawCloud(g, 160 + Math.sin(S.t * 0.10) * 14, 66, 1.0, 0.92);
   drawCloud(g, 470 + Math.sin(S.t * 0.14 + 2) * 18, 44, 0.74, 0.80);
   drawCloud(g, 560 + Math.sin(S.t * 0.08 + 4) * 10, 104, 0.62, 0.62);
   drawCloud(g, 300 + Math.sin(S.t * 0.12 + 1) * 12, 122, 0.48, 0.45);
+}
 
-  // 远山三层：最远一道近白的雾（只有轮廓）→ 远山 → 近山。
-  // 两层不够 —— 只有两级的话"远"和"中"挨在一起，读作同一片背景。
+/**
+ * 远景场景。**这一屏是"哪个地方"的主要判据。**
+ *
+ * hills 的三层参数一个都不能随便动（最远那层是近白的雾，只有轮廓；
+ * 两层不够 —— 只有两级的话"远"和"中"挨在一起，读作同一片背景）。
+ * cliffs / marsh 沿用同一条"三层"原则，只是把每一层的**形状**换掉，
+ * 这样三族的纵深关系一致，玩家不会觉得某一族"扁"。
+ */
+function drawScape(g) {
+  if (SCAPE === "cliffs") {
+    /* 三层岩柱。近层**更矮更宽**：近的东西在画面里占的面积大，
+       如果近层也高，一排柱子会顶到天空上沿、压迫感过强，
+       而且会盖住远处的太阳。 */
+    /* 颜色**不能直接用 hillFar / hillNear** —— 那两个是给"圆山"算的，
+       按"远山往天空里退"的比例混出来，在紫夜和灰岩主题下和天空几乎同色。
+       岩柱要读成"石头"，所以往木色（土）里混 0.30，明度再压一档：
+       石头是画面上**比天空暗**的东西，不是比天空淡的东西。 */
+    const rockFar = hexDim(hexMix(TH.hillFar, TH.trunkNear, 0.30), 0.96);
+    const rockNear = hexDim(hexMix(TH.hillNear, TH.trunkNear, 0.26), 0.90);
+    drawCliffs(g, 292, "#FFFFFF", 118, 186, 26, 52, 3, 7, 0.14);
+    drawCliffs(g, 306, rockFar, 92, 158, 38, 82, 7, 6, 1);
+    drawCliffs(g, 322, rockNear, 50, 104, 54, 116, 11, 5, 1);
+    return;
+  }
+
+  if (SCAPE === "marsh") {
+    /* 沼泽**没有山**。只有：
+         ① 远处一条积水亮带（在草脊 276 之上 6px，被草地压住下沿）
+         ② 两层芦苇（远层淡而高，近层实而矮）
+       地平线压在 280（= 草脊 276 往下 4px）—— 不能更低：
+       再低就会在草地和天空之间露出一条"没有东西"的缝。 */
+    const wl = g.createLinearGradient(0, 258, 0, 280);
+    wl.addColorStop(0, rgbaOf(TH.hillFar, 0.0));
+    wl.addColorStop(0.55, rgbaOf(TH.cloud, 0.30));
+    wl.addColorStop(1, rgbaOf(TH.hillNear, 1));
+    g.fillStyle = wl;
+    g.fillRect(0, 258, W, 22);
+
+    /* 密度 46/38 → 72/58。第一版太稀：一屏 84 根细线铺在 960px 上，
+       平均 11px 一根 —— 读作"地平线上有点毛"，不读作芦苇荡。
+       高度也提了 40%：芦苇必须**高过中景树的树冠下沿**，
+       否则它只是"草"，成不了"荡"。 */
+    drawReeds(g, 282, TH.hillFar, 70, 132, 5, 72, 0.44);
+    drawReeds(g, 286, TH.hillNear, 44, 96, 11, 58, 0.95);
+    return;
+  }
+
+  // hills：最远一道近白的雾（只有轮廓）→ 远山 → 近山
   drawHills(g, 296, 104, rgbaOf("#FFFFFF", 0.20), 3, 224);
   drawHills(g, 310, 72, TH.hillFar, 7, 178);
   drawHills(g, 324, 46, TH.hillNear, 11, 134);
+}
+
+function drawForest(world) {
+  const g = ctx;
+  g.clearRect(0, 0, W, H);
+
+  drawSky(g);
+
+  drawClouds(g);
+  drawScape(g);
 
   // 光柱压在山之上、地表之下：光是在空气里走的，被山挡住就成了贴纸。
   drawSunShaft(g);
@@ -6037,9 +6369,12 @@ function drawForest(world) {
     [ 578, 0.38, 0.24], [ 646, 0.26, 0.14], [ 706, 0.34, 0.18],
     [ 768, 0.30, 0.16], [ 830, 0.36, 0.22], [ 896, 0.27, 0.12],
   ];
-  for (const [fx, fsc, fd] of FAR_TREES) {
+  /* 场景族分派：数量见 bgTreeRow，造型见 drawBgTree。
+     cliffs 只留 5 棵 —— 岩柱的辨识度靠"露出竖向的天"，
+     30 棵树会把每根柱子切成两段，"垂直"这个形状语言当场失效。 */
+  for (const [fx, fsc, fd] of bgTreeRow(FAR_TREES)) {
     // 贴着草脊站（+3 让树干底边压进草皮 3px，不然会浮在脊线上面）
-    drawTree(g, fx, ridgeY(fx) + 3, fsc * TREE_SCALE, true, fd);
+    drawBgTree(g, fx, ridgeY(fx) + 3, fsc * TREE_SCALE, true, fd);
   }
 
   /* 中景树：**三档深度 + 允许互相遮挡**。
@@ -6058,7 +6393,7 @@ function drawForest(world) {
     [ 612, 0.52, 0.46], [ 672, 0.64, 0.64], [ 742, 0.44, 0.34],
     [ 800, 0.74, 0.78], [ 862, 0.50, 0.42], [ 930, 0.60, 0.58],
   ];
-  for (const [tx, tsc, td] of MID_TREES) {
+  for (const [tx, tsc, td] of bgTreeRow(MID_TREES)) {
     /* 基线 = 草脊 + 一个和 depth 成正比的小位移。
        越近越靠下 —— 这是"从低角度看一片平地"时唯一成立的规律；
        少了它，树再大也贴在同一个平面上。
@@ -6068,7 +6403,16 @@ function drawForest(world) {
        **夹到 334**：350 那层平台从 350 起，树根扎进去就开始读作
        "战斗发生在树上"（之前踩过一次，六棵树画在战场背后）。 */
     const by = Math.min(334, ridgeY(tx) + 2 + td * 12);
-    drawTree(g, tx, by, tsc * TREE_SCALE, true, td);
+    drawBgTree(g, tx, by, tsc * TREE_SCALE, true, td);
+  }
+
+  /* 沼泽的中景芦苇带：**这一层是 marsh 和另外两族最大的差别**。
+     树是"块"（有体积、有冠），芦苇是"线"（只有茎）。
+     一条地平线上"线多于块"，读作湿地；"块多于线"读作山林。
+     放在树之后、灌木之前 —— 它比中景树近，比前景灌木远。 */
+  if (SCAPE === "marsh") {
+    drawReeds(g, 318, hexMix(TH.hillNear, TH.treeNear, 0.30), 34, 82, 23, 62, 0.55);
+    drawReeds(g, 330, hexMix(TH.hillNear, TH.treeNear, 0.52), 22, 56, 31, 48, 0.80);
   }
 
   /* 树脚雾：草脊那一条上贴一层薄雾，把树根"化"进地面。
@@ -6099,7 +6443,10 @@ function drawForest(world) {
     // [x, 宽度, 底部 y, depth]
     [246, 40, 430, 0.46], [704, 26, 412, 0.36], [916, 34, 424, 0.42],
   ];
-  for (const [tx0, tw0, tbase, tdep] of BIG_TRUNKS) {
+  /* 三根中景大树干只在 hills 出现。
+     cliffs 的竖向由岩柱负责、marsh 的竖向由芦苇负责，
+     再叠三根 40px 粗的树干，三族又会糊成同一个空间。 */
+  for (const [tx0, tw0, tbase, tdep] of (SCAPE === "hills" ? BIG_TRUNKS : [])) {
     const tk0 = hexMix(hexMix(TH.trunkNear, TH.trunkFar, 1 - tdep), TH.horizon, 0.16);
     const tkLit = hexMix(tk0, "#FFE0A8", 0.34);
     const tkDark = hexMix(tk0, "#2A1A0E", 0.34);
@@ -7898,7 +8245,219 @@ function drawLevel() {
  * 地面行走的视觉带一点都不能占，否则玩家分不清"球是落地了还是被草挡住了"。
  * 这条死线写进算式（cy 按 r 反推），不靠调参运气。
  */
+/**
+ * 前景中段留空的阈值（|x/W - 0.5| × 2 大于它才允许立起高元素）。
+ *
+ * **0.30 是从球的几何反推的，不是构图上随手定的**：
+ *   球底 556、球顶 534 → 中段的任何前景都不能高过 534。
+ *   而立起来的高元素最低也有 120px（从画面底 600 起）→ 顶端到 480，
+ *   比球顶还高 54px。所以中段**只能**交给 15px 以内的碎屑。
+ * 测试盯着这个值：改小到 0.22 就会有一根杆立在球道上。
+ */
+const FG_EDGE_MIN = 0.30;
+
+/**
+ * 前景的硬约束（三族共用）：**不许盖住坑和营地**。
+ * 前景是"压在镜头前面的东西"，它盖住什么，什么就真的看不见；
+ * 而坑和门口是玩家必须看见的玩法目标。
+ */
+function fgBlocked(x, r) {
+  /* 边距**必须收窄**（40/60/70 → 22/30/46）。
+     实测：27 屏里有 8 屏的"坑 + 营地 + 出生点"在宽边距下占满全场，
+     点数直接归零 —— 第 20 屏一根芦苇都没有，第 12 屏一块石头都没有。
+     前景"挡得太狠"和"完全不来"是同一个 bug 的两头：
+     它挡的是**玩意的中心**，不是它的安全气囊。 */
+  for (const pt of PITS) {
+    if (x + r * 0.45 > pt.x - 22 && x - r * 0.45 < pt.x + pt.w + 22) return true;
+  }
+  if (x + r * 0.45 > CAMP.x - 30 && x - r * 0.45 < CAMP.x + CAMP.w + 30) return true;
+  /* **出生点也要让开。** 实测第 20 屏：一根 210px 的前景芦苇正好长在
+     出生点上，开局第一帧玩家的小动物就被自己面前的一根杆子挡住半个身子 ——
+     不是"氛围好"，是"我以为角色卡住了"。 */
+  const sp = PLAYER_SPAWN && PLAYER_SPAWN.x;
+  if (sp && x + r * 0.45 > sp - 46 && x - r * 0.45 < sp + 46) return true;
+  return false;
+}
+
+/**
+ * 前景岩石（cliffs 族）。
+ *
+ * 为什么这一族不能继续用灌木：**灌木的轮廓是"一团"，岩石的轮廓是"一条锯齿"**。
+ * 断崖的画面下沿如果还是六丛圆叶，玩家读到的仍然是草地，
+ * 上面那些岩柱就成了"贴在天上的山"。
+ *
+ * 高度规则和灌木完全一致（这是可读性，不是美术）：
+ *   中段（|t-0.5| < 0.28）**必须贴地**，只到 548 —— 球在 y≈534 滚，
+ *   中段的前景一旦高过它，球就被自己的前景吃掉，玩家会以为球消失了。
+ *   两侧可以高到 420 —— 那里球不常走，而且"两侧高"本身就框住了视线。
+ */
+/**
+ * 底边碎屑：**被避让掉的候选点改画这个**。
+ *
+ * 为什么必须有：27 屏里坑+营地+出生点把底边切得很碎，实测第 12 屏只剩 4 个可用点、
+ * 第 20 屏只剩 5 个。如果被避让的地方就"什么都不画"，画面下沿会是一段段空白，
+ * 读作"这一屏没画完"，不是"这一屏很干净"。
+ *
+ * 高度 7~15px，**贴地，什么也不挡**：它够不着球（球底 556、球顶 534），
+ * 也够不着坑（坑从地面往下挖）。它的唯一职责是"底边不是一条硬直线"。
+ */
+function drawFgPebble(g, x, i, col) {
+  const n = 1 + Math.floor(hash(i * 2.3) * 3);
+  for (let k = 0; k < n; k++) {
+    const px = x + (hash(i * 3.7 + k * 1.9) - 0.5) * 26;
+    const w = 5 + hash(i * 5.1 + k * 2.7) * 12;
+    const h = 4 + hash(i * 7.3 + k * 3.3) * 9;
+    g.fillStyle = col;
+    g.beginPath();
+    g.ellipse(px, H - h * 0.4, w, h, 0, 0, 6.283);
+    g.fill();
+  }
+}
+
+function drawFgRocks(g) {
+  /* 颜色：**不能直接用 TH.shrub**。那是灌木的墨绿，在紫夜/灰岩主题下几乎是纯黑，
+     一排锯齿黑块读作"画面被撕了几道口子"，不读作石头。
+     也不能往 hillNear 混（第二版）：枯木产地的 hillNear 偏绿灰，
+     混出来是**绿色石头** —— 比黑色更难读。
+     石头只认木色/土色：往 trunkNear 混 0.34，再压一档明度。 */
+  const col = hexDim(hexMix(TH.shrub || hexDim(TH.hillNear, 0.62), TH.trunkNear, 0.34), 0.92);
+  const lit = hexMix(col, "#FFE9B8", 0.34);
+  const dark = hexDim(col, 0.78);
+
+  /* **扫描式布局，间距 26~46。**
+     固定点位表（第一、二版）的问题是：点位只有 6~10 个，三道避让一排除就归零。
+     扫描式之后密度跟着地形走。采样间隔从 42~70 收到 26~46：
+     实测第 12 屏（三个坑把底边切碎）在 42 起步长下只剩 4 个可用点，
+     收到 26 之后变成 9 个 —— 前景才成"层"而不是"几个孤零零的块"。 */
+  for (let x = 16, i = 0; x < W - 16; x += 26 + hash(i * 7.1) * 20, i++) {
+    /* **尺寸差异要拉大**（半宽 22~56）。第一版 30~54 出来是一排等高的方碑 ——
+       等高等宽 = 人造物，那是栏栅不是石头。 */
+    const r = 22 + hash(i * 3.9) * 34;
+    const px = x + (hash(i * 9.3) - 0.5) * 12;
+    if (fgBlocked(px, r)) { drawFgPebble(g, px, i, col); continue; }
+
+    const edge = Math.abs(px / W - 0.5) * 2;
+    /* 中段（球道）压到 546 只剩 10px —— 那等于没画，所以中段**直接交给碎屑**。
+       只有两侧（edge > FG_EDGE_MIN）才立起真正的石堆。 */
+    if (edge <= FG_EDGE_MIN) { drawFgPebble(g, px, i, col); continue; }
+    const hi = 466 + hash(i * 6.1) * 52;
+    /* 石头块数也按 hash 变（1~3 块）：每堆都是"三块叠一起"，
+       规模一致就成了"预制件"。 */
+    /* **三块石头合成一个轮廓（路径并集），不是三块分开画。**
+       分开画（上一版）出来是"一排小方碑" —— 因为每块都有独立的左右边和顶棱，
+       眼睛把它们读成三个物体。canvas 对同一条路径里的多个闭合子路径按非零环绕
+       填充，出来就是并集，内部不会出现接缝。见 blobPath 的同一段注释。 */
+    g.beginPath();
+    for (let k = 0; k < 3; k++) {
+      const ox = (hash(i * 2.9 + k * 4.1) - 0.5) * r * 1.5;
+      const w = r * (0.58 + hash(i * 4.3 + k * 2.2) * 0.52);
+      const top = hi + hash(i * 6.7 + k * 3.1) * 44;
+      const hh = r * (0.34 + hash(i * 8.1 + k * 1.3) * 0.28);
+      const cx = px + ox;
+      const hw = w / 2;
+      /* 上小下大的**梯形 + 圆角顶**：岩石坐在地上是被埋住的，
+         下沿必须比上沿宽。上宽下窄读作"碑"。 */
+      const tw = hw * 0.70;
+      g.moveTo(cx - tw, top);
+      g.quadraticCurveTo(cx - tw * 0.5, top - hh * 0.26, cx, top - hh * 0.19);
+      g.quadraticCurveTo(cx + tw * 0.5, top - hh * 0.26, cx + tw, top);
+      g.lineTo(cx + hw, H);
+      g.lineTo(cx - hw, H);
+      g.closePath();
+    }
+    g.fillStyle = col;
+    g.fill();
+
+    /* 顶面受光：最靠前那块（k=2）的顶棱。
+       整堆只有这一条亮边 —— 并集之后没有内部边界了，
+       亮边是**唯一**能说明"这块石头有厚度"的东西。 */
+    {
+      const ox = (hash(i * 2.9 + 2 * 4.1) - 0.5) * r * 1.5;
+      const w = r * (0.58 + hash(i * 4.3 + 2 * 2.2) * 0.52);
+      const top = hi + hash(i * 6.7 + 2 * 3.1) * 44;
+      const hh = r * (0.34 + hash(i * 8.1 + 2 * 1.3) * 0.28);
+      const cx = px + ox;
+      const tw = (w / 2) * 0.70;
+      g.strokeStyle = lit;
+      g.lineWidth = 2.4;
+      g.beginPath();
+      g.moveTo(cx - tw, top + 1);
+      g.quadraticCurveTo(cx - tw * 0.5, top - hh * 0.26 + 1, cx, top - hh * 0.19 + 1);
+      g.quadraticCurveTo(cx + tw * 0.5, top - hh * 0.26 + 1, cx + tw, top + 1);
+      g.stroke();
+    }
+  }
+}
+
+
+
+
+/**
+ * 前景芦苇（marsh 族）。
+ *
+ * 前景这一层是"镜头贴着的东西"，所以芦苇要**比中景粗一倍**、
+ * 只留几根、顶端探进画面上半部。三两根高杆从画面底部竖起来，
+ * 读到的是"我在芦苇丛里往上看"，而不是"远处有一片芦苇"。
+ *
+ * 中段照样要留空：**贴地的前景只放矮的（不到 552 以上 8px）**。
+ */
+function drawFgReeds(g) {
+  const col = hexMix(TH.shrub || hexDim(TH.hillNear, 0.60), TH.hillNear, 0.28);
+  const lit = hexMix(col, "#E8FFD8", 0.26);
+
+  /* 扫描式，间距 26~46（同岩石）。芦苇是"线"，视觉重量只有石头的三分之一，
+     所以同一档密度下它看起来更稀 —— 靠"根数多"来补。 */
+  let k = 0;
+  for (let x = 10; x < W - 10; x += 26 + hash(k * 5.9) * 20, k++) {
+    const px = x + (hash(k * 8.7) - 0.5) * 10;
+    if (fgBlocked(px, 18)) { drawFgPebble(g, px, k, col); continue; }
+    const edge = Math.abs(px / W - 0.5) * 2;
+    /* **中段不立杆。** 球底 556、球顶 534，中段能立的高度只有 22px ——
+       那点高度的杆读作"地上有几根毛"，还不如不画，交给碎屑。 */
+    if (edge <= FG_EDGE_MIN) { drawFgPebble(g, px, k, col); continue; }
+    const h = 116 + hash(k * 5.3) * 118;
+    const lean = (hash(k * 7.1) - 0.5) * 0.42;
+    const tipX = px + lean * h * 0.5;
+    const tipY = H - h;
+
+    g.strokeStyle = col;
+    g.lineWidth = 4.6;
+    g.lineCap = "round";
+    g.beginPath();
+    g.moveTo(px, H + 4);
+    g.quadraticCurveTo(px + lean * 16, H - h * 0.55, tipX, tipY);
+    g.stroke();
+    // 受光的一侧：往右偏一点再描一条细的
+    g.strokeStyle = lit;
+    g.lineWidth = 1.6;
+    g.beginPath();
+    g.moveTo(px + 1.6, H + 2);
+    g.quadraticCurveTo(px + lean * 16 + 1.4, H - h * 0.55, tipX + 1.2, tipY + 2);
+    g.stroke();
+    // 穗：前景的穗要够大，它才是"这是芦苇"而不是"这是杆子"的证据
+    g.save();
+    g.translate(tipX, tipY - 9);
+    g.rotate(lean * 1.1);
+    g.fillStyle = col;
+    g.beginPath();
+    g.ellipse(0, 0, 5.4, 17, 0, 0, 6.283);
+    g.fill();
+    g.restore();
+  }
+}
+
+
+
 function drawForeground(g) {
+  /* 三族的前景语言：
+       hills  —— 灌木丛（底座团 + 12 片宽叶）
+       cliffs —— 锯齿岩石块（没有叶子）
+       marsh  —— 高杆芦苇（线条，几乎没有体积）
+     这一层是"镜头前"：它一变，整屏的**空间感**就变了 ——
+     同一条地平线，前面是灌木 = 草地，前面是岩块 = 峡谷，前面是苇杆 = 湿地。 */
+  if (SCAPE === "cliffs") { drawFgRocks(g); return; }
+  if (SCAPE === "marsh") { drawFgReeds(g); return; }
+
   const base = TH.shrub || TH.grass;
   const lit = TH.shrubLit || base;
   const DEAD = GROUND_Y - 4;       // 552：盖住草皮鼓包，只淹掉球底 4px
@@ -13089,6 +13648,27 @@ Object.defineProperty(GROVE, "PORTALS", { get: () => PORTALS });
 Object.defineProperty(GROVE, "GROUNDS", { get: () => GROUNDS });
 Object.defineProperty(GROVE, "REFLECTS", { get: () => REFLECTS });
 Object.defineProperty(GROVE, "TOUR", { get: () => TOUR });
+/* 场景族必须导出：冒烟要断言"27 屏分成了几族、每族几屏"，
+   以及"没有一族是空的"。不导出就只能靠截图目视，那不算检查。 */
+Object.defineProperty(GROVE, "SCAPE", { get: () => SCAPE });
+/* ★ 这里**必须**用 Object.defineProperty，不能用 `window.GROVE.X = ...`。
+   extract_grove_runtime.py 只改写 `Object.defineProperty(GROVE, ...)`
+   这一种模式；普通的属性赋值改写成 `GROVE.X`，而 TS 模块里没有 window ——
+   运行时体检当场报 "Cannot set properties of undefined"。
+   （2026-10-24 踩过一次：冒烟全绿、体检红，因为冒烟跑的是原始 html。） */
+Object.defineProperty(GROVE, "SCAPE_OF_THEME", { get: () => SCAPE_OF_THEME });
+Object.defineProperty(GROVE, "FG_EDGE_MIN", { get: () => FG_EDGE_MIN });
+/* 场景族的绘制入口也要导出：冒烟要断言"三族真的各有自己的函数"，
+   而不是"三个名字指向同一张画"。 */
+Object.defineProperty(GROVE, "fgBlocked", { get: () => fgBlocked });
+Object.defineProperty(GROVE, "drawCliffs", { get: () => drawCliffs });
+Object.defineProperty(GROVE, "drawReeds", { get: () => drawReeds });
+Object.defineProperty(GROVE, "drawDeadTree", { get: () => drawDeadTree });
+Object.defineProperty(GROVE, "drawBgTree", { get: () => drawBgTree });
+Object.defineProperty(GROVE, "bgTreeRow", { get: () => bgTreeRow });
+Object.defineProperty(GROVE, "drawFgRocks", { get: () => drawFgRocks });
+Object.defineProperty(GROVE, "drawFgReeds", { get: () => drawFgReeds });
+Object.defineProperty(GROVE, "drawFgPebble", { get: () => drawFgPebble });
 /* PUSH_BASE / PUSH_RUN 必须导出：冒烟要按"满助跑 = 基准 ×1.95"算力度，
    而探针/测试里手写 1209 就是硬编码 —— 哪天基准一调，测试量的还是旧数。 */
 Object.defineProperty(GROVE, "PUSH_BASE", { get: () => PUSH_BASE });

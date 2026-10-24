@@ -3042,6 +3042,124 @@ console.log("\n=== 31. 赛道：TOUR 段必须真的踩得到 ===");
   }
 }
 
+console.log("\n=== 32. 场景族：三族形状语言 ===");
+{
+  /* 用户的原话是「你的重心怎么老是在球上 为什么不是在空间设计上多去思考
+     比如场景上的」。
+     这条批评指向的事实是：**27 屏共用同一套远景** —— 4 朵云、3 层圆顶山、
+     30 棵树、6 丛灌木，坐标全部写死，只换配色。
+     配色只能说明"这是哪个产地"，形状才能说明"这是另一个地方"。
+     这一节钉的就是"形状必须分族"。 */
+
+  /* ① 映射表必须覆盖全部主题。
+     漏一个主题 → 那一屏 SCAPE 退化成 hills，它会莫名其妙地长成苔原，
+     而且**没有任何报错**。这是最典型的"静默降级"。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    const M = P.SCAPE_OF_THEME;
+    ok(!!M, "SCAPE_OF_THEME 已导出");
+    const missing = [];
+    for (const L of P.LEVELS) if (!M[L.theme]) missing.push(L.theme);
+    eq(missing.length, 0, "27 屏用到的主题全部有场景族映射",
+       missing.length ? "缺: " + missing.join(",") : "14/14");
+    const kinds = new Set(Object.values(M));
+    eq(kinds.size, 3, "只有三族（多出来的是没画完的第四族）", [...kinds].join("/"));
+  }
+
+  /* ② 三族必须**都有足够的屏**。
+     一族只有 1~2 屏的话玩家根本感觉不到"换了地方"，
+     那不是"分族"，那是"一个特例"。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    const cnt = { hills: 0, cliffs: 0, marsh: 0 };
+    for (let i = 0; i < P.LEVELS.length; i++) {
+      P._start(0, i);
+      cnt[P.SCAPE] = (cnt[P.SCAPE] || 0) + 1;
+    }
+    eq(cnt.hills + cnt.cliffs + cnt.marsh, P.LEVELS.length,
+       "27 屏全部分到了三族里", JSON.stringify(cnt));
+    ok(cnt.hills >= 3 && cnt.cliffs >= 3 && cnt.marsh >= 3,
+       "三族每族至少 3 屏（不然只是特例，不是一族）", JSON.stringify(cnt));
+  }
+
+  /* ③ loadLevel 必须重置 SCAPE。
+     忘了重置的话，上一层产地的形状会跟到下一层 ——
+     第 9 屏还在画第 8 屏的岩柱，而且因为配色变了，看起来"还挺合理"。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    P._start(0, 0);                       // 第 1 屏苔原 → hills
+    eq(P.SCAPE, "hills", "第 1 屏是 hills 族");
+    P._start(0, 2);                       // 第 3 屏断崖 → cliffs
+    eq(P.SCAPE, "cliffs", "换到第 3 屏，场景族跟着换（没有残留）");
+    P._start(0, 19);                      // 第 20 屏沼泽 → marsh
+    eq(P.SCAPE, "marsh", "换到第 20 屏，场景族跟着换");
+    P._start(0, 0);
+    eq(P.SCAPE, "hills", "再换回来也对（不是单向）");
+  }
+
+  /* ④ 三族必须用**不同的绘制函数**。
+     "三个名字指向同一张画"是这个功能最容易退化的形态：
+     代码里写了 cliffs/marsh 两个分支，但两个分支都调 drawHills ——
+     测试全绿、画面全一样。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    const fns = ["drawCliffs", "drawReeds", "drawDeadTree", "drawBgTree",
+                 "bgTreeRow", "drawFgRocks", "drawFgReeds", "drawFgPebble", "fgBlocked"];
+    for (const n of fns) eq(typeof P[n], "function", "导出 " + n);
+    ok(P.drawCliffs !== P.drawReeds, "岩柱和芦苇是两个函数（不是同一个）");
+    /* 树的数量也必须分族。只换造型不换数量的话，断崖还是一片密林，
+       岩柱全被树切断，"垂直"这个形状语言就没了。 */
+    const arr = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+    const nHills = P.bgTreeRow(arr).length;
+    P._start(0, 2);                       // cliffs
+    const nCliffs = P.bgTreeRow(arr).length;
+    P._start(0, 19);                      // marsh
+    const nMarsh = P.bgTreeRow(arr).length;
+    ok(nCliffs < nHills && nCliffs <= 6,
+       "断崖的树比密林少得多（岩柱要靠露出的天立住）",
+       "hills=" + nHills + " cliffs=" + nCliffs);
+    ok(nMarsh < nHills, "沼泽也比密林稀（它靠芦苇补，不靠树）",
+       "hills=" + nHills + " marsh=" + nMarsh);
+  }
+
+  /* ⑤ 前景的硬约束：**坑、营地、出生点都要让开**。
+     这是可读性，不是构图偏好 —— 前景盖掉火坑，玩家就找不到该往哪推。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    P._start(0, 3);                       // 第 4 屏：泥沼 200..280
+    const pit = P.PITS[0];
+    ok(P.fgBlocked(pit.x + pit.w / 2, 30), "坑中心被前景让开");
+    ok(P.fgBlocked(P.CAMP.x + P.CAMP.w / 2, 30), "营地中心被前景让开");
+    ok(P.fgBlocked(P.PLAYER_SPAWN.x, 30), "出生点被前景让开");
+    /* 反证：找一段明确空着的中间地带，不能被误判成"挡" ——
+       如果 fgBlocked 恒为 true，上面三条全过，但前景就一丛都没有了。 */
+    let free = -1;
+    for (let x = 100; x < 900; x += 10) {
+      if (!P.fgBlocked(x, 26)) { free = x; break; }
+    }
+    ok(free >= 0, "有让得开的位置（fgBlocked 不是恒 true）", "free x=" + free);
+  }
+
+  /* ⑥ 中段留空的阈值。
+     球的几何是硬约束：球底 556、球顶 534。
+     任何立起来的前景最少 120px 高（从画面底 600 起步）→ 顶端到 480，
+     比球顶高 54px。所以中段**只能**放碎屑。
+     FG_EDGE_MIN 一改小，就会有一根杆立在球道上，把球吃掉。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    ok(typeof P.FG_EDGE_MIN === "number", "FG_EDGE_MIN 已导出");
+    ok(P.FG_EDGE_MIN >= 0.25,
+       "中段留空的阈值不小于 0.25（再小就有前景立在球道上）",
+       "FG_EDGE_MIN=" + P.FG_EDGE_MIN);
+    /* 中段（|x/W-0.5|*2 <= 阈值）的 x 范围必须覆盖球最常走的那一段。 */
+    const g = P.GROUND_Y;
+    const lo = 0.5 - P.FG_EDGE_MIN / 2, hi = 0.5 + P.FG_EDGE_MIN / 2;
+    ok(g > 0 && lo < 0.45 && hi > 0.55,
+       "留空区覆盖画面正中（球道从这里过）",
+       (lo * 100).toFixed(0) + "% ~ " + (hi * 100).toFixed(0) + "%");
+  }
+}
+
 console.log("\n" + "=".repeat(56));
 if (fail) {
   console.log("通过 " + pass + " · 失败 " + fail);

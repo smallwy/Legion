@@ -252,8 +252,8 @@ ok(!!sheetNode, '点徽标后打开了面板（__Sheet）');
 const sheetTitle = sheetNode && sheetNode.getChildByName('card')
     && sheetNode.getChildByName('card').getChildByName('title');
 const sheetTitleComp = sheetTitle && sheetTitle.getComponent(cc.Label);
-/* 「家」= 工作台 + 灶台合并后的入口，所以标题断言的是「家」而不是「工作台」 */
-ok(!!sheetTitleComp && sheetTitleComp.string === '家',
+/* 「工坊」= 工作台 + 灶台合并后的入口，所以标题断言的是「工坊」而不是「工作台」 */
+ok(!!sheetTitleComp && sheetTitleComp.string === '工坊',
     '面板标题指向被点的入口', sheetTitleComp ? sheetTitleComp.string : '(无)');
 
 for (let i = 0; i < 12; i++) {

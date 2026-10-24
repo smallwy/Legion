@@ -303,12 +303,20 @@ const LAWN_SPOT: [number, number] = [874, 578];
  * 入口说明文案。没有 hover 的平台上只有 :hover 提示等于没有提示，
  * 所以这些文案在点击时以 toast 形式常驻显示，不依赖悬停。
  * -------------------------------------------------------------------------- */
+/**
+ * 抽屉里的一行。**高度计算和绘制读同一份清单**（`taskLayout()`）——
+ * 两处各算一遍就会漂移，漂移的症状是最后一行被面板底边切掉半截。
+ */
+type TaskItem =
+    | { kind: 'row'; t: TaskDef; h: number }
+    | { kind: 'fold'; h: number; n: number };
+
 const BADGE_INFO: Record<string, string> = {
-    // 「家」= 原工作台 + 灶台，已经是真面板（openHome），这里只为兜底
+    // 「工坊」= 原工作台 + 灶台，已经是真面板（openHome），这里只为兜底
     '工作台': '家 · 喂饭与制作都在这里',
     // 图鉴已经是真面板了（openCodex），这里留着只为兜底 —— 它不会再被读到
     '图鉴': '图鉴 · 查看已收服的宠物',
-    '灶台': '灶台 · 已并入「家」',
+    '灶台': '灶台 · 已并入「工坊」',
     '派遣': '派遣 · 让宠物出门带资源回来（待实装）',
     '去苔原': '苔原 · 下一关的入口（已由底部「出门」承担）',
 };
@@ -816,12 +824,12 @@ class HomeController {
                 // 底板与圆徽共用一条竖直中轴
                 cap.setPosition(b.position.x + (BADGE_W - cw) / 2, b.position.y - CAP_GAP, 0);
 
-                const txt = cap.getChildByName('txt');
-                const tut = txt && txt.getComponent(UITransform);
-                if (txt && tut) {
-                    txt.setPosition((cw - tut.contentSize.width) / 2,
-                                    -(ch - tut.contentSize.height) / 2, 0);
-                }
+                /* ⚠ 这里原来是 `txt.setPosition((cw - tut.contentSize.width) / 2, ...)` ——
+                   它默认"容器宽 = 文字宽"，而场景里 txt 的宽是**写死的**
+                   （「工作台」36 / 「图鉴」24），Label 又是左对齐。
+                   文案字数一变，字就贴到容器左边（「家」偏左 12px）。
+                   改成容器吃满 + 居中 + SHRINK，以后改文案不会再歪。 */
+                this.fitCapText(cap, cw);
             }
         }
 
@@ -912,10 +920,11 @@ class HomeController {
         const gc = this.canvas.getChildByName('Dock')?.getChildByName('GoCard');
         if (gc) {
             /* 3. 名字 13.5px（行高 17.5）与心形 11.5px（行高 15）只差 1.5px 就贴上。
-                  心形下移到 -32；belly 从 -47 让到 -53 给它腾地方（卡高 72，底 -62 仍有余量）。 */
+                  心形下移到 -36；belly 从 -47 让到 -53 给它腾地方（卡高 72，底 -62 仍有余量）。
+                  上一版 -34 只拉开 0.6px（审计报“太近”），再降 2px 才有 2.6px 净间隙。 */
             for (const nm of ['hearts-on', 'hearts-off']) {
                 const n = gc.getChildByName(nm);
-                if (n) n.setPosition(n.position.x, -34, 0);
+                if (n) n.setPosition(n.position.x, -36, 0);
             }
             for (const nm of ['belly-0', 'belly-1', 'belly-2', 'belly-txt']) {
                 const n = gc.getChildByName(nm);
@@ -941,18 +950,18 @@ class HomeController {
      *
      * **收敛依据**：灶台和工作台做的事情是同一类 —— "花资源换一个数值"。
      * 分成两个入口的代价是玩家要记住食物在哪个炉子旁、配方在哪个桌子旁，
-     * 而两边加起来只有 5 个可选项目。合并成「家」之后点一次进去左右分栏，
+     * 而两边加起来只有 5 个可选项目。合并成「工坊」之后点一次进去左右分栏，
      * 喂饭和制作在同一个面板里，还省掉一块牌子。
      *
      * 改前：工作台 / 图鉴 / 灶台 / 派遣（四块牌子）+ 右上角设置。
-     * 改后：家 / 图鉴 / 派遣（三块牌子）+ 右上角设置 = **四个入口**。
+     * 改后：工坊 / 图鉴 / 派遣（三块牌子）+ 右上角设置 = **四个入口**。
      * 「去苔原」仍然藏掉 —— 右下角的出门按钮已经是这条路。
      */
     private layoutRail() {
         const badges = this.canvas.getChildByName('Badges');
         if (!badges) return;
 
-        /* 「家」沿用工作台那块牌子的位置（木桌旁）。
+        /* 「工坊」沿用工作台那块牌子的位置（木桌旁）。
            为什么不搬到灶台那边：木桌更靠画面中部，是玩家视线落点；
            灶台在左侧偏下、离宠物群太近，牌子和宠物会挤。 */
         const keep = new Set(['图鉴', '工作台', '派遣']);
@@ -964,22 +973,21 @@ class HomeController {
             n.active = false;
         }
 
-        /* 工作台 → 家：把说明牌从"工作台"（三个字、52 宽）改成"家"（一个字）。
-           底板同时收到 40 宽 —— 和图鉴 / 派遣一致，一排看过去才是齐的。
-           ⚠ 改了宽度必须重摆位置：alignHud 是按 52 宽算的，直接用会偏右 6px，
-           单看一块牌子看不出来，三块并排就一眼歪。 */
+        /* 工作台 → 工坊：牌子上写「工坊」。
+           本来的名字是「家」，但它底下同时有灶台（喂饭）和木工台（做东西），
+           叫「家」把"在这儿能动手做东西"这件事整个盖掉了，读起来像一个目的地。
+           底板收到 40 宽 —— 和图鉴 / 派遣一致，一排看过去才是齐的。
+           ⚠ 改了宽度必须重摆位置：alignHud 是按 52 宽算的，直接用会偏右 6px。 */
         const cap = badges.getChildByName('Cap-工作台');
-        const lbl = cap?.getChildByName('txt')?.getComponent(Label);
-        if (lbl) lbl.string = '家';
-        const cut = cap?.getComponent(UITransform);
         const bd = badges.getChildByName('Badge-工作台');
         const bt = bd?.getComponent(UITransform);
+        const cut = cap?.getComponent(UITransform);
         if (cap && cut && bd && bt) {
+            const lbl = cap.getChildByName('txt')?.getComponent(Label);
+            if (lbl) lbl.string = '工坊';
             cut.setContentSize(40, cut.contentSize.height);
-            const txt = cap.getChildByName('txt');
-            const tut = txt?.getComponent(UITransform);
-            if (txt && tut) txt.setPosition((40 - tut.contentSize.width) / 2, txt.position.y, 0);
             cap.setPosition(bd.position.x + (bt.contentSize.width - 40) / 2, cap.position.y, 0);
+            this.fitCapText(cap, 40);
         }
 
         /* 图标换成锅（pot）。图是异步来的，这里先试一次，
@@ -989,7 +997,34 @@ class HomeController {
     }
 
     /**
-     * 给「家」换锅图标。幂等，可以随便多调。
+     * 说明牌里的字，永远在牌子正中。
+     *
+     * **这是"UI 字体对不齐"的根因，不是微调 1~2px 能解决的**：
+     * `Cap-工作台/txt` 的容器宽在场景里写死 36（那是给「工作台」三个字留的），
+     * 而 Label 的对齐方式是 hAlign NONE（左对齐）。改成「家」一个字之后，
+     * 12px 的字放进 36 宽的容器里，字整个贴在容器左边 —— 视觉上就是
+     * "字偏到牌子左侧 12px"，牌子越大越明显。
+     *
+     * 修法不是把坐标挪 12px（下次改文案又歪），而是让容器吃满牌子 + 居中 + SHRINK：
+     * 不管写两个字还是三个字，都自动居中，且永远不会溢出牌子。
+     */
+    private fitCapText(cap: Node, capW: number) {
+        const txt = cap.getChildByName('txt');
+        const tut = txt?.getComponent(UITransform);
+        const tlb = txt?.getComponent(Label);
+        if (!txt || !tut || !tlb) return;
+        const cw = capW - 6;
+        const ch = cap.getComponent(UITransform)!.contentSize.height - 4;
+        tut.setContentSize(cw, ch);
+        tlb.horizontalAlign = Label.HorizontalAlign.CENTER;
+        tlb.verticalAlign = Label.VerticalAlign.CENTER;
+        tlb.overflow = Label.Overflow.SHRINK;
+        /* anchor 是 (0,1)，所以 position 就是"左上角"：居中 = (父宽-子宽)/2 */
+        txt.setPosition(3, -2, 0);
+    }
+
+    /**
+     * 给「工坊」换锅图标。幂等，可以随便多调。
      * 幂等是有必要的：`layoutRail` 和 `loadIcons` 的回调都会调它，
      * 谁先到谁先生效，后到的不该把已经换好的图再换回去。
      */
@@ -2757,7 +2792,7 @@ class HomeController {
         const wn = who ? who.name : '砂糖';
 
         this.openSheet(
-            '家',
+            '工坊',
             `果子 ${s.apples} · 材料 ${s.logs} · 吧唧 ${s.coins} · 干粮 ${s.bag.ration} · 收集篮 ${s.bag.basket}`,
             (card) => {
                 /* 装饰层单独一个节点：Cocos 一个节点只能挂一个 Graphics 组件，
@@ -3421,11 +3456,31 @@ class HomeController {
     }
 
     /* ----------------------------------------------------------------------
-     * 任务抽屉：左侧滑出，不压暗场景，不占全高
+     * 任务抽屉：左侧滑出，不压暗场景，高度跟着条目走
      * -------------------------------------------------------------------- */
 
-    /** 抽屉宽度 340。够放"图标 36 + 名字 5 字 + 两件奖励 + 状态钮 72"，再宽就是白占地方 */
-    private static readonly DRAWER_W = 340;
+    /**
+     * 抽屉宽度 300。
+     *
+     * 上一版 340 × 606。问题是**内容是轻的**：六条任务，每行只有"名字 + 两件小奖励"，
+     * 却按"每行一张 72 高的圆角卡"排下来占了半个屏幕 ——
+     * 读起来像"翻了一整页"，不像"从边上抽出一张纸"。
+     *
+     * 现在 300 宽 + 单行 48：六条全铺开 400 出头，
+     * 再把已领的折起来（常态），实际高度只有 200 上下，正好是"瞟一眼"的量。
+     */
+    private static readonly DRAWER_W = 300;
+
+    /** 单行 44：图标 22 + 名字 14px + 右侧「奖励组 / 进度」+ 领取钮，全在一行 */
+    private static readonly TASK_ROW_H = 44;
+
+    /**
+     * 已领的默认折叠成一行「已完成 N 件」。
+     *
+     * 这不是省地方的小聪明：做完的任务在列表里**没有任何可操作性**，
+     * 平铺五个灰行只会把"现在能领什么"往下压，甚至压出屏幕。
+     */
+    private tasksDoneOpen = false;
 
     /** 点场景关闭用的 canvas 监听（要能摘掉，否则关一次抽屉就多挂一个） */
     private drawerTap: ((e: EventTouch) => void) | null = null;
@@ -3434,33 +3489,31 @@ class HomeController {
      * 为什么任务不是弹窗，以及**为什么在左边**。
      *
      * 任务是"随时瞟一眼"的东西，不是"进入一个地方"，所以不压暗、不挡操作。
-     * 位置这条我上一版放错了一次（放右边），必须写清楚：
+     * 位置这条放错过一次（放右边），必须写清楚：
      *
-     *   主界面右侧 340 宽 = 派遣告示牌 + 粉垫上六只宠物的右半 + 右下角「出门」。
-     *   **那是全屏最活跃的一块**。抽屉一滑出来就把它全盖住，
-     *   玩家想一边看任务一边看宠物 —— 恰恰做不到。
-     *   左侧 340 宽盖住的是 Logo、路标牌、木桌边缘，那些在开抽屉时本来就不需要看，
-     *   而且任务入口（路标牌上的胶囊）就在左边，从入口位置展开逻辑也顺。
-     *
-     * 高度**按内容算**，不占满 720：六个任务 608 高，上下各留 56，
-     * 全屏高会让它读成"换了一页"而不是"拉出来一张纸"。
+     *   主界面右侧 300 宽 = 派遣告示牌 + 粉垫上六只宠物的右半 + 右下角「出门」。
+     *   **那是全屏最活跃的一块**，抽屉一出来就全盖住 ——
+     *   玩家想"一边看任务一边看宠物"恰恰做不到。
+     *   左侧盖住的是 Logo、路标牌、木桌边缘，开抽屉时本来就不需要看；
+     *   而且任务入口（路标牌上的胶囊）就在左边，从入口位置展开也更顺。
      */
     private openTasks() {
         if (this.drawerBusy) return;
         if (this.drawer) { this.closeDrawer(); return; }
         this.closeSheet();
 
-        /* 高度按内容算，**从 `taskBodyHeight()` 拿** —— 和绘制共用同一份分段逻辑，
-           不在这里另算一遍（另算必然漂移，漂移就是最后一行被切掉半截）。 */
-        const DH = clamp(this.taskBodyHeight(), 300, H - 100);
-
         const DW = HomeController.DRAWER_W;
+        /* 下限 150（不是 240）：内容只有两条 + 折叠行时高度约 194，
+           撑到 240 会在纸底留 40px 空气 —— 那点空气就是"占位太多"的由来之一。 */
+        const DH = clamp(this.taskLayout().height, 150, H - 100);
+
         const OPEN_X = -(W / 2) + DW / 2;
         const SHUT_X = -(W / 2) - DW / 2;
-        /* 垂直位置 +26 而不是居中：底部那排资源条（果子/材料/吧唧）在
-           y -360..-290，抽屉高度到 606 时居中的底边是 -291 —— **正好压住它顶部**。
-           抬 26px 后底边 -277，留 13px。顶部多露出的一点 Logo 无所谓（Logo 不是交互元素）。 */
-        const DY = 26;
+        /* 垂直位置：**居中略偏上 20**，不再按公式反推。
+           原来的 `DH/2-268` 在大内容时抬得对、小内容时把抽屉推到屏幕下半截。
+           实际上内容最高（六条全展开 370）时底边也只到 -165，
+           离资源条（y -290）还有 125px —— 根本不需要让，直接定值最省事。 */
+        const DY = 20;
 
         const root = new Node('__Drawer');
         root.parent = this.canvas;
@@ -3478,19 +3531,10 @@ class HomeController {
         /* 抽屉内部吃掉触摸：不然点行 / 点按钮都会冒到 canvas，
            被下面那个"点场景关闭"的监听接住 —— 点「领取」变成"关抽屉" */
         panel.on(Node.EventType.TOUCH_END, (e: EventTouch) => { e.propagationStopped = true; });
-
-        const bg = panel.addComponent(Graphics);
-        bg.fillColor = CARD_FILL_SOLID;
-        /* 圆角只在右侧两角：左边贴屏幕边，"四角都圆"会读成一张浮着的卡 */
-        bg.roundRect(-DW / 2 - 28, -DH / 2, DW + 28, DH, 20);
-        bg.fill();
-        /* 右缘一道描边 + 一道暖光，把纸和背后的草地分开 */
-        bg.lineWidth = 3;
-        bg.strokeColor = new Color(122, 80, 52, 255);
-        bg.roundRect(-DW / 2 - 28, -DH / 2, DW + 28, DH, 20);
-        bg.stroke();
+        this.paintDrawerBg(panel.addComponent(Graphics), DW, DH);
 
         this.paintTaskBody(panel, DH);
+        this.stageIn(panel);
 
         /* 点抽屉以外任何地方都关。靠 canvas 冒泡实现 —— **不加全屏拦截层**：
            拦截层会把整个场景的点击都吃掉（宠物摸不到、徽标点不到），
@@ -3498,8 +3542,56 @@ class HomeController {
         this.drawerTap = () => this.closeDrawer();
         this.canvas.on(Node.EventType.TOUCH_END, this.drawerTap);
 
-        tween(panel).to(0.24, { position: new Vec3(OPEN_X, DY, 0) }, { easing: 'quadOut' }).start();
-        tween(op).to(0.20, { opacity: 255 }, { easing: 'quadIn' }).start();
+        /* 纸**不淡入**：它是从屏幕左缘滑出来的，淡入会读成"凭空浮现"。
+           只有内容层做延迟淡入（见 stageIn）。 */
+        op.opacity = 255;
+        tween(panel).to(0.26, { position: new Vec3(OPEN_X, DY, 0) }, { easing: 'cubicOut' }).start();
+    }
+
+    /**
+     * 纸的底色：投影 + 双层边。
+     *
+     * 不用 `ui-res` 九宫格：那是泡泡卡（圆角约 150px），拉成 300×400 会糊成一团。
+     * 投影用 3 条 alpha 递减的竖条近似（Graphics 没有渐变）——
+     * 纯描边读起来是"贴在屏幕上的贴纸"，加一层投影才是"浮在草地上的一张纸"。
+     */
+    private paintDrawerBg(g: Graphics, DW: number, DH: number) {
+        g.clear();
+        for (let i = 0; i < 3; i++) {
+            g.fillColor = new Color(84, 54, 30, 24 - i * 7);
+            g.rect(DW / 2 + i * 5, -DH / 2 + 12 + i * 4, 5, DH - 24 - i * 8);
+            g.fill();
+        }
+        /* 左边超出屏幕 30px：纸是"贴在屏幕左缘"的，不是一张浮着的卡 */
+        g.fillColor = CARD_FILL_SOLID;
+        g.roundRect(-DW / 2 - 30, -DH / 2, DW + 30, DH, 22);
+        g.fill();
+        g.lineWidth = 3;
+        g.strokeColor = new Color(122, 80, 52, 255);
+        g.roundRect(-DW / 2 - 30, -DH / 2, DW + 30, DH, 22);
+        g.stroke();
+        /* 内层浅色描边 —— 双层纸的"第二层"，成本 3 行，观感差很多 */
+        g.lineWidth = 2;
+        g.strokeColor = new Color(255, 255, 255, 120);
+        g.roundRect(-DW / 2 - 26, -DH / 2 + 5, DW + 22, DH - 10, 18);
+        g.stroke();
+    }
+
+    /**
+     * 内容层进场：**纸先到、字后落**。
+     *
+     * 上一版整块一起匀速平移进来，一张写满字的纸机械感很强。
+     * 拆成两层（纸 0.26s 滑入 + 内容延迟 0.07s 从下方 8px 淡入）才有"落定"的感觉，
+     * 而且不需要任何新素材。
+     */
+    private stageIn(panel: Node) {
+        const body = panel.getChildByName('body');
+        if (!body) return;
+        const bop = body.getComponent(UIOpacity) ?? body.addComponent(UIOpacity);
+        bop.opacity = 0;
+        body.setPosition(0, -8, 0);
+        tween(body).delay(0.07).to(0.18, { position: new Vec3(0, 0, 0) }, { easing: 'quadOut' }).start();
+        tween(bop).delay(0.07).to(0.18, { opacity: 255 }).start();
     }
 
     private closeDrawer() {
@@ -3514,13 +3606,16 @@ class HomeController {
         }
         const DW = HomeController.DRAWER_W;
         const panel = n.getChildByName('panel');
-        const op = n.getComponent(UIOpacity);
-        if (op) tween(op).to(0.14, { opacity: 0 }).start();
         if (!panel) {
             n.removeFromParent(); n.destroy(); this.drawerBusy = false; return;
         }
+        /* y 用当前值：抽屉高度会随内容变，写死一个数会让关闭时"跳一下" */
+        const py = panel.position.y;
+        const body = panel.getChildByName('body');
+        const bop = body?.getComponent(UIOpacity);
+        if (bop) tween(bop).to(0.08, { opacity: 0 }).start();
         tween(panel)
-            .to(0.16, { position: new Vec3(-(W / 2) - DW / 2, 26, 0) }, { easing: 'quadIn' })
+            .to(0.15, { position: new Vec3(-(W / 2) - DW / 2, py, 0) }, { easing: 'quadIn' })
             .call(() => {
                 this.drawerBusy = false;
                 if (n.isValid) { n.removeFromParent(); n.destroy(); }
@@ -3529,34 +3624,33 @@ class HomeController {
     }
 
     /**
-     * 任务分成几段。**高度计算和绘制共用这一份** ——
-     * 两处各写一遍必然漂移，漂移的结果是内容比面板高，最后一行被切掉半截。
+     * 抽屉的内容清单。**高度计算和绘制共用这一份** ——
+     * 两处各写一遍必然漂移，漂移的结果是最后一行被切掉半截。
+     *
+     * 顺序按"现在能不能动手"排：能领的 → 还差一点的 → 做完了的（折起来）。
      */
-    private taskSections(): Array<{ label: string; list: TaskDef[] }> {
+    private taskLayout(): { items: TaskItem[]; height: number } {
         const s = this.save;
         const ready = TASKS.filter((t) => taskPhase(s, t.id) === 'ready');
         const open = TASKS.filter((t) => taskPhase(s, t.id) === 'open');
         const done = TASKS.filter((t) => taskPhase(s, t.id) === 'claimed');
-        const out: Array<{ label: string; list: TaskDef[] }> = [];
-        if (ready.length) out.push({ label: (open.length || done.length) ? '可以领了' : '', list: ready });
-        if (open.length) out.push({ label: ready.length ? '还没做完' : '', list: open });
-        if (done.length) out.push({ label: (ready.length || open.length) ? '已完成' : '', list: done });
-        return out;
-    }
 
-    /** 抽屉内容高。分段数 × 标签高 + 行数 × 行距 + 头尾 */
-    private taskBodyHeight(): number {
-        let h = 70;                        // 标题区 + 底边留白
-        if (this.taskSections().some((x) => x.list.some((t) => taskPhase(this.save, t.id) === 'ready'))) h += 52;
-        for (const sec of this.taskSections()) {
-            if (sec.label) h += 26;
-            h += sec.list.length * 72;
+        const items: TaskItem[] = [];
+        for (const t of ready) items.push({ kind: 'row', t, h: HomeController.TASK_ROW_H });
+        for (const t of open) items.push({ kind: 'row', t, h: HomeController.TASK_ROW_H });
+        if (done.length) {
+            items.push({ kind: 'fold', h: 34, n: done.length });
+            if (this.tasksDoneOpen) {
+                for (const t of done) items.push({ kind: 'row', t, h: HomeController.TASK_ROW_H });
+            }
         }
-        return h;
+        const body = items.reduce((a, b) => a + b.h, 0);
+        /* 12 上边距 + 46 标题带 + 内容 + 14 下边距 */
+        return { items, height: 12 + 46 + body + 14 };
     }
 
     /**
-     * 画抽屉内容。领取之后整块重画（数字、状态全部现算），
+     * 画抽屉内容。领取 / 展开之后整块重画（数字、状态全部现算），
      * 所以这里必须是纯函数式的：进来先拆旧的 body 再建新的。
      *
      * **所有 y 从面板顶边往下算**（`top - offset`），不是从中心算 ——
@@ -3567,145 +3661,210 @@ class HomeController {
         if (old) { old.removeFromParent(); old.destroy(); }
 
         const DW = HomeController.DRAWER_W;
+        const RW = DW - 28;                    // 272：左右各留 14
         const top = DH / 2;
-        const secs = this.taskSections();
-        const readyN = secs.length && secs[0].list.length && secs[0].list.every(
-            (t) => taskPhase(this.save, t.id) === 'ready') ? secs[0].list.length : 0;
+        const { items } = this.taskLayout();
+        const readyList = TASKS.filter((t) => taskPhase(this.save, t.id) === 'ready');
 
         const body = new Node('body');
         body.parent = panel;
         body.addComponent(UITransform).setContentSize(DW, DH);
         body.on(Node.EventType.TOUCH_END, (e: EventTouch) => { e.propagationStopped = true; });
 
-        /* 标题「任务」+ 右侧件数。**同一基线**（都写 top-30），
-           一大一小两个字号中心对齐才是看着齐的，对齐字底会显得小字往下掉。 */
-        mkLeftLabel(body, 'title', '任务', 24, INK, -DW / 2 + 20, top - 34, 120, 32);
-        const cnt = readyN > 0 ? `${readyN} 件可领` : `共 ${TASKS.length} 件`;
-        const cntLb = mkLabel(body, 'cnt', cnt, 12, INK_SOFT, 96, 20);
-        cntLb.node.setPosition(DW / 2 - 20 - 48, top - 34, 0);
+        /* 标题带：「任务」22 + 紧跟的件数 12 + 右侧「全部领取」小胶囊。
+           两个字号按**中心**对齐，对齐字底会让小字看起来往下沉。 */
+        /* 容器宽只给 48（两个 22px 字实际占 48）—— 写 110 会跟右边的件数
+           容器重叠 52px（审计报「重叠 body/title × body/cnt」），
+           视觉上因为文字没那么宽所以看不出来，但下次改文案就会撞上。 */
+        mkLeftLabel(body, 'title', '任务', 22, INK, -RW / 2, top - 35, 48, 30);
+        const cnt = readyList.length > 0 ? `${readyList.length} 件可领` : `${TASKS.length} 件`;
+        /* 件数紧贴「任务」右侧（22px 两个字实际 48 宽，所以 +56 才留出 8px 间隙），不是靠右 ——
+           靠右会和「全部领取」抢同一块地方，两个东西中间空一大段，读不成一组 */
+        mkLeftLabel(body, 'cnt', cnt, 12,
+            readyList.length > 0 ? BTN_DEEP : INK_SOFT, -RW / 2 + 56, top - 35, 80, 18);
 
-        /* 分割线画在独立节点上：一个节点只能挂一个 Graphics，
-           后面每行还要画自己的圆角底，全挤在 body 上会互相覆盖 */
-        const dline = new Node('line');
-        dline.parent = body;
-        dline.addComponent(UITransform).setContentSize(DW, DH);
-        const dg = dline.addComponent(Graphics);
-        dg.fillColor = new Color(214, 176, 140, 140);
-        dg.rect(-DW / 2 + 18, top - 58, DW - 36, 2);
-        dg.fill();
+        /* 表头下的分隔线：没有它，第一条任务像是标题的一部分 */
+        const hline = new Node('hdiv');
+        hline.parent = body;
+        hline.addComponent(UITransform).setContentSize(DW, DH);
+        const hg = hline.addComponent(Graphics);
+        hg.fillColor = new Color(214, 176, 140, 110);
+        hg.rect(-RW / 2, top - 52, RW, 1.5);
+        hg.fill();
 
-        let y = top - 62;
-        if (readyN > 0) {
-            const sum: Record<string, number> = {};
-            for (const t of secs[0].list) for (const r of t.rewardList) sum[r.kind] = (sum[r.kind] ?? 0) + r.n;
-            const names: Record<string, string> = { apple: '果子', log: '材料', coin: '吧唧' };
-            const txts: string[] = [];
-            for (const k of ['apple', 'log', 'coin']) if (sum[k]) txts.push(`${names[k]} +${sum[k]}`);
-            this.mkPill(body, 'claimAll', `全部领取 · ${txts.join('  ')}`, DW - 36, 44, 0, y - 24, true,
-                () => this.claimAllTasks());
-            y -= 56;
+        if (readyList.length > 0) {
+            /* 「全部领取」做在标题行里，不占一整条。
+               上一版是一行 272 宽的实心大按钮 —— 它把抽屉撑高 46px，
+               而下面的每一行本身已经写清了能领什么，汇总条纯属重复。
+               现在只留一个 84×26 的小胶囊，动作还在，版面省掉一整行。 */
+            this.mkPill(body, 'claimAll', '全部领取', 84, 28, RW / 2 - 42, top - 35,
+                true, () => this.claimAllTasks());
         }
 
-        for (const sec of secs) {
-            if (sec.label) {
-                mkLeftLabel(body, `g-${sec.label}`, sec.label, 12, INK_SOFT, -DW / 2 + 20, y - 10, 200, 18);
-                y -= 26;
-            }
-            for (const t of sec.list) {
-                this.mkTaskRow(body, t, y - 32);
-                y -= 72;
+        let y = top - 56;
+        for (const it of items) {
+            if (it.kind === 'fold') {
+                this.mkDoneFold(body, y - it.h / 2, it.n, RW);
+                y -= it.h;
+            } else {
+                this.mkTaskRow(body, it.t, y - it.h / 2, RW);
+                y -= it.h;
             }
         }
     }
 
     /**
-     * 一行任务：竖条 + 图标 + 名字 + 第二行（进度或奖励）+ 状态。
+     * 一行任务：图标 + 名字 +（右侧）奖励组 / 进度 + 状态。
      *
-     * 「字体遮挡」这个问题的根源在这里：上一版名字 y=+9、第二行 y=-13，
-     * 中心距 22px，而 17px 字 + 12px 字的实际视觉高度加起来就 20px ——
-     * 两行**只差 1~2px 就贴上**，缩到 50% 看是一团。现在拉开到 24px 中心距，
-     * 名字降到 16px，净间隙约 10px。
+     * **单行 48 高**。上一版是 72 高的双行（名字在上、奖励在下），六条下来 432px，
+     * 加标题和聚合条就是 606 —— 占了大半屏。而双行并没有多给信息：
+     * 第二行只放了两件小奖励，横向排开在名字右侧完全放得下。
      */
-    private mkTaskRow(parent: Node, t: TaskDef, y: number) {
-        const RW = HomeController.DRAWER_W - 32;   // 308
+    private mkTaskRow(parent: Node, t: TaskDef, cy: number, RW: number) {
+        const RH = HomeController.TASK_ROW_H;
+        const half = RW / 2;
         const phase = taskPhase(this.save, t.id);
         const isReady = phase === 'ready';
         const isDone = phase === 'claimed';
 
         const row = new Node(t.id);
         row.parent = parent;
-        row.addComponent(UITransform).setContentSize(RW, 64);
-        row.setPosition(0, y, 0);
-        const op = row.addComponent(UIOpacity);
-        op.opacity = isDone ? 115 : 255;
+        row.addComponent(UITransform).setContentSize(RW, RH);
+        row.setPosition(0, cy, 0);
+        row.addComponent(UIOpacity).opacity = isDone ? 150 : 255;
 
         const g = row.addComponent(Graphics);
-        g.fillColor = isReady ? new Color(255, 249, 234, 255) : ROW_FILL;
-        g.roundRect(-RW / 2, -32, RW, 64, 16);
-        g.fill();
-        g.lineWidth = 2;
-        g.strokeColor = isReady ? BTN_DEEP : new Color(226, 212, 194, 255);
-        g.roundRect(-RW / 2, -32, RW, 64, 16);
-        g.stroke();
-        /* 可领的行左缘一道杏黄竖条：六行等高时，这是唯一能在 10% 缩略图下
-           分出"哪行能点"的形状 */
         if (isReady) {
+            /* 可领的行给整行浅杏底 + 左竖条：满屏同高的行里，
+               只有这两样能在缩略图尺寸下分出"哪行现在能点" */
+            /* 底色要够黄才看得出来（#FFF9EA 和纸底 #FFFCF4 只差 1~2 级亮度，
+               屏幕上等于没有），但**不描边** —— 描边会让每行变成一张独立小卡，
+               五条都能领的时候就是"五张黄卡堆叠"，比白底还重。 */
+            g.fillColor = new Color(255, 245, 224, 255);
+            g.roundRect(-half, -RH / 2 + 2, RW, RH - 4, 12);
+            g.fill();
+            g.fill();
             g.fillColor = BTN_FILL;
-            g.roundRect(-RW / 2 + 5, -24, 5, 48, 2.5);
+            g.roundRect(-half + 7, -13, 4, 26, 2);
             g.fill();
-        }
-
-        const iconX = -RW / 2 + 8 + 17;
-        if (!this.mkIcon(row, 'ico', t.icon, 34, iconX, 0)) {
-            g.fillColor = isReady ? new Color(246, 214, 150, 255) : new Color(232, 222, 208, 255);
-            g.circle(iconX, 0, 17);
-            g.fill();
-            mkLabel(row, 'mark', t.name.slice(0, 1), 16, new Color(92, 60, 24, 255), 34, 24)
-                .node.setPosition(iconX, 0, 0);
-        }
-
-        /* 文字区：名字在上、进度/奖励在下，中心距 24 */
-        const textX = -RW / 2 + 8 + 34 + 9;
-        mkLeftLabel(row, 'name', t.name, 16, isDone ? INK_SOFT : INK, textX, 11, 130, 22);
-
-        if (isReady || isDone) {
-            let rx = textX;
-            for (const r of t.rewardList) {
-                this.mkIcon(row, `r-${r.kind}`, r.kind, 14, rx + 7, -13);
-                mkLeftLabel(row, `n-${r.kind}`, `+${r.n}`, 12, INK_SOFT, rx + 16, -13, 34, 16);
-                rx += 46;
-            }
         } else {
-            mkLeftLabel(row, 'prog', `${Math.min(t.cur(this.save), t.target)} / ${t.target}`,
-                12, INK_SOFT, textX, -13, 70, 16);
+            /* 其余行不画卡片，只画一条短分隔线 —— 一行一张圆角卡会读成"六个按钮" */
+            g.fillColor = new Color(206, 186, 164, 80);
+            g.rect(-half + 10, -RH / 2, RW - 20, 1);
+            g.fill();
         }
 
-        const ax = RW / 2 - 8 - 34;
+        const icoX = -half + 10 + 11;
+        if (!this.mkIcon(row, 'ico', t.icon, 22, icoX, 0)) {
+            g.fillColor = isReady ? new Color(246, 214, 150, 255) : new Color(233, 223, 210, 255);
+            g.circle(icoX, 0, 11);
+            g.fill();
+            mkLabel(row, 'mark', t.name.slice(0, 1), 12, new Color(92, 60, 24, 255), 22, 16)
+                .node.setPosition(icoX, 0, 0);
+        }
+
+        /* 横向分配（行宽 272）：
+             图标 22 | 名字 72 | 奖励组 2×35 + 组间距 9 | 按钮 52
+           名字 5 字在 14px 下是 70，容器 72 刚好贴满；SHRINK 兜底防止以后加长任务名。 */
+        const btnW = 52, btnH = 26;
+        const btnCx = half - 10 - btnW / 2;
+        const nameX = -half + 10 + 22 + 8;
+        const nameW = isReady ? 72 : 124;
+        const nameLb = mkLeftLabel(row, 'name', t.name, 14, isDone ? INK_SOFT : INK,
+            nameX, 0, nameW, 20);
+        nameLb.overflow = Label.Overflow.SHRINK;
+
+        if (phase === 'open') {
+            mkRightLabel(row, 'prog', `${Math.min(t.cur(this.save), t.target)} / ${t.target}`,
+                12, INK_SOFT, half - 12, 0, 52, 16);
+        } else if (isDone) {
+            /* 已领的行**不列奖励**，只留一个「已领」。
+               奖励信息在领的那一刻就已经给过了，重复列出来只会和「已领」打架
+               （上一版就是 "+2 已领+6" 叠在一起，右边完全读不出是几个字）。 */
+        } else {
+            /* 奖励组：**图标贴着数字左边**，一组 = 数字 20 + 间隙 3 + 图标 12。
+               上一版把每个图标和数字分开定位、组间给了 52 宽，
+               结果"+"和图标错开一截，看着像六七个散落的数字。 */
+            const rc = isDone ? new Color(176, 156, 138, 255) : new Color(122, 146, 88, 255);
+            const numW = 20, iconW = 12, gap = 3, groupGap = 9;
+            const unit = numW + gap + iconW;
+            let rx = isReady ? btnCx - btnW / 2 - 10 : half - 12;
+            for (const r of [...t.rewardList].reverse()) {
+                mkRightLabel(row, `n-${r.kind}`, `+${r.n}`, 11, rc, rx, 0, numW, 15);
+                /* 没有图标就只留数字（不留空框 —— 空框比没有更像 bug） */
+                this.mkIcon(row, `r-${r.kind}`, r.kind, iconW, rx - numW - gap - iconW / 2, 0);
+                rx -= unit + groupGap;
+            }
+        }
+
         if (isReady) {
-            this.mkPill(row, 'act', '领取', 68, 30, ax, 0, true, () => {
-                /* 不关抽屉、不重开 —— 原地重画。领完还留在列表里，
+            this.mkPill(row, 'act', '领取', btnW, btnH, btnCx, 0, true, () => {
+                /* 不关抽屉、不重开 —— 原地重画。领完的行会落进「已完成」里，
                    才符合"一次把能领的都领了"的实际行为 */
                 this.act(claimTask(this.save, t.id), () => this.repaintDrawer());
             });
         } else if (isDone) {
-            mkLabel(row, 'done', '已领', 13, INK_SOFT, 56, 20).node.setPosition(ax, 0, 0);
+            /* 右缘和上面各行的进度数字对齐（half-12），不是钉在按钮位置上 ——
+               展开后整列右缘必须是一条线 */
+            mkRightLabel(row, 'done', '已领', 12, new Color(170, 148, 128, 255), half - 12, 0, 40, 16);
         }
 
         return row;
     }
 
+    /** 「已完成 N 件」折叠行。三角用 Graphics 画 —— `▾` 靠字体兜底，缺字形就是一格方块 */
+    private mkDoneFold(parent: Node, cy: number, n: number, RW: number) {
+        const half = RW / 2;
+        const row = new Node('fold');
+        row.parent = parent;
+        row.addComponent(UITransform).setContentSize(RW, 34);
+        row.setPosition(0, cy, 0);
+
+        const g = row.addComponent(Graphics);
+        g.fillColor = new Color(206, 186, 164, 80);
+        g.rect(-half + 10, 15, RW - 20, 1);
+        g.fill();
+        /* 三角刻意比文字左缘再往左 6px：视觉重心靠左，玩家才会先读到"这是可点的" */
+        g.fillColor = INK_SOFT;
+        if (this.tasksDoneOpen) {
+            g.moveTo(-half + 18, 2); g.lineTo(-half + 28, 2); g.lineTo(-half + 23, -4); g.close(); g.fill();
+        } else {
+            g.moveTo(-half + 19, 4); g.lineTo(-half + 19, -4); g.lineTo(-half + 25, 0); g.close(); g.fill();
+        }
+
+        /* 文字左缘和上面每行的任务名对齐（都是 -half+40）——
+           不对齐的话折叠行看着像另一张表格 */
+        mkLeftLabel(row, 'txt', `已完成 ${n} 件`, 12, INK_SOFT, -half + 40, 0, 140, 16);
+        mkRightLabel(row, 'hint', this.tasksDoneOpen ? '收起' : '展开', 11,
+            new Color(178, 150, 126, 255), half - 10, 0, 44, 16);
+
+        this.press(row, 0.98);
+        row.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
+            e.propagationStopped = true;
+            this.tasksDoneOpen = !this.tasksDoneOpen;
+            this.repaintDrawer();
+        });
+    }
+
     /**
-     * 原地重画抽屉。
+     * 原地重画抽屉。领取或展开会让内容变高变矮，**面板跟着变**。
      *
-     * **高度保持打开时的高度不变**：领取会让内容变少（聚合条消失、行变灰），
-     * 如果跟着缩，抽屉会在玩家眼前"矮一截"——读作闪了一下。
-     * 下次重新打开时才用新高度。
+     * 关键是**顶边钉住**：高度变了之后只改底边，否则纸会"往上长"——
+     * 玩家读作整张纸跳了一下。顶边的位置要先用旧高度反推出来。
      */
     private repaintDrawer() {
         const p = this.drawer?.getChildByName('panel');
         if (!p) return;
         const ut = p.getComponent(UITransform);
-        this.paintTaskBody(p, ut ? ut.contentSize.height : H - 80);
+        const g = p.getComponent(Graphics);
+        const DW = HomeController.DRAWER_W;
+        const oldH = ut ? ut.contentSize.height : H - 100;
+        const newH = clamp(this.taskLayout().height, 150, H - 100);
+        const topEdge = p.position.y + oldH / 2;
+        if (ut) ut.setContentSize(DW, newH);
+        if (g) this.paintDrawerBg(g, DW, newH);
+        p.setPosition(p.position.x, topEdge - newH / 2, 0);
+        this.paintTaskBody(p, newH);
     }
 
     /** 把所有可领的一次领完 */
@@ -3733,7 +3892,7 @@ class HomeController {
     private mkPill(
         parent: Node, name: string, text: string, w: number, h: number,
         x: number, y: number, enabled: boolean, onClick: () => void, active = false,
-    ) {
+    ): Node {
         const btn = new Node(name);
         btn.parent = parent;
         btn.addComponent(UITransform).setContentSize(w, h);
@@ -3749,14 +3908,16 @@ class HomeController {
         g.roundRect(-w / 2, -h / 2, w, h, Math.min(17, h / 2));
         g.stroke();
         const ink = active ? new Color(255, 250, 240, 255) : new Color(96, 58, 28, 255);
-        const lb = mkLabel(btn, 'txt', text, 15, enabled ? ink : new Color(150, 140, 128, 255), w - 14, h - 6);
+        const lb = mkLabel(btn, 'txt', text, h <= 30 ? 13 : 15,
+            enabled ? ink : new Color(150, 140, 128, 255), w - 12, h - 6);
         lb.overflow = Label.Overflow.SHRINK;
-        if (!enabled) return;
+        if (!enabled) return btn;
         this.press(btn, 0.95);
         btn.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
             e.propagationStopped = true;
             onClick();
         });
+        return btn;
     }
 
     /**

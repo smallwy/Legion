@@ -160,6 +160,17 @@ if (OPT.cleared !== undefined) {
     };
 }
 
+/* `--save='{"runs":2,"feeds":1}'`：覆盖任意存档字段。
+   任务的三态分别看 runs / feeds / crafts / dispatches —— 只给 `--cleared`
+   永远测不到"已领"那一段，也就看不到「已完成 N 件」折叠行长什么样。
+   故意写成通用 JSON 合并，以后测别的界面状态不用再改这个脚本。 */
+if (OPT.save) {
+    let base = {};
+    try { base = JSON.parse(globalThis.localStorage?.getItem('pawpack.save.v1') || '{}'); } catch (e) { base = {}; }
+    const patch = JSON.parse(OPT.save);
+    globalThis.localStorage.setItem('pawpack.save.v1', JSON.stringify({ ...base, ...patch }));
+}
+
 require(path.join(__dirname, '_rt-build', 'HomeRuntime.js'));
 
 /* 从 0 一路推进到 `--t`，每 16ms 一帧。
@@ -184,6 +195,18 @@ const findNode = (name) => (function find(n) {
 if (OPT.touch) {
     const hit = findNode(OPT.touch);
     if (!hit) { console.error(`找不到节点 ${OPT.touch}`); process.exit(1); }
+    hit.emitTouch('touch-start');
+    hit.emitTouch('touch-end');
+    for (let i = 0; i < 3; i++) { fakeNow += 16; director.emit('before-update'); }
+}
+
+/* `--touch2=X` 在第一次点击之后再点一次。
+   用途：验证"点开一层 → 在那一层里再点一个东西"的路径 ——
+   比如任务抽屉的「已完成 N 件」折叠行，它是**点开抽屉之后才存在**的节点，
+   只给 `--touch` 永远点不到它（第一次触摸时节点树里还没有它）。 */
+if (OPT.touch2) {
+    const hit = findNode(OPT.touch2);
+    if (!hit) { console.error(`找不到节点 ${OPT.touch2}`); process.exit(1); }
     hit.emitTouch('touch-start');
     hit.emitTouch('touch-end');
     for (let i = 0; i < 3; i++) { fakeNow += 16; director.emit('before-update'); }

@@ -3160,6 +3160,220 @@ console.log("\n=== 32. 场景族：三族形状语言 ===");
   }
 }
 
+/** 两个 BOSS 流派配置是否**完全相同**。用来证明"三套打法"不是同一套。 */
+function sameStyle(a, b) {
+  for (const k of ["slam", "fan", "spawn", "crack", "mud"]) if (a[k] !== b[k]) return false;
+  return true;
+}
+
+console.log("\n=== 33. BOSS 流派：三个产地三套打法 ===");
+{
+  /* 用户的原话是「boss机制也单调」。
+     客观事实：改造前 27/27 屏的 BOSS 都只有砸地 / 散射 / 产卵三个动作，
+     19 屏连等级都相同。玩家第二章见到的"新 BOSS"，和第一章那只长得一样、
+     打得也一模一样 —— 只有配色换了。
+
+     这一节钉两件事：
+     A. 每个产地**必须有一手别的产地没有的**招牌动作（否则等于没做）；
+     B. **基础三件谁都不许关** —— 这是本轮最贵的教训，见 ② 的注释。
+  */
+
+  /* ① 映射完整：每个 BOSS 都有流派，三个流派配置各不相同 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    const ST = P.BOSS_STYLE;
+    ok(!!ST, "BOSS_STYLE 已导出");
+    for (const fam of ["hills", "cliffs", "marsh"]) {
+      ok(!!ST[fam], "有 " + fam + " 流派");
+      for (const k of ["slam", "fan", "spawn", "crack", "mud"]) {
+        ok(typeof ST[fam][k] === "boolean", fam + "." + k + " 是显式布尔（没写等于没定义）");
+      }
+    }
+    ok(P.BOSS_STYLE.cliffs.crack === true, "断崖会砸断台面");
+    ok(P.BOSS_STYLE.marsh.mud === true, "沼泽会渗泥");
+    ok(P.BOSS_STYLE.hills.crack === false && P.BOSS_STYLE.hills.mud === false,
+       "密林两样都不会（第一章是基准，不能抢后面两章的招）");
+    ok(P.BOSS_STYLE.cliffs.mud === false && P.BOSS_STYLE.marsh.crack === false,
+       "两个招牌动作各归各的产地，没有互相抄");
+  }
+
+  /* ② ★ 基础三件谁都不许关。
+     踩过：为了让三族"看起来不一样"，第一版给 cliffs 关了 fan、给 marsh 关了 slam。
+     ALL9 当场三条红 ——
+       12. 树桩林（cliffs）单球只装到 2 只（目标 3）
+       15. 弹菇田（cliffs）落袋 3（目标 4）
+       27. 沼气王（marsh）清不完 6/7
+     排查过程走了四轮反证：把 crack/mud 全关掉仍然红（857/3），
+     把 fan/slam 恢复立刻全绿（860）—— **元凶是"少一个动作"**。
+
+     为什么少一个动作会让目标变不可能：这三个动作不只是"攻击方式"，
+     它们同时也是**敌人的来源**（产卵）和**玩家的走位时机**（砸地逼跳、扇形逼换位）。
+     少一个，整条节奏就变了，机器人算好的那一套全错。
+     —— "少一个动作"和"少一批敌人"是两件事，混在一起就会把目标变不可能。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    for (const fam of ["hills", "cliffs", "marsh"]) {
+      ok(P.BOSS_STYLE[fam].slam === true, fam + " 保留了砸地（逼玩家跳）");
+      ok(P.BOSS_STYLE[fam].fan === true, fam + " 保留了散射（逼玩家换位）");
+      ok(P.BOSS_STYLE[fam].spawn === true, fam + " 保留了产卵（敌人的来源）");
+    }
+  }
+
+  /* ③ 三个流派真的分到不同屏上。
+     `_start` 只会摆好地形，**BOSS 在最后一波才刷**，所以这里测映射链
+     （主题 → 场景族 → 流派），而不是去场上找一只 BOSS ——
+     那只测的是"刷没刷出来"，跟流派对不对是两件事。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    const seen = {};
+    let nBoss = 0;
+    for (let i = 0; i < 27; i++) {
+      P._start(0, i);
+      const fam = P.SCAPE_OF_THEME[P.LEVELS[i].theme] || "hills";
+      const st = P.BOSS_STYLE[fam];
+      ok(!!st, "第 " + (i + 1) + " 屏（" + P.LEVELS[i].theme + "）能解析出流派");
+      seen[fam] = (seen[fam] || 0) + 1;
+      nBoss++;
+    }
+    eq(nBoss, 27, "27 屏全部有流派映射");
+    for (const fam of ["hills", "cliffs", "marsh"]) {
+      ok((seen[fam] || 0) >= 3, "至少有 3 屏用 " + fam + " 流派", fam + "=" + (seen[fam] || 0));
+    }
+    /* 三个流派的配置必须**两两不同**，否则"三套打法"其实是同一套 */
+    ok(!sameStyle(P.BOSS_STYLE.hills, P.BOSS_STYLE.cliffs), "密林 ≠ 断崖");
+    ok(!sameStyle(P.BOSS_STYLE.cliffs, P.BOSS_STYLE.marsh), "断崖 ≠ 沼泽");
+    ok(!sameStyle(P.BOSS_STYLE.hills, P.BOSS_STYLE.marsh), "沼泽 ≠ 密林");
+  }
+
+  /* ④ ★★ 画的就是砸的。
+     预告层的全部价值在一个等式上：**玩家看到被标记的那块，必须就是碎掉的那块**。
+     只要两者能不一致，这个机制就从"可读"变成"骗人"，
+     而且比没有预告更糟 —— 玩家会学会"别信那个圈"。
+
+     实现上用**一份数据两处读**（f._crackTgt / f._mudSpot）保证恒等，
+     所以这里测的是"锁定 → 落手"这条链上真的没有第二次选择。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    P._start(0, 2);   // cliffs
+    const fake = { x: 500, w: 96, face: 1 };
+    const tg = P.crackTarget(fake);
+    ok(!!tg, "断崖屏选得出要砸的台面");
+    ok(tg.kind !== "ground", "选中的不是地面（地面没了 = 坏档，不是难度）");
+    ok(tg.y <= 360, "选中的只在高两层（球道那层不许打）", "y=" + tg.y);
+    eq(P.BROKEN.length, 0, "只选不打：crackTarget 不改状态");
+    ok(P.crackPlat(fake, tg), "把锁定的那块砸下去");
+    eq(P.BROKEN.length, 1, "砸完 BROKEN 只多一块");
+    ok(P.BROKEN[0] === tg, "★ 碎掉的就是预告的那一块（同一个对象）");
+    /* 落空不许换目标：换一块打就是"画一块砸另一块" */
+    ok(!P.crackPlat(fake, tg), "同一块砸第二次 → 落空");
+    eq(P.BROKEN.length, 1, "落空时 BROKEN 不增长（没有偷偷换一块）");
+  }
+
+  /* ⑤ 断台的三条护栏 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    P._start(0, 2);
+    let n = 0;
+    for (let i = 0; i < 8; i++) {
+      const p = P.crackTarget({ x: 100 + i * 110, w: 96, face: 1 });
+      if (p && P.crackPlat({ x: 100 + i * 110, w: 96, face: 1 }, p)) n++;
+    }
+    eq(n, 2, "一屏最多砸断 2 块（碎光了地形设计全废）");
+    for (const p of P.BROKEN) ok(p.kind !== "ground", "BROKEN 里没有地面");
+  }
+
+  /* ⑥ 泥潮：铺的必须就是预告的那一段 + 三条护栏 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    P._start(0, 19);   // marsh
+    if (P.S.p) P.S.p.x = 700;
+    /* 找一个能铺的位置。**不是每个 x 都合法** —— 铺哪由 BOSS 站哪决定，
+       而且要避开营地通道，所以这里扫一遍而不是写死一个坐标。 */
+    let f = null, sp = null;
+    for (let x = 200; x <= 640 && !sp; x += 20) {
+      const t = { x, w: 96, face: 1 };
+      const s2 = P.mudSpot(t);
+      if (s2) { f = t; sp = s2; }
+    }
+    ok(!!sp, "沼泽屏选得出要铺的位置（存在合法落点）");
+    ok(typeof sp.x0 === "number" && typeof sp.w === "number", "spot 带 x0/w");
+    eq(P.GROUNDS.filter(g => g.kind === "mud").length, 0, "只选不铺：mudSpot 不改状态");
+    ok(P.mudRise(f, sp), "按锁定的位置铺下去");
+    const muds = P.GROUNDS.filter(g => g.kind === "mud");
+    eq(muds.length, 1, "只多铺一段");
+    eq(muds[0].x, sp.x0, "★ 铺下的起点就是预告的起点");
+    eq(muds[0].w, sp.w, "★ 铺下的宽度就是预告的宽度");
+
+    /* 三条护栏用手工 spot 测：这里考的是 mudRise 的边界，不是 mudSpot 的选址，
+       混在一起测的话，选址一变这几条就跟着漂。 */
+    P._start(0, 19);
+    const mk = (x0) => ({ x0, w: 130, cx: x0 + 65 });
+    ok(P.mudRise(f, mk(40)), "手工 spot #1 铺上");
+    ok(P.mudRise(f, mk(240)), "手工 spot #2 铺上（和 #1 不重叠）");
+    ok(!P.mudRise(f, mk(400)), "第 3 段被拒（上限 2：铺满全屏只剩「到处都慢」）");
+    eq(P.GROUNDS.filter(g => g.kind === "mud").length, 2, "泥最多 2 段");
+    ok(!P.mudRise(f, mk(250)), "和已有泥重叠 → 拒（叠了只是同一段加深，玩家看不出变化）");
+    ok(!P.mudRise(f, { x0: P.CAMP.x - 60, w: 130, cx: P.CAMP.x + 5 }),
+       "营地通道里不铺（球停在门口 = 玩家读作「门坏了」）");
+    /* BOSS 铺的泥必须**带画法标记**。
+       沼泽关本身遍地是泥（27 屏里 24 屏自带），BOSS 再铺一段、
+       长得和地形泥一样的话，玩家看不出它做了什么 ——
+       机制在跑、反馈为零，和"没做"没区别。 */
+    for (const g of P.GROUNDS) {
+      if (g.kind === "mud" && g.boss) ok(true, "BOSS 泥带 boss 标记");
+    }
+    ok(P.GROUNDS.filter(g => g.kind === "mud" && g.boss).length === 2,
+       "这两段都是 BOSS 铺的（地形自带的泥不带标记）");
+    eq(P.MAT.mud.ballGain, 0, "BOSS 泥没有偷改物理：仍然是同一套 MAT.mud");
+
+    /* 重开同屏：BOSS 铺的泥**不能写进关卡数据** */
+    P._start(0, 19);
+    eq(P.GROUNDS.filter(g => g.kind === "mud").length, 0,
+       "重开同屏泥回到 0（GROUNDS 是副本，不是关卡数据本体）");
+    eq(P.BROKEN.length, 0, "重开同屏 BROKEN 也清空");
+  }
+
+  /* ⑦ ★ 机制必须**画出来**。
+     这是本轮真正的病根：crack/mud 的计时器先做完的时候，
+     绘制代码一次都没读过 f.cracking / f.mucking ——
+     举手了、地形变了，中间什么都没有。冒烟当时还是全绿的。
+     "系统是通的"和"玩家看得见"是两件事，测试必须分别钉住。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    for (const n of ["drawCrackMark", "drawMudWarn", "drawBossMarks", "crackTarget", "mudSpot"]) {
+      eq(typeof P[n], "function", "导出 " + n);
+    }
+    ok(P.drawCrackMark !== P.drawMudWarn, "两种预告是两张画（不是同一个函数改个名）");
+
+    const src = fs.readFileSync(HTML, "utf8");
+    ok(/function drawLevel\(\)[\s\S]{0,4000}?drawBossMarks\(g\)/.test(src),
+       "drawLevel 里真的调了 drawBossMarks（不是只定义不用）");
+    /* 预告层的进度必须来自计时器本体，不能自造一个 */
+    ok(/drawCrackMark\(g, f\._crackTgt, 1 - f\.cracking/.test(src),
+       "断台预告读 f.cracking 算进度");
+    ok(/drawMudWarn\(g, f\._mudSpot, 1 - f\.mucking/.test(src),
+       "泥潮预告读 f.mucking 算进度");
+    /* BOSS 本体也要有姿态，不能只有地上一个圈 */
+    ok(/f\.cracking > 0 \? Math\.sin/.test(src), "BOSS 身上有断台蓄力的起伏");
+    ok(/f\.mucking > 0 \? Math\.sin/.test(src), "BOSS 身上有泥潮蓄力的起伏");
+    /* BOSS 铺的泥要有自己的画法，并且 drawGroundMat 真的分了流 ——
+       只定义不分支，等于画法写了但永远走不到。 */
+    eq(typeof P.drawMudMound, "function", "导出 drawMudMound");
+    ok(/function drawGroundMat[\s\S]{0,400}?gr\.kind === "mud" && gr\.boss[\s\S]{0,120}?drawMudMound/.test(src),
+       "drawGroundMat 里真的分到了 drawMudMound");
+
+    /* 锁定字段必须在 foe 上**显式初始化**。
+       undefined 和 null 在 JS 里都能当"没在抬手"用，
+       但显式声明才说明这两个字段是这套机制的一部分，而不是随手挂上去的。
+       —— 这里查源码不查实例：BOSS 在最后一波才刷，靠跑机器人去碰它，
+       测出来的是"机器人能不能打到最后一波"，跟字段有没有声明无关。 */
+    ok(/_crackTgt: null, _mudSpot: null/.test(src),
+       "foe 上显式声明了 _crackTgt / _mudSpot");
+    ok(/bossStyle: isBoss \? \(BOSS_STYLE\[SCAPE\]/.test(src),
+       "刷怪时按场景族挂流派（不是所有 BOSS 都拿同一份）");
+  }
+}
+
 console.log("\n" + "=".repeat(56));
 if (fail) {
   console.log("通过 " + pass + " · 失败 " + fail);

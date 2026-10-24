@@ -85,6 +85,60 @@ if (!args.length) { console.log("给个 tag，例如 s1 / clear:3"); process.exi
         S.hoverStage = -1;
         G.openPick();
       }, s === undefined ? "" : s);
+    } else if (kind === "boss") {
+      /* `boss:12` = 第 12 屏，BOSS 站着抬手（断台预告）。
+         `boss:20:mud` = 第 20 屏，泥潮预告。
+         `boss:12:slam` = 砸地（对照：老动作长什么样）。
+         直接造一只 BOSS 进 S.foes —— BOSS 本来只在最后一波刷，
+         靠机器人打到最后一波再截图，拍成什么样全看运气。 */
+      await page.evaluate((arg) => {
+        const G = window.GROVE, S = G.S;
+        const parts = arg.split(":");
+        const st = Number(parts[0]) - 1;
+        const what = parts[1] || "crack";
+        G._start(0, st);
+        S.phase = "play";
+        S.foes.length = 0;
+        const b = G.foeFromSpec({ foe: "boss", lv: 5, x: 520, y: G.GROUND_Y }, false);
+        b.face = -1;
+        if (what === "crack") {
+          b.cracking = 0.46;
+          b._crackTgt = G.crackTarget(b);
+        } else if (what === "mud") {
+          /* 玩家站到 BOSS **左边**：泥是朝玩家那一侧铺的。
+             站右边的话，落点会撞上营地通道的护栏（营地左边 280px 不铺），
+             mudSpot 返回 null，截出来什么预告都没有 —— 第一次就这么拍的。 */
+          S.p.x = 160;
+          b.face = 1;
+          b.mucking = 0.44;
+          b._mudSpot = G.mudSpot(b);
+        } else if (what === "muddone") {
+          /* 铺完之后长什么样（对照"预告"用）：直接落手，不等计时器。 */
+          S.p.x = 160;
+          b.face = 1;
+          const sp = G.mudSpot(b);
+          if (sp) G.mudRise(b, sp);
+          b.mucking = 0;
+        } else if (what === "slam") {
+          b.slamming = 0.62;
+        } else if (what === "spawn") {
+          b.breeding = 0.52;
+        } else if (what === "fan") {
+          b.spitting = 0.40;
+        }
+        S.foes.push(b);
+        /* ★ 主循环是活的：取值 0.46 的抬手在 700ms 的等待里会一路减到 0.30 以下，
+           落手、地形变样 —— 截到的是"变完之后"，不是"预告"。第一版就这么翻了车。
+           所以每帧把计时器按回去：状态冻结在"抬手到一半"那一刻。 */
+        const hold = () => {
+          if (what === "crack") { b.cracking = 0.46; }
+          else if (what === "mud") { b.mucking = 0.44; }
+          else if (what === "slam") { b.slamming = 0.62; }
+          else if (what === "spawn") { b.breeding = 0.52; }
+          else if (what === "fan") { b.spitting = 0.40; }
+        };
+        S._shotHold = setInterval(hold, 16);
+      }, a.slice(5));
     } else if (kind === "jump") {
       /* 测试跳关面板（F2）。`jump` = 存档只通到第 3 屏、光标停在当前屏；
          `jump:12` = 光标挪到第 13 格。

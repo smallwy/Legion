@@ -2494,6 +2494,40 @@ let REFLECTS = [];
  * ------------------------------------------------------------------------- */
 let TOUR = [];
 
+/* ===========================================================================
+ * BOSS 流派（2026-10-24 第三批 · 下半）
+ * ===========================================================================
+ *
+ * 病根：27 屏的 BOSS **共用同一套三动作**（砸地 / 散射 / 产卵），
+ * 差别只有 `cm = 4 + lv`（要糊几层）和移动速度。玩家第一次见到 BOSS 就学会了，
+ * 之后 26 次都是同一个东西 —— 用户原话：「boss机制也单调」。
+ *
+ * 三个产地给三套**空间型**动作，不是三套数值：
+ *   beast   砸地 / 散射 / 产卵     —— 逼跳、逼走位、逼清场（原有）
+ *   crusher **断台** / 砸地 / 散射 —— 把玩家脚下的**地形**打掉
+ *   sump    **泥潮** / 散射 / 产卵 —— 把地面变成泥沼，球滚过去掉速
+ *
+ * 「断台」和「泥潮」都不是改球的数值，是**改空间本身**：
+ * 断台让"能站的地方"消失，泥潮让"能滚的地面"变质。
+ * 这两条才是这一节的全部意义 —— 数值型的 BOSS 差异玩家感知不到。
+ * ------------------------------------------------------------------------- */
+let BROKEN = [];            // 已被打碎的浮台（存 PLATS 里的对象引用，每关重置）
+
+/** 这块台面是不是碎了。**空数组时直接 false**，26 屏的普通怪不用付这个开销。 */
+function isBroken(p) { return BROKEN.length > 0 && BROKEN.indexOf(p) >= 0; }
+
+/** BOSS 流派：按场景族。三个产地三套打法，见上面的长注释。 */
+const BOSS_STYLE = {
+  /* 三条动作里，**产卵（spawn）谁都不能关**。
+     它不是"气氛动作"，是**敌人数量的来源**：chain/bank 目标要靠幼虫凑只数
+     （第 12 屏 chain 3、第 15 屏 bank 4）。第一版给 cliffs 关掉了产卵，
+     ALL9 当场两条红：单球只装到 2 只、落袋只有 3。
+     ——"少一个动作"和"少一批敌人"是两件事，混在一起就会把目标变不可能。 */
+  hills:  { slam: true,  fan: true,  spawn: true, crack: false, mud: false },
+  cliffs: { slam: true,  fan: true,  spawn: true, crack: true,  mud: false },
+  marsh:  { slam: true,  fan: true,  spawn: true, crack: false, mud: true  },
+};
+
 /** 当前关的主题配色。背景/平台/空气中的浮尘都从这里取色 */
 let TH = THEMES[LEVELS[0].theme];
 
@@ -2511,7 +2545,12 @@ function loadLevel(i) {
   RAMPS = L.ramps || [];
   BOUNCERS = L.bouncers || [];
   PORTALS = L.portals || [];
-  GROUNDS = L.grounds || [];
+  /* **必须是副本，不能是关卡数据的引用。**
+     BOSS 的「泥潮」会往 GROUNDS 里 push 新段；
+     直接引用的话那几个对象会写进 LEVELS，重开这一关泥沼还在，
+     再打一遍就变成一片沼泽 —— 而且存档/回主界面都清不掉。 */
+  GROUNDS = (L.grounds || []).slice();
+  BROKEN = [];
   REFLECTS = L.reflects || [];
   TOUR = L.tour || [];
   WAVES = L.waves;
@@ -2936,6 +2975,7 @@ function stepBody(b, dt) {
     // skyDrop 是给 BOSS 天降用的：它要从天上直接落到地面，中途所有台面都不接。
     const dropping = b.dropT > 0 && (b.dropPlat || b.skyDrop);
     for (const p of PLATS) {
+      if (isBroken(p)) continue;            // 断台：这块板已经没了
       if (dropping) {
         if (b.skyDrop) { if (p.kind !== "ground") continue; }
         else if (p === b.dropPlat) continue;
@@ -3033,6 +3073,21 @@ function foeFromSpec(sp, fromSky) {
     chargeT: rand(1.2, 3.2), charging: 0,
     // 落地 1.2 秒就砸第一次（不是 2.6）：2.6 秒的空窗里玩家已经把它糊成球了，
     // "举起来"这一下全程没机会播。
+    /* 流派。BOSS 才有，普通怪是 null。
+       `SCAPE` 在 loadLevel 里已经设好，这里直接读 —— 同一个产地的 BOSS
+       打法一致，这正是"三章三套 BOSS"的意思。 */
+    bossStyle: isBoss ? (BOSS_STYLE[SCAPE] || BOSS_STYLE.hills) : null,
+    /* 断台 / 泥潮两条计时。
+       ★ 这里原先还有半句"crusher 没有产卵、sump 没有砸地"—— **已经删掉**。
+       那个做法想让三族"看起来不一样"，方式是**减动作**，结果 ALL9 三条红：
+       减掉的不是"多余的一招"，是敌人的来源（产卵）和玩家的走位时机（砸地逼跳）。
+       现在三族的基础三件全部保留，区别只在**加法**：cliffs 多断台、marsh 多泥潮。 */
+    crackT: isBoss ? 3.0 : 0, cracking: 0,
+    mudT: isBoss ? 3.6 : 0, mucking: 0,
+    /* 预告锁定的目标。undefined 表示"没在抬手"。
+       绘制层读这两个字段画圈；结算时读同一个值落手。**一份数据两处用**，
+       所以画的和砸的不可能不是同一块。 */
+    _crackTgt: null, _mudSpot: null,
     slamT: isBoss ? 1.2 : 2.6, slamming: 0,
     // 繁殖 / 散射两条计时。三条动作（砸地 6.5s、散射 5.5s、产卵 7.5s）
     // 特意错开，玩家的"跳 / 走位 / 攻击"三个动作才能轮流用上，
@@ -3906,6 +3961,8 @@ function updateBoss(f, dt) {
   f.slamT -= dt;
   f.scatterT -= dt;
   f.spawnT -= dt;
+  // 流派专属的两条。普通怪没有 bossStyle，这两个计时恒为 0、永远不会触发。
+  if (f.bossStyle) { f.crackT -= dt; f.mudT -= dt; }
 
   /* ---- 砸地（最高优先级：手已经举起来了就必须砸完） ---- */
   if (f.slamming > 0) {
@@ -3972,21 +4029,60 @@ function updateBoss(f, dt) {
 
   /* ---- 触发：一帧只开一个。三个动作叠在同一秒，"跳 / 走位 / 攻击"
          就变成"同时干三件"，那是难度，不是设计。 ---- */
+  /* 流派开关。`st` 对普通怪是 undefined —— 普通怪本来就走不到这里
+     （上面 `if (!f.isBoss)` 已经 return），但留 `|| ALL` 兜住手改配置的情况。 */
+  const st = f.bossStyle || BOSS_STYLE.hills;
   const larvas = S.foes.filter(q => q.larva && !q.dead).length;
-  if (f.spawnT <= 0 && larvas < 3 && (f.spawned || 0) < 5) {
+  if (st.spawn && f.spawnT <= 0 && larvas < 3 && (f.spawned || 0) < 5) {
     f.spawned = (f.spawned || 0) + 1;
     f.breeding = 0.9;
     addText(f.x, f.y - f.h - 30, "产卵…", "#FFD86B", 20);
     stepBody(f, dt);
     return;
   }
-  if (f.scatterT <= 0) {
+  /* ---- 断台 / 泥潮：**不打断移动** ----
+   *
+   * 第一版把这两个动作写成"站住 1 秒再放"（和砸地/产卵一样的做法）。
+   * ALL9 当场三条红，而且**每次红的屏都不一样** —— 换配置实验四轮，
+   * 红的分别是 12+27 / 12+15+27 / 12+27 / 12+15+18。
+   * 那不是在说"某个动作坏了"，是在说：**BOSS 一站住，机器人的瞄准全错**，
+   * 后面的每一波都跟着乱，最后随机地掉进超时。
+   *
+   * 所以这两个动作改成"边走边抬手"：只开一个计时器，
+   * BOSS 照常以原速度移动，时间到了地形再变。
+   * 它对玩家依然是一次可读的预告（有字、有震动），
+   * 但对整个战斗节奏的扰动只剩"那块板/那段地面变了"这一件事。
+   */
+  /* ★ 抬手那一刻就**锁定目标**，并把它挂到 f 上给绘制层读。
+     没有可打的台面 / 没有可铺的位置 → 不抬手。
+     （原来是"抬手放空炮，落手时再去找"：找不到就白抬手，
+      玩家看到一次举拳什么都没发生，会读作"这招没用"。） */
+  if (st.crack && f.crackT <= 0) {
+    f.crackT = 11.0;
+    const tg = crackTarget(f);
+    if (tg) {
+      f.cracking = 0.85;
+      f._crackTgt = tg;
+      addText(f.x, f.y - f.h - 30, "举拳…", "#FFCF6B", 20);
+      S.shake = Math.max(S.shake, 3);
+    }
+  }
+  if (st.mud && f.mudT <= 0) {
+    f.mudT = 10.0;
+    const sp = mudSpot(f);
+    if (sp) {
+      f.mucking = 0.95;
+      f._mudSpot = sp;
+      addText(f.x, f.y - f.h - 30, "渗泥…", "#B8946A", 20);
+    }
+  }
+  if (st.fan && f.scatterT <= 0) {
     f.spitting = 0.72;
     addText(f.x, f.y - f.h - 30, "吸气…", "#C7E86B", 20);
     stepBody(f, dt);
     return;
   }
-  if (f.slamT <= 0) {
+  if (st.slam && f.slamT <= 0) {
     f.slamming = 1.15;
     addText(f.x, f.y - f.h - 30, "举起来了", "#FFB08A", 20);
     S.shake = Math.max(S.shake, 4);
@@ -3996,11 +4092,182 @@ function updateBoss(f, dt) {
 
   if (p && !p.dead) f.face = sign(p.x - f.x);
   f.vx = f.face * (f.stun > 0 ? 0 : 40 + (f.lv || 1) * 7);
+
+  /* 结算断台 / 泥潮。位置在**移动之后**：
+     这样落点用的是 BOSS 抬手结束时真实站的地方，不是抬手开始的地方。 */
+  if (f.cracking > 0) {
+    f.cracking -= dt;
+    if (f.cracking <= 0.30 && !f._cracked) {
+      f._cracked = true;
+      const tg = f._crackTgt;
+      f._crackTgt = null;
+      if (tg && crackPlat(f, tg)) { S.shake = Math.max(S.shake, 13); S.flash = 0.12; }
+    }
+    if (f.cracking <= 0) { f._cracked = false; f._crackTgt = null; }
+  }
+  if (f.mucking > 0) {
+    f.mucking -= dt;
+    if (f.mucking <= 0.30 && !f._mucked) {
+      f._mucked = true;
+      const sp = f._mudSpot;
+      f._mudSpot = null;
+      if (sp) mudRise(f, sp);
+    }
+    if (f.mucking <= 0) { f._mucked = false; f._mudSpot = null; }
+  }
+
   stepBody(f, dt);
   if (f.hitWall) f.face = -f.face;
 
   // 掉进坑里（不该发生，但兜一下）
   if (f.y > H + 120) f.dead = true;
+}
+
+/**
+ * 断台（crusher 专属）：把离 BOSS 最近的一块**浮空台面**整块打掉。
+ *
+ * 为什么这是"空间"动作而不是"数值"动作：
+ * 它改的是**能站的地方**。台面没了，玩家要么换位、要么掉到下一层，
+ * 而球原本滚得过去的那条线也断了 —— 玩家得重新找一条路。
+ * 这和"球速 ×0.72"是两回事：后者只是同一个空间里的一个数字。
+ *
+ * 三条护栏（踩过才知道为什么必须有）：
+ *  1. **不打 ground**。地面没了，营地、出生点、球的全套物理全塌 —— 那不是难度，是坏档。
+ *  2. **不打玩家脚下那块**。玩家站在那里被抽掉地板，感觉是"游戏 bug"，
+ *     不是"我被打中了"。这一条是手感边界，不是平衡。
+ *  3. **每关最多 2 块**。碎光了这一屏就变成一块光板，地形设计全废。
+ */
+/** 断台的**选目标**。和"砸下去"分开，因为预告要在抬手那一刻就锁定：
+ * 玩家看到的那块，必须就是最后碎掉的那块。分两步做，就只能靠"落手时再选一次"
+ * 来假装——而 BOSS 在这 0.85 秒里是走动的，两块可能不是同一块。 */
+function crackTarget(f) {
+  if (BROKEN.length >= 2) return null;
+  const p0 = S.p;
+  let best = null, bd = 1e9;
+  for (const p of PLATS) {
+    if (p.kind === "ground") continue;
+    if (isBroken(p)) continue;
+    /* ★ 只打**高层**（y <= 360，也就是 350 和 248 那两层）。
+       试过连 462 一起打，ALL9 当场三条红：第 12 屏「树桩林」单球只装到 2 只
+       （目标 3）、第 15 屏落袋 3（目标 4）—— 462 是球最常走的那一层，
+       抽掉一块，整条球道就断了。**断台要改的是"玩家站的地方"，
+       不是"球滚的那条线"**：这两件事在同一屏里往往就是同一层，
+       所以只能从最高层下手。 */
+    if (p.y > 360) continue;
+    /* ★ 台面上还站着活敌人 → 不打。
+       敌人脚下的板抽掉，它会直落地面，机器人原本算好的路线全废
+       （实测第 12 屏：碎片一落，机器人绕着空位转，一个也装不上）。 */
+    let occupied = false;
+    for (const q of S.foes) {
+      if (q.dead) continue;
+      if (Math.abs(q.y - p.y) < 40 && q.x > p.x - 12 && q.x < p.x + p.w + 12) { occupied = true; break; }
+    }
+    if (occupied) continue;
+    const cx = p.x + p.w / 2;
+    // 玩家站在这块上（脚下 30px 内、水平在范围内）→ 跳过
+    if (p0 && !p0.dead &&
+        Math.abs(p0.y - p.y) < 32 &&
+        p0.x > p.x - 16 && p0.x < p.x + p.w + 16) continue;
+    const d = Math.abs(cx - f.x);
+    if (d < bd) { bd = d; best = p; }
+  }
+  if (!best || bd > 360) return null;
+  return best;
+}
+
+function crackPlat(f, forced) {
+  if (BROKEN.length >= 2) return false;
+  let best;
+  if (forced) {
+    /* 预告锁定的那块走这条路。**只用它，不再重新选**：
+       锁定之后那块可能已经被上一发打碎、可能有人在上面站着了 ——
+       那时该"落空"，不该"换一块打"。换了就是画一块砸另一块。 */
+    if (forced.kind === "ground" || isBroken(forced) || forced.y > 360) return false;
+    best = forced;
+  } else {
+    best = crackTarget(f);
+    if (!best) return false;
+  }
+  BROKEN.push(best);
+  /* 碎片要从**台面的两端**飞出去，不是从中心炸开：
+     中心炸开读作"这块板爆了"，两端崩开读作"这块板塌了"。 */
+  for (let i = 0; i < 18; i++) {
+    const edge = i % 2 ? best.x : best.x + best.w;
+    addFrag(edge + rand(-10, 10), best.y + rand(-6, 14), 8,
+            i % 3 ? TH.wood : TH.wood3);
+  }
+  addText(best.x + best.w / 2, best.y - 26, "台塌了!", "#FFAE7A", 21);
+  return true;
+}
+
+/**
+ * 泥潮（sump 专属）：在 BOSS 脚下铺开一段泥沼。
+ *
+ * 用的是**已有的** GROUNDS / MAT 机制（N1 地脉），不新增物理：
+ * 球滚上去 ×0.72 + 每帧拖拽，人踩上去摩擦 ×2.10。
+ * 这样"BOSS 的动作"和"地形材质"是同一套规则，玩家学一次就懂 ——
+ * 给 BOSS 单开一套物理，玩家会读成"Boss 一边的东西不算数"。
+ *
+ * 放置规则：**朝玩家那一侧**铺。铺在 BOSS 背后等于没铺（玩家在另一边）。
+ * 最多 3 段：铺满全屏之后，这一屏就只剩"到处都慢"，没有"哪段快哪段慢"。
+ */
+/** 泥潮的**选址**。和"铺下去"分开 —— 同 crackTarget 的理由：
+ * 预告画在哪一段，最后就得铺哪一段。 */
+function mudSpot(f) {
+  const p0 = S.p;
+  const dir = (p0 && !p0.dead) ? sign(p0.x - f.x) || 1 : (f.face || 1);
+  /* 宽度 150 → 130、上限 3 → 2。
+     实测 3 段 × 150px 之后第 27 屏「沼气王」机器人清不完（6/7）：
+     球滚到 BOSS 面前已经没速度了。泥是"让路变难"，不是"把路堵死"。 */
+  const w = 130;
+  const cx = clamp(f.x + dir * (f.w * 0.5 + 80), WALL_L + w / 2, WALL_R - w / 2);
+  const x0 = cx - w / 2;
+  /* ★ 营地左边 280px 内不铺。
+     那一段是"球滚进门的最后一截"：铺上去球会在门口停住，
+     玩家看着球停在营地外面，读作"门坏了"。
+     （第 15 屏落袋 3 vs 目标 4 就是这么来的。） */
+  if (x0 + w > CAMP.x - 280) return null;
+  // 已经有泥在附近 → 不叠（叠了只是把同一段加深，玩家看不出变化）
+  for (const g of GROUNDS) {
+    if (g.kind !== "mud") continue;
+    if (x0 < g.x + g.w + 20 && x0 + w > g.x - 20) return null;
+  }
+  let n = 0;
+  for (const g of GROUNDS) if (g.kind === "mud") n++;
+  if (n >= 2) return null;
+  return { x0, w, cx };
+}
+
+function mudRise(f, forced) {
+  let spot;
+  if (forced) {
+    /* 锁定之后要**复验**：这 0.95 秒里可能已经铺过一段，或者刚好又到上限。
+       复验不过就落空 —— 不另找地方铺（画一段铺另一段是最难查的那种不一致）。 */
+    spot = forced;
+    if (spot.x0 + spot.w > CAMP.x - 280) return false;
+    for (const g of GROUNDS) {
+      if (g.kind !== "mud") continue;
+      if (spot.x0 < g.x + g.w + 20 && spot.x0 + spot.w > g.x - 20) return false;
+    }
+    let m = 0;
+    for (const g of GROUNDS) if (g.kind === "mud") m++;
+    if (m >= 2) return false;
+  } else {
+    spot = mudSpot(f);
+    if (!spot) return false;
+  }
+
+  /* `boss: true` 是**画法标记**，不是第二份真相：物理仍然只认 kind="mud"。
+     为什么要标：沼泽类关卡本身遍地是泥（27 屏里 24 屏自带），
+     BOSS 再"多铺一段"如果长得和地形泥一样，玩家根本看不出它做了什么 ——
+     机制在跑、反馈为零，等于没做。 */
+  GROUNDS.push({ x: spot.x0, w: spot.w, kind: "mud", boss: true });
+  for (let i = 0; i < 14; i++) {
+    addFrag(spot.x0 + rand(0, spot.w), GROUND_Y - rand(0, 10), 6, i % 3 ? "#7A5A38" : "#5C4226");
+  }
+  addText(spot.cx, GROUND_Y - 74, "地面渗泥了", "#C9A277", 19);
+  S.shake = Math.max(S.shake, 5);
+  return true;
 }
 
 /** 五发扇形。目的是逼玩家**走位**——砸地逼他跳，扇形逼他换位置，
@@ -4456,6 +4723,7 @@ function updateBalls(dt) {
     if (b.vy >= 0) {
       let best = null;
       for (const p of PLATS) {
+        if (isBroken(p)) continue;          // 断台
         if (b.x + b.r < p.x || b.x - b.r > p.x + p.w) continue;
         if (prevY <= p.y + 2 && b.y >= p.y) {
           if (!best || p.y < best.y) best = p;
@@ -4829,6 +5097,7 @@ function predictBall(b, dir, pow) {
     if (vy >= 0) {
       let best = null;
       for (const p of PLATS) {
+        if (isBroken(p)) continue;          // 断台：预瞄线和实跑必须同一套地形
         if (x + r < p.x || x - r > p.x + p.w) continue;
         if (prevY <= p.y + 2 && y >= p.y) { if (!best || p.y < best.y) best = p; }
       }
@@ -6811,6 +7080,192 @@ function snowLine(g, x, w, y, depth) {
   g.restore();
 }
 
+/**
+ * 被打碎的浮台留下的**断茬**。
+ *
+ * 整块凭空消失读作"贴图丢了"；两端各留一截参差的木桩，才读作"这块板塌了"。
+ * 断口那一侧不能是直线 —— 直线是"被人锯断"，参差才是"被砸断"。
+ *
+ * 只在 BROKEN 里有的台面才画。BROKEN 空的时候这个循环一次都不进。
+ */
+function drawBrokenPlat(g, p) {
+  const h = p.h || 22;
+  const stub = Math.min(26, Math.max(14, p.w * 0.16));
+  for (const side of [-1, 1]) {
+    const x0 = side < 0 ? p.x : p.x + p.w - stub;
+    const inner = side < 0 ? x0 + stub : x0;      // 朝中间那一侧的边
+    /* 断口：三个折点，深度按台面高度走。
+       折点顺序从顶到底 —— 这样填充出来是一块缺角的木头。 */
+    g.beginPath();
+    g.moveTo(x0, p.y);
+    g.lineTo(x0 + stub, p.y);
+    g.lineTo(inner - side * stub * 0.26, p.y + h * 0.30);
+    g.lineTo(inner - side * stub * 0.05, p.y + h * 0.58);
+    g.lineTo(inner - side * stub * 0.32, p.y + h);
+    g.lineTo(x0, p.y + h);
+    g.closePath();
+    g.fillStyle = TH.wood2;
+    g.fill();
+    // 顶面受光：和完整台面同一条规则，否则断茬读作"一块深色贴片"
+    g.fillStyle = TH.wood3;
+    g.fillRect(Math.min(x0, x0 + stub), p.y, stub, 3.5);
+  }
+}
+
+/* ============================================================
+ * BOSS 的预告层（断台 / 泥潮）
+ *
+ * **为什么必须有这一层**：机制先做完的时候，`f.cracking` / `f.mucking`
+ * 这两个计时器在绘制代码里一次都没被读过 —— 也就是说 BOSS 举手、
+ * 地形变样，中间**什么都没有**。系统是通的（冒烟全绿），玩家什么都看不见。
+ * 那和"没做"没有区别，而"没感觉"就是这么来的。
+ *
+ * 三条规矩：
+ *  1. **预告的范围 = 真正变化的范围**。锁定和落手共用同一份数据
+ *     （`f._crackTgt` / `f._mudSpot`），所以画的和砸的不可能是两处。
+ *  2. **画在目标上，不画在屏幕中央**。屏幕上弹一行字是 UI；
+ *     在那块板子上画裂纹才是"这块板要塌了"。
+ *  3. **进度要看得出来**。三个信号同时随 k 长大：裂缝变深、箭头压下来、
+ *     角括号收紧。只做一个的话，玩家分不清"刚开始"和"马上要落"。
+ * ============================================================ */
+
+/** 描一条"任何背景上都看得见"的线：**先画一粗的底，再画一细的面**。
+ *
+ * 为什么不能单色：这个游戏的天空是暖橙、木头也是暖橙。第一版预告用的
+ * `#FF6B3D` 橙色，在断崖那一章和背景撞成一片 —— 出图上完全找不到，
+ * 我自己的截图里都要盯半天才看见那条带。
+ * 深底 + 亮面之后，浅背景上有暗边、深背景上有亮芯，两种都立得住。
+ */
+function sigLine(g, w, under, over) {
+  g.lineCap = "round";
+  g.lineJoin = "round";
+  g.strokeStyle = under || "#33150E";
+  g.lineWidth = w + 3.4;
+  g.stroke();
+  g.strokeStyle = over || "#FFF3E2";
+  g.lineWidth = w;
+  g.stroke();
+}
+
+/** 断台预告。p = 被锁定的台面，k = 0（刚抬手）→ 1（快要落） */
+function drawCrackMark(g, p, k) {
+  const h = p.h || 22;
+  const t = clamp(k, 0, 1);
+  const pulse = 0.5 + 0.5 * Math.sin(S.t * 20);
+  const cx = p.x + p.w / 2;
+
+  /* ① 整块压暗泛红 → "被锁定了"。
+     第一版是在顶边涂一条橙色带。橙色带落在木头本来就有的奶白高光上，
+     读起来就是"这块板的高光画得有点脏"，完全不像预告。 */
+  g.globalAlpha = 0.10 + 0.20 * pulse;
+  g.fillStyle = "#5A1B0C";
+  g.fillRect(p.x, p.y, p.w, h);
+  g.globalAlpha = 1;
+
+  /* ② 顶边一条亮带（黑底 + 亮面）。它给的是"这条边"，
+     裂缝给的是"这块板要从这里断开"。 */
+  g.beginPath();
+  g.moveTo(p.x + 2, p.y - 1.5);
+  g.lineTo(p.x + p.w - 2, p.y - 1.5);
+  sigLine(g, 3.2, "#33150E", "#FFE2BE");
+
+  /* ③ 裂缝：**主体是深色**。
+     浅色线在浅色木头上读作"在发光"，不读作"裂开了"；
+     木头裂开的地方是暗缝。所以这里反过来：亮色当底（把它从木纹里剥出来），
+     深色当芯（才是裂缝本身）。深度随 t 长大 = 进度。 */
+  for (let i = 0; i < 3; i++) {
+    const bx = p.x + p.w * (0.26 + i * 0.24);
+    const d = (h + 14) * (0.32 + 0.68 * t);
+    g.beginPath();
+    g.moveTo(bx, p.y - 1);
+    g.lineTo(bx + 5, p.y + d * 0.40);
+    g.lineTo(bx - 4, p.y + d * 0.70);
+    g.lineTo(bx + 3, p.y + d);
+    /* 亮底 6.4 / 暗芯 3.0：暗芯必须比亮圈粗，否则整条读作"白色的爪痕"。
+       第一版是 5.6 / 2.2，出图上就是三道白痕。 */
+    sigLine(g, 3.0, "#FFF0DC", "#33120A");
+  }
+
+  /* ④ 四角角括号：把"这一块"框出来。长度随 t 收紧（不是变长）——
+     收紧读作"锁定了"，变长读作"在展开"。 */
+  const L = Math.min(20, p.w * 0.24) * (1.0 - 0.35 * t);
+  g.beginPath();
+  for (const sd of [-1, 1]) {
+    const bx = sd < 0 ? p.x - 5 : p.x + p.w + 5;
+    for (const [ey, dy] of [[p.y - 9, 1], [p.y + h + 9, -1]]) {
+      g.moveTo(bx, ey + dy * L);
+      g.lineTo(bx, ey);
+      g.lineTo(bx - sd * L, ey);
+    }
+  }
+  sigLine(g, 2.8);
+
+  /* ⑤ 下压箭头：从上方压到顶边。它给的是"方向"，不是"进度" */
+  const ay = p.y - 52 + 38 * t;
+  g.beginPath();
+  for (const off of [0, 13]) {
+    g.moveTo(cx - 14, ay + off);
+    g.lineTo(cx, ay + off + 12);
+    g.lineTo(cx + 14, ay + off);
+  }
+  sigLine(g, 3.2);
+}
+
+/** 泥潮预告。spot = 锁定的 {x0, w, cx}，k = 0 → 1 */
+function drawMudWarn(g, spot, k) {
+  const t = clamp(k, 0, 1);
+  const pulse = 0.5 + 0.5 * Math.sin(S.t * 16);
+  const hh = 8 + 26 * t;
+
+  /* ① 地面上升起的一层泥影：**高度跟着 t 长**。
+     固定高度的话，"在涨"这件事完全读不到，看起来只是地上脏了一块。 */
+  const grd = g.createLinearGradient(0, GROUND_Y - hh, 0, GROUND_Y + 4);
+  /* 第一版 0.06 → 0.58，出图上是"草地上有一点点脏"，基本看不见。
+     泥是在深绿草地上长的，明度差要够 30 级才认得出来。 */
+  grd.addColorStop(0, "rgba(40,26,12,0.18)");
+  grd.addColorStop(1, "rgba(40,26,12," + (0.72 + 0.20 * t).toFixed(3) + ")");
+  g.fillStyle = grd;
+  g.fillRect(spot.x0, GROUND_Y - hh, spot.w, hh + 10);
+
+  /* ② 顶部一条界线：泥会涨到这里为止。
+     没有这条线，玩家不知道"现在躲一下够不够"，只能等它真涨上来。 */
+  g.beginPath();
+  g.moveTo(spot.x0 + 4, GROUND_Y - hh);
+  g.lineTo(spot.x0 + spot.w - 4, GROUND_Y - hh);
+  sigLine(g, 2.6, "#2A1B10", "#EFE0C6");
+
+  /* ③ 冒泡：黑边 + 亮芯。**相位错开**（+i*19）——
+     同步冒的三个点看起来像一条虚线，不是气泡。 */
+  for (let i = 0; i < 3; i++) {
+    const bx = spot.x0 + spot.w * (0.22 + i * 0.28);
+    const by = GROUND_Y - 4 - ((S.t * 26 + i * 19) % (16 + 30 * t));
+    const r = 3.4 + i * 0.9;
+    g.globalAlpha = 0.55 + 0.40 * pulse;
+    g.fillStyle = "#D8B98C";
+    g.beginPath(); g.arc(bx, by, r, 0, 6.283); g.fill();
+    g.strokeStyle = "#2A1B10"; g.lineWidth = 1.6; g.stroke();
+    g.globalAlpha = 1;
+  }
+
+  /* ④ 两端封口：这段泥到这里为止。
+     没有封口线，玩家会以为泥会一直往两边蔓延，不敢走。 */
+  g.beginPath();
+  for (const xb of [spot.x0 + 2, spot.x0 + spot.w - 2]) {
+    g.moveTo(xb, GROUND_Y - hh);
+    g.lineTo(xb, GROUND_Y + 3);
+  }
+  sigLine(g, 2.4, "#2A1B10", "#EFE0C6");
+}
+
+/** 把场上所有 BOSS 的预告一次画完。空的时候一次都不进循环。 */
+function drawBossMarks(g) {
+  for (const f of S.foes) {
+    if (f.dead || !f.isBoss) continue;
+    if (f.cracking > 0 && f._crackTgt) drawCrackMark(g, f._crackTgt, 1 - f.cracking / 0.85);
+    if (f.mucking > 0 && f._mudSpot) drawMudWarn(g, f._mudSpot, 1 - f.mucking / 0.95);
+  }
+}
+
 function drawPlat(g, p) {
   const isGround = p.kind === "ground";
   if (isGround) {
@@ -7831,9 +8286,78 @@ function drawBouncer(g, b) {
      冰 = 亮蓝白 + 横向高光断点（读作"滑"）
      泥 = 深棕 + 不规则斑块（读作"陷"）
    两条都在 30% 缩放下还能分辨，这是这个件的合格线。 */
+/** BOSS 现铺的泥。
+ *
+ * 和关卡自带的泥**同一套物理**（`MAT.mud`：球 ×0.72 增益 + 每帧拖拽、
+ * 人摩擦 ×2.10），只有画法不同：
+ *   地形泥  = 一条静态色带 + 几个暗点（它一直在那儿，不需要抢注意力）
+ *   BOSS 泥 = 顶边是不规则的泥包 + 一直冒泡（它是刚刚发生的，必须抢到注意力）
+ *
+ * 高度上限 10px 是量出来的：球底 556、球心 545。高过 545 就会把球整个盖住，
+ * 读作"球被埋了"（物理上并没有）；压在 548 以下，球就只是"陷在泥里"。
+ */
+function drawMudMound(g, gr) {
+  const y = GROUND_Y, h = 12;
+
+  /* ① 泥面：顶边四个缓包，**包要够高**（3~5px 的起伏读作"边缘抖了一下"）。
+     直线顶边读作"贴了一条纸"；缓包读作"泥堆起来了"。 */
+  g.beginPath();
+  g.moveTo(gr.x, y + 5);
+  const n = 4, step = gr.w / n;
+  for (let i = 0; i < n; i++) {
+    const x0 = gr.x + i * step;
+    g.quadraticCurveTo(x0 + step * 0.5, y - h - (i % 2 ? 2 : 6),
+                       x0 + step, y - 3);
+  }
+  g.lineTo(gr.x + gr.w, y + 5);
+  g.closePath();
+  /* 泥要**比草亮**。第一版用 #7A5735→#3A2716，在深绿草地上是"一块更深的暗影"，
+     4 倍放大才看得出那是泥。泥是湿的，湿的东西顶面反光，明度该高于草地。 */
+  const grd = g.createLinearGradient(0, y - h, 0, y + 5);
+  grd.addColorStop(0, "#9A7550");
+  grd.addColorStop(0.55, "#6B4C2E");
+  grd.addColorStop(1, "#3E2A18");
+  g.fillStyle = grd;
+  g.fill();
+  g.strokeStyle = "#2A1B10";
+  g.lineWidth = 2.4;
+  g.lineJoin = "round";
+  g.stroke();
+
+  /* ② 顶面反光：一小段亮弧。没有它，这块泥和"地面上的阴影"分不开 */
+  g.globalAlpha = 0.85;
+  g.strokeStyle = "#C4A176";
+  g.lineWidth = 2.4;
+  g.lineCap = "round";
+  g.beginPath();
+  g.moveTo(gr.x + gr.w * 0.14, y - h + 4);
+  g.quadraticCurveTo(gr.x + gr.w * 0.30, y - h + 1, gr.x + gr.w * 0.46, y - h + 3);
+  g.stroke();
+  g.globalAlpha = 1;
+
+  /* ③ 冒泡：**这是它和地形泥唯一分得开的地方**。
+     相位错开（+i*0.37），同步冒的四个点看起来像一条虚线。 */
+  for (let i = 0; i < 4; i++) {
+    const bx = gr.x + gr.w * (0.14 + i * 0.24);
+    const ph = (S.t * 0.9 + i * 0.37) % 1;
+    const by = y - 2 - ph * (h + 4);
+    g.globalAlpha = 0.85 * (1 - ph);
+    g.fillStyle = "#C9A277";
+    g.beginPath();
+    g.arc(bx, by, 3.2 + (i % 2) * 1.4, 0, 6.283);
+    g.fill();
+    g.strokeStyle = "#2A1B10";
+    g.lineWidth = 1.2;
+    g.stroke();
+  }
+  g.globalAlpha = 1;
+}
+
 function drawGroundMat(g, gr) {
   const m = MAT[gr.kind];
   if (!m || !m.tint) return;
+  /* BOSS 现铺的泥走另一套画法（会冒泡的活泥）。物理还是 MAT.mud 那一套。 */
+  if (gr.kind === "mud" && gr.boss) { drawMudMound(g, gr); return; }
   const y = GROUND_Y, h = 9;
   g.save();
   g.beginPath();
@@ -8220,10 +8744,16 @@ function drawLevel() {
   // 看上去就是"木头架完没收拾"。把地面挪到坡后面就干净了。
   for (const r of RAMPS) drawRamp(g, r);
   for (const p of PLATS) if (p.kind === "ground") drawPlat(g, p);
+  /* 碎掉的浮台**不画**。但两端要留断茬 —— 整块凭空消失读作"贴图丢了"，
+     留两截参差的桩脚才读作"这块板塌了"。断茬在台面之后、材质带之前画。 */
+  for (const p of BROKEN) drawBrokenPlat(g, p);
   // 材质带必须在地面之后、坑之前：坑是"地面被挖开"，理应盖住色带
   for (const gr of GROUNDS) drawGroundMat(g, gr);
   for (const pit of PITS) drawPit(g, pit);
-  for (const p of PLATS) if (p.kind !== "ground") drawPlat(g, p);
+  for (const p of PLATS) if (p.kind !== "ground" && !isBroken(p)) drawPlat(g, p);
+  /* 预告层必须在**所有台面之后**：它要压在台面顶上。
+     放在角色之前，免得盖住 BOSS 抬手的手臂。 */
+  drawBossMarks(g);
   /* 跑道在**所有台面之后**画：它是铺在台面顶上的，先画会被台面盖住。
      又必须在坑之前……不，坑在地面上、跑道在台面上，两者不重叠，
      但跑道的序号会飘到台面上方 30px，被后画的件盖住就看不见了，
@@ -8944,16 +9474,37 @@ function drawBoss(g, f) {
   const squash = f.hitT > 0 ? f.hitT / 0.20 : 0;
   const br = 1 + Math.sin(f.bob * 1.6) * 0.018;
   // 砸地抬手：整个身体先往上抬一点，再砸下来
-  const lift = f.slamming > 0.35 ? -22 * Math.sin((1.15 - f.slamming) * 2.0) : 0;
+  let lift = f.slamming > 0.35 ? -22 * Math.sin((1.15 - f.slamming) * 2.0) : 0;
   // 产卵：肚子鼓；吸气：整个身子缩一下。两个动作方向相反，玩家一眼分得清
   const breed = f.breeding > 0 ? Math.sin((0.9 - f.breeding) * 3.6) : 0;
   const suck = f.spitting > 0 ? Math.sin((0.72 - f.spitting) * 4.4) : 0;
+  /* 断台 / 泥潮的抬手：**一起一伏**，不是"发着光站着"。
+     静止的高亮读作"它中了状态"；有节奏的起伏才读作"它在蓄力"。
+     断台往上顶（举拳砸高处），泥潮往下沉（往地里压）。 */
+  const rais = f.cracking > 0 ? Math.sin((0.85 - f.cracking) * 5.2) * 11 : 0;
+  const sink = f.mucking > 0 ? Math.sin((0.95 - f.mucking) * 4.6) * 7 : 0;
+  lift -= rais;
+  lift += sink;
   const OUT = COL.outline;
 
   g.globalAlpha = 0.22;
   g.fillStyle = "#1A1224";
   g.beginPath(); g.ellipse(cx, f.y + 3, bw * 0.44, 8, 0, 0, 6.283); g.fill();
   g.globalAlpha = 1;
+
+  /* 蓄力圈：脚下往外扩的一圈光。
+     为什么画在脚下而不是身上：**身上加亮会和"被打中"的闪白撞**，
+     玩家分不出"它要出招"和"我打中了"。脚下画圈两件事不会混。 */
+  if (f.cracking > 0 || f.mucking > 0) {
+    const k = f.cracking > 0 ? 1 - f.cracking / 0.85 : 1 - f.mucking / 0.95;
+    g.globalAlpha = 0.26 + 0.36 * (0.5 + 0.5 * Math.sin(S.t * 18));
+    g.strokeStyle = f.cracking > 0 ? "#FF8A5C" : "#C9A277";
+    g.lineWidth = 3;
+    g.beginPath();
+    g.ellipse(cx, f.y + 2, bw * (0.44 + 0.34 * k), 9 + 6 * k, 0, 0, 6.283);
+    g.stroke();
+    g.globalAlpha = 1;
+  }
 
   g.save();
   g.translate(cx, cy + lift);
@@ -13669,6 +14220,25 @@ Object.defineProperty(GROVE, "bgTreeRow", { get: () => bgTreeRow });
 Object.defineProperty(GROVE, "drawFgRocks", { get: () => drawFgRocks });
 Object.defineProperty(GROVE, "drawFgReeds", { get: () => drawFgReeds });
 Object.defineProperty(GROVE, "drawFgPebble", { get: () => drawFgPebble });
+/* BOSS 流派：冒烟要断言"三个产地的动作表不一样"、"断台真能碎"、
+   "泥潮真的改了材质"。这些不导出就只能截图目视。 */
+Object.defineProperty(GROVE, "BOSS_STYLE", { get: () => BOSS_STYLE });
+Object.defineProperty(GROVE, "BROKEN", { get: () => BROKEN });
+Object.defineProperty(GROVE, "isBroken", { get: () => isBroken });
+Object.defineProperty(GROVE, "crackPlat", { get: () => crackPlat });
+Object.defineProperty(GROVE, "mudRise", { get: () => mudRise });
+/* 选目标要和"落手"分开导出：冒烟要证明**画的就是砸的**
+   （预览锁定同一块），就必须能单独调到"只选不打"的那一半。 */
+Object.defineProperty(GROVE, "crackTarget", { get: () => crackTarget });
+/* 造一只怪出来。截图器要拍 BOSS 的预告，而 BOSS 只在最后一波才刷 ——
+   靠机器人打到最后一波去拍照，拍出来的是什么全看运气。
+   **能直接造，就不要靠"跑到那一步"**。 */
+Object.defineProperty(GROVE, "foeFromSpec", { get: () => foeFromSpec });
+Object.defineProperty(GROVE, "mudSpot", { get: () => mudSpot });
+Object.defineProperty(GROVE, "drawCrackMark", { get: () => drawCrackMark });
+Object.defineProperty(GROVE, "drawMudWarn", { get: () => drawMudWarn });
+Object.defineProperty(GROVE, "drawMudMound", { get: () => drawMudMound });
+Object.defineProperty(GROVE, "drawBossMarks", { get: () => drawBossMarks });
 /* PUSH_BASE / PUSH_RUN 必须导出：冒烟要按"满助跑 = 基准 ×1.95"算力度，
    而探针/测试里手写 1209 就是硬编码 —— 哪天基准一调，测试量的还是旧数。 */
 Object.defineProperty(GROVE, "PUSH_BASE", { get: () => PUSH_BASE });

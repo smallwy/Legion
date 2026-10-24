@@ -1218,7 +1218,29 @@ const LEVELS = [
     id: "trampoline", name: "弹跳林", sub: "两级弹菇 · 塔式上升",
     note: "地面一朵菇把球弹上 350，350 那朵再弹上 248。想让球上顶层，得连弹两次",
     theme: "bouncy",
-    goal: "bank", bank: 5, par: { time: 80, made: 9 },
+    /* ★ 2026-10-24：goal 仍是 bank:5，但**挂了一条赛道约束**。
+       原来的问题是"落袋"和其余 26 屏一模一样 —— 球往右滚、进营地、+1，
+       金字塔的形状白设计了。加赛道之后，"层"第一次变成**路线**：
+       球必须一层一层往下接力，而不是在某层推一下就落袋。
+       保留 bank 而不改成新目标：落袋关全游戏只剩这一关，
+       把它换掉的话，"按只数落袋"这套判据就再没有关在用了。 */
+    goal: "bank", bank: 5, tourNeed: 2, par: { time: 90, made: 9 },
+    /* 赛道 = 一条「之」字下降。
+       ① 350 层往右 → 到 734 右端掉下去
+       ② 落到 462 层 → 往右到 800 端掉下去
+       ③ 落到地面 → 营地 830
+
+       起点可以是那朵**地面弹菇 (200)**：球被弹起 229px 越过 350 层，
+       落在塔身上 —— 所以"怎么开始这条路线"本身就要用弹菇，
+       不是走到 350 层再推。
+
+       段 2 从 600 起、不卡 740：球从 350 层掉下来带着水平速度，
+       落点会随推球力度前后飘 ±140px。卡死在 740 的话，
+       推轻一点球落在 700 就直接"没进赛道"，玩家看不出为什么。 */
+    tour: [
+      { x1: 240, x2: 700, y: 350 },
+      { x1: 600, x2: 790, y: 462 },
+    ],
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
       // **金字塔：三层居中收窄（720 / 534 / 294）。**
@@ -2451,6 +2473,27 @@ let PORTALS = [];
 let GROUNDS = [];
 let REFLECTS = [];
 
+/* ---- 赛道层（2026-10-24 第二批）--------------------------------------------
+ * 前两件（材质 / 斜板）改的是"球怎么滚"，可 27 屏的核心动作还是同一个：
+ * 往右推、落袋、完事。差别只在障碍物摆在哪。
+ *
+ * **为什么会这样：这套物理里球几乎从不飞。** 推球的初速是 vy=-40（几乎水平），
+ * 唯一的竖直来源是"从台面边缘掉下去"和撞斜板。所以在半空摆一个环、
+ * 让球穿过去 —— 穿不过去，那不是设计，那是幻觉。
+ *
+ * 所以赛道不放在空中，放在**台面上**：TOUR 是若干段「在高度 y 上、x 落在
+ * [x1,x2] 内」的跑道，球必须**按顺序**依次经过，全部走完再落袋才算数。
+ *
+ * 它改变的东西很具体：以前球往哪滚都行，撞几个算几个；现在球有一条
+ * **必须走完的路**，而且路的每一段都在不同的层上 —— 玩家要算的是
+ * "从哪层推、推多快，球才会在正确的地方掉下去接上下一段"。
+ * 这是 27 屏里第一次出现"路线"这个动词。
+ *
+ * 顺序不能省。不按顺序的话，球在场地里随便滚两圈就把所有段都碰一遍，
+ * "路线"就不存在了，剩下一堆发光的地板。
+ * ------------------------------------------------------------------------- */
+let TOUR = [];
+
 /** 当前关的主题配色。背景/平台/空气中的浮尘都从这里取色 */
 let TH = THEMES[LEVELS[0].theme];
 
@@ -2467,6 +2510,7 @@ function loadLevel(i) {
   PORTALS = L.portals || [];
   GROUNDS = L.grounds || [];
   REFLECTS = L.reflects || [];
+  TOUR = L.tour || [];
   WAVES = L.waves;
   PLAYER_SPAWN = L.spawn;
 }
@@ -2606,7 +2650,7 @@ const S = {
   killed: 0,            // 已消灭
   total: 0,
   // 球的归宿统计。用来回答"为什么打不完"：是造不出来，还是推不到位
-  stat: { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0 },
+  stat: { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0, toured: 0 },
 
   // 关卡可破坏件（每局重建，不能直接改 PLATS 常量）
   stumps: [],
@@ -3082,7 +3126,7 @@ function setupLevel() {
   S.failWhy = "";
   // 台词每关重置：first / big 是"这一关的第一次"，跨关累计就永远不说了
   S.say.txt = ""; S.say.t = 0; S.say.life = 0; S.say.fired = {};
-  S.stat = { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0, chests: 0 };
+  S.stat = { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0, chests: 0, toured: 0 };
   S.t = 0;
   S.shake = 0;
   S.flash = 0;
@@ -4194,6 +4238,10 @@ function makeBallFrom(f, vx, vy) {
     // 以前对着自己的球开枪，子弹直接穿过去，像是两套不相干的系统。
     frost: 0, frostCd: 0,
     onGround: false, ground: null,
+    /* 赛道游标：这颗球走到第几段了。0 = 一段都没走。
+       存在**球**上而不是全局 —— 赛道考的是"每一颗球都得自己走完"，
+       存在全局的话第一颗球走完，之后所有球都白捡。 */
+    tour: 0,
     t: 0, spin: 0, dead: false,
     boss: isBoss, bossLv: f.lv || 1,
     packed: [f.def],
@@ -4286,6 +4334,34 @@ function updateBalls(dt) {
         }
       }
     }
+    /* ---- 赛道（TOUR）。判的是"球**这一帧**踩在哪层、踩在哪一段"，
+       所以必须放在位移之后、落点判定之前。
+
+       容差 12px 的来历：球的 y 是**底边**，贴台面时 y ≈ 台面 y，
+       但落地那几帧会有 1~3px 的穿插/悬浮。12px 吃得掉这个抖动，
+       又不足以让"从上一层掉下来穿过这一层"蒙混过关 ——
+       自由落体一帧就掉 8px 以上，穿过时 y 跟台面只差十几像素，
+       但它**不会在 x 区间里停住**，下一帧就飞出去了，游标照样不推进。
+       （真正防止蒙混的是"必须在区间内"，不是 y 容差。） */
+    if (TOUR.length && b.tour < TOUR.length) {
+      const seg = TOUR[b.tour];
+      /* x1/x2 一律按 min/max 取，不假设"小的写前面"。
+         配置里写反了是常事（跑道的方向本来就有两向），
+         写反就让整段失效的话，这种错没人查得出来 —— 它只是"球不计数"。 */
+      const sx1 = Math.min(seg.x1, seg.x2), sx2 = Math.max(seg.x1, seg.x2);
+      if (Math.abs(b.y - seg.y) <= 12 && b.x >= sx1 && b.x <= sx2) {
+        b.tour++;
+        const last = b.tour >= TOUR.length;
+        addText(b.x, b.y - b.r * 2 - 12,
+                last ? "赛道走完" : "跑道 " + b.tour + "/" + TOUR.length,
+                last ? "#FFD86B" : "#8FE9C8", last ? 19 : 15, last ? 1.0 : 0.6);
+        for (let i = 0; i < (last ? 12 : 5); i++) {
+          addFrag(b.x, b.y - 4, 5, last ? "#FFD86B" : "#8FE9C8");
+        }
+        if (last) S.shake = Math.max(S.shake, 5);
+      }
+    }
+
     /* 滚动扬尘：只在贴地且够快时冒。节流 0.07s 一粒 —— 每帧都冒
        会糊成一条尾巴（拖尾已经有一条了，尘土再连成线就是双重残影）。
        出尘点在球**后脚跟**（运动反方向 0.6r），球往前滚、土往后扬。 */
@@ -4654,6 +4730,7 @@ function predictBall(b, dir, pow) {
   let mud = b.mud;
   let onGround = false;
   let bounce = 0, travel = 0, portalCd = 0, bouncerCd = 0, relT = 0, bounceN = 0;
+  let tour = 0;      // 这条路线能走完几段赛道（从球当前的位置起算）
 
   const pts = [{ x, y: y - r }];
   const marks = [];
@@ -4686,6 +4763,18 @@ function predictBall(b, dir, pow) {
       const mk = matAt(x);
       if (mk === "ice") vx *= 1 + MAT.ice.ballGain * AIM_DT;
       else if (mk === "mud") vx *= 1 - MAT.mud.ballDrag * AIM_DT;
+    }
+
+    /* 赛道（TOUR）—— 判据和 updateBalls 里那一处逐字同源。
+       预瞄线必须能回答"这条路线能走完几段"，否则赛道关只能盲试；
+       而盲试恰恰是这个游戏最不该有的东西 —— 有预瞄线就是为了不盲试。 */
+    if (TOUR.length && tour < TOUR.length) {
+      const seg = TOUR[tour];
+      const sx1 = Math.min(seg.x1, seg.x2), sx2 = Math.max(seg.x1, seg.x2);
+      if (Math.abs(y - seg.y) <= 12 && x >= sx1 && x <= sx2) {
+        tour++;
+        marks.push({ x, y: y - r, kind: "tour", n: tour });
+      }
     }
 
     /* 反射板（N2）—— 同一把 reflectStep，连临时对象都是同一个。
@@ -4827,7 +4916,7 @@ function predictBall(b, dir, pow) {
   }
 
   pts.push({ x, y: y - r, ph: bounce > 0 ? 1 : 0 });
-  return { pts, marks, end, hits: hitFoes.length };
+  return { pts, marks, end, hits: hitFoes.length, tour };
 }
 
 /** 取缓存：球没动、气没变、敌人没死，就不用重算 */
@@ -4903,6 +4992,14 @@ function ballTerrain(b, fallVy) {  // 火坑：烧掉，收成翻倍，但球没
     S.stat.banked++;
     // 落袋关考的是"只数"，不是"球数"：一球装三只走营地算三只
     S.stat.bankHolds += b.holds;
+    /* 赛道关：只有**走完全程**的球才算数。
+       没走完的照常给收成和落袋 —— 球是玩家费劲造出来的，一进营地就
+       把它判成"废了"太黑；但 HUD 上那个「走完 N / M」的数是通关条件，
+       它只认走完的。收成是过程奖励，不是通关条件，两件事不能混。 */
+    if (TOUR.length) {
+      if (b.tour >= TOUR.length) S.stat.toured++;
+      else addText(b.x, CAMP.y - 116, "赛道没走完 · 不算", "#E8A0A0", 17, 1.0);
+    }
     const gain = b.holds + 1 + (b.boss ? 12 : 0);
     S.food += gain;
     S.killed += b.holds;
@@ -7437,6 +7534,111 @@ function drawGroundMat(g, gr) {
    两端各一颗螺栓（说明是被人钉上去的、可靠）。
 
    高光沿板身画，所以在任何角度下都能读出"这是一块有厚度的板"而不是一条线。 */
+/* 赛道段（TOUR）：铺在台面顶上的发光跑道。
+ *
+ * 画法上有一条硬要求：**它必须读成"地面的一部分"**，不能读成摆在台上的道具。
+ * 因为球是真的要从上面滚过去的，画一个立体的框/门会让玩家下意识绕开。
+ * 所以只用「贴地色带 + 顶面高光 + 两端虚线」，全部压在台面厚度以内。
+ *
+ * 序号不能省。赛道是**有顺序**的，没有序号玩家只会看见三段发光地板，
+ * 不知道先踩哪段 —— 而顺序恰恰是这一屏唯一的谜题。 */
+function drawTour(g, t, i) {
+  const x1 = Math.min(t.x1, t.x2), x2 = Math.max(t.x1, t.x2);
+  const w = x2 - x1;
+  const y = t.y;
+  if (w < 8) return;
+  const pulse = 0.5 + 0.5 * Math.sin(S.t * 2.2 - i * 1.9);
+
+  /* 带宽 12，但**不靠颜色浓淡区分**：第一版用 alpha 0.16，截图里
+     整条带子融进木台面，读起来像"这层木板被染色了"，不像跑道。
+     现在靠三样东西立起来：实边 + 斜纹 + 端头箭头。 */
+  g.fillStyle = "rgba(126,240,200,0.30)";
+  g.fillRect(x1, y - 12, w, 12);
+
+  // 斜纹：跑道的地面纹理。间距 18、斜 45°，比纯色带更"是条路"
+  g.strokeStyle = "rgba(196,255,236," + (0.26 + 0.12 * pulse).toFixed(3) + ")";
+  g.lineWidth = 2;
+  g.beginPath();
+  for (let x = x1 + 6; x < x2 - 2; x += 18) {
+    g.moveTo(x, y);
+    g.lineTo(x + 9, y - 12);
+  }
+  g.stroke();
+
+  // 顶面亮边：贴地那一条，位置压在 y-12..y-9
+  g.fillStyle = "rgba(206,255,240," + (0.70 + 0.28 * pulse).toFixed(3) + ")";
+  g.fillRect(x1, y - 12, w, 3);
+
+  // 两端竖线：实线，读作"这段到这为止"
+  g.strokeStyle = "rgba(224,255,246,0.9)";
+  g.lineWidth = 2.5;
+  for (const x of [x1 + 1, x2 - 1]) {
+    g.beginPath();
+    g.moveTo(x, y - 13); g.lineTo(x, y);
+    g.stroke();
+  }
+
+  // 方向箭头：每 96px 一个
+  const dir = t.x2 >= t.x1 ? 1 : -1;
+  g.strokeStyle = "rgba(180,255,232," + (0.50 + 0.30 * pulse).toFixed(3) + ")";
+  g.lineWidth = 2.6;
+  for (let x = x1 + 34; x < x2 - 26; x += 96) {
+    g.beginPath();
+    g.moveTo(x - 6 * dir, y - 9);
+    g.lineTo(x + 2 * dir, y - 5.5);
+    g.lineTo(x - 6 * dir, y - 2);
+    g.stroke();
+  }
+
+  /* **出口**：段右端往下一道光柱 + 箭头。
+     没有它，两段发光地板读起来是两个不相干的标记 ——
+     "从这里滚出去、掉到下面那段"才是这条路线的全部含义。
+     第一版用 1.5px 淡绿虚线，缩到 50% 直接消失；
+     现在改成光柱（宽 10、越往下越淡）+ 实心箭头，缩略图里也读得出。
+     最后一段不画（下面没东西了）。 */
+  if (i + 1 < TOUR.length) {
+    const ny = TOUR[i + 1].y;
+    if (ny > y) {
+      const h = Math.min(ny - y - 8, 96);
+      const grad = g.createLinearGradient(0, y, 0, y + h);
+      grad.addColorStop(0, "rgba(170,250,224," + (0.55 + 0.25 * pulse).toFixed(3) + ")");
+      grad.addColorStop(1, "rgba(170,250,224,0.04)");
+      g.fillStyle = grad;
+      g.fillRect(x2 - 5, y, 10, h);
+      // 箭头：实心，压在光柱下缘
+      g.fillStyle = "rgba(206,255,240," + (0.80 + 0.20 * pulse).toFixed(3) + ")";
+      g.beginPath();
+      g.moveTo(x2 - 8, y + h - 4);
+      g.lineTo(x2 + 8, y + h - 4);
+      g.lineTo(x2, y + h + 8);
+      g.closePath();
+      g.fill();
+    }
+  }
+
+  /* 序号：浮在跑道上方 30px。第一段前面加一个"入"字，
+     因为它就是整条路线的起点，光有个「1」不知道从哪头开始。 */
+  const cx = (x1 + x2) / 2, cy = y - 30;
+  g.fillStyle = "rgba(14,34,30,0.78)";
+  g.beginPath(); g.arc(cx, cy, 13, 0, 6.283); g.fill();
+  g.strokeStyle = "rgba(206,255,240," + (0.75 + 0.25 * pulse).toFixed(3) + ")";
+  g.lineWidth = 2.2;
+  g.beginPath(); g.arc(cx, cy, 13, 0, 6.283); g.stroke();
+  g.fillStyle = "#E4FFF6";
+  g.font = "bold 15px 'Microsoft YaHei','PingFang SC',system-ui,sans-serif";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.fillText(String(i + 1), cx, cy + 0.5);
+  if (i === 0) {
+    g.font = "11px 'Microsoft YaHei','PingFang SC',system-ui,sans-serif";
+    g.fillStyle = "rgba(206,255,240,0.85)";
+    g.fillText("起点", cx, cy - 21);
+  }
+  g.textAlign = "left";
+  g.textBaseline = "alphabetic";
+}
+
+
 function drawReflect(g, d) {
   const dx = d.x2 - d.x1, dy = d.y2 - d.y1;
   const len = Math.hypot(dx, dy) || 1;
@@ -7675,6 +7877,11 @@ function drawLevel() {
   for (const gr of GROUNDS) drawGroundMat(g, gr);
   for (const pit of PITS) drawPit(g, pit);
   for (const p of PLATS) if (p.kind !== "ground") drawPlat(g, p);
+  /* 跑道在**所有台面之后**画：它是铺在台面顶上的，先画会被台面盖住。
+     又必须在坑之前……不，坑在地面上、跑道在台面上，两者不重叠，
+     但跑道的序号会飘到台面上方 30px，被后画的件盖住就看不见了，
+     所以放在坑之后、弹菇之前。 */
+  for (let i = 0; i < TOUR.length; i++) drawTour(g, TOUR[i], i);
   for (const b of BOUNCERS) drawBouncer(g, b);
   for (const d of REFLECTS) drawReflect(g, d);
   for (const pt of PORTALS) drawPortal(g, pt);
@@ -9382,7 +9589,7 @@ function drawShot(g, s) {
    目标进度 / 判定
    ---------------------------------------------------------------------------- */
 
-function goalProgress() {
+function _goalBase() {
   const st = curStage();
   const done = S.killed >= S.total;
   if (st.goal === "limit") {
@@ -9409,6 +9616,18 @@ function goalProgress() {
       frac: S.stat.bankHolds / st.bank,
       done: S.stat.bankHolds >= st.bank,
       cells: st.bank, filled: Math.min(S.stat.bankHolds, st.bank),
+    };
+  }
+  if (st.goal === "tour") {
+    /* 赛道关的进度**只数走完的球**。这里不能顺手把 S.stat.toured 换成
+       S.stat.banked —— 落袋数包括"没走完就滚进营地"的那些，
+       拿它当进度条的话，玩家会看到进度条往前走、却一直通不了关。 */
+    const need = st.tourNeed || 1;
+    return {
+      text: "走完赛道 " + S.stat.toured + " / " + need + (done ? "" : " · 已清 " + S.killed + "/" + S.total),
+      frac: S.stat.toured / need,
+      done: S.stat.toured >= need,
+      cells: need, filled: Math.min(S.stat.toured, need),
     };
   }
   if (st.goal === "collect") {
@@ -9451,6 +9670,24 @@ function goalProgress() {
     // 一颗豆子 = 一只被送走的小怪。总数就是 S.total，是这关真实的人数。
     cells: S.total, filled: Math.min(S.killed, S.total),
   };
+}
+
+/* 目标进度 + 赛道约束。
+ *
+ * 赛道**不是第七种目标**，它是给已有目标加的一条空间条件 ——
+ * "落袋 5 只"和"走完这条路线"是两件事，不该互相替代。
+ * 做成附加约束之后，任何一关都能挂一条路线要求，而不用为它单开一种 goal。
+ * （第 5 屏就是这么用的：bank 5 照旧，但必须有两颗球是从塔上滚下来的。） */
+function goalProgress() {
+  const r = _goalBase();
+  if (TOUR.length) {
+    const need = curStage().tourNeed || 1;
+    r.text += " · 赛道 " + S.stat.toured + "/" + need;
+    /* 赛道没走完就不给"已完成"。不给这一行的话，主目标先满、进度条全绿、
+       玩家以为通关了，实际还差路线 —— 那种"明明满了却过不去"是最伤人的。 */
+    if (S.stat.toured < need) r.done = false;
+  }
+  return r;
 }
 
 /** 定宽文字截断。卡片宽度是写死的，brief 长短不一，溢出去会压到卡片外面。 */
@@ -10093,6 +10330,30 @@ function drawHUD(g) {
       g.fillText(pr.inner, BX + BW / 2, BY + BH / 2 + 0.5);
       g.textAlign = "left";
     }
+  }
+
+  /* ---- 赛道计数：画在进度条**右侧**的空白里 ----
+   *
+   * 这张卡片只有四条基线（title / brief / bar / cond），底下两行已被
+   * "倒数 + 用时 + 用球 + 奖励"占满，塞不下第五行。
+   * 而赛道恰恰是这一屏**唯一的新东西** —— 不显示的话，玩家看到的就是
+   * "一个普通的落袋关，地上多了几块发光的地板"，根本不知道要走。
+   *
+   * 位置是量出来的：豆子 5 颗、dr=5.8、step=21 → 总宽 142，居中后右端在
+   * BX+207；卡片可用宽 272，`赛道 0/2` 用 10px 字约 54 宽，
+   * 右对齐到 BX+272 时左端在 BX+218 —— 离豆子 11px，不撞。
+   * 超过 16 颗豆子时 step 会自动收窄、右端仍在 BX+207 附近，这条结论不变。 */
+  if (TOUR.length) {
+    const need = curStage().tourNeed || 1;
+    const tDone = S.stat.toured >= need;
+    g.textAlign = "right";
+    g.textBaseline = "middle";
+    g.font = "bold 10px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+    // 完成用深绿、未完成用灰绿：这一格不能抢主目标的颜色，它是附加条件
+    g.fillStyle = tDone ? "#22785A" : "rgba(62,106,92,.85)";
+    g.fillText("赛道 " + S.stat.toured + "/" + need, BX + BW, BY + 5);
+    g.textAlign = "left";
+    g.textBaseline = "alphabetic";
   }
 
   /* ④ 倒数 + ⑤ S 的两个条件 + 本关奖励 —— **压成同一行**
@@ -11135,10 +11396,12 @@ function drawSelect(g) {
 function checkGoal() {
   const st = curStage();
   if (S.killed < S.total) return false;
+  if (TOUR.length && S.stat.toured < (st.tourNeed || 1)) return false;
   if (st.goal === "limit") return S.stat.made <= st.ballLimit;
   if (st.goal === "chain") return S.stat.maxHolds >= st.chain;
   if (st.goal === "bank")  return S.stat.bankHolds >= st.bank;
   if (st.goal === "collect") return S.food >= st.collect;
+  if (st.goal === "tour")    return S.stat.toured >= (st.tourNeed || 1);
   if (st.goal === "intact")  return S.stat.burst === 0;
   if (st.goal === "nohit")   return S.stat.hits === 0;
   return true;
@@ -11146,9 +11409,15 @@ function checkGoal() {
 
 function goalFailWhy() {
   const st = curStage();
+  /* 赛道排最前：其他原因（球用超了、挨打了）玩家自己能看到，
+     而"球没走完那条路"是看不见的 —— 球确实进了营地，只是没走完整条线。 */
+  if (TOUR.length && S.stat.toured < (st.tourNeed || 1)) {
+    return "人都送走了，但走完赛道的只有 " + S.stat.toured + " 颗（要 " + (st.tourNeed || 1) + " 颗）—— 那几段跑道要一层一层接着掉下去，不是随便滚";
+  }
   if (st.goal === "chain") return "人都送走了，但没有一颗球装够 " + st.chain + " 只（最大 x" + S.stat.maxHolds + "）";
   if (st.goal === "bank")  return "人都送走了，但从营地过的只有 " + S.stat.bankHolds + " 只（要 " + st.bank + " 只）";
   if (st.goal === "collect") return "人都送走了，但收成只有 " + S.food + "（要 " + st.collect + "）—— 火坑 ×2 才是正路";
+  if (st.goal === "tour")    return "人都送走了，但走完赛道的只有 " + S.stat.toured + " 颗（要 " + (st.tourNeed || 1) + " 颗）—— 那三段跑道是一层一层接着掉下去的，不是随便滚";
   if (st.goal === "intact")  return "人都送走了，但崩了 " + S.stat.burst + " 颗球（一次都不许）";
   if (st.goal === "nohit")   return "人都送走了，但挨了 " + S.stat.hits + " 下（一次都不许）";
   return "人都送走了，但用了 " + S.stat.made + " 颗球（只给 " + st.ballLimit + " 颗）";
@@ -12819,6 +13088,11 @@ Object.defineProperty(GROVE, "BOUNCERS", { get: () => BOUNCERS });
 Object.defineProperty(GROVE, "PORTALS", { get: () => PORTALS });
 Object.defineProperty(GROVE, "GROUNDS", { get: () => GROUNDS });
 Object.defineProperty(GROVE, "REFLECTS", { get: () => REFLECTS });
+Object.defineProperty(GROVE, "TOUR", { get: () => TOUR });
+/* PUSH_BASE / PUSH_RUN 必须导出：冒烟要按"满助跑 = 基准 ×1.95"算力度，
+   而探针/测试里手写 1209 就是硬编码 —— 哪天基准一调，测试量的还是旧数。 */
+Object.defineProperty(GROVE, "PUSH_BASE", { get: () => PUSH_BASE });
+Object.defineProperty(GROVE, "PUSH_RUN", { get: () => PUSH_RUN });
 // 结算卡的几何：按钮/文字都按它排，冒烟断言要拿它判"按钮有没有掉出卡片"，
 // 写死 544 那种事干过一次 —— 卡片一加高，断言就变成在验一个不存在的尺寸。
 GROVE.CARD = { w: CARD_W, y: CARD_Y, h: CARD_H, btnY: BTN_Y, btnH: BTN_H, btnW: BTN_W };

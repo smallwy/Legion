@@ -1834,6 +1834,10 @@ function forceClear(P, S, food) {
   S.stat.bankHolds = 99;
   S.stat.burst = 0;
   S.stat.hits = 0;
+  /* 赛道也一起满足。它是**附加约束**（任何关都能挂），
+     所以任何一关现在都可能因为"路线没走完"而判不过 ——
+     这一段测的是"趟"（肚子/倍率/收成跨关累计），不是某一关的目标。 */
+  S.stat.toured = 99;
   P.tick(1 / 60);
 }
 
@@ -2900,6 +2904,141 @@ console.log("\n=== 30. 空间语法：地面材质 / 反射板 / 回弹井 ===")
     ok(withMud > noMud * 0.5, "（反证）线没短到「球直接陷在泥里」的程度",
        (withMud / noMud).toFixed(2) + "×");
     eq(PITS.findIndex(q => q.kind === "mud"), mi, "测完把泥沼放回去了");
+  }
+}
+
+console.log("\n=== 31. 赛道：TOUR 段必须真的踩得到 ===");
+{
+  /* 赛道的错法全都**长得像正常工作**：段写在根本不存在的台面上，
+     球路过时不计数，玩家只会觉得"这关过不去"，不会觉得"数据写错了"。
+     所以这一节的断言全部落在"几何上到底踩不踩得到"和"计数到底加没加"。 */
+
+  /* ① 只有挂了 tour 的屏才有段，其余 26 屏必须是空 ——
+     loadLevel 忘了重置 TOUR 的话，上一关的段会跟着带到下一关。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    let n = 0;
+    for (let i = 0; i < P.LEVELS.length; i++) {
+      P._start(0, i);
+      if (P.TOUR.length) n++;
+    }
+    eq(n, 1, "27 屏里只有 1 屏挂了赛道", "有赛道的屏数=" + n);
+    P._start(0, 0);
+    eq(P.TOUR.length, 0, "没有赛道的屏：TOUR 是空数组（不是 undefined）");
+    eq(P.S.stat.toured, 0, "每关重置：赛道计数从 0 起");
+  }
+
+  /* ② 每一段都必须**完整落在某一块真实台面上**。
+     y 差 1px 都算错：判定用 |球y - 段y| <= 12，段 y 写成 348 而台面是 350，
+     球从台面上滚过时差 2px 刚好能过 —— 看起来没问题，但换一关差 13px 就整段失效。
+     x 超出台面同理：球滚到台面右端就掉下去了，段画到台面外面那段永远踩不到。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    P._start(0, 4);                       // 第 5 屏「弹菇」
+    eq(P.TOUR.length, 2, "第 5 屏有 2 段跑道");
+    for (let i = 0; i < P.TOUR.length; i++) {
+      const t = P.TOUR[i];
+      const x1 = Math.min(t.x1, t.x2), x2 = Math.max(t.x1, t.x2);
+      const plat = P.PLATS.find(p => p.y === t.y && p.x <= x1 && p.x + p.w >= x2);
+      ok(!!plat, "第 " + (i + 1) + " 段完整落在某块真实台面上",
+         plat ? "台面 " + plat.x + ".." + (plat.x + plat.w) + "@" + plat.y
+              : "x " + x1 + ".." + x2 + "@y=" + t.y + " 没有任何台面盖住它");
+      ok(x2 - x1 >= 100, "第 " + (i + 1) + " 段够长（球滚过去至少有 6 帧）",
+         "w=" + (x2 - x1));
+    }
+  }
+
+  /* ③ 顺序必须是**下降**（y 越来越大）。
+     赛道叫"之字下降"就是因为一层一层往下接力；顺序反过来的话，
+     球得先落到下层再"上去"踩第二段 —— 而球上不去层，那一段永远不可能被踩到。
+     这一条是本轮唯一一条"顺序"约束，别删。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    P._start(0, 4);
+    for (let i = 1; i < P.TOUR.length; i++) {
+      ok(P.TOUR[i].y > P.TOUR[i - 1].y,
+         "第 " + (i + 1) + " 段在第 " + i + " 段**下面**（球只会往下掉）",
+         P.TOUR[i - 1].y + " → " + P.TOUR[i].y);
+    }
+  }
+
+  /* ④ 预瞄线要能回答"这条路能走完几段"。
+     从塔顶(350 层)左侧出发能走完 2 段；从 462 层出发一段都踩不到 ——
+     这两条一正一反，能同时抓住"漏判"和"白给"。 */
+  {
+    const sb = boot(), P = sb.GROVE, S = P.S;
+    P._start(0, 4);
+    P.coatFoe(S.foes[0], 3);
+    const b = S.balls[0], gy = P.GROUND_Y;
+    S.foes.forEach(f => { f.x = 4000; f.dead = true; });
+    S.p.x = 100; S.p.y = gy;
+
+    b.x = 250; b.y = 350; b.vx = 0; b.vy = 0; b.onGround = true; b.ground = null; b.mud = false;
+    const r1 = P.predictBall(b, 1, P.PUSH_BASE);
+    eq(r1.tour, 2, "从 350 层左侧推：预瞄线报告走完 2 段",
+       "tour=" + r1.tour + " end=" + r1.end);
+
+    b.x = 200; b.y = 462; b.vx = 0; b.vy = 0; b.onGround = true; b.ground = null; b.mud = false;
+    const r2 = P.predictBall(b, 1, P.PUSH_BASE);
+    eq(r2.tour, 0, "（反证）从 462 层推：一段都踩不到（不是白给）",
+       "tour=" + r2.tour + " end=" + r2.end);
+  }
+
+  /* ⑤ 落袋时只有**走完**的球计数。
+     没走完的照常给收成和落袋（球是玩家造的，不能吞），
+     但不给"走完赛道的球"这个数 —— 那个数才是通关条件。 */
+  {
+    const sb = boot(), P = sb.GROVE, S = P.S;
+    P._start(0, 4);
+    const f = S.foes[0];
+    P.coatFoe(f, 3);
+    const b = S.balls[0];
+
+    // 走完的球
+    b.tour = P.TOUR.length;
+    b.x = P.CAMP.x + 20; b.y = P.PLATS[0].y; b.onGround = true; b.vx = 0;
+    P.tick(1 / 60);
+    eq(S.stat.toured, 1, "走完赛道的球落袋 → toured +1");
+
+    // 没走完的球
+    const f2 = S.foes.find(o => !o.dead);
+    ok(!!f2, "场上还有敌人可以造第二颗球");
+    if (f2) {
+      P.makeBallFrom(f2, 0, 0);
+      const b2 = S.balls[S.balls.length - 1];
+      b2.tour = P.TOUR.length - 1;
+      b2.x = P.CAMP.x + 20; b2.y = P.PLATS[0].y; b2.onGround = true; b2.vx = 0;
+      P.tick(1 / 60);
+      eq(S.stat.toured, 1, "没走完的球落袋 → toured 不变（但收成照给）");
+      ok(S.food > 0, "没走完的球照样给收成（不吞玩家的球）", "food=" + S.food);
+    }
+  }
+
+  /* ⑥ 赛道没走完就不许通关 —— 哪怕主目标早满了。
+     "进度条全绿却过不去"是最伤人的一种 bug。 */
+  {
+    const sb = boot(), P = sb.GROVE, S = P.S;
+    P._start(0, 4);
+    S.foes.length = 0;
+    S.killed = S.total;
+    S.stat.bankHolds = 99;                // 主目标（落袋 5）早就满了
+    S.stat.toured = 0;
+    eq(P.checkGoal(), false, "主目标满了、赛道没走 → 不算通关");
+    const gp = P.goalProgress();
+    eq(gp.done, false, "进度条也不显示「已完成」");
+    ok(gp.text.indexOf("赛道") >= 0, "HUD 文案里带赛道进度", gp.text);
+    S.stat.toured = P.curStage().tourNeed || 1;
+    eq(P.checkGoal(), true, "赛道也走完 → 通关");
+  }
+
+  /* ⑦ tourNeed 不能超过这一关的造球预算，否则永远打不完 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    P._start(0, 4);
+    const st = P.curStage();
+    ok((st.tourNeed || 1) <= st.bank,
+       "赛道的球数要求 ≤ 主目标球数（不然物理上不可能同时满足）",
+       "tourNeed=" + st.tourNeed + " bank=" + st.bank);
   }
 }
 

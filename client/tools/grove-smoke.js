@@ -2293,6 +2293,55 @@ console.log("\n=== 27b. 测试跳关（F2 面板 / [ ] 上下屏）===");
   P.resetRun();
 }
 
+console.log("\n=== 27c. Cocos 键盘转发（GROVE._key）===");
+{
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+
+  /* 病根：Cocos 侧的 KEY_MAP 只映射方向 / WASD / J / K —— F2、[ ]、R、Esc、
+     Enter 一个都不在里面，而运行时自带的 window 监听在编辑器的 Game View 里
+     可能压根收不到按键（焦点在编辑器、或者宿主页面把键吃了）。
+     症状是"浏览器里好好的，进 Cocos 按 F2 完全没反应"。
+
+     修法不是在这边再写一张热键表（那就是第二份真值，迟早漂移），
+     而是把键喂回运行时的 onKeyDown —— 跳关面板 / 挑一屏 / 收工 / 继续
+     全部只有一份实现。这一节守的就是那条转发链。 */
+
+  ok(typeof P._key === "function", "GROVE._key 存在（Cocos 转发入口）");
+
+  P._start(0, 3);
+  P._key("F2");
+  eq(S.phase, "jump", "_key(F2) 从战斗中打开跳关面板");
+
+  /* 40ms 去重：同一次物理按键会同时从 window 和引擎两条路进来。
+     不去重的话 F2 被"开一次、又关一次"，玩家看到的正是"按了没反应"。 */
+  P._key("F2");
+  eq(S.phase, "jump", "紧接着重复的 F2 被去重（不会自己把面板关掉）");
+
+  P._key("Escape");
+  eq(S.phase, "play", "换个键不受去重影响（Escape 关面板回战斗）");
+  ok(!!S.p, "关面板后角色还在（不是黑屏）");
+
+  P._key("BracketRight");
+  eq(S.stage, 4, "_key(BracketRight) 下一屏");
+  P._key("BracketLeft");
+  eq(S.stage, 3, "_key(BracketLeft) 上一屏");
+  P._key("KeyR");
+  eq(S.stage, 3, "_key(KeyR) 重开本屏（不是跳到别处）");
+
+  /* 面板里的方向键：Cocos 的 KEY_MAP 把方向键当动作键（只在 play 里生效），
+     所以非 play 阶段必须走转发，否则面板打开后光标一动不动。 */
+  P.openJump();
+  S.jumpCur = 0;
+  P._key("ArrowRight", true);
+  eq(S.jumpCur, 0, "带 repeat 的方向键不移动（按住会一路飞到最后一格）");
+  // 把 40ms 去重窗口让过去，再测"真的按了一下"
+  const t0 = Date.now();
+  while (Date.now() - t0 < 50) { /* 等过去重窗口 */ }
+  P._key("ArrowRight");
+  eq(S.jumpCur, 1, "_key(ArrowRight) 在跳关面板里移动光标");
+}
+
 console.log("\n=== 28. 三目标 / 越饱越强 ===");
 {
   const sb = boot();

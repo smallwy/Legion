@@ -68,12 +68,15 @@ const STAGE_Z = '10';
 const HERO_IDS = ['cat', 'dog', 'ham', 'rab', 'ox', 'fox'];
 
 /**
- * 引擎键盘通道的键位表。
+ * 引擎键盘通道的**状态键**表（按住 / 松开，幂等）。
  *
- * **只转发状态键，绝不转发动作键**（R 重打 / E 收工 / Enter 继续）。
- * 动作键是"按一下执行一次"，而这里和运行时内部的 window 监听是**两条同时活着的通路** ——
- * 动作键双转发就会执行两次：R 连开两局、Enter 连跳两关。
- * 状态键是幂等的（置 true / 置 false），双写没有副作用。
+ * 只放"按住才有效"的键。**按一下执行一次**的键（F2 跳关 / R 重打 /
+ * [ ] 换屏 / Esc 收工 / Enter 继续）走下面的 CODE_NAME，交回运行时的
+ * onKeyDown —— 那边已经有一份 40ms 去重守卫，双路进来只生效一次。
+ *
+ * 为什么非要分两张：状态键要的是"零延迟、每帧都读"，
+ * 而动作键要的是"一份判断逻辑"。动作键也塞进这儿就等于在 Cocos 里
+ * 再实现一遍跳关面板和收工流程 —— 那是第二份真值，迟早漂移。
  */
 const KEY_MAP: Readonly<Record<number, string>> = {
     [KeyCode.ARROW_LEFT]: 'left', [KeyCode.KEY_A]: 'left',
@@ -82,6 +85,27 @@ const KEY_MAP: Readonly<Record<number, string>> = {
     [KeyCode.ARROW_DOWN]: 'down', [KeyCode.KEY_S]: 'down',
     [KeyCode.KEY_J]: 'atk',
     [KeyCode.KEY_K]: 'dash',
+};
+
+/**
+ * keyCode（DOM 老值）→ `ev.code` 字符串。运行时内部用的是 `ev.code`，
+ * 引擎给的是 `ev.keyCode`，这张表就是那道翻译。
+ *
+ * **只列"运行时按名字认、但不在 KEY_MAP 里"的键**：漏一个的症状是
+ * "这个键在 Cocos 里按了没反应，在浏览器里正常" —— 极难从画面上判断。
+ * 新增热键时两边都要看一眼。
+ *
+ * 顺带记一笔：**跳关面板是 F2，不是 F12**。F12 在浏览器和 Creator 里
+ * 是开发者工具的快捷键，按键根本到不了页面。
+ */
+const CODE_NAME: Readonly<Record<number, string>> = {
+    113: 'F2',
+    219: 'BracketLeft', 221: 'BracketRight',
+    82: 'KeyR', 69: 'KeyE', 76: 'KeyL',
+    13: 'Enter', 27: 'Escape', 32: 'Space',
+    37: 'ArrowLeft', 38: 'ArrowUp', 39: 'ArrowRight', 40: 'ArrowDown',
+    49: 'Digit1', 50: 'Digit2', 51: 'Digit3',
+    52: 'Digit4', 53: 'Digit5', 54: 'Digit6',
 };
 
 /**
@@ -408,17 +432,38 @@ export class GroveBattle extends Component {
         input.on(Input.EventType.KEY_UP, this._onKeyUp);
     }
 
+    /**
+     * 按住不放时引擎会不停重发 KEY_DOWN，但 EventKeyboard 上**没有 `repeat` 字段**。
+     * 运行时里的挑一屏 / 跳关面板都靠 `!ev.repeat` 挡重发（不挡的话按住方向键
+     * 一秒连发 30 次，光标从第 5 屏直接飞到第 27 屏），所以这个状态得我们自己记。
+     */
+    private _held = new Set<number>();
+
     private _onKeyDown = (ev: EventKeyboard): void => {
-        const k = KEY_MAP[ev.keyCode];
-        if (!k) return;
         const S = (GROVE as any).S;
-        if (!S || !S.keys || S.phase !== 'play') return;
-        // 边沿只在"第一次按下"记一次：按住键会不停重发 KEY_DOWN。
-        if (!S.keys[k]) S.press[k] = true;
-        S.keys[k] = true;
+        const k = KEY_MAP[ev.keyCode];
+
+        if (k && S && S.keys && S.phase === 'play') {
+            // 状态键的快通道：直接写键表，不走运行时那把大 switch。
+            if (!S.keys[k]) S.press[k] = true;
+            S.keys[k] = true;
+            this._held.add(ev.keyCode);
+            return;
+        }
+
+        /* 其余一切键都交回运行时：
+           - play 里的 F2 / [ ] / R / Esc（KEY_MAP 里没有）
+           - 所有非 play 阶段的方向键、回车、Esc（挑一屏、跳关面板、结算）
+           一份判断逻辑，两个入口。 */
+        const code = CODE_NAME[ev.keyCode];
+        if (!code) return;
+        const repeat = this._held.has(ev.keyCode);
+        this._held.add(ev.keyCode);
+        (GROVE as any)._key(code, repeat);
     };
 
     private _onKeyUp = (ev: EventKeyboard): void => {
+        this._held.delete(ev.keyCode);
         const k = KEY_MAP[ev.keyCode];
         if (!k) return;
         const S = (GROVE as any).S;

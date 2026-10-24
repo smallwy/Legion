@@ -2572,7 +2572,18 @@ const KEYMAP = {
    走和跳是别的东西转发的，喷只认这一张表。
 
    捕获阶段 window 是事件链上的第一个节点，谁拦都拦不住它。 */
-window.addEventListener("keydown", (ev) => {
+/* 同一次物理按键可能从两条路进来：DOM 的 window 监听，和 Cocos 引擎的
+   input 转发（GroveBattle._onKeyDown → GROVE._key）。不去重的话
+   F2 会被"开一次、又关一次"，表现就是**按了完全没反应**。
+   40ms 足够宽 —— 人手连点两下同一个键最快也要 80ms。 */
+let _keyGuard = { code: "", t: -1e9 };
+
+function onKeyDown(ev) {
+  const _t = (typeof performance !== "undefined" && performance.now)
+    ? performance.now() : Date.now();
+  if (ev.code === _keyGuard.code && _t - _keyGuard.t < 40) return;
+  _keyGuard.code = ev.code;
+  _keyGuard.t = _t;
   // 非战斗阶段，方向键归界面用，不往角色身上送
   const inPlay = S.phase === "play";
 
@@ -2682,7 +2693,10 @@ window.addEventListener("keydown", (ev) => {
       ev.preventDefault();
     }
   }
-}, true);
+}
+
+/* 真实 DOM 监听（浏览器直开 grove.html 时唯一的那条路）。 */
+window.addEventListener("keydown", onKeyDown, true);
 
 window.addEventListener("keyup", (ev) => {
   const k = KEYMAP[ev.code];
@@ -12424,6 +12438,15 @@ window.GROVE = {
   // 拿 ImageAsset 再注进来。导出它，截图脚本才能拍出"有 UI 图"的样子 ——
   // 不导出的话 file:// 打开的 grove.html 永远是代码回退图形，截图和真机对不上。
   setArt: groveSetArt,
+  /* 外部按键入口 —— 给 Cocos 转发用。
+     **不复制任何判断逻辑**，直接把事件喂回 onKeyDown：跳关面板、R 重开、
+     Esc 收工、挑一屏的方向键导航全部只有一份实现。在这儿再写一张
+     KEY_MAP 就是第二份真值，迟早漂移（这个项目最贵的教训之一）。
+     和 DOM 那条路的重复由 onKeyDown 里的 40ms 守卫挡掉。 */
+  _key(code, repeat) {
+    onKeyDown({ code: code, repeat: !!repeat, preventDefault() {} });
+  },
+
   // 模拟按键：既要置"按住"状态，也要置"本帧按下"的边沿。
   // 只置 keys 的话，atk / dash / jump 这三个读边沿的动作全部不触发 ——
   // 表现是"按了没反应"，但按住方向走是正常的，很容易误判成动作逻辑坏了。

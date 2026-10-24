@@ -2486,8 +2486,10 @@ const S = {
    *   stages 这一趟推过了几关（重打同一关不算）
    */
   trip: { loot: 0, multi: 1, stages: 0 },
-  // 饱食度 0..100。出门满，**每过一关掉 16**：第 3 关开始半饿，第 6 关全饿。
-  // 全饿不扣火力（那是 P2 的事），只收走一件事：冲刺。跑不动是能被看见的饿。
+  // 饱食度 0..100。出门满，**每过一关掉 20**：过 1 屏满饱、2-3 屏半饿、4 屏全饿。
+  // 三档**全部**接进战斗：推球力 1.00 / 0.95 / 0.86（见 bellyPower），
+  // 外加冲刺分档（满饱冲得更远、半饿原样、全饿冲不动）。
+  // 方向是"越饱越强"——「喂饱了反而软」那个反符号 2026-10-24 已经改掉。
   belly: 100,
   // 家里攒的（还没有家园，先堆在屋前当视觉证据）
   home: { loot: 0, runs: 0, lastLoot: 0 },
@@ -2501,6 +2503,10 @@ const S = {
   hover: -1,
   hoverStage: -1,
   hoverBtn: -1,         // 结算面板：0 继续 / 1 收工 / -1 没指
+  /* 测试跳关（F2）的三个格子状态：光标格 / 鼠标悬停格 / 从哪个阶段进来的。
+     jumpPrev 是"关掉面板要回到哪"—— 不记的话从 play 打开就得回 select，
+     玩家会以为"开个面板把这一趟弄丢了"。 */
+  jumpCur: 0, jumpHover: -1, jumpPrev: null,
   vignette: true,
   /* 后期合成总开关（泛光 / 分离色调 / 颗粒）。
      暗角不归它管（vignette 单独一个）—— 暗角是构图工具，
@@ -2531,6 +2537,30 @@ const KEYMAP = {
 window.addEventListener("keydown", (ev) => {
   // 非战斗阶段，方向键归界面用，不往角色身上送
   const inPlay = S.phase === "play";
+
+  /* ---- 测试跳关（F2）----
+     必须放在所有分支之前：面板打开时它要是**唯一**接收按键的地方，
+     否则方向键会同时被 select / pick 的逻辑吃掉，光标和格子对不上。 */
+  if (ev.code === "F2") { openJump(); ev.preventDefault(); return; }
+  if (S.phase === "jump") {
+    const cols = JUMP.cols, n = LEVELS.length;
+    let c = S.jumpCur;
+    if (ev.code === "ArrowLeft")       c -= 1;
+    else if (ev.code === "ArrowRight") c += 1;
+    else if (ev.code === "ArrowUp")    c -= cols;
+    else if (ev.code === "ArrowDown")  c += cols;
+    else if (ev.code === "Enter" || ev.code === "Space") {
+      jumpTo(S.jumpCur);
+      ev.preventDefault();
+      return;
+    } else if (ev.code === "Escape") { closeJump(); return; }
+    else return;
+    // 上下越界不绕圈（和挑一屏一致）：绕圈会让人以为"按到底又从头开始了"
+    if (!ev.repeat) S.jumpCur = clamp(c, 0, n - 1);
+    ev.preventDefault();
+    return;
+  }
+
   const k = KEYMAP[ev.code];
   if (k && inPlay) {
     // 只在"第一次按下"记一次边沿。浏览器按住键会不停重发 keydown，
@@ -2543,6 +2573,15 @@ window.addEventListener("keydown", (ev) => {
 
   if (ev.code === "KeyR" && (inPlay || S.phase === "clear" || S.phase === "fail")) {
     beginRun(S.stage);
+    return;
+  }
+  /* 测试跳关：[ / ] 直接上一屏 / 下一屏，连扫 27 屏不用回面板。
+     **只在 play 里给** —— clear / fail 时回车已经是"进下一关"，
+     再挂一对键会让人分不清哪个是正常推进、哪个是测试跳过。 */
+  if (inPlay && (ev.code === "BracketLeft" || ev.code === "BracketRight")) {
+    const d = ev.code === "BracketRight" ? 1 : -1;
+    jumpTo(clamp(S.stage + d, 0, LEVELS.length - 1));
+    ev.preventDefault();
     return;
   }
   if (ev.code === "Escape" && S.phase !== "select") {
@@ -2975,36 +3014,67 @@ function bellyTier(v) {
   return b < 30 ? 0 : b < 70 ? 1 : 2;      // 0 全饿 / 1 半饿 / 2 满饱
 }
 
-/* 「半饿最强」—— 全篇只有一处把肚子接进战斗数值。
+/* 饱食 → 火力。**全篇只有这一处把肚子接进战斗数值。**
  *
- * 说法很简单：**七分饱最好干活。** 吃太饱犯困，饿透了没劲。
+ * ---- 2026-10-24 改：从「半饿最强」改成「越饱越强」----
  *
- * 为什么非做不可：肚子掉一档是目前"贪一关"唯一的代价，但原来它只管
- * 两件看得见的事（跑不动、眼睛下垂）。玩家算得出来的账是"贪 = 只有坏处"，
- * 于是最优解永远是每关回家吃饭 —— 一趟连锁倍率（最多 ×2.0）就白设计了。
- * 给半饿一档火力，账才变成"贪两关火力最猛，再贪开始崩"，
- * 那才是取舍，而不是纯粹的惩罚。
+ * 原来这里是 [0.92, 1.12, 1.00]（全饿 / 半饿 / 满饱），意图是
+ * "七分饱最好干活：吃太饱犯困，饿透了没劲"。这个形状有个硬伤：
  *
- * **幅度必须小（±12% 以内）。** 它改的是球能滚多远，而 27 屏的落点、
- * 竖井、营地都是按 PUSH_BASE=620 这个基准调的。再大就不是"饿不饿"，
- * 而是"换了一张地图"—— 那种改动要在关卡数据里一起调，不能偷偷加个系数。
+ *   出门 100 → 满饱 1.00（**最弱**）
+ *   过 2 屏 68 → 半饿 1.12（**最强**）
+ *   过 5 屏 20 → 全饿 0.92
  *
- * **满饱 = 1.00，这一条不能省。** 它不是"没效果"，是这个机制的基准线：
- * 出门时肚子是满的，27 屏的落点、竖井、营地全部是按"满饱推出去多远"
- * 调出来的。给满饱一个 0.96 的"犯困"惩罚，等于把所有关卡悄悄调紧 4% ——
- * 实测就是第 1 屏的机器人直接清不完（球差一点进不了营地）。
- * 想加 punishment 也不是不行，但那是"重调 27 屏"，不是"加个系数"。
+ * 曲线是**非单调**的（平 → 升 → 降）。后果三条，都是实测出来的：
+ *   ① 玩家没办法从这条线上读出"我现在该回家了吗" ——
+ *      而它每 77 秒就弹一次（一屏 par 均值），是最频繁的那个决策；
+ *   ② **"喂饱了反而软"**：计划书里 0:20 的第一次交互就是喂饭，
+ *      喂完出门是最弱档，这个动作在数值上等于惩罚；
+ *   ③ 代价只有 −18%（1.12→0.92），而倍率收益 +25%（1.60→2.00），
+ *      算下来永远"继续" —— 于是"收工"从来没被选过，"继续/收工"
+ *      退化成每屏弹一次的确认框，答案永远是同一个。
  *
- * 所以这个机制的形状是：**满饱 = 基准，半饿 = +12%，全饿 = −8%**。
- * 够强到值得为它贪两关，又弱到不会把地图变成另一张。
+ * 现在改成单调：**满饱 1.00 > 半饿 0.95 > 全饿 0.86**。
+ * 喂饭第一次成为正收益；每多打一屏都在变弱，收工点才浮得出来。
+ * 贪的甜头全部交给连锁倍率（1+0.15n），两个机制各管一件事、不再打架。
+ *
+ * **满饱 = 1.00 这一条绝对不能动，它是基准线。**
+ * 27 屏的落点、竖井、营地全按"满饱推出去多远"（PUSH_BASE=620）调过，
+ * 给满饱任何惩罚（哪怕 0.96 的"犯困"）都等于把所有关卡悄悄调紧 ——
+ * 实测后果是第 1 屏的机器人直接清不完，球差一点进不了营地。
+ * 所以这里只往下压**饿**的两档，基准不动。
+ *
+ * 幅度同样控制在 −14% 以内：再大就不是"饿不饿"，而是"换了一张地图"，
+ * 那种改动必须连关卡数据一起调，不能在这里偷偷加系数。
  */
 function bellyPower() {
-  return [0.92, 1.12, 1.00][bellyTier()];
+  return [0.86, 0.95, 1.00][bellyTier()];
 }
 /** 饱食的三档说法。**必须给词，不能只给条** —— 一个没有刻度的条
  *  玩家只能看出"少了"，看不出"我现在是哪一档、该不该回家"。 */
 function bellyWord() {
   return ["饿着呢", "七分饱", "刚吃饱"][bellyTier()];
+}
+
+/** 每过一屏掉多少饱食。**唯一真值** —— 通关判定和结算卡副标题都读它。
+ *  原来这个 20 在两处各写一次，改一处另一处就骗人。 */
+const BELLY_PER_CLEAR = 20;
+
+/** 结算卡「继续」副标题上的力气变化。**三态，不是两态。**
+ *
+ *  第一版只写了"降一档 / 见底"两个分支，结果满饱时（100 → 80，
+ *  两边都还是满饱档）写成了"力气见底" —— 意思完全相反，
+ *  玩家会以为打完这屏就废了。
+ *
+ *  抽成函数是为了让冒烟能验**真身**，而不是验一份抄过来的副本
+ *  （项目里"同一件事存两份必然漂移"已经栽过三次）。
+ */
+function nextBellyHint(from) {
+  const cur = from === undefined ? S.belly : from;
+  const a = bellyTier(cur);
+  const b = bellyTier(Math.max(0, cur - BELLY_PER_CLEAR));
+  if (b >= a) return "力气不变";
+  return b === 0 ? "力气见底" : "力气降一档";
 }
 
 /** 关卡里冒一句话。新的直接盖掉旧的 —— 排队会在玩家已经跑远的时候冒出来 */
@@ -3246,11 +3316,20 @@ function updatePlayer(dt) {
   }
 
   // ---- 撞（K）
+  /* **冲刺只做一件事：全饿收走。** 不按时长分档，也不按冷却分档。
+     2026-10-24 试过两种加强满饱的做法，都被冒烟当场打回：
+       · dashT 0.16 → 0.21（距离 +31%）→ 第 8 / 15 / 18 屏机器人全崩（240s 超时）
+       · dashCd × 0.72（冲得更勤）    → 第 1 / 4 / 15 屏崩，问题从 3 条变 5 条
+     原因很简单：**冲刺是关卡几何的隐式输入**。27 屏的平台间距、竖井宽度、
+     营地落点是围绕"0.16 秒 × dashPow"这组数调的，动任何一项都等于偷偷改地图。
+     想加强满饱的手感，只能在**推球力**和**表现**上做，不能碰位移。
+
+     "饿"的后果仍然成立，而且是最硬的那种 —— 全饿直接没有这个动作。
+     玩家想跳过那个坑、想撞开那只壳，按 K 没反应，比任何数值都清楚。 */
   if (S.press.dash && p.dashCd <= 0) {
     if (bellyTier() === 0) {
       // 全饿跑不动。**"饿"必须有后果**，否则饱食度只是贴在图标上的一个字，
       // 玩家永远不回家，"再贪一关"就不成立。
-      // 只收走冲刺而不碰火力：火力是 P2 的数值，现在不能提前动。
       p.dashCd = 0.55;
       addText(p.x, p.y - p.h - 20, "跑不动…", "#FFC9A8", 15, 0.85);
     } else {
@@ -9963,6 +10042,175 @@ function pickHit(mx, my) {
   return -1;
 }
 
+/* ============================================================================
+   测试跳关（F2）
+   ----------------------------------------------------------------------------
+   测试期要能"想打哪屏就打哪屏"。游戏里原本唯一能选关的地方是「挑一屏」，
+   但它被 maxOpen() 锁着 —— 只能跳到已经打通的屏。想验第 23 屏的芦苇荡，
+   得先把前 22 屏打一遍，那不叫测试。
+
+   三件事：
+     ① F2 打开/关闭本面板（play / clear / fail / pick / select 都能开）
+     ② 面板里 27 格全可点，**无视解锁与存档进度**，选了立刻 beginRun
+     ③ 打的时候按 [ / ] 直接上一屏/下一屏，连扫不用回面板
+
+   **这不是玩法功能，别混进正向流程。** 它不改 progress、不写存档、
+   不发奖励（beginRun 只重置关卡级状态），所以随便点不会污染存档。
+   正式版要删的话，删掉 keydown 里那三段 + 这个块即可，不留后门。
+   ========================================================================== */
+const JUMP = {
+  /* 版式按"三行刚好把卡填满"定：格子 68 高 + 行距 14，三行占 232，
+     加抬头 96，卡高 366 —— 第一版是 388/60/10，下面空了一大块，
+     看起来像格子没画完。 */
+  x: 44, y: 118, w: 872, h: 366,
+  cols: 9, cw: 80, ch: 68, gapX: 7, gapY: 14,
+  labelW: 56, labelGap: 10,
+  gridY: 118 + 96,
+};
+
+/** 第 i 屏的格子矩形。绘制与命中共用这一份 ——
+ *  两边各算一次必然错开，表现是"点上去跳到隔壁那屏"。
+ *  挑一屏那边已经吃过一次这个亏（所以它也只留了 pickCell 一份真值）。 */
+function jumpCell(i) {
+  const col = i % JUMP.cols, row = Math.floor(i / JUMP.cols);
+  return {
+    x: JUMP.x + JUMP.labelW + JUMP.labelGap + col * (JUMP.cw + JUMP.gapX),
+    y: JUMP.gridY + row * (JUMP.ch + JUMP.gapY),
+    w: JUMP.cw, h: JUMP.ch,
+  };
+}
+
+function jumpHit(mx, my) {
+  for (let i = 0; i < LEVELS.length; i++) {
+    const c = jumpCell(i);
+    if (mx >= c.x && mx <= c.x + c.w && my >= c.y && my <= c.y + c.h) return i;
+  }
+  return -1;
+}
+
+function openJump() {
+  if (S.phase === "jump") { closeJump(); return; }
+  /* 只从这五个阶段进。别的时候开面板没意义，而且 closeJump 得有地方可回。 */
+  if (["play", "clear", "fail", "pick", "select"].indexOf(S.phase) < 0) return;
+  S.jumpPrev = S.phase;
+  S.jumpCur = clamp(S.stage, 0, LEVELS.length - 1);
+  S.jumpHover = -1;
+  S.phase = "jump";
+}
+
+function closeJump() {
+  const back = S.jumpPrev || "select";
+  S.jumpPrev = null;
+  S.jumpHover = -1;
+  /* 回 play 的前提是角色和关卡还在。从 select / pick 进来的没有 S.p，
+     硬回 play 会得到"一片空地 + 没人"—— 看起来像崩了。 */
+  S.phase = (back === "play" && S.p) ? "play" : (back === "pick" ? "pick" : "select");
+  if (S.phase === "select") { S.door.pick = -1; S.door.leaveT = 0; }
+}
+
+/** 直接开打第 i 屏。**不动 progress、不写存档** —— 这是测试工具，不是作弊码。
+ *
+ *  必须显式护住 progress：`beginRun` 里有一行
+ *  `S.progress = Math.max(S.progress, S.stage)`（正常流程"进到第 N 屏就记 N"）。
+ *  不护的话，测试时按两下 `]` 跳到第 20 屏，存档进度就真的变成 20 ——
+ *  下次从主界面进来直接掉到第 20 屏，看起来像存档被写坏了。
+ *
+ *  beginRun 自己不调 saveProgress（写盘在 pickStage / 通关判定里），
+ *  所以只要把内存值还原，盘上就一点没动。 */
+function jumpTo(i) {
+  const n = clamp(Math.round(i), 0, LEVELS.length - 1);
+  S.jumpPrev = null;
+  S.jumpHover = -1;
+  const keepProg = S.progress;
+  beginRun(n);
+  S.progress = keepProg;
+}
+
+function drawJump(g) {
+  const FONT = "'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  const K = hudSkin();
+
+  /* 全屏盖死。底下的画布可能是战场（从 play 进来），也可能是门口 ——
+     不盖死的话，漏出来的平台木条会跟格子咬在一起，27 个数字读不出来。 */
+  g.fillStyle = "rgba(8,13,17,.93)";
+  g.fillRect(0, 0, W, H);
+
+  creamCard(g, JUMP.x, JUMP.y, JUMP.w, JUMP.h, 24);
+
+  g.textAlign = "left";
+  g.textBaseline = "middle";
+  g.fillStyle = K.ink;
+  g.font = "bold 22px " + FONT;
+  g.fillText("测试跳关", JUMP.x + 28, JUMP.y + 36);
+
+  g.fillStyle = "rgba(116,98,76,.95)";
+  g.font = "12px " + FONT;
+  g.fillText("27 屏全开 · 无视解锁与存档进度 · F2 关闭 · 方向键选 · 回车开打 · [ ] 上下屏",
+             JUMP.x + 130, JUMP.y + 37);
+
+  g.strokeStyle = "rgba(150,124,92,.34)";
+  g.lineWidth = 1;
+  g.beginPath();
+  g.moveTo(JUMP.x + 28, JUMP.y + 78);
+  g.lineTo(JUMP.x + JUMP.w - 28, JUMP.y + 78);
+  g.stroke();
+
+  // 产地产地标签：每行一产地，和挑一屏的分组一致
+  for (let row = 0; row < FACTIONS.length; row++) {
+    const c = jumpCell(row * JUMP.cols);
+    g.textAlign = "right";
+    g.font = "bold 12px " + FONT;
+    g.fillStyle = "rgba(112,94,72,.95)";
+    g.fillText(FACTIONS[row].name, JUMP.x + JUMP.labelW, c.y + c.h / 2);
+  }
+
+  for (let i = 0; i < LEVELS.length; i++) {
+    const c = jumpCell(i);
+    const cur = i === S.jumpCur;
+    const hov = i === S.jumpHover;
+    const seen = !!S.best[i];
+
+    g.fillStyle = cur ? "rgba(232,149,26,.20)"
+                : hov ? "rgba(112,150,84,.22)"
+                : seen ? "rgba(248,242,228,.92)"
+                       : "rgba(240,232,216,.62)";
+    rr(g, c.x, c.y, c.w, c.h, 10);
+    g.fill();
+
+    g.lineWidth = cur ? 2.6 : 1.2;
+    g.strokeStyle = cur ? "#E8951A" : hov ? "#6E9A48" : "rgba(150,128,100,.55)";
+    rr(g, c.x + 0.6, c.y + 0.6, c.w - 1.2, c.h - 1.2, 10);
+    g.stroke();
+
+    g.textAlign = "center";
+    g.fillStyle = K.ink;
+    g.font = "bold 19px " + FONT;
+    g.fillText(String(i + 1), c.x + c.w / 2, c.y + 24);
+
+    /* 关卡名：先挤掉空格再截到 5 字。
+       数据里有「乌 鸦」这种带空格的敌人名，空格会白吃一格宽度。 */
+    const nm = String(LEVELS[i].name || "").replace(/\s/g, "");
+    g.font = "10.5px " + FONT;
+    g.fillStyle = "rgba(96,82,66,.92)";
+    g.fillText(nm.length > 5 ? nm.slice(0, 5) : nm, c.x + c.w / 2, c.y + 47);
+
+    // 已打过的那几屏挂个评级角标，一眼看出哪些验过了
+    const rk = S.best[i];
+    if (rk) {
+      g.textAlign = "right";
+      g.font = "bold 10px " + FONT;
+      g.fillStyle = RANK_COLOR[rk] || "#7a6a55";
+      g.fillText(rk, c.x + c.w - 5, c.y + 11);
+    }
+  }
+
+  g.textAlign = "center";
+  g.fillStyle = "rgba(255,248,232,.72)";
+  g.font = "bold 12px " + FONT;
+  g.fillText("点格子或按回车开打   ·   [ / ]  上一屏 / 下一屏   ·   F2 或 ESC 关掉",
+             W / 2, JUMP.y + JUMP.h + 22);
+}
+
 function openPick() {
   S.phase = "pick";
   S.p = null;
@@ -10612,7 +10860,12 @@ function tick(dt) {
         S.trip.loot += S.food;
         S.trip.stages += 1;
         S.trip.multi = Math.min(2, 1 + 0.15 * S.trip.stages);
-        S.belly = Math.max(0, S.belly - 16);
+        /* 肚子掉一档。**16 → 20（2026-10-24）** ——
+           16 的时候要过 5 屏才见底，一趟太长（≈7 分钟），
+           中途那段"火力没变化"的日子会让人麻木。
+           20 之后：过 1 屏满饱、2-3 屏半饿、4 屏全饿，
+           一趟自然收到 4-5 屏（≈6 分钟）—— 短到能重开，长到有弧线。 */
+        S.belly = Math.max(0, S.belly - BELLY_PER_CLEAR);
         const rk = rate();
         const ORD2 = { B: 1, A: 2, S: 3 };
         const idx = S.stage;
@@ -11043,7 +11296,12 @@ function render() {
   // 画在球前面 = 烟雾糊脸 —— 后者看起来像特效坏了。
   drawDust(g);
 
-  if (S.phase === "play" || S.phase === "clear" || S.phase === "fail") {
+  if (S.phase === "jump") {
+    /* 面板第一行就把整屏铺满了（见 drawJump），所以不用管下面画过什么。
+       位置必须在场景之后、drawPost 之前 —— 挪到 drawPost 后面会被
+       颗粒和暗角糊一层，27 个格子的描边全部发虚。 */
+    drawJump(g);
+  } else if (S.phase === "play" || S.phase === "clear" || S.phase === "fail") {
     // 预测线画在关卡之上、单位之下：它属于"地形信息"，不属于"角色"
     drawShocks(g);
     if (S.phase === "play") drawAim(g);
@@ -11745,10 +12003,20 @@ function render() {
 
       /* 下一关的事全塞进"继续"的副标题。
          原来卡里有一整行"2. 雪原 · 三池 · 中间一条长坡" —— 占了 24px，
-         但玩家按下去就会看到那一关，它不构成任何决策。 */
+         但玩家按下去就会看到那一关，它不构成任何决策。
+
+         ---- 2026-10-24 加"力气" ----
+         这一步是把一个**已经存在的代价**从隐形变成可见。
+         以前按"继续"其实在掉火力（每屏 −20 饱食），但卡面只报倍率，
+         玩家算的账是"继续 = 白赚 ×1.15"，于是永远继续。
+         现在两个按钮的副标题一对读就是取舍：
+             继续 → ×1.60 · 力气降一档
+             收工 → +28 果 · 吃完回满
+         这比再写一行说明文字有效 —— 说明文字没人读，按钮副标题一定被读。 */
       if (ok && !last) {
         const nx = LEVELS[S.stage + 1];
-        drawBtn(B.cont, hiCont, "继续深入", nx.name + " · ×" + nextMulti.toFixed(2), true);
+        drawBtn(B.cont, hiCont, "继续深入",
+                nx.name + " · ×" + nextMulti.toFixed(2) + " · " + nextBellyHint(), true);
       } else if (ok && last) {
         /* 最后一屏通了 —— **主按钮不再是"收工"**。
          * 原来这里写"全部通关 / 点这里收工"，按下去 = 存档归零 = 没得玩了。
@@ -11758,7 +12026,8 @@ function render() {
       } else {
         drawBtn(B.cont, hiCont, "重打本关", "R 也行", true);
       }
-      drawBtn(B.home, hov === 1, "收工回家", "+" + Math.round(S.trip.loot * S.trip.multi) + " 果", false);
+      drawBtn(B.home, hov === 1, "收工回家",
+              "+" + Math.round(S.trip.loot * S.trip.multi) + " 果 · 吃完回满", false);
 
       /* ---- 提示行 ----
          它是"整个画面"的热键，不是卡片内容 —— 所以放卡片**外面**。
@@ -11769,7 +12038,7 @@ function render() {
       g.font = "bold 12px " + FONT;
       g.fillText(!ok ? "回车 / 点击  重打   ·   E  收工回家   ·   ESC 回选人"
                : last ? "回车 / 点击  挑一屏   ·   E  收工回家   ·   ESC 回选人"
-                      : "回车 / 点击  继续   ·   E  收工回家   ·   ESC 回选人",
+                      : "回车 / 点击  继续   ·   E  收工（回满力气）   ·   ESC 回选人",
                  cx, cardY + cardH + 22);
     }
   } else {
@@ -11828,6 +12097,8 @@ function toLocal(ev) {
 }
 
 function onCanvasMove(loc: any): void {
+  // 测试跳关面板是模态的：它在的时候别让下面的 select / pick / 结算按钮跟着亮
+  if (S.phase === "jump") { S.jumpHover = jumpHit(loc.x, loc.y); return; }
   if (S.phase === "select") S.hover = hitSelect(loc.x, loc.y);
   if (S.phase === "pick") S.hoverStage = pickHit(loc.x, loc.y);
   // 结算面板：指着按钮时不推进倒计时 —— 他正在读，别替他做决定
@@ -11838,6 +12109,11 @@ function onCanvasMove(loc: any): void {
 }
 
 function onCanvasDown(loc: any): void {
+  if (S.phase === "jump") {
+    const i = jumpHit(loc.x, loc.y);
+    if (i >= 0) jumpTo(i);
+    return;
+  }
   if (S.phase === "select") {
     const i = hitSelect(loc.x, loc.y);
     if (i >= 0) pickHero(i);
@@ -12078,6 +12354,9 @@ export const GROVE: any = {
   curStage, curGoal, loadLevel, rampAt, nextLevel, saveProgress,
   hitSelect, pickHero, MOODS, DOOR_SLOTS, VOICE,
   goHome, bellyTier, bellyPower, bellyWord, sayLine, finishSay, settleBtns, inRect,
+  /* 饱食的两个真值：每屏掉多少、下一屏的力气变化怎么说。
+     导出是为了让冒烟验真身，不是验副本。 */
+  BELLY_PER_CLEAR, nextBellyHint,
   recordClear, readHomeSave, FROM_HOME,
   /* 解锁节奏与分章几何：冒烟要能直接问"第 20 屏属于哪个产地""这屏送谁"。
      问不出来的话，只能靠截图目测，而截图看不出边界到底在 9 还是 10。 */
@@ -12086,6 +12365,10 @@ export const GROVE: any = {
   // 锁着的点不动、全通后进得去"
   openPick, pickStage, pickCell, pickHit, drawPick, allDone, maxOpen,
   PICK, FACTIONS, RANK_COLOR,
+  /* 测试跳关（F2）。导出是为了**能自动验证**："27 格都点得到、
+     点第 N 格真的进第 N 屏、跳关不写存档"这三条只能靠代码问，截图看不出来。
+     顺手也给截图脚本用：grove-shot3 可以直接 jumpTo(22) 拍芦苇荡。 */
+  openJump, closeJump, jumpTo, jumpCell, jumpHit, drawJump, JUMP,
   /* 右上目标卡的矩形与内部基线。**冒烟必须能读到它** ——
      "卡片不许压住任何落脚面"这条要拿真实几何去量，写死 672/182 的那一次
      就是断言在验旧位置、界面已经压住台子。 */

@@ -85,6 +85,23 @@ if (!args.length) { console.log("给个 tag，例如 s1 / clear:3"); process.exi
         S.hoverStage = -1;
         G.openPick();
       }, s === undefined ? "" : s);
+    } else if (kind === "jump") {
+      /* 测试跳关面板（F2）。`jump` = 存档只通到第 3 屏、光标停在当前屏；
+         `jump:12` = 光标挪到第 13 格。
+         故意把 progress 压到 2 —— 面板的全部意义就是"没解锁也能点"，
+         拿全通的存档来拍，看不出这个功能到底做没做。 */
+      await page.evaluate((cur) => {
+        const G = window.GROVE, S = G.S;
+        const n = G.LEVELS.length;
+        S.progress = 2;
+        for (let i = 0; i < n; i++) {
+          S.best[i] = i < 5 ? ["S", "A", "B"][i % 3] : null;
+        }
+        G._start(0, 5);
+        G.openJump();
+        if (cur !== null) S.jumpCur = Number(cur);
+        S.jumpHover = 13;
+      }, s === undefined ? null : s);
     } else {
       /* `s8` = 第 8 屏带默认那只（尖耳猫）；`s8#3` = 第 8 屏带第 3 只（长耳兔）。
          加这个后缀是为了**用画面证明"换宠物真的换了"** ——

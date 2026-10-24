@@ -1835,16 +1835,16 @@ console.log("\n=== 24a. 一关 = 一顿饭：肚子掉一档、倍率涨一档 =
 
   forceClear(P, S, 40);
   eq(S.phase, "clear", "清干净了");
-  eq(S.belly, 84, "过一关掉 16（100 -> 84）");
+  eq(S.belly, 80, "过一关掉 20（100 -> 80）");
   near(S.trip.multi, 1.15, 0.001, "过一关倍率 +0.15");
   eq(S.trip.stages, 1, "这一趟推过 1 关");
   // 收成 = 场上收的 40 + 清场奖励 3
   eq(S.trip.loot, 43, "这一趟攒下 43（收成 40 + 清场 3）");
 
   P.nextLevel();
-  eq(S.belly, 84, "进下一关不会回血（饿是跨关的）");
+  eq(S.belly, 80, "进下一关不会回血（饿是跨关的）");
   forceClear(P, S, 40);
-  eq(S.belly, 68, "再过一关 84 -> 68（进入半饿）");
+  eq(S.belly, 60, "再过一关 80 -> 60（进入半饿）");
   eq(P.bellyTier(), 1, "68 是半饿档");
   near(S.trip.multi, 1.30, 0.001, "第二关倍率 1.30");
   eq(S.trip.loot, 86, "两关累计 43 + 43");
@@ -2232,7 +2232,68 @@ console.log("\n=== 27. 挑一屏 / 全通存档语义 ===");
   P.resetRun();
 }
 
-console.log("\n=== 28. 三目标 / 半饿最强 ===");
+console.log("\n=== 27b. 测试跳关（F2 面板 / [ ] 上下屏）===");
+{
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+  const N = P.LEVELS.length;
+
+  /* ① 27 格几何：都在画布内、中心点命中自己、两两不重叠。
+     "点上去跳到隔壁那屏"是这类面板最典型的 bug，而它只能靠几何断言抓 ——
+     截图看不出 1px 的偏移，玩家的手指看得出。 */
+  let outBox = 0, miss = 0, overlap = 0;
+  for (let i = 0; i < N; i++) {
+    const a = P.jumpCell(i);
+    if (a.x < 0 || a.y < 0 || a.x + a.w > 960 || a.y + a.h > 600) outBox++;
+    if (P.jumpHit(a.x + a.w / 2, a.y + a.h / 2) !== i) miss++;
+    for (let j = i + 1; j < N; j++) {
+      const b = P.jumpCell(j);
+      if (a.x < b.x + b.w && b.x < a.x + a.w &&
+          a.y < b.y + b.h && b.y < a.y + a.h) overlap++;
+    }
+  }
+  ok(outBox === 0, "27 格全在画布内", "出界 " + outBox + " 格");
+  ok(miss === 0, "每格中心点都命中自己", "错位 " + miss + " 格");
+  ok(overlap === 0, "27 格两两不重叠", "重叠 " + overlap + " 对");
+
+  /* ② **无视解锁 —— 这是这个功能的全部意义。**
+     存档进度停在 0，也要能一步进第 23 屏；否则"想验芦苇荡先把前 22 屏打一遍"
+     就不叫测试。 */
+  S.progress = 0;
+  P.jumpTo(22);
+  eq(S.stage, 22, "progress=0 也能直接跳第 23 屏（无视解锁）");
+  eq(S.phase, "play", "跳完立刻在战斗里");
+
+  /* ③ 不污染存档。beginRun 里有一行 `progress = max(progress, stage)`，
+     不显式护住的话，测试时按两下 `]` 就把存档写到第 20 屏 ——
+     下次从主界面进来直接掉到第 20 屏，看起来像存档坏了。 */
+  eq(S.progress, 0, "跳关不推进 progress（存档没被测试工具写坏）");
+  eq(S.trip.stages, 0, "跳关不算一趟的关数");
+  eq(S.trip.multi, 1, "跳关不动倍率");
+
+  /* ④ 面板进出。从 play 进必须回 play，从 select 进必须回 select ——
+     "回错地方"的表现是黑屏（S.p 已清空却回到 play），不是报错。 */
+  P._start(0, 3);
+  P.openJump();
+  eq(S.phase, "jump", "openJump 进面板");
+  P.closeJump();
+  eq(S.phase, "play", "从 play 打开 → 关掉回 play");
+  ok(!!S.p, "回来时角色还在（不是黑屏）");
+
+  S.phase = "select"; S.p = null;
+  P.openJump();
+  P.closeJump();
+  eq(S.phase, "select", "从 select 打开 → 关掉回 select（不能硬回 play）");
+
+  /* ⑤ F2 是开关：面板开着再按一次 = 关掉 */
+  P.openJump();
+  P.openJump();
+  ok(S.phase !== "jump", "再按一次 F2 关掉面板", "phase=" + S.phase);
+
+  P.resetRun();
+}
+
+console.log("\n=== 28. 三目标 / 越饱越强 ===");
 {
   const sb = boot();
   const P = sb.GROVE, S = P.S;
@@ -2250,7 +2311,7 @@ console.log("\n=== 28. 三目标 / 半饿最强 ===");
   S.stat.made = st.par.made + 3;
   eq(P.rate(), "B", "两个都没达标 = B");
 
-  /* ② 半饿最强：三档推球力的顺序必须是 满饱 < 半饿，且 全饿 < 满饱。
+  /* ② 越饱越强：三档推球力的顺序必须是 满饱 > 半饿 > 全饿。
      **不能写成"三档相等"** —— 那就等于这个机制没做。
      也不能让半饿比满饱只高一点点的同时全饿还比满饱高（顺序会反）。 */
   const pw = {};
@@ -2258,11 +2319,21 @@ console.log("\n=== 28. 三目标 / 半饿最强 ===");
     S.belly = v;
     pw[name] = P.bellyPower();
   }
-  ok(pw.half > pw.full, "半饿比满饱推得更远", pw.half + " > " + pw.full);
-  ok(pw.full > pw.hungry, "满饱比全饿推得更远", pw.full + " > " + pw.hungry);
-  ok(pw.half / pw.full < 1.25 && pw.half / pw.full > 1.02,
-     "半饿的加成在 2%~25% 之间（再大就不是取舍，是换了张地图）",
-     (pw.half / pw.full).toFixed(3));
+  ok(pw.full > pw.half, "满饱比半饿推得更远", pw.full + " > " + pw.half);
+  ok(pw.half > pw.hungry, "半饿比全饿推得更远", pw.half + " > " + pw.hungry);
+  ok(pw.hungry / pw.full < 0.94 && pw.hungry / pw.full > 0.80,
+     "全饿的降幅在 6%~20% 之间（再大就不是取舍，是换了张地图）",
+     (pw.hungry / pw.full).toFixed(3));
+
+  /* ②b 结算卡副标题的"力气"三态。**必须验真身，不是抄一份逻辑再验。**
+     第一版把它写成两态：满饱时（100 → 80，两边都还是满饱档）判成"力气见底"，
+     意思完全反了 —— 玩家会以为打完这屏就废了。
+     而它只影响按钮上的一句副标题，不跑断言根本没人发现。 */
+  eq(P.BELLY_PER_CLEAR, 20, "每屏掉 20（唯一真值，通关判定和副标题共用）");
+  eq(P.nextBellyHint(100), "力气不变", "满饱打下一屏：力气不变（100→80 都还满饱）");
+  eq(P.nextBellyHint(85), "力气降一档", "满饱边缘：降一档（85→65 掉进半饿）");
+  eq(P.nextBellyHint(45), "力气见底", "半饿打下一屏：见底（45→25 掉进全饿）");
+  eq(P.nextBellyHint(10), "力气不变", "已经全饿：再打也不会更弱，别吓人");
 
   /* ③ 三档必须有词。只有条没有字，玩家读不出自己现在算哪一档。 */
   S.belly = 10; const w0 = P.bellyWord();
@@ -2274,7 +2345,7 @@ console.log("\n=== 28. 三目标 / 半饿最强 ===");
   /* ④ 推球力真的乘上去了 —— 不是加了个没人读的系数。
      做法和 §3 完全一致：造一颗球、把人贴到左边、推一帧、读 vx。
      **只比倍数不比绝对值**：绝对值会被 PUSH_BASE 一改就红，
-     而这条断言要守的是"半饿 > 满饱"，不是"620 这个数"。 */
+     而这条断言要守的是"满饱 > 半饿"，不是"620 这个数"。 */
   const pushAt = (belly) => {
     P._start(0, 6);
     S.belly = belly;
@@ -2289,10 +2360,10 @@ console.log("\n=== 28. 三目标 / 半饿最强 ===");
     return Math.abs(b.vx);
   };
   const vHalf = pushAt(50), vFull = pushAt(100), vHungry = pushAt(10);
-  ok(vHalf > vFull * 1.02, "半饿推出去的球真的更快（实测）",
-     vHalf.toFixed(0) + " vs 满饱 " + vFull.toFixed(0));
-  ok(vFull > vHungry, "满饱比全饿快（实测）",
-     vFull.toFixed(0) + " vs 全饿 " + vHungry.toFixed(0));
+  ok(vFull > vHalf * 1.02, "满饱推出去的球真的更快（实测）",
+     vFull.toFixed(0) + " vs 半饿 " + vHalf.toFixed(0));
+  ok(vHalf > vHungry, "半饿比全饿快（实测）",
+     vHalf.toFixed(0) + " vs 全饿 " + vHungry.toFixed(0));
 }
 
 

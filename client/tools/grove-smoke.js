@@ -505,15 +505,24 @@ function gapsAt(P, y) {
   return out;
 }
 
-/** 两层缺口能同时通过的那一段 = 竖井 */
+/** 两层缺口能同时通过的那一段 = 竖井
+ *
+ *  **取最宽的那一段，不是第一个碰上的那一段。**
+ *  这是被第 20 屏（浮萍台）逼出来的：那一屏的台面是一排浮萍小方块，
+ *  350 层左端的缺口和 462 层第一个踏脚位只错开 30px —— 而右侧有一条
+ *  104px 的真通道。返回"第一个交集"时会拿到那个 30px 的装饰缝，
+ *  判成"竖井太窄"，但球其实从右边畅通无阻地掉下去。
+ *  取最宽 = 和球自己找路的行为一致（它也走最宽那条）。
+ */
 function shaftOf(P, ya, yb) {
+  let best = null;
   for (const a of gapsAt(P, ya)) {
     for (const b of gapsAt(P, yb)) {
       const l = Math.max(a.l, b.l), r = Math.min(a.r, b.r);
-      if (r > l) return { l, r, w: r - l, x: (l + r) / 2 };
+      if (r > l && (!best || r - l > best.w)) best = { l, r, w: r - l, x: (l + r) / 2 };
     }
   }
-  return null;
+  return best;
 }
 
 console.log("\n=== 11. 八关几何：每关都得能下到地面、推得到营地 ===");
@@ -586,7 +595,11 @@ console.log("\n=== 11. 八关几何：每关都得能下到地面、推得到营
       const hp0 = S.stumps.map(s => s.hp);
       for (const s of S.stumps) s.hp = 0;
       let hit = null;
-      const layers = [248, 350, 462];
+      /* **地面必须算进来。** 原来只扫 248/350/462 三层，是因为 1~8 关每屏都有一条
+         坡落在营地门口，球滑下来就进袋。但 27 屏里有 17 屏没有坡 —— 玩家最自然的
+         做法就是走到地面上，把地上的球往营地推。漏掉地面这一层，会把
+         "地面上明明能推"的关判成死关（泥沼那几屏全被误报）。 */
+      const layers = [P.GROUND_Y, 248, 350, 462];
       for (const y of layers) {
         if (hit) break;
         for (let x = P.WALL_L + 20; x <= P.WALL_R - 20 && !hit; x += 6) {
@@ -659,8 +672,17 @@ console.log("\n=== 12. 目标：限球 / 连锁 / 落袋 ===");
   const cands = [];
   P.LEVELS.forEach((st, i) => {
     if (st.goal !== "chain") return;
-    const sg = st.plats.filter(q => q.kind !== "ground").sort((a, b) => b.w - a.w)[0];
-    if (sg) cands.push({ i, seg: sg });
+    /* **只挑"干净"的球道：这一段上没有木桩、下面没有坑。**
+       原来只管"最宽的那一段"，在 8 屏时够用。27 屏之后连锁关变成 7 个，
+       最宽的一段是树桩林那条 794 长的台 —— 而那条台上立着三根桩，
+       球推出 60px 就撞桩停下，maxHolds 只记到 1，测试假失败。
+       这一段量的是"撞人能不能攒 holds"，不是"能不能绕开桩"，所以要挑干净的。 */
+    const clean = st.plats
+      .filter(q => q.kind !== "ground")
+      .filter(q => !(st.stumps || []).some(s => s.x + s.w / 2 > q.x - 30 && s.x - s.w / 2 < q.x + q.w + 30))
+      .filter(q => !(st.pits || []).some(p => p.x + p.w > q.x && p.x < q.x + q.w))
+      .sort((a, b) => b.w - a.w)[0];
+    if (clean) cands.push({ i, seg: clean });
   });
   cands.sort((a, b) => b.seg.w - a.seg.w);
   ok(cands.length > 0, "关卡线里至少有一关是连锁关");
@@ -1061,11 +1083,17 @@ console.log("\n=== 16. 推关流程 ===");
   eq(S.stage, 3, "失败重打本关，不往前推");
   eq(S.phase, "play", "重打直接进战斗");
 
-  // 最后一关通关回选人
+  /* 最后一关通关 → 挑一屏，不是回门口。
+   *
+   * 原来是 `goHome(true)`，那条路会把 progress 拍回 0：27 屏打完，存档变
+   * "第 1 关"，重进游戏从第一屏开始 —— 玩家看到的就是"通关了怎么又重来"。
+   * 现在的出口是挑一屏：27 格全亮，想刷评级就刷，想收工按 E。
+   * 断言改成验这个**新契约**，而不是把旧行为固化下来。 */
   P._start(0, P.LEVELS.length - 1);
   S.phase = "clear";
   P.nextLevel();
-  eq(S.phase, "select", "最后一关通关后回选人界面");
+  eq(S.phase, "pick", "最后一关通关后进挑一屏（不是回选人、不是回第 1 关）");
+  eq(S.stage, P.LEVELS.length - 1, "挑一屏时 stage 还停在最后一屏，不会被改成 0");
 }
 
 /* ---------- 17. 八关布局：每关都得是"另一个地方" ---------- */
@@ -2116,6 +2144,155 @@ console.log("\n=== 26. 地面层两端开口 / 上层反弹 ===");
   ok(S.snowDepth === 0 && S.footprints.length === 0,
     "换关清雪和脚印（雪是关卡级状态）",
     "depth=" + S.snowDepth + " prints=" + S.footprints.length);
+}
+
+console.log("\n=== 27. 挑一屏 / 全通存档语义 ===");
+{
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+  const N = P.LEVELS.length;
+
+  /* ① 27 格必须全部排得进面板、互不重叠、都在画布内。
+     这是"3 产地 × 9 屏"这个版式的硬约束：格子多一格或宽一格，
+     第 27 关就会压到面板外面，而截图里只是"右边缺一块"，看不出来。 */
+  const cells = [];
+  for (let i = 0; i < N; i++) cells.push(P.pickCell(i));
+  ok(cells.length === N, "每屏都有格子", "n=" + cells.length);
+
+  let out = 0, overlap = 0;
+  for (let i = 0; i < N; i++) {
+    const a = cells[i];
+    if (a.x < 0 || a.y < 0 || a.x + a.w > 960 || a.y + a.h > 600) out++;
+    for (let j = i + 1; j < N; j++) {
+      const b = cells[j];
+      const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+      const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+      if (ox > 0 && oy > 0) overlap++;
+    }
+  }
+  ok(out === 0, "27 个格子全部在画布内", "越界 " + out);
+  ok(overlap === 0, "格子之间不重叠", "重叠 " + overlap);
+
+  /* ② 面板本身也得在画布内 —— 格子在内但面板出界，边框会被切掉一条。 */
+  ok(P.PICK.x >= 0 && P.PICK.y >= 0 &&
+     P.PICK.x + P.PICK.w <= 960 && P.PICK.y + P.PICK.h <= 600,
+     "面板在画布内",
+     P.PICK.w + "×" + P.PICK.h + " @ " + P.PICK.x + "," + P.PICK.y);
+
+  /* ③ 命中测试和格子几何是同一份 —— 抓格子中心必须命中自己。 */
+  let hitBad = 0;
+  for (let i = 0; i < N; i++) {
+    const c = cells[i];
+    if (P.pickHit(c.x + c.w / 2, c.y + c.h / 2) !== i) hitBad++;
+  }
+  ok(hitBad === 0, "每个格子中心点命中自己（绘制与判定同源）", "错 " + hitBad);
+
+  /* ④ 锁：progress = 3 时，第 4 屏之后（索引 >3）都点不动。
+     注意上界是**闭区间** —— progress=0 时第 1 屏可玩，这是"一关没打"的常态。 */
+  S.progress = 3;
+  ok(P.maxOpen() === 3, "maxOpen 跟着 progress 走", "maxOpen=" + P.maxOpen());
+  P.openPick();
+  eq(S.phase, "pick", "openPick 进挑一屏");
+  const before = S.stage;
+  P.pickStage(9);
+  eq(S.stage, before, "锁着的屏点了没反应（stage 不动）");
+  P.pickStage(2);
+  eq(S.stage, 2, "已通的屏点得进去");
+  eq(S.phase, "play", "选完就开打");
+
+  /* ⑤ 选老关不许把进度退回去 —— "只进不退"是这套存档的唯一规则。 */
+  S.progress = 12;
+  P.pickStage(1);
+  ok(S.progress === 12, "回头打第 2 屏，progress 停在 12 不退", String(S.progress));
+
+  /* ⑥ 全通判定：progress 顶到 length 就是全通，且 maxOpen 不会越界到 27。 */
+  S.progress = N;
+  ok(P.allDone(), "progress === LEVELS.length 就是全通");
+  ok(P.maxOpen() === N - 1, "全通时 maxOpen 收到最后一屏", String(P.maxOpen()));
+
+  /* ⑦ 全通后 `goHome(true)` 不许把进度清零 —— 这是那句
+     "通关了怎么又重新开始了"的原始病根。 */
+  S.progress = N;
+  P.goHome(true);
+  ok(S.progress >= N, "全通后收工不把进度拍回 0", String(S.progress));
+
+  /* ⑧ 评级数组也是全通的一个来源：progress 落后但 27 格评级都在，也算全通。 */
+  S.progress = 0;
+  const keep = S.best.slice();
+  for (let i = 0; i < N; i++) S.best[i] = "B";
+  ok(P.allDone(), "27 格评级全在 = 全通（不只看 progress）");
+  for (let i = 0; i < N; i++) S.best[i] = keep[i];
+  ok(!P.allDone(), "清掉评级就退回未全通");
+
+  /* ⑨ 结算卡的「继续」在最后一屏要去挑一屏，不是去收工。 */
+  P._start(0, N - 1);
+  S.phase = "clear";
+  P.nextLevel();
+  eq(S.phase, "pick", "最后一屏通关 → 挑一屏");
+  P.resetRun();
+}
+
+console.log("\n=== 28. 三目标 / 半饿最强 ===");
+{
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+
+  /* ① 评级 = 主目标 + 两个可选条件（用时 / 用球）。
+     这条断言的价值在于**把口径钉死**：改成"只有两个条件"或者
+     "三个条件都算"之前，先得看见这里写的是什么。 */
+  P._start(0, 5);
+  const st = P.LEVELS[5];
+  S.phase = "clear";
+  S.playT = st.par.time - 1;  S.stat.made = st.par.made;
+  eq(P.rate(), "S", "两个条件都达标 = S");
+  S.playT = st.par.time + 10;
+  eq(P.rate(), "A", "只差用时 = A");
+  S.stat.made = st.par.made + 3;
+  eq(P.rate(), "B", "两个都没达标 = B");
+
+  /* ② 半饿最强：三档推球力的顺序必须是 满饱 < 半饿，且 全饿 < 满饱。
+     **不能写成"三档相等"** —— 那就等于这个机制没做。
+     也不能让半饿比满饱只高一点点的同时全饿还比满饱高（顺序会反）。 */
+  const pw = {};
+  for (const [name, v] of [["hungry", 10], ["half", 50], ["full", 100]]) {
+    S.belly = v;
+    pw[name] = P.bellyPower();
+  }
+  ok(pw.half > pw.full, "半饿比满饱推得更远", pw.half + " > " + pw.full);
+  ok(pw.full > pw.hungry, "满饱比全饿推得更远", pw.full + " > " + pw.hungry);
+  ok(pw.half / pw.full < 1.25 && pw.half / pw.full > 1.02,
+     "半饿的加成在 2%~25% 之间（再大就不是取舍，是换了张地图）",
+     (pw.half / pw.full).toFixed(3));
+
+  /* ③ 三档必须有词。只有条没有字，玩家读不出自己现在算哪一档。 */
+  S.belly = 10; const w0 = P.bellyWord();
+  S.belly = 50; const w1 = P.bellyWord();
+  S.belly = 100; const w2 = P.bellyWord();
+  ok(w0 && w1 && w2 && w0 !== w1 && w1 !== w2,
+     "三档肚子各有各的说法", [w0, w1, w2].join(" / "));
+
+  /* ④ 推球力真的乘上去了 —— 不是加了个没人读的系数。
+     做法和 §3 完全一致：造一颗球、把人贴到左边、推一帧、读 vx。
+     **只比倍数不比绝对值**：绝对值会被 PUSH_BASE 一改就红，
+     而这条断言要守的是"半饿 > 满饱"，不是"620 这个数"。 */
+  const pushAt = (belly) => {
+    P._start(0, 6);
+    S.belly = belly;
+    const f = S.foes.find(x => x.kind === "walk");
+    P.coatFoe(f, 3);
+    const b = S.balls[0];
+    b.x = 400; b.y = 462; b.vx = 0;
+    S.p.x = b.x - 40; S.p.y = b.y; S.p.vx = 0;
+    P._press("right", true);
+    P.tick(1 / 60);
+    P._press("right", false);
+    return Math.abs(b.vx);
+  };
+  const vHalf = pushAt(50), vFull = pushAt(100), vHungry = pushAt(10);
+  ok(vHalf > vFull * 1.02, "半饿推出去的球真的更快（实测）",
+     vHalf.toFixed(0) + " vs 满饱 " + vFull.toFixed(0));
+  ok(vFull > vHungry, "满饱比全饿快（实测）",
+     vFull.toFixed(0) + " vs 全饿 " + vHungry.toFixed(0));
 }
 
 console.log("\n" + "=".repeat(56));

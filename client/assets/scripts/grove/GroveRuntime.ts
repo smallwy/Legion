@@ -612,6 +612,79 @@ const THEMES = {
     wood: "#8E80CA", wood2: "#6A5E9E", wood3: "#C8BEF2",
     accent: "#FFE066",
   },
+
+  /* ==========================================================================
+     产地 2 · 枯木坡（wither1 / wither2 / wither3）
+     --------------------------------------------------------------------------
+     **一个产地一套色族，三套是同一条线上的三段深度，不是三个不相干的景。**
+     色相走"金黄 → 赭红 → 灰褐"，明度一路降、色温一路冷 ——
+     玩家读到的是"越往里走天越晚"，而不是"换了个游戏"。
+
+     每套仍然守住那条硬规则：**天空 / 地面 / 木台三档色相必须分开**。
+     cliff、slope、tower 三关都栽在"整屏同一色相、只靠明度差"上，
+     草地一压暗（GRASS_DIM 0.80）明度差也没了，就成了一张渐变板。
+
+     枯木坡的地面刻意**带绿**（#9DA85A 这种"黄里剩一点绿"）：
+     纯黄地面配金黄天空 = 同一块颜色，球和敌人在上面直接消失。
+     ========================================================================== */
+  wither1: {
+    sky1: "#E8B44C", sky2: "#FFE7B8", cloud: "#FFF6E4",
+    hill1: "#BFA36A", hill2: "#DCC48E",
+    grass: "#9DA85A", grass2: "#C4CC80",
+    dirt: "#7A5A36", dirt2: "#4E3822",
+    wood: "#C08A4E", wood2: "#84562C", wood3: "#E8BC84",
+    accent: "#FFD35E",
+  },
+  wither2: {
+    sky1: "#C97A3E", sky2: "#FFC98A", cloud: "#FFEBD6",
+    hill1: "#A87A5A", hill2: "#C99E78",
+    grass: "#8A8A4A", grass2: "#B0AC66",
+    dirt: "#6A4528", dirt2: "#42291A",
+    wood: "#B87A44", wood2: "#7C4C28", wood3: "#DEA870",
+    accent: "#FFB040",
+  },
+  wither3: {
+    /* 枯灰 —— 深秋阴天。天空往**冷灰蓝**走，地面往灰褐压。
+       这一套配"枯木顶"那几屏：越高越荒，光是散的。 */
+    sky1: "#8A8CA0", sky2: "#D6D8E2", cloud: "#EFF1F6",
+    hill1: "#7E7C86", hill2: "#A6A4AE",
+    grass: "#8A8468", grass2: "#AEA88C",
+    dirt: "#5E5040", dirt2: "#3C3228",
+    wood: "#A8825E", wood2: "#745238", wood3: "#D0AC84",
+    accent: "#D8D24E",
+  },
+
+  /* ==========================================================================
+     产地 3 · 泥沼（marsh1 / marsh2 / marsh3）
+     --------------------------------------------------------------------------
+     色相走"青雾 → 墨绿 → 沼气紫绿"，水汽一层比一层重。
+     marsh3 是唯一天空偏紫的产地收尾，**所以地面必须偏绿**：
+     紫天空 + 紫地面在压暗之后就只剩一种颜色了（这一课付过三次学费）。
+     ========================================================================== */
+  marsh1: {
+    sky1: "#7FBFA8", sky2: "#D8F2E4", cloud: "#EFFBF4",
+    hill1: "#7FA890", hill2: "#A8C8B4",
+    grass: "#6E9A5A", grass2: "#96C07E",
+    dirt: "#4E5A3A", dirt2: "#333C26",
+    wood: "#A88A5E", wood2: "#745C38", wood3: "#D2B084",
+    accent: "#B6F06E",
+  },
+  marsh2: {
+    sky1: "#2E6B5E", sky2: "#8AC0AC", cloud: "#CDE8DC",
+    hill1: "#2F5E52", hill2: "#4E8272",
+    grass: "#3E6E4A", grass2: "#6A9A68",
+    dirt: "#3A4230", dirt2: "#242A1E",
+    wood: "#8E7A56", wood2: "#5E5034", wood3: "#BCA47C",
+    accent: "#8FF0B0",
+  },
+  marsh3: {
+    sky1: "#3E3462", sky2: "#7E6EA8", cloud: "#C0B4DC",
+    hill1: "#3A3A5A", hill2: "#585878",
+    grass: "#2E5E4E", grass2: "#4E8A6E",
+    dirt: "#33303E", dirt2: "#1F1E28",
+    wood: "#8A7A62", wood2: "#5C503C", wood3: "#B8A886",
+    accent: "#A8FF7E",
+  },
 };
 
 /* ----------------------------------------------------------------------------
@@ -1262,6 +1335,857 @@ const LEVELS = [
     ],
     spawn: { x: 70, y: GROUND_Y },
   },
+
+  /* ==========================================================================
+     产地 1 收尾 · 苔原哨站（第 9 关）
+     --------------------------------------------------------------------------
+     三块台面收窄成"哨站"轮廓，只打硬仗。
+     前 8 关的每一关末波已经各有一个 BOSS，这一屏是把 BOSS 当主菜。
+     ========================================================================== */
+  {
+    id: "tundra_boss", name: "雪线哨站", sub: "产地收尾 · 三波硬仗",
+    note: "苔原走到头了。中间一条通天的空槽，BOSS 就站在那里",
+    theme: "tundra",
+    goal: "clear", par: { time: 90, made: 12 },
+    /* **BOSS 屏必须有一条通天空槽。**
+       原来 350 是整条 180..760，462 断在 420..540 —— BOSS 站 460，
+       正好被压在 350 台面底下那个 120 宽的窄缝里。玩家的活动空间、
+       推球的通道、BOSS 的体型全挤在这条缝里，机器人 240 秒只清掉 2 只
+       （173 颗球全都卡在缝里崩掉）。第 8 屏（双塔）之所以能过，
+       就是因为 462 和 350 在 340..600 是**对齐**的 —— 一条从上到下的空槽。
+       现在照那个做法：两层都在 420..600 断开。 */
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 394, h: 20, kind: "ledge" },   // 26..420
+      // 右段收在 830，不是 880。**离右墙必须留 ≥ 100**：
+      // 营地就压在 852..934 的地面上，台面收到 880 时球从台沿掉下去的
+      // 空间只有 54px —— 球会在"撞右墙弹回 → 又被台沿接住"之间来回抖，
+      // 永远掉不进营地（第 11、12、18 屏全栽在同一个数上）。
+      { x: 600,    y: 462, w: 230, h: 20, kind: "ledge" },   // 600..830
+      { x: 100,    y: 350, w: 320, h: 20, kind: "ledge" },   // 100..420
+      { x: 600,    y: 350, w: 230, h: 20, kind: "ledge" },   // 600..830
+      { x: WALL_L, y: 248, w: 274, h: 20, kind: "ledge" },   // 26..300 左塔顶
+    ],
+    // 两个坑都在左半边的地面上，右半边 300..830 是干净的竞技场。
+    // 坑只对球是危险、人踩的是实地 —— 坑压在 BOSS 出生点上，
+    // 等于"球滚过去先掉坑、BOSS 在坑里站着"，那台 BOSS 就对球免疫。
+    pits: [
+      { x: 60,  y: GROUND_Y, w: 90, kind: "mud"  },
+      { x: 200, y: GROUND_Y, w: 90, kind: "fire" },
+    ],
+    stumps: [{ x: 700, y: 462, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 150, y: 462 },
+        { foe: "bug",  x: 300, y: 462 },
+        { foe: "bug",  x: 680, y: 462 },
+        { foe: "boar", x: 780, y: 462 },
+      ],
+      [
+        { foe: "bug",  x: 180, y: 350 },
+        { foe: "bug",  x: 340, y: 350 },
+        { foe: "boar", x: 700, y: 350 },
+        { foe: "crow", x: 510, y: 300, fly: 1 },
+      ],
+      [{ foe: "boss", x: 510, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 80, y: GROUND_Y },
+  },
+
+  /* ==========================================================================
+     产地 2 · 枯木坡（第 10~18 关）
+     ========================================================================== */
+
+  /* ---------------- 10 ---------------- */
+  {
+    id: "wither_gate", name: "枯木坡口", sub: "缓坡 · 双层对望",
+    note: "一条 230 长的坡从 462 滑到地面。坡口两边各一块台，球从坡上下来正好穿过火坑",
+    theme: "wither1",
+    goal: "collect", collect: 12, par: { time: 70, made: 9 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 274, h: 20, kind: "ledge" },   // 26..300
+      { x: 560,    y: 462, w: 240, h: 20, kind: "ledge" },   // 560..800
+      { x: 160,    y: 350, w: 440, h: 20, kind: "ledge" },   // 160..600
+    ],
+    // w=230 ≥ 2.4·94。坡跨 300..530，**右段台面必须从 530 之后起**，
+    // 否则坡从台底钻出来，只露一个尖（第 2 关踩过这个坑）。
+    ramps: [{ x: 300, w: 230, yL: 462, yR: GROUND_Y }],
+    pits: [
+      { x: 60,  y: GROUND_Y, w: 90, kind: "mud"  },
+      // 火坑横在坡脚到营地之间 —— 收成关，火坑给双份，这是"顺路贪一口"的设计。
+      // 右端收到 710：桩子站在 760（738..782），原来火坑到 750 会把桩**包进坑里**。
+      { x: 620, y: GROUND_Y, w: 90, kind: "fire" },
+    ],
+    stumps: [{ x: 760, y: 462, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 100, y: 462 },
+        { foe: "bug",  x: 200, y: 462 },
+        { foe: "bug",  x: 640, y: 462 },
+        { foe: "bug",  x: 250, y: 350 },
+      ],
+      [
+        { foe: "boar", x: 400, y: 350 },
+        { foe: "bug",  x: 520, y: 350 },
+        { foe: "bug",  x: 700, y: 462 },
+        { foe: "crow", x: 480, y: 300, fly: 1 },
+      ],
+      [{ foe: "boss", x: 820, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 90, y: GROUND_Y },
+  },
+
+  /* ---------------- 11 ----------------
+     没有坡、没有竖井，全是**错位**的长台。
+     这一关考的是"在哪一层推"，不是"怎么上下"。 */
+  {
+    id: "wither_logs", name: "倒木阵", sub: "三段错位长台",
+    note: "三根倒下的长木错着叠了三层，没有坡 —— 全靠推和跳",
+    theme: "wither1",
+    goal: "chain", chain: 3, par: { time: 75, made: 9 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 224, h: 20, kind: "ledge" },   // 26..250
+      { x: 300,    y: 462, w: 260, h: 20, kind: "ledge" },   // 300..560
+      { x: 610,    y: 462, w: 210, h: 20, kind: "ledge" },   // 610..820
+      { x: 120,    y: 350, w: 300, h: 20, kind: "ledge" },   // 120..420
+      { x: 470,    y: 350, w: 300, h: 20, kind: "ledge" },   // 470..770
+      { x: 250,    y: 248, w: 310, h: 20, kind: "ledge" },   // 250..560
+    ],
+    pits: [
+      { x: 180, y: GROUND_Y, w: 90,  kind: "mud"  },
+      { x: 520, y: GROUND_Y, w: 100, kind: "fire" },
+    ],
+    // 倒木阵里的"倒木"：一根横在右段台上的桩，逼玩家先清路再推球。
+    // 位置 678..722，避开了两个坑（180..270 / 520..620）和右端落点（844..910）。
+    stumps: [{ x: 700, y: 462, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 100, y: 462 },
+        { foe: "bug",  x: 380, y: 462 },
+        { foe: "bug",  x: 460, y: 462 },
+        { foe: "bug",  x: 700, y: 462 },
+      ],
+      [
+        { foe: "bug",  x: 200, y: 350 },
+        { foe: "bug",  x: 320, y: 350 },
+        { foe: "boar", x: 640, y: 350 },
+        { foe: "bug",  x: 400, y: 248 },
+        { foe: "crow", x: 600, y: 300, fly: 1 },
+      ],
+      [{ foe: "boss", x: 480, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 70, y: GROUND_Y },
+  },
+
+  /* ---------------- 12 ----------------
+     唯一一关把"桩子"当主角：一条通到底的长台 + 四根挡路的桩。
+     球会被弹回来，所以先清桩再推球。 */
+  {
+    id: "wither_stumps", name: "树桩林", sub: "一根长台 · 四根桩",
+    note: "462 一整条通到底，路上立了四根桩。球撞上去会弹回来，先清桩",
+    theme: "wither2",
+    goal: "chain", chain: 3, par: { time: 80, made: 10 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 794, h: 20, kind: "ledge" },   // 26..820 一整条
+      { x: 150,    y: 350, w: 350, h: 20, kind: "ledge" },   // 150..500
+    ],
+    pits: [
+      { x: 200, y: GROUND_Y, w: 100, kind: "mud"   },
+      { x: 520, y: GROUND_Y, w: 80,  kind: "water" },
+      { x: 640, y: GROUND_Y, w: 80,  kind: "fire"  },
+    ],
+    // 桩子的 x 必须和所有出生点错开 ≥ 50：桩半宽 22 + 敌人半宽 28，
+    // 重合的话 stepBody 会每帧把它顶到桩外侧同一个位置，表现是"开局钉死不动"。
+    // 四根桩的包围盒（±22）也逐根对过三个坑：98..142 / 328..372 / 458..502 / 738..782。
+    stumps: [
+      { x: 120, y: 462, w: 44, h: 78, hp: 2 },
+      { x: 350, y: 462, w: 44, h: 78, hp: 2 },
+      { x: 480, y: 462, w: 44, h: 78, hp: 2 },
+      { x: 760, y: 462, w: 44, h: 78, hp: 2 },
+    ],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 120, y: 462 },
+        { foe: "bug",  x: 380, y: 462 },
+        { foe: "bug",  x: 540, y: 462 },
+        { foe: "bug",  x: 200, y: 350 },
+      ],
+      [
+        { foe: "boar", x: 700, y: 462 },
+        { foe: "bug",  x: 860, y: 462 },
+        { foe: "bug",  x: 300, y: 350 },
+        { foe: "crow", x: 520, y: 300, fly: 1 },
+      ],
+      [{ foe: "boss", x: 500, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 60, y: GROUND_Y },
+  },
+
+  /* ---------------- 13 ---------------- */
+  {
+    id: "wither_gap", name: "断口", sub: "中央真空 · 两道传送",
+    note: "中间整块是空的，靠两道传送门在断口之间来回。球滚过去会直接掉下去",
+    theme: "wither2",
+    goal: "limit", ballLimit: 7, par: { time: 70, made: 9 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 354, h: 20, kind: "ledge" },   // 26..380
+      { x: 620,    y: 462, w: 210, h: 20, kind: "ledge" },   // 620..830
+      { x: 100,    y: 350, w: 200, h: 20, kind: "ledge" },
+      { x: 700,    y: 350, w: 130, h: 20, kind: "ledge" },   // 700..830
+      { x: WALL_L, y: 248, w: 194, h: 20, kind: "ledge" },
+      { x: 760,    y: 248, w: 120, h: 20, kind: "ledge" },
+    ],
+    portals: [
+      { id: "a", x: 364, y: 462, link: "b" },
+      { id: "b", x: 636, y: 462, link: "a" },
+    ],
+    pits: [
+      { x: 420, y: GROUND_Y, w: 120, kind: "water" },
+      { x: 240, y: GROUND_Y, w: 90,  kind: "mud"   },
+      { x: 640, y: GROUND_Y, w: 80,  kind: "fire"  },
+    ],
+    // 桩子立在被传送洞分开的左半段上（178..222），三个坑和右端落点都不碰。
+    stumps: [{ x: 200, y: 462, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 120, y: 462 },
+        { foe: "bug",  x: 260, y: 462 },
+        { foe: "bug",  x: 700, y: 462 },
+        { foe: "bug",  x: 820, y: 462 },
+      ],
+      [
+        { foe: "bug",  x: 180, y: 350 },
+        { foe: "bug",  x: 760, y: 350 },
+        { foe: "boar", x: 140, y: 350 },
+        { foe: "crow", x: 500, y: 300, fly: 1 },
+      ],
+      // BOSS 站 780：它原来的 480 正好在水塘 420..540 里，球过不去。
+      [{ foe: "boss", x: 780, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 60, y: GROUND_Y },
+  },
+
+  /* ---------------- 14 ----------------
+     全八关里落差最大的一屏：五段窄台，最窄 140。
+     没有一段够球横向滚两秒，打法是"推到边缘、让它往下砸"。 */
+  {
+    id: "wither_cliff", name: "断崖路", sub: "五段窄台 · 落差四层",
+    note: "没有一寸长台。每一段都得推着球往下走，掉哪层算哪层",
+    theme: "wither3",
+    goal: "nohit", par: { time: 75, made: 10 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 154, h: 20, kind: "ledge" },   // 26..180
+      { x: 560,    y: 462, w: 140, h: 20, kind: "ledge" },   // 560..700
+      { x: 220,    y: 350, w: 200, h: 20, kind: "ledge" },   // 220..420
+      { x: 740,    y: 350, w: 140, h: 20, kind: "ledge" },   // 740..880
+      { x: 460,    y: 248, w: 220, h: 20, kind: "ledge" },   // 460..680
+      { x: WALL_L, y: 156, w: 174, h: 20, kind: "ledge" },   // 26..200 最高点
+    ],
+    pits: [
+      { x: 320, y: GROUND_Y, w: 100, kind: "mud"  },
+      { x: 720, y: GROUND_Y, w: 90,  kind: "fire" },
+    ],
+    stumps: [{ x: 620, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 80,  y: 462 },
+        { foe: "bug",  x: 620, y: 462 },
+        { foe: "bug",  x: 300, y: 350 },
+        { foe: "bug",  x: 100, y: 156 },
+      ],
+      [
+        { foe: "bug",  x: 800, y: 350 },
+        { foe: "boar", x: 520, y: 248 },
+        { foe: "bug",  x: 600, y: 248 },
+        { foe: "crow", x: 340, y: 300, fly: 1 },
+      ],
+      [{ foe: "boss", x: 460, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 70, y: GROUND_Y },
+  },
+
+  /* ---------------- 15 ----------------
+     三朵菇。地面 → 462 → 248 一条完整的上升链。 */
+  {
+    id: "wither_shrooms", name: "弹菇田", sub: "三朵菇 · 连弹上三层",
+    note: "地面那朵把球弹上 462，462 那朵再弹到 248。想上顶得连弹两次",
+    theme: "wither3",
+    goal: "bank", bank: 4, par: { time: 85, made: 10 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: 120,    y: 462, w: 660, h: 20, kind: "ledge" },   // 120..780
+      { x: 260,    y: 350, w: 380, h: 20, kind: "ledge" },   // 260..640
+      { x: 340,    y: 248, w: 260, h: 20, kind: "ledge" },   // 340..600
+    ],
+    // 弹菇不摆在"落点 → 营地"那条路上，否则球被弹起来飞过营地，落袋关变死关。
+    // 200 在地面（弹 229 越过 462），520 站在 462（再弹越过 248）。
+    bouncers: [
+      { x: 200, y: GROUND_Y },
+      { x: 520, y: 462 },
+    ],
+    pits: [
+      { x: 60,  y: GROUND_Y, w: 90,  kind: "mud"  },
+      { x: 820, y: GROUND_Y, w: 80,  kind: "fire" },
+    ],
+    // 一根桩立在长台左段（278..322）：不是挡路，是给"要不要先清桩"一个决断点。
+    // 三个弹菇的落点都不在它上面，别把桩摆到菇的弹道里 —— 球会被顶下来。
+    stumps: [{ x: 300, y: 462, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 200, y: 462 },
+        { foe: "bug",  x: 360, y: 462 },
+        { foe: "bug",  x: 640, y: 462 },
+        { foe: "bug",  x: 400, y: 350 },
+      ],
+      [
+        { foe: "bug",  x: 480, y: 350 },
+        { foe: "bug",  x: 400, y: 248 },
+        { foe: "boar", x: 560, y: 248 },
+        { foe: "crow", x: 300, y: 380, fly: 1 },
+      ],
+      [{ foe: "boss", x: 780, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 90, y: GROUND_Y },
+  },
+
+  /* ---------------- 16 ----------------
+     两条渠把地面切开，只能踩着上面的窄桥过去。
+     桥面故意做成三截不等长 —— 等长会读成"三条一样的板"。 */
+  {
+    id: "wither_trench", name: "深渠", sub: "两条深渠 · 三座窄桥",
+    note: "地面被两条渠切开，只能踩着上面的窄桥过去。掉进渠里就没了",
+    theme: "wither2",
+    goal: "intact", par: { time: 75, made: 10 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 274, h: 20, kind: "ledge" },   // 26..300
+      { x: 390,    y: 462, w: 170, h: 20, kind: "ledge" },   // 390..560
+      { x: 650,    y: 462, w: 180, h: 20, kind: "ledge" },   // 650..830
+      { x: WALL_L, y: 350, w: 174, h: 20, kind: "ledge" },
+      { x: 740,    y: 350, w: 90,  h: 20, kind: "ledge" },   // 740..830
+    ],
+    pits: [
+      { x: 300, y: GROUND_Y, w: 90, kind: "water" },
+      { x: 560, y: GROUND_Y, w: 90, kind: "mud"   },
+      { x: 700, y: GROUND_Y, w: 80, kind: "fire"  },
+    ],
+    stumps: [{ x: 200, y: 462, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 120, y: 462 },
+        { foe: "bug",  x: 440, y: 462 },
+        { foe: "bug",  x: 720, y: 462 },
+        { foe: "bug",  x: 120, y: 350 },
+      ],
+      [
+        { foe: "bug",  x: 800, y: 350 },
+        { foe: "boar", x: 480, y: 462 },
+        { foe: "bug",  x: 780, y: 462 },
+        { foe: "crow", x: 600, y: 300, fly: 1 },
+      ],
+      [{ foe: "boss", x: 800, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 70, y: GROUND_Y },
+  },
+
+  /* ---------------- 17 ----------------
+     五层（含 156）收窄塔。这是全 27 屏最高的一屏。 */
+  {
+    id: "wither_top", name: "枯木顶", sub: "五层收窄 · 产地最高点",
+    note: "一层比一层窄，156 的顶只够站一个人。推球要在最宽那层做",
+    theme: "wither3",
+    goal: "collect", collect: 14, par: { time: 90, made: 11 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 534, h: 20, kind: "ledge" },   // 26..560
+      { x: 200,    y: 350, w: 560, h: 20, kind: "ledge" },   // 200..760
+      { x: 320,    y: 248, w: 320, h: 20, kind: "ledge" },   // 320..640
+      { x: 400,    y: 156, w: 160, h: 20, kind: "ledge" },   // 400..560
+    ],
+    pits: [
+      // 火坑收到 660：桩子立在 350 层 700（738..782 是它的包围盒）。
+      // 原来火坑到 720，把桩的左边包进去了 —— "桩站在火坑里"。
+      { x: 580, y: GROUND_Y, w: 80,  kind: "fire" },
+      { x: 160, y: GROUND_Y, w: 90,  kind: "mud"  },
+    ],
+    stumps: [{ x: 700, y: 350, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 120, y: 462 },
+        { foe: "bug",  x: 300, y: 462 },
+        { foe: "bug",  x: 460, y: 462 },
+        { foe: "bug",  x: 300, y: 350 },
+      ],
+      [
+        { foe: "bug",  x: 500, y: 350 },
+        { foe: "bug",  x: 420, y: 248 },
+        { foe: "boar", x: 520, y: 248 },
+        { foe: "bug",  x: 480, y: 156 },
+        { foe: "crow", x: 260, y: 300, fly: 1 },
+      ],
+      [{ foe: "boss", x: 520, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 70, y: GROUND_Y },
+  },
+
+  /* ---------------- 18 ---------------- */
+  {
+    id: "wither_boss", name: "老根", sub: "产地收尾 · 两根老桩",
+    note: "枯木坡的根。一整条长台，两根老桩挡在中间",
+    theme: "wither2",
+    goal: "clear", par: { time: 95, made: 12 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 794, h: 20, kind: "ledge" },   // 26..820
+      { x: 300,    y: 350, w: 340, h: 20, kind: "ledge" },   // 300..640
+    ],
+    pits: [
+      { x: 240, y: GROUND_Y, w: 90, kind: "mud"  },
+      { x: 600, y: GROUND_Y, w: 90, kind: "fire" },
+    ],
+    // 两根老桩：400 在长台左半边，760 在右半边靠台沿（738..782）。
+    // 760 不能往左挪到 700 —— 会和火坑 600..690 的右边界咬上。
+    stumps: [
+      { x: 400, y: 462, w: 44, h: 78, hp: 3 },
+      { x: 760, y: 462, w: 44, h: 78, hp: 3 },
+    ],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 140, y: 462 },
+        { foe: "bug",  x: 540, y: 462 },
+        { foe: "boar", x: 820, y: 462 },
+        { foe: "bug",  x: 420, y: 350 },
+      ],
+      [
+        { foe: "bug",  x: 600, y: 350 },
+        { foe: "crow", x: 480, y: 300, fly: 1 },
+        { foe: "bug",  x: 200, y: 462 },
+      ],
+      [{ foe: "boss", x: 520, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 80, y: GROUND_Y },
+  },
+
+  /* ==========================================================================
+     产地 3 · 泥沼（第 19~27 关）
+     --------------------------------------------------------------------------
+     这一产地的主球道**降到 350**（前两个产地是 462）。
+     台面矮一层 = 球滚得近、掉得快，水塘代替火坑成为主要威胁。
+     ========================================================================== */
+
+  /* ---------------- 19 ---------------- */
+  {
+    id: "marsh_edge", name: "沼泽边", sub: "低台 · 三个水塘",
+    note: "台面比别处矮一层（350 就是主球道）。水塘多，球掉下去直接没",
+    theme: "marsh1",
+    goal: "collect", collect: 12, par: { time: 70, made: 9 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 174, h: 20, kind: "ledge" },   // 26..200 爬升踏脚
+      { x: 480,    y: 462, w: 140, h: 20, kind: "ledge" },   // 480..620 爬升踏脚
+      { x: WALL_L, y: 350, w: 274, h: 20, kind: "ledge" },   // 26..300 主球道
+      { x: 470,    y: 350, w: 230, h: 20, kind: "ledge" },   // 470..700
+      { x: 760,    y: 350, w: 70,  h: 20, kind: "ledge" },   // 760..830
+      { x: 150,    y: 248, w: 370, h: 20, kind: "ledge" },   // 150..520
+    ],
+    /* **两块 462 踏脚不是装饰，是这一屏唯一的上层通路。**
+       350 离地面 206，跳跃只有 150 —— 一步上不去。原来这屏一块 462 台面都没有，
+       玩家站在地面上跳一下顶到 350 台底，永远上不去；机器人 240 秒造了 0 颗球。
+       现在：地面 → 462 踏脚 → 350 主球道 → 248 顶台，四级都通。
+       踏脚放在 26..200 和 480..620，正好卡在 350 两段台面的下方。 */
+    pits: [
+      { x: 60,  y: GROUND_Y, w: 90,  kind: "water" },
+      { x: 300, y: GROUND_Y, w: 90,  kind: "mud"   },
+      { x: 620, y: GROUND_Y, w: 100, kind: "fire"  },
+    ],
+    // 桩立左段（253..297），离 350 层那只 x=220 的敌人 55 —— 桩半宽 22 + 人半宽 28，
+    // 低于 50 就会把出生点顶到桩外侧同一个位置，表现是"开局钉死不动"。
+    stumps: [{ x: 275, y: 350, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 100, y: 350 },
+        { foe: "bug",  x: 220, y: 350 },
+        { foe: "bug",  x: 560, y: 350 },
+        { foe: "bug",  x: 700, y: 350 },
+      ],
+      [
+        { foe: "bug",  x: 300, y: 248 },
+        { foe: "boar", x: 420, y: 248 },
+        { foe: "bug",  x: 800, y: 350 },
+        { foe: "crow", x: 400, y: 280, fly: 1 },
+      ],
+      [{ foe: "boss", x: 420, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 90, y: GROUND_Y },
+  },
+
+  /* ---------------- 20 ---------------- */
+  {
+    id: "marsh_pads", name: "浮萍台", sub: "五块碎台 · 一路跳过去",
+    note: "462 被切成五块，每块只够放一颗球。跳错一块就掉进水里",
+    theme: "marsh1",
+    goal: "chain", chain: 3, par: { time: 80, made: 10 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 114, h: 20, kind: "ledge" },   // 26..140
+      { x: 200,    y: 462, w: 120, h: 20, kind: "ledge" },   // 200..320
+      { x: 380,    y: 462, w: 120, h: 20, kind: "ledge" },   // 380..500
+      { x: 560,    y: 462, w: 120, h: 20, kind: "ledge" },   // 560..680
+      { x: 740,    y: 462, w: 90,  h: 20, kind: "ledge" },   // 740..830
+      { x: 160,    y: 350, w: 260, h: 20, kind: "ledge" },   // 160..420
+      { x: 500,    y: 350, w: 260, h: 20, kind: "ledge" },   // 500..760
+    ],
+    // 三个坑，不是五个。**坑的密度要低于跳跃能力**：
+    // 四个 60 宽的坑排开时，机器人会在"跳过第三个、落进第四个"之间循环。
+    // 三个坑都对准浮萍之间的缝 —— 这样"跳错一块就掉进水里"才是真的。
+    pits: [
+      { x: 140, y: GROUND_Y, w: 60, kind: "mud"   },
+      { x: 320, y: GROUND_Y, w: 60, kind: "water" },
+      { x: 680, y: GROUND_Y, w: 60, kind: "fire"  },
+    ],
+    stumps: [{ x: 250, y: 350, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 80,  y: 462 },
+        { foe: "bug",  x: 260, y: 462 },
+        { foe: "bug",  x: 440, y: 462 },
+        { foe: "bug",  x: 800, y: 462 },
+      ],
+      [
+        { foe: "bug",  x: 240, y: 350 },
+        { foe: "bug",  x: 600, y: 350 },
+        { foe: "boar", x: 700, y: 350 },
+        { foe: "crow", x: 460, y: 300, fly: 1 },
+      ],
+      [{ foe: "boss", x: 460, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 60, y: GROUND_Y },
+  },
+
+  /* ---------------- 21 ---------------- */
+  {
+    id: "marsh_gas", name: "沼气沟", sub: "中央长沟 · 两道传送",
+    note: "中间 320 的沟，两头的传送门接得住。雾浓，看得近",
+    theme: "marsh2",
+    goal: "chain", chain: 3, par: { time: 70, made: 9 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 254, h: 20, kind: "ledge" },   // 26..280
+      { x: 700,    y: 462, w: 130, h: 20, kind: "ledge" },   // 700..830
+      // 350 从左端 26..180 挪到 260..420：原来它正压在 462 左台（26..280）头上，
+      // 中间只留 112 的缝，两只虫就站在缝里 —— 机器人被夹着挨打，240 秒造 0 颗球。
+      { x: 260,    y: 350, w: 160, h: 20, kind: "ledge" },   // 260..420
+      { x: 700,    y: 350, w: 130, h: 20, kind: "ledge" },   // 700..830
+      { x: 60,     y: 248, w: 300, h: 20, kind: "ledge" },
+      { x: 620,    y: 248, w: 240, h: 20, kind: "ledge" },
+    ],
+    portals: [
+      { id: "a", x: 264, y: 462, link: "b" },
+      { id: "b", x: 716, y: 462, link: "a" },
+    ],
+    pits: [
+      { x: 330, y: GROUND_Y, w: 120, kind: "water" },
+      { x: 560, y: GROUND_Y, w: 90,  kind: "mud"   },
+      { x: 700, y: GROUND_Y, w: 80,  kind: "fire"  },
+    ],
+    // 桩立在左段台面上（128..172）：地面那一带被三个坑占满了，
+    // 而竖井落点是 304..676 —— 桩不能进那个区间。
+    stumps: [{ x: 150, y: 462, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 100, y: 462 },
+        { foe: "bug",  x: 200, y: 462 },
+        { foe: "bug",  x: 760, y: 462 },
+        { foe: "bug",  x: 800, y: 462 },
+      ],
+      [
+        { foe: "bug",  x: 120, y: 350 },
+        { foe: "bug",  x: 800, y: 350 },
+        { foe: "boar", x: 680, y: 248 },
+        { foe: "crow", x: 460, y: 300, fly: 1 },
+      ],
+      [{ foe: "boss", x: 480, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 60, y: GROUND_Y },
+  },
+
+  /* ---------------- 22 ---------------- */
+  {
+    id: "marsh_slope", name: "泥潭坡", sub: "一条长坡 · 坡上排着人",
+    note: "整关就一条 230 长的坡，坡上排着一排人。先把球冻实再推",
+    theme: "marsh2",
+    goal: "limit", ballLimit: 8, par: { time: 80, made: 10 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 234, h: 20, kind: "ledge" },   // 26..260
+      { x: 620,    y: 462, w: 210, h: 20, kind: "ledge" },   // 620..830
+      { x: 520,    y: 350, w: 280, h: 20, kind: "ledge" },   // 520..800
+    ],
+    // 坡跨 260..490。右段台面从 620 起，中间 130px 是坡脚的空地 ——
+    // 球滑到底还有地方滚，不会顶死在台边。
+    ramps: [{ x: 260, w: 230, yL: 462, yR: GROUND_Y }],
+    pits: [
+      { x: 100, y: GROUND_Y, w: 90,  kind: "mud"   },
+      // 水塘收到 620、火坑从 700 起：桩立在 350 层 660（638..682），
+      // 两个坑的边界都得给它让开 —— 坑是按 x 轴判重叠的，不看高度。
+      { x: 520, y: GROUND_Y, w: 100, kind: "water" },
+      { x: 700, y: GROUND_Y, w: 90,  kind: "fire"  },
+    ],
+    stumps: [{ x: 660, y: 350, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 300, y: 470 },
+        { foe: "bug",  x: 360, y: 488 },
+        { foe: "bug",  x: 420, y: 506 },
+        { foe: "bug",  x: 100, y: 462 },
+      ],
+      [
+        { foe: "bug",  x: 480, y: 524 },
+        { foe: "boar", x: 700, y: 462 },
+        { foe: "bug",  x: 660, y: 462 },
+        { foe: "crow", x: 400, y: 300, fly: 1 },
+      ],
+      // BOSS 站 400：它的 800 原来在火坑 700..790 的边缘上，会被判成"站在坑里"。
+      [{ foe: "boss", x: 400, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 80, y: GROUND_Y },
+  },
+
+  /* ---------------- 23 ---------------- */
+  {
+    id: "marsh_reeds", name: "芦苇荡", sub: "高低竖井 · 五层错落",
+    note: "从地面一层层往上跳，最上面的 156 只够站一只脚",
+    theme: "marsh3",
+    goal: "nohit", par: { time: 85, made: 11 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 194, h: 20, kind: "ledge" },   // 26..220
+      { x: 300,    y: 462, w: 200, h: 20, kind: "ledge" },   // 300..500
+      { x: 580,    y: 462, w: 200, h: 20, kind: "ledge" },   // 580..780
+      { x: WALL_L, y: 350, w: 154, h: 20, kind: "ledge" },
+      { x: 620,    y: 350, w: 210, h: 20, kind: "ledge" },   // 620..830
+      { x: WALL_L, y: 248, w: 274, h: 20, kind: "ledge" },
+      { x: 480,    y: 156, w: 220, h: 20, kind: "ledge" },
+    ],
+    pits: [
+      { x: 240, y: GROUND_Y, w: 100, kind: "water" },
+      { x: 520, y: GROUND_Y, w: 90,  kind: "mud"   },
+      { x: 660, y: GROUND_Y, w: 80,  kind: "fire"  },
+    ],
+    // 桩立在营地门口的地面上（778..822）。火坑到 740 为止；
+    // 竖井落点是 854..910 —— 桩不能压到那里，否则球砸下来先撞桩。
+    stumps: [{ x: 800, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 100, y: 462 },
+        { foe: "bug",  x: 360, y: 462 },
+        { foe: "bug",  x: 660, y: 462 },
+        { foe: "bug",  x: 100, y: 350 },
+      ],
+      [
+        { foe: "bug",  x: 720, y: 350 },
+        { foe: "bug",  x: 160, y: 248 },
+        { foe: "boar", x: 240, y: 248 },
+        { foe: "bug",  x: 560, y: 156 },
+        { foe: "crow", x: 400, y: 380, fly: 1 },
+      ],
+      [{ foe: "boss", x: 420, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 70, y: GROUND_Y },
+  },
+
+  /* ---------------- 24 ---------------- */
+  {
+    id: "marsh_pools", name: "双泥塘", sub: "两个大水塘 · 中间一条窄路",
+    note: "地面被两个塘子占了大半，只有中间一条窄路能走",
+    theme: "marsh1",
+    goal: "intact", par: { time: 75, made: 10 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 314, h: 20, kind: "ledge" },   // 26..340
+      { x: 600,    y: 462, w: 230, h: 20, kind: "ledge" },   // 600..830
+      { x: 150,    y: 350, w: 300, h: 20, kind: "ledge" },   // 150..450
+      { x: 560,    y: 350, w: 240, h: 20, kind: "ledge" },   // 560..800
+    ],
+    // 两坑之间必须留一条**能走的路**。上一版摆成 340..600 连成一片，
+    // 地面被彻底切断 —— 人过不去，机器人直接卡死。
+    pits: [
+      { x: 330, y: GROUND_Y, w: 110, kind: "water" },
+      { x: 520, y: GROUND_Y, w: 80,  kind: "mud"   },
+      { x: 660, y: GROUND_Y, w: 80,  kind: "fire"  },
+    ],
+    stumps: [{ x: 220, y: 462, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 120, y: 462 },
+        { foe: "bug",  x: 280, y: 462 },
+        { foe: "bug",  x: 700, y: 462 },
+        { foe: "bug",  x: 300, y: 350 },
+      ],
+      [
+        { foe: "bug",  x: 640, y: 350 },
+        { foe: "boar", x: 740, y: 350 },
+        { foe: "bug",  x: 820, y: 462 },
+        { foe: "crow", x: 460, y: 300, fly: 1 },
+      ],
+      [{ foe: "boss", x: 500, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 90, y: GROUND_Y },
+  },
+
+  /* ---------------- 25 ---------------- */
+  {
+    id: "marsh_bridge", name: "烂木桥", sub: "三截桥 · 断口在两截之间",
+    note: "三截桥各留一个断口，掉下去就是水",
+    theme: "marsh2",
+    goal: "collect", collect: 13, par: { time: 80, made: 10 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 174, h: 20, kind: "ledge" },   // 26..200
+      { x: 380,    y: 462, w: 180, h: 20, kind: "ledge" },   // 380..560
+      { x: 740,    y: 462, w: 90,  h: 20, kind: "ledge" },   // 740..830
+      { x: WALL_L, y: 350, w: 154, h: 20, kind: "ledge" },
+      { x: 560,    y: 350, w: 180, h: 20, kind: "ledge" },
+    ],
+    /* **地面中段要有两个火坑，一边一个。**
+       原来只有右边 620..700 一个 —— 球从桥上掉到 550 一带就两头都去不了
+       （往右够得着但中间隔着泥塘，往左是水），实测 124 颗球全崩在 x=550。
+       火坑在两端，中间任何一个位置往任一边推都有结局。 */
+    pits: [
+      { x: 80,  y: GROUND_Y, w: 90, kind: "fire"  },
+      { x: 300, y: GROUND_Y, w: 90, kind: "water" },
+      { x: 460, y: GROUND_Y, w: 80, kind: "mud"   },
+      { x: 620, y: GROUND_Y, w: 80, kind: "fire"  },
+    ],
+    // 桩立在中间那截桥面（398..442）。原来摆在 260 的地面上，
+    // 一头扎进水塘 200..310 里，另一头正堵着竖井落点 224..356。
+    stumps: [{ x: 420, y: 462, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 80,  y: 462 },
+        { foe: "bug",  x: 440, y: 462 },
+        { foe: "bug",  x: 800, y: 462 },
+        { foe: "bug",  x: 100, y: 350 },
+      ],
+      [
+        { foe: "bug",  x: 640, y: 350 },
+        { foe: "boar", x: 460, y: 462 },
+        { foe: "bug",  x: 520, y: 462 },
+        { foe: "crow", x: 340, y: 300, fly: 1 },
+      ],
+      [{ foe: "boss", x: 580, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 60, y: GROUND_Y },
+  },
+
+  /* ---------------- 26 ---------------- */
+  {
+    id: "marsh_deep", name: "泥沼深", sub: "深井 · 四层错落",
+    note: "中央一大块真空，两边的塔错着开，最下面那层只到 240",
+    theme: "marsh3",
+    goal: "chain", chain: 2, par: { time: 85, made: 11 },
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 214, h: 20, kind: "ledge" },   // 26..240
+      { x: 660,    y: 462, w: 170, h: 20, kind: "ledge" },   // 660..830
+      { x: WALL_L, y: 350, w: 274, h: 20, kind: "ledge" },   // 26..300
+      { x: 620,    y: 350, w: 210, h: 20, kind: "ledge" },   // 620..830
+      { x: 100,    y: 248, w: 300, h: 20, kind: "ledge" },   // 100..400
+      { x: 560,    y: 248, w: 260, h: 20, kind: "ledge" },   // 560..820
+      { x: 260,    y: 156, w: 260, h: 20, kind: "ledge" },   // 260..520 顶
+    ],
+    pits: [
+      { x: 320, y: GROUND_Y, w: 140, kind: "water" },
+      { x: 540, y: GROUND_Y, w: 90,  kind: "mud"   },
+      { x: 700, y: GROUND_Y, w: 90,  kind: "fire"  },
+    ],
+    // 桩立在营地门口（798..842）。火坑到 790 为止 —— 差 8px，是量过的。
+    stumps: [{ x: 820, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 100, y: 462 },
+        { foe: "bug",  x: 200, y: 462 },
+        { foe: "bug",  x: 740, y: 462 },
+        { foe: "bug",  x: 800, y: 462 },
+      ],
+      [
+        { foe: "bug",  x: 140, y: 350 },
+        { foe: "bug",  x: 760, y: 350 },
+        { foe: "bug",  x: 300, y: 248 },
+        { foe: "boar", x: 400, y: 156 },
+        { foe: "crow", x: 500, y: 320, fly: 1 },
+      ],
+      [{ foe: "boss", x: 480, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 60, y: GROUND_Y },
+  },
+
+  /* ---------------- 27 ---------------- */
+  {
+    id: "marsh_boss", name: "沼气王", sub: "产地收尾 · 中央水池",
+    note: "泥沼的最后一屏。中间一个水池，两边的台子对称收着",
+    theme: "marsh3",
+    goal: "clear", par: { time: 100, made: 13 },
+    /* 同第 9 屏：**BOSS 屏要有一条通天空槽**。
+       原来 350 是整条 200..760，BOSS 站 470 —— 被压在台面底下那个 220 宽的
+       缝里，玩家的活动空间、推球通道全挤在这儿。现在 350 也在 360..580 断开，
+       和 462 的缺口上下对齐，BOSS 站在正中间的空槽里。 */
+    plats: [
+      { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+      { x: WALL_L, y: 462, w: 334, h: 20, kind: "ledge" },   // 26..360
+      { x: 580,    y: 462, w: 250, h: 20, kind: "ledge" },   // 580..830
+      { x: 200,    y: 350, w: 160, h: 20, kind: "ledge" },   // 200..360
+      { x: 580,    y: 350, w: 230, h: 20, kind: "ledge" },   // 580..810
+    ],
+    // 水池居中偏左，左右各补一个泥塘和一个火坑 —— 最终 BOSS 屏也得给"烧双份"这条路。
+    // 三个坑都在 40..380 之间，BOSS 的空槽 360..580 和它右边的营地通道都是干净的。
+    pits: [
+      { x: 60,  y: GROUND_Y, w: 80, kind: "water" },
+      { x: 170, y: GROUND_Y, w: 80, kind: "mud"   },
+      { x: 290, y: GROUND_Y, w: 80, kind: "fire"  },
+    ],
+    // 一根桩立在右段台面（678..722）。左段 26..360 被三个坑占满了 x 区间 ——
+    // 坑是按 x 轴判重叠的、不看高度，桩摆上去就会被判成"站在坑里"。
+    stumps: [{ x: 700, y: 462, w: 44, h: 78, hp: 2 }],
+    camp: { x: 852, y: GROUND_Y, w: 82 },
+    waves: [
+      [
+        { foe: "bug",  x: 120, y: 462 },
+        { foe: "bug",  x: 260, y: 462 },
+        { foe: "boar", x: 700, y: 462 },
+        { foe: "bug",  x: 300, y: 350 },
+      ],
+      [
+        { foe: "bug",  x: 650, y: 350 },
+        { foe: "crow", x: 460, y: 300, fly: 1 },
+      ],
+      [{ foe: "boss", x: 470, y: GROUND_Y, lv: 5 }],
+    ],
+    spawn: { x: 80, y: GROUND_Y },
+  },
 ];
 
 /* ============================================================================
@@ -1439,9 +2363,25 @@ function rampAt(x) {
    ========================================================================== */
 
 const S = {
-  phase: "select",      // select(选人) | play | clear | fail —— 没有选关这一站，是推关
+  /* select(选人) | pick(挑一屏) | play | clear | fail
+   *
+   * **「推关」和「选关」并存，不是二选一。** 主线仍然是推关：通关直接往下走，
+   * 不弹列表（弹了人就开始挑着打，"这一趟"的连续感就断了）。
+   * 选关只在三个地方出现：① 从门口选人时主动点「挑一屏重打」；
+   * ② 27 屏全通后从主界面进来（这时没有"下一个没通的关"可推）；
+   * ③ 通关最后一屏之后 —— 那一步原本直接把人送回第一屏，等于游戏结束。 */
+  phase: "select",
   stage: 0,             // 当前关卡索引
-  progress: 0,          // 推到第几关（存档用，通关 +1）
+  /* 推到第几关（存档用）= **第一个还没通的关的索引**。
+   *
+   * 取值域是 `0 .. LEVELS.length`，注意上界是**闭区间**：
+   * `progress === LEVELS.length` 就是"全部走完"。这不是特例，是唯一能
+   * 用一个数字同时表达"推到哪"和"通没通完"的写法 —— 原来 `goHome(true)`
+   * 把 progress 拍回 0，于是 27 屏打完存档变成"第 1 关"，重进游戏从第一屏
+   * 开始，玩家看到的就是"我通关了，怎么又重新开始了"。 */
+  progress: 0,
+  // 挑一屏（phase === "pick"）时的键盘光标：0..LEVELS.length-1
+  pickCur: 0,
   playT: 0,             // 这一关的战斗用时。和 S.t 分开：S.t 是动画钟，结算后还要走
   clearT: 0,            // 结算面板已经停了多久（到点自动进下一关）
   /* 结算面板出现后过了几秒。**和 clearT 分开**：clearT 会被"鼠标停在按钮上"
@@ -1591,6 +2531,8 @@ window.addEventListener("keydown", (ev) => {
 
   // 选人：先走 1.6 秒的出门演出，再开打。（演出内容 = 其余五只的反应）
   if (S.phase === "select") {
+    // L = 挑一屏。**放在选人层**，因为"这趟打哪一屏"和"带谁出门"是同一个决定。
+    if (ev.code === "KeyL") { openPick(); return; }
     const n = ["Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6"].indexOf(ev.code);
     if (n >= 0 && n < HEROES.length) { pickHero(n); return; }
     // Enter / Space = 带"上一次用的那只"出门，不再按默认来。
@@ -1598,6 +2540,32 @@ window.addEventListener("keydown", (ev) => {
       pickHero(S.heroIdx);
       ev.preventDefault();
     }
+    return;
+  }
+
+  /* 挑一屏：3 行 × 9 列的方向键导航。`ev.repeat` 必须挡掉 ——
+   * 按住方向键一秒会连发 30 次，光标直接从第 5 屏飞到第 27 屏。 */
+  if (S.phase === "pick") {
+    const n = LEVELS.length, cols = PICK.cols;
+    let c = S.pickCur;
+    if (ev.code === "ArrowLeft")       c -= 1;
+    else if (ev.code === "ArrowRight") c += 1;
+    else if (ev.code === "ArrowUp")    c -= cols;
+    else if (ev.code === "ArrowDown")  c += cols;
+    else if (ev.code === "Enter" || ev.code === "Space") {
+      pickStage(S.pickCur);
+      ev.preventDefault();
+      return;
+    } else if (ev.code === "KeyE") { goHome(false); return; }
+    else if (ev.code === "KeyL") {
+      S.phase = "select"; S.p = null; S.hoverStage = -1; return;
+    } else return;
+    if (!ev.repeat) {
+      // 上下越界不绕圈 —— 绕圈会让人以为"按到底又从头上开始了"
+      S.pickCur = clamp(c, 0, n - 1);
+      S.hoverStage = -1;
+    }
+    ev.preventDefault();
     return;
   }
 
@@ -1947,14 +2915,19 @@ function beginRun(i) {
 
 /**
  * 推关：通关就往下走，失败就重打本关。
- * 不回关卡列表 —— 一回到列表，"推关"的感觉就断了，人会开始挑着打。
- * 想换关只有一条路：ESC 回选人，再从存档进度继续。
+ * **正常运行时不回关卡列表** —— 一回到列表，"推关"的感觉就断了，
+ * 人会开始挑着打。想换关只有一条路：ESC 回选人，再从存档进度继续。
+ *
+ * 唯一的例外是**最后一屏之后**。原来那里直接 `goHome(true)`，
+ * 于是"打穿第 27 屏"这件事的全部反馈是一句结算 + 被扔回第一屏；
+ * 玩家手里还攥着倍率，屏幕上却已经没有下一步了。
+ * 现在换成打开选关：27 格全亮，每格带评级，想刷 S 就去刷，
+ * 想收工就按 E —— **"没得玩了"这句话不该由游戏来说**。
  */
 function nextLevel() {
   if (S.phase === "fail") { beginRun(S.stage); return; }
   if (S.stage + 1 < LEVELS.length) { beginRun(S.stage + 1); return; }
-  // 通关了。最后一关没有再下一关，直接算收工
-  goHome(true);
+  openPick();
 }
 
 /* ---------- 饱食 ----------
@@ -1965,6 +2938,38 @@ function nextLevel() {
 function bellyTier(v) {
   const b = v === undefined ? S.belly : v;
   return b < 30 ? 0 : b < 70 ? 1 : 2;      // 0 全饿 / 1 半饿 / 2 满饱
+}
+
+/* 「半饿最强」—— 全篇只有一处把肚子接进战斗数值。
+ *
+ * 说法很简单：**七分饱最好干活。** 吃太饱犯困，饿透了没劲。
+ *
+ * 为什么非做不可：肚子掉一档是目前"贪一关"唯一的代价，但原来它只管
+ * 两件看得见的事（跑不动、眼睛下垂）。玩家算得出来的账是"贪 = 只有坏处"，
+ * 于是最优解永远是每关回家吃饭 —— 一趟连锁倍率（最多 ×2.0）就白设计了。
+ * 给半饿一档火力，账才变成"贪两关火力最猛，再贪开始崩"，
+ * 那才是取舍，而不是纯粹的惩罚。
+ *
+ * **幅度必须小（±12% 以内）。** 它改的是球能滚多远，而 27 屏的落点、
+ * 竖井、营地都是按 PUSH_BASE=620 这个基准调的。再大就不是"饿不饿"，
+ * 而是"换了一张地图"—— 那种改动要在关卡数据里一起调，不能偷偷加个系数。
+ *
+ * **满饱 = 1.00，这一条不能省。** 它不是"没效果"，是这个机制的基准线：
+ * 出门时肚子是满的，27 屏的落点、竖井、营地全部是按"满饱推出去多远"
+ * 调出来的。给满饱一个 0.96 的"犯困"惩罚，等于把所有关卡悄悄调紧 4% ——
+ * 实测就是第 1 屏的机器人直接清不完（球差一点进不了营地）。
+ * 想加 punishment 也不是不行，但那是"重调 27 屏"，不是"加个系数"。
+ *
+ * 所以这个机制的形状是：**满饱 = 基准，半饿 = +12%，全饿 = −8%**。
+ * 够强到值得为它贪两关，又弱到不会把地图变成另一张。
+ */
+function bellyPower() {
+  return [0.92, 1.12, 1.00][bellyTier()];
+}
+/** 饱食的三档说法。**必须给词，不能只给条** —— 一个没有刻度的条
+ *  玩家只能看出"少了"，看不出"我现在是哪一档、该不该回家"。 */
+function bellyWord() {
+  return ["饿着呢", "七分饱", "刚吃饱"][bellyTier()];
 }
 
 /** 关卡里冒一句话。新的直接盖掉旧的 —— 排队会在玩家已经跑远的时候冒出来 */
@@ -2006,7 +3011,11 @@ function finishSay(ok) {
  * 两种都算在玩，但贪的那个得扛着饿。这是全篇唯一不做失败惩罚的张力来源。
  */
 function goHome(allClear) {
-  const gain = Math.round(S.trip.loot * S.trip.multi) + (allClear ? 12 : 0);
+  /* 那 12 份"走完全部"的奖励**在通关那一刻就发过了**（见 tick 里的 clear 判定）。
+   * 原来挂在这里的 `+ (allClear ? 12 : 0)` 有个漏洞：结算卡上点「收工回家」
+   * 传的是 `goHome(false)`，走完最后一屏点收工 = 拿不到这 12 份。
+   * 同一件事两条路两种结果，玩家一定会撞上少给的那条。 */
+  const gain = Math.round(S.trip.loot * S.trip.multi);
   S.home.loot += gain;
   S.home.lastLoot = gain;
   S.home.lastStages = S.trip.stages;
@@ -2018,20 +3027,39 @@ function goHome(allClear) {
   S.door.pick = -1;
   S.door.leaveT = 0;
   S.say.txt = ""; S.say.t = 0; S.say.life = 0; S.say.fired = {};
-  // 进度不退回 —— "收工"不是惩罚，只是这一趟结束了
-  if (allClear) S.progress = 0;
+  /* 进度不退回 —— "收工"不是惩罚，只是这一趟结束了。
+   * 全通时**记成"走完了"而不是归零**：归零会把 27 屏的存档擦成第 1 关。 */
+  if (allClear) S.progress = Math.max(S.progress, LEVELS.length);
+  saveProgress();
   // 从家园进来的，收工就回主界面（解锁过场在那里播）
   groveExit("done");
 }
 
+/* `progress` 的上界是 **LEVELS.length**（闭区间），不是 length-1。
+   等于 length 就是"全部走完" —— 存档必须能表达这件事，否则全通和
+   "卡在第 1 关"在磁盘上长得一模一样。 */
 function saveProgress() {
-  try { localStorage.setItem("pawpack.progress", String(Math.min(S.progress, LEVELS.length - 1))); } catch (e) {}
+  try { localStorage.setItem("pawpack.progress", String(clamp(S.progress, 0, LEVELS.length))); } catch (e) {}
 }
 function loadProgress() {
   try {
     const v = parseInt(localStorage.getItem("pawpack.progress"), 10);
-    if (v >= 0 && v < LEVELS.length) S.progress = v;
+    if (v >= 0 && v <= LEVELS.length) S.progress = v;
   } catch (e) {}
+}
+
+/** 全部走完了吗。**两个来源取并集**：进度到顶，或者 27 格评级都有。
+ *  只看 progress 会被老存档坑（那时的存档没有"全通"这个概念，值恒小于 27）；
+ *  只看 best 会被"手改了 progress 但没打全"的存档坑。取并集最稳。 */
+function allDone() {
+  if (S.progress >= LEVELS.length) return true;
+  for (let i = 0; i < LEVELS.length; i++) if (!S.best[i]) return false;
+  return true;
+}
+
+/** 现在能挑到第几屏（含）。= 第一个没通的关；全通则全是最后一屏。 */
+function maxOpen() {
+  return clamp(S.progress, 0, LEVELS.length - 1);
 }
 
 /* ---------------------------------------------------------------------------
@@ -2232,7 +3260,9 @@ function updatePlayer(dt) {
   // 上一版"感觉推不动"，问题不在数值而在**反馈**：推的那一帧什么也没发生。
   // 现在推球这一刻同时给四样东西 —— 顿帧、球压扁、人后坐、球拖影。
   const runUp = Math.min(1, (p.runD || 0) / 380);
-  const pushPow = PUSH_BASE * (1 + PUSH_RUN * runUp);
+  // 肚子接进来（见 bellyPower）。它乘在整条链路上：
+  // 助跑还是那个助跑，"七分饱"的人推出去的每一球都更远一点。
+  const pushPow = PUSH_BASE * (1 + PUSH_RUN * runUp) * bellyPower();
   for (const b of S.balls) {
     if (b.dead) continue;
     // 判定窗口 = 两个圆刚好相切再加 2px。上一版是 -4 ——
@@ -7908,7 +8938,12 @@ function drawTrail(g) {
   for (let i = 0; i < n; i++) {
     const x = cx - total / 2 + i * gap;
     const y = 45;
-    const done = i < S.stage;
+    /* **"通过了"必须读 S.best，不能读 `i < S.stage`。**
+     * 后者的含义是"在第几屏之前"，只在一条直线推到黑的时候等于"通了"。
+     * 有挑一屏之后它会骗人：第 20 屏回头去打第 3 屏，第 4..19 屏的灯全灭，
+     * 看起来像存档丢了。 */
+    const rk = S.best[i];
+    const done = !!rk;
     const cur = i === S.stage;
 
     if (pipOff && pipOn) {
@@ -7940,6 +8975,24 @@ function drawTrail(g) {
       g.beginPath();
       g.arc(x, y, 10 + Math.sin(S.t * 4) * 1.6, 0, 6.283);
       g.stroke();
+    }
+
+    /* ---- 评级色条：每颗点下面一小横 ----
+     *
+     * 27 颗点只能回答"走了多远"，回答不了"走得怎么样"。评级原来只活在
+     * 结算卡上 —— 一闪而过，而且只有当前这一屏。通关之后想刷 S，
+     * 屏幕上没有任何地方能看到"哪几屏还是 B"。
+     *
+     * 为什么不直接把字母写上去：27 个 9px 的字母在 960 宽的屏上是一片噪点，
+     * 而且每颗点间距只有 22px，"第 10 屏"的字母会和"第 11 屏"的点黏在一起。
+     * 一条 11×3 的色条在同样的间距下不会互相干扰，扫一眼就是一片金色/绿色。
+     *
+     * 色值不能靠压暗区分 —— B 也得是能读的颜色，它只代表"没打好"。
+     * S 金 / A 绿 / B 青灰，和结算卡徽章同一套。 */
+    if (done) {
+      g.fillStyle = RANK_COLOR[rk] || "rgba(255,255,255,.5)";
+      rr(g, x - 5.5, y + 8.5, 11, 2.6, 1.3);
+      g.fill();
     }
   }
 
@@ -8224,7 +9277,7 @@ function drawHUD(g) {
 
   // 左上：角色 + 心
   const K = hudSkin();
-  panelBg(g, "ui-tip", 16, 14, 236, 62, 40, "rgba(12,26,20,.72)", 14);
+  panelBg(g, "ui-tip", 16, 14, 236, 88, 40, "rgba(12,26,20,.72)", 14);
 
   // 头像：有美术圆头像就贴，没图就画代码脸
   const av = artOf("head-" + H.id);
@@ -8274,6 +9327,58 @@ function drawHUD(g) {
     g.fill();
   }
 
+  /* ---------------- 肚子（卡片第二行） ----------------
+   *
+   * **这一条以前是不存在的。** 肚子的三档只体现在两处看不见的地方：
+   * 跑不动时的"跑不动…"（只在按 K 的那一瞬）和眼睛下垂的几像素。
+   * 于是"我该收工了吗"是玩家算不出来的 —— 他得记住自己打了第几关。
+   *
+   * 两个刻度（30 / 70）比填充本身重要：没有刻度，这条只读成"还剩多少"；
+   * 有了刻度，它才读成"我现在在哪一档、离下一档还有多远"。
+   *
+   * 颜色只标一件事：**七分饱是金色的**。金色在这套 UI 里一直等于"好"，
+   * 于是"别吃太饱"这条规则不用写一个字。
+   */
+  {
+    const tier = bellyTier();
+    const bcol = ["#E06A4E", "#F5B93C", "#8FBF5A"][tier];
+    const bx0 = 52, bw0 = 150, by0 = 80, bh0 = 7;
+
+    g.textAlign = "left";
+    g.textBaseline = "middle";
+    g.fillStyle = K.ink3;
+    g.font = "10.5px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+    g.fillText("肚子", 26, by0);
+
+    // 槽
+    g.fillStyle = K.cream ? "rgba(122,92,60,.22)" : "rgba(255,255,255,.16)";
+    rr(g, bx0, by0 - bh0 / 2, bw0, bh0, bh0 / 2);
+    g.fill();
+    // 填充
+    const k = clamp(S.belly / 100, 0, 1);
+    if (k > 0.01) {
+      g.fillStyle = bcol;
+      rr(g, bx0, by0 - bh0 / 2, Math.max(bh0, bw0 * k), bh0, bh0 / 2);
+      g.fill();
+    }
+    // 两个档位刻度：30 / 70
+    g.strokeStyle = K.cream ? "rgba(60,40,24,.42)" : "rgba(20,34,26,.55)";
+    g.lineWidth = 1.4;
+    for (const t of [0.30, 0.70]) {
+      const tx = bx0 + bw0 * t;
+      g.beginPath();
+      g.moveTo(tx, by0 - bh0 / 2 - 1.5);
+      g.lineTo(tx, by0 + bh0 / 2 + 1.5);
+      g.stroke();
+    }
+
+    g.textAlign = "right";
+    g.fillStyle = bcol;
+    g.font = "bold 10.5px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+    g.fillText(bellyWord(), 246, by0);
+    g.textAlign = "left";
+  }
+
   /* ---------------- 目标卡（右上） ----------------
    *
    * 版式从"两行字 + 一条胶囊 + 一行小字"改成四段：
@@ -8287,10 +9392,10 @@ function drawHUD(g) {
    * 字号只能给到 10px —— 玩家得凑近才读得出，读不出就只能猜"我还差几个"。
    * 拆成十几颗豆子之后，"还剩几个空圈"是扫一眼就有的答案，根本不用读字。
    *
-   * 卡片尺寸没动（272×118）。压着顶部树冠，再高就盖住关卡名了 ——
-   * 改版只重排内部四段的 y，不加高度。
+   * 卡片尺寸 272×130 → 272×168：多出来的 38px 是**S 的两个条件**（⑤）。
+   * 顶到 y=182 也不挡东西 —— 关卡名在正中（x 380~580），卡片从 x=672 起。
    */
-  panelBg(g, "ui-cream", W - 288, 14, 272, 130, 26, "rgba(12,26,20,.72)", 14);
+  panelBg(g, "ui-cream", W - 288, 14, 272, 168, 26, "rgba(12,26,20,.72)", 14);
 
   const GX = W - 270, GW = 236;
   const pr = goalProgress();
@@ -8328,7 +9433,12 @@ function drawHUD(g) {
   g.fillText(fitText(g, curGoal().brief(curStage(), S.total), GW), GX, 51);
 
   // ③ 进度：能数清的关走豆子，数不清的关（收成 70 份）走连续条
-  const BX = GX, BY = 76, BW = GW, BH = 16;
+  /* BY 从 76 提到 72、BH 从 16 收到 14 —— 原来连续条的下沿在 92，
+     而下一行「还差 N 只」的 12.5px 字从中线 97 往上长到 90.75，
+     **两条真的叠在一起**（截图里那行字是压在条的下边框上的）。
+     豆子那条路径不会撞（豆心在 BY+1、半径 5.8，下沿只到 79），
+     所以这个错只在"收成 / 连锁 / 零崩 / 无伤"这几关出现。 */
+  const BX = GX, BY = 72, BW = GW, BH = 14;
   if (pr.cells > 0) {
     /* 一颗豆子 = 一只小怪（或一颗球）。**固定豆径、整体居中**：
      * 按 N 均分宽度会让 8 只的关豆子散得像省略号、14 只的关挤成一串珠子。
@@ -8407,13 +9517,50 @@ function drawHUD(g) {
     "12.5px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
   g.fillText(fitText(g, leftTxt, 118), GX, 97);
 
-  /* 右侧是 S 评级的用球条件。写「造球 3 / 10」而不是「球 3」——
-   * 后面那个 10 是**拿 S 的标准**，不给它一个"标准"的说法，玩家会以为
-   * 那是上限（上一版就有人以为超过 10 颗就输了）。 */
-  g.textAlign = "right";
-  g.fillStyle = K.ink2;
-  g.font = "11.5px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.fillText("造球 " + S.stat.made + " / " + curStage().par.made, W - 34, 97);
+  /* ---------------- ⑤ S 的两个条件 · 常驻 ----------------
+   *
+   * **这是"一屏三目标"落地的地方。** 一屏其实一直有三个目标：
+   *   ① 主目标（右上第一行，不过就判负）
+   *   ② 用时压在 S 线内
+   *   ③ 用球压在 S 线内
+   * 但 ②③ 原来只活在**结算卡**上 —— 打的时候完全不知道自己离 S 有多远，
+   * 打完了才被告知"用时 41.2s / S 线 60s"。那是一条复审信息，
+   * 不是一条能改变动作的信息。
+   *
+   * 现在 ②③ 常驻在卡片里，实时读秒、**达标染绿、超了染红**。
+   * 于是"要不要再省一颗球"变成一个每一秒都能自己回答的问题 ——
+   * 这也正是重打刷 S 的全部动机所在。
+   *
+   * 上一版把「造球 3 / 10」塞在信息行右端，孤零零一串数字，
+   * 玩家读成"球的上限是 10"。给一个"条件"的样子（一颗指示灯 + 一条对照），
+   * 它才读成"目标"。 */
+  {
+    const par = curStage().par;
+    const conds = [
+      { ok: S.playT <= par.time,
+        txt: "用时 " + Math.floor(S.playT) + " / " + par.time + "s" },
+      { ok: S.stat.made <= par.made,
+        txt: "用球 " + S.stat.made + " / " + par.made },
+    ];
+    const cw2 = (GW - 8) / 2, cy2 = 121;
+    for (let i = 0; i < conds.length; i++) {
+      const cd = conds[i];
+      const x = GX + i * (cw2 + 8);
+      g.fillStyle = cd.ok ? "rgba(120,178,54,.18)" : "rgba(150,110,80,.13)";
+      rr(g, x, cy2 - 8.5, cw2, 17, 8.5);
+      g.fill();
+      // 指示灯：绿 = 这一条已经达标，褐 = 还没
+      g.fillStyle = cd.ok ? "#63A82A" : (K.cream ? "rgba(122,92,60,.42)" : "rgba(255,255,255,.30)");
+      g.beginPath();
+      g.arc(x + 9, cy2, 3.2, 0, 6.283);
+      g.fill();
+      g.textAlign = "left";
+      g.fillStyle = cd.ok ? "#3E7A18" : (K.cream ? "rgba(74,53,36,.56)" : "rgba(220,240,220,.60)");
+      g.font = "bold 10px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+      g.fillText(cd.txt, x + 17, cy2);
+    }
+    g.textAlign = "left";
+  }
   g.textAlign = "left";
   g.textBaseline = "middle";
 
@@ -8431,7 +9578,7 @@ function drawHUD(g) {
    */
   const reward = stageUnlockReward(S.stage);
   if (reward) {
-    const ry = 119;
+    const ry = 147;   // S 条件那一行占了 121，奖励顺延到 147（卡片底 182）
     /* 头像圆片。玩家认脸比认字快，而"到家的是谁"本来就是个脸的问题 ——
      * 只有名字的话，"星屑"对还没见过它的玩家是一个没有形状的词。 */
     const hd = artOf("head-" + reward.id);
@@ -8616,6 +9763,251 @@ function drawBubble(g, x, y, text, alpha) {
   g.textBaseline = "middle";
   g.fillText(text, bx + bw / 2, by + bh / 2 + 1);
   g.globalAlpha = 1;
+}
+
+/* ============================================================================
+   16.4 挑一屏（phase === "pick"）
+   ----------------------------------------------------------------------------
+   为什么非要有这一站：27 屏做完之后，存档里只有一个"推到第几关"的数字。
+   那个数字一旦顶到 27，就**只能表达"没得玩了"** —— 重进游戏回到第一屏，
+   玩家看到的是"我通关了，怎么又重新开始了"。进度条能回答"我在哪"，
+   回答不了"我还能玩什么"。这一屏就是那个答案。
+
+   三处入口：
+     ① 门口选人 → 「挑一屏重打」（`L` 也行）
+     ② 全通后从主界面进来 —— 没有"下一个没通的关"可推，直接落在这里
+     ③ 通关第 27 屏之后 —— 原来那一步直接把存档拍回第 1 关
+
+   版式是 **3 产地 × 9 屏**，和 LEVELS 的实际结构 1:1 对上（不是凑出来的
+   3×9 —— 每个产地就是 8 屏 + 1 屏收尾，一共 27）。行 = 产地，列 = 屏序。
+
+   评级（S/A/B）**只在这块面板里露字母**。HUD 顶上那排 27 颗点是"进度"，
+   每颗点旁边挂一个 9px 的字母，在 960 宽的屏幕上就是一片噪点。
+   点负责"走了多远"，这里负责"走得怎么样"，两件事分开画才都读得清。
+   ========================================================================== */
+
+const PICK = {
+  x: 40, y: 102, w: 880, h: 380,
+  cols: 9,
+  cw: 82, ch: 74, gap: 6, rowGap: 14,
+  labelW: 46, labelGap: 10,
+};
+/** 每个产地 9 屏。名字是产地，不是主题键 —— 主题键有 12 套（含变体），
+ *  按主题分组会切出 7 行，和"一产地一屏地打完"的实际路径对不上。 */
+const FACTIONS = [
+  { id: "tundra", name: "苔原" },
+  { id: "wither", name: "枯木坡" },
+  { id: "marsh",  name: "泥沼" },
+];
+
+/** 格子几何。**绘制和点击判定共用这一份** —— 分开算必错开，改布局时必踩。 */
+function pickCell(i) {
+  const col = i % PICK.cols;
+  const row = (i - col) / PICK.cols;
+  const gridW = PICK.cols * PICK.cw + (PICK.cols - 1) * PICK.gap;
+  const blockW = PICK.labelW + PICK.labelGap + gridW;
+  const gx = PICK.x + (PICK.w - blockW) / 2 + PICK.labelW + PICK.labelGap;
+  const gy = PICK.y + 60;
+  return {
+    x: gx + col * (PICK.cw + PICK.gap),
+    y: gy + row * (PICK.ch + PICK.rowGap),
+    w: PICK.cw, h: PICK.ch,
+  };
+}
+function pickHit(mx, my) {
+  for (let i = 0; i < LEVELS.length; i++) {
+    const c = pickCell(i);
+    if (mx >= c.x && mx <= c.x + c.w && my >= c.y && my <= c.y + c.h) return i;
+  }
+  return -1;
+}
+
+function openPick() {
+  S.phase = "pick";
+  S.p = null;
+  S.door.pick = -1;
+  S.door.leaveT = 0;
+  S.hoverBtn = -1;
+  S.hoverStage = -1;
+  S.pickCur = clamp(S.stage, 0, LEVELS.length - 1);
+}
+
+/** 从挑一屏进关。选的这一屏如果比存档落后，progress 不会退 —— 只进不退。 */
+function pickStage(i) {
+  if (i < 0 || i > maxOpen()) return;
+  S.progress = Math.max(S.progress, i);
+  saveProgress();
+  beginRun(i);
+}
+
+const RANK_COLOR = { S: "#E8951A", A: "#4F9B24", B: "#3F82A2" };
+
+function drawPick(g) {
+  const cx = W / 2;
+
+  // 门口那套夜景压暗：不压的话，27 个奶油格子会浮在一片草绿上
+  g.fillStyle = "rgba(0,0,0,.52)";
+  g.fillRect(0, 0, W, H);
+  g.fillStyle = "rgba(20,36,52,.40)";
+  g.fillRect(0, 0, W, H);
+
+  creamCard(g, PICK.x, PICK.y, PICK.w, PICK.h, 24);
+
+  const FONT = "'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  const K = hudSkin();
+
+  // ---- 抬头：标题 + 战绩汇总 ----
+  g.textBaseline = "middle";
+  g.textAlign = "left";
+  g.fillStyle = K.ink;
+  g.font = "bold 21px " + FONT;
+  g.fillText(allDone() ? "都走完了，想再走哪一屏？" : "挑一屏重打", PICK.x + 28, PICK.y + 32);
+
+  {
+    const cnt = { S: 0, A: 0, B: 0 };
+    let done = 0;
+    for (let i = 0; i < LEVELS.length; i++) {
+      const r = S.best[i];
+      if (r) { cnt[r] = (cnt[r] || 0) + 1; done++; }
+    }
+    g.textAlign = "right";
+    g.font = "12.5px " + FONT;
+    const seg = [["S", cnt.S], ["A", cnt.A], ["B", cnt.B]];
+    let tx = PICK.x + PICK.w - 28;
+    // 从右往左摆：B A S 倒着排，最后读出来还是 S A B 的顺序
+    for (let k = seg.length - 1; k >= 0; k--) {
+      const t = seg[k][1] + " " + seg[k][0];
+      g.fillStyle = RANK_COLOR[seg[k][0]];
+      g.font = "bold 13px " + FONT;
+      g.fillText(t, tx, PICK.y + 32);
+      tx -= g.measureText(t).width + 12;
+    }
+    g.fillStyle = K.ink3;
+    g.font = "12.5px " + FONT;
+    g.fillText("已通 " + done + " / " + LEVELS.length, tx, PICK.y + 32);
+  }
+
+  g.strokeStyle = "rgba(120,92,64,.24)";
+  g.lineWidth = 1;
+  g.beginPath();
+  g.moveTo(PICK.x + 28, PICK.y + 48);
+  g.lineTo(PICK.x + PICK.w - 28, PICK.y + 48);
+  g.stroke();
+
+  // ---- 27 个格子 ----
+  const cur = S.hoverStage >= 0 ? S.hoverStage : S.pickCur;
+  const open = maxOpen();
+  for (let i = 0; i < LEVELS.length; i++) {
+    const L = LEVELS[i];
+    const c = pickCell(i);
+    const locked = i > open;
+    const cleared = !!S.best[i];
+    const isCur = i === cur && !locked;
+    const hot = i === S.hoverStage && !locked;
+
+    // 底板
+    g.fillStyle = locked ? "rgba(96,74,52,.10)"
+                : cleared ? "#FFFBF0"
+                : "#FFF3D6";
+    rr(g, c.x, c.y, c.w, c.h, 10);
+    g.fill();
+
+    // 描边：选中 → 金粗线 + 光晕；通了 → 淡棕；锁着 → 几乎透明
+    if (isCur) {
+      g.save();
+      g.shadowColor = "rgba(240,168,30,.75)";
+      g.shadowBlur = 12;
+      g.strokeStyle = "#F0A81E";
+      g.lineWidth = 2.8;
+      rr(g, c.x, c.y, c.w, c.h, 10);
+      g.stroke();
+      g.restore();
+    } else {
+      g.strokeStyle = locked ? "rgba(120,92,64,.14)"
+                    : cleared ? "rgba(120,92,64,.42)"
+                    : "rgba(240,168,30,.55)";
+      g.lineWidth = hot ? 2.2 : 1.5;
+      rr(g, c.x, c.y, c.w, c.h, 10);
+      g.stroke();
+    }
+
+    const ink = locked ? "rgba(74,53,36,.30)" : "#4A3524";
+    const ink2 = locked ? "rgba(74,53,36,.22)" : "rgba(74,53,36,.62)";
+
+    // 左上：第几屏
+    g.textAlign = "left";
+    g.font = "10px " + FONT;
+    g.fillStyle = ink2;
+    g.fillText("第 " + (i + 1), c.x + 8, c.y + 15);
+
+    // 右上：评级 / 新 / 锁
+    g.textAlign = "right";
+    if (locked) {
+      g.font = "11px " + FONT;
+      g.fillStyle = "rgba(74,53,36,.28)";
+      g.fillText("锁", c.x + c.w - 8, c.y + 16);
+    } else if (cleared) {
+      g.font = "bold 18px " + FONT;
+      g.fillStyle = RANK_COLOR[S.best[i]] || "#4A3524";
+      g.fillText(S.best[i], c.x + c.w - 9, c.y + 16);
+    } else {
+      // 还没通的那一屏：给一个金色「新」，和周围一片灰区别开
+      const pulse = 0.62 + 0.38 * Math.abs(Math.sin(S.t * 2.2));
+      g.globalAlpha = pulse;
+      g.font = "bold 11px " + FONT;
+      g.fillStyle = "#C97A10";
+      g.fillText("新", c.x + c.w - 9, c.y + 16);
+      g.globalAlpha = 1;
+    }
+
+    // 关卡名
+    g.textAlign = "center";
+    g.fillStyle = ink;
+    g.font = (cleared || !locked ? "bold 14px " : "13px ") + FONT;
+    g.fillText(fitText(g, L.name, c.w - 12), c.x + c.w / 2, c.y + 40);
+
+    // 底部：目标词。它才是"这一屏打法不一样"的唯一线索 ——
+    // 27 屏里有 6 种目标，光看名字全是地形名，读不出来差别。
+    const gd = GOALS[L.goal];
+    g.font = "10px " + FONT;
+    g.fillStyle = locked ? "rgba(74,53,36,.20)" : "rgba(120,92,64,.72)";
+    g.fillText(gd ? gd.name : "", c.x + c.w / 2, c.y + c.h - 15);
+  }
+
+  // ---- 产地标签：画在每行左侧，和那一行的格子垂直居中 ----
+  for (let r = 0; r < FACTIONS.length; r++) {
+    const c = pickCell(r * PICK.cols);
+    const f = FACTIONS[r];
+    const fy = c.y + c.h / 2;
+    // 竖排两~三字：竖排比横排窄，46 宽的标签列才放得下「枯木坡」
+    g.textAlign = "center";
+    g.font = "bold 12px " + FONT;
+    const chars = f.name.split("");
+    const lh = 14;
+    const y0 = fy - (chars.length - 1) * lh / 2;
+    for (let k = 0; k < chars.length; k++) {
+      // 第一个字染金，后两个字退灰 —— 一整列同色会读成四条独立的竖线
+      g.fillStyle = k === 0 ? "#8A5716" : "rgba(120,92,64,.68)";
+      g.fillText(chars[k], PICK.x + 22 + PICK.labelW / 2, y0 + k * lh);
+    }
+  }
+
+  // ---- 底部：当前指向的是哪一屏，以及操作 ----
+  const cy = PICK.y + PICK.h - 26;
+  if (cur >= 0 && cur < LEVELS.length) {
+    const L = LEVELS[cur];
+    const gd = GOALS[L.goal];
+    const canGo = cur <= open;
+    g.textAlign = "center";
+    g.font = "bold 12.5px " + FONT;
+    g.fillStyle = canGo ? "rgba(74,53,36,.82)" : "rgba(74,53,36,.40)";
+    g.fillText("第 " + (cur + 1) + " 屏 " + L.name + " · " + (gd ? (gd.title || gd.name) : "") +
+               (canGo ? "" : "　（还没走到）"), cx, cy - 16);
+  }
+  g.textAlign = "center";
+  g.font = "11.5px " + FONT;
+  g.fillStyle = "rgba(74,53,36,.50)";
+  g.fillText("点一屏开打   ·   方向键挑   ·   Enter 开打   ·   ESC 返回   ·   E 收工", cx, cy + 6);
 }
 
 function drawSelect(g) {
@@ -8918,9 +10310,14 @@ function drawSelect(g) {
 
   g.fillStyle = "rgba(198,226,198,.62)";
   g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.fillText(S.progress > 0
-    ? ("走到第 " + (S.progress + 1) + " 关 · 一只出门，五只看家")
-    : "六只都在等 · 一只出门，五只看家", W / 2, 84);
+  /* 三分支，别写成 `progress > 0 ? ... : ...`。
+   * progress 的上界是 LEVELS.length（闭区间），全通时 `progress + 1` 会印出
+   * "走到第 28 关" —— 27 屏的游戏说第 28 关，玩家第一反应是"还有第 28 关？"。 */
+  g.fillText(allDone()
+    ? ("27 屏都走完了 · 一只出门，五只看家")
+    : S.progress > 0
+      ? ("走到第 " + (S.progress + 1) + " 关 · 一只出门，五只看家")
+      : "六只都在等 · 一只出门，五只看家", W / 2, 84);
 
   if (S.home.loot > 0) {
     g.fillStyle = "rgba(255,216,107,.70)";
@@ -8929,10 +10326,16 @@ function drawSelect(g) {
               (S.home.runs > 1 ? "  ·  第 " + (S.home.runs + 1) + " 趟" : ""), W / 2, 106);
   }
 
-  // ---------- 底部提示 ----------
-  g.fillStyle = "rgba(206,232,206,.44)";
-  g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.fillText(picked >= 0 ? "门在身后合上了。" : "1–6 或点一只 · 出门前想清楚带谁", W / 2, H - 26);
+  /* ---------- 底部提示 ----------
+   * 挑一屏面板自己有底部提示（它盖住了这一行），这里必须收手 ——
+   * 两边都画的话，574 处的"1–6 或点一只"会从面板底下露出一截，
+   * 看起来像面板没盖严。 */
+  if (S.phase !== "pick") {
+    g.fillStyle = "rgba(206,232,206,.44)";
+    g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+    g.fillText(picked >= 0 ? "门在身后合上了。"
+                          : "1–6 或点一只 · L 挑一屏重打 · 出门前想清楚带谁", W / 2, H - 26);
+  }
 }
 
 /* ============================================================================
@@ -8985,7 +10388,11 @@ function tick(dt) {
         S.heroIdx = S.door.pick;
         S.door.pick = -1;
         S.door.leaveT = 0;
-        beginRun(S.progress);
+        /* 全通了就没有"下一个没通的关"可推 —— 这时先把人送到挑一屏，
+         * 而不是 `beginRun(clamp(27, 0, 26))` 悄悄塞进最后一屏。
+         * 那种"按了 1 号键却掉进第 27 屏"的行为，玩家只会读成 bug。 */
+        if (allDone()) openPick();
+        else beginRun(S.progress);
       }
     }
   }
@@ -9077,6 +10484,20 @@ function tick(dt) {
           saveBest();
         }
         S.progress = Math.max(S.progress, S.stage + 1);
+        /* ---- 走完全部 27 屏 ----
+         *
+         * 奖励必须在这一刻发。挂在「收工」上是错的 —— 收工有两条路
+         * （结算面板自动跳走 / 点「收工回家」），挂一处就漏一处，
+         * 而玩家只会撞上少给的那条，然后觉得"说好的奖励呢"。
+         *
+         * 顺带把 progress 顶到 LEVELS.length：这才是"全通"在存档里的写法。
+         * 不写的话，第 27 屏通完 progress 是 27（= length），刚好也是全通 ——
+         * 但那是碰巧对，不是设计对。显式写一次，读代码的人不用反推。 */
+        if (S.stage + 1 >= LEVELS.length) {
+          S.progress = LEVELS.length;
+          S.trip.loot += 12;
+          addText(W / 2, 292, "27 屏全走完了 · +12 份口粮", "#FFD86B", 22, 3.2);
+        }
         saveProgress();
         addText(W / 2, 250, "这一屏清干净了", "#FFE9B0", 32, 2.2);
       } else {
@@ -10183,7 +11604,11 @@ function render() {
         const nx = LEVELS[S.stage + 1];
         drawBtn(B.cont, hiCont, "继续深入", nx.name + " · ×" + nextMulti.toFixed(2), true);
       } else if (ok && last) {
-        drawBtn(B.cont, hiCont, "全部通关", "点这里收工", true);
+        /* 最后一屏通了 —— **主按钮不再是"收工"**。
+         * 原来这里写"全部通关 / 点这里收工"，按下去 = 存档归零 = 没得玩了。
+         * 现在主按钮去挑一屏：27 格全亮、每格带评级，想刷 S 就去刷。
+         * 收工还在（右边那个），但它是**选择**，不是唯一出口。 */
+        drawBtn(B.cont, hiCont, "挑一屏再走", "27 屏全通了 · 刷评级", true);
       } else {
         drawBtn(B.cont, hiCont, "重打本关", "R 也行", true);
       }
@@ -10196,12 +11621,16 @@ function render() {
       g.textAlign = "center";
       g.fillStyle = "rgba(255,248,232,.66)";
       g.font = "bold 12px " + FONT;
-      g.fillText(ok && !last ? "回车 / 点击  继续   ·   E  收工回家   ·   ESC 回选人"
-                             : "回车 / 点击  重打   ·   E  收工回家   ·   ESC 回选人",
+      g.fillText(!ok ? "回车 / 点击  重打   ·   E  收工回家   ·   ESC 回选人"
+               : last ? "回车 / 点击  挑一屏   ·   E  收工回家   ·   ESC 回选人"
+                      : "回车 / 点击  继续   ·   E  收工回家   ·   ESC 回选人",
                  cx, cardY + cardH + 22);
     }
   } else {
+    /* 门口场景 → 挑一屏是**叠在它上面**的，不是另起一屏。
+     * 换背景会让人以为"我离开了门口"，而实际上选完一屏就是从这扇门走出去。 */
     drawSelect(g);
+    if (S.phase === "pick") drawPick(g);
   }
 
   /* 后期合成：泛光 / 分离色调 / 颗粒 / 暗角。
@@ -10254,6 +11683,7 @@ function toLocal(ev) {
 
 function onCanvasMove(loc: any): void {
   if (S.phase === "select") S.hover = hitSelect(loc.x, loc.y);
+  if (S.phase === "pick") S.hoverStage = pickHit(loc.x, loc.y);
   // 结算面板：指着按钮时不推进倒计时 —— 他正在读，别替他做决定
   if (S.phase === "clear" || S.phase === "fail") {
     const B = settleBtns();
@@ -10265,6 +11695,13 @@ function onCanvasDown(loc: any): void {
   if (S.phase === "select") {
     const i = hitSelect(loc.x, loc.y);
     if (i >= 0) pickHero(i);
+    return;
+  }
+  /* 挑一屏：锁着的格子**点不动**，但点上去不弹提示 —— 格子上已经写着
+     "锁"了，再弹一句"这一屏还没走到"是把同一件事说两遍。 */
+  if (S.phase === "pick") {
+    const i = pickHit(loc.x, loc.y);
+    if (i >= 0 && i <= maxOpen()) pickStage(i);
     return;
   }
   // 结算界面：只有真的点在按钮上才算数。
@@ -10415,8 +11852,12 @@ export const GROVE: any = {
   predictBall, aimFor, ballBudget, checkGoal, rate, goalProgress,
   curStage, curGoal, loadLevel, rampAt, nextLevel, saveProgress,
   hitSelect, pickHero, MOODS, DOOR_SLOTS, VOICE,
-  goHome, bellyTier, sayLine, finishSay, settleBtns, inRect,
+  goHome, bellyTier, bellyPower, bellyWord, sayLine, finishSay, settleBtns, inRect,
   recordClear, readHomeSave, FROM_HOME,
+  // 挑一屏：几何/命中/进出口全部导出，冒烟才能验"27 格都点得到、
+  // 锁着的点不动、全通后进得去"
+  openPick, pickStage, pickCell, pickHit, drawPick, allDone, maxOpen,
+  PICK, FACTIONS, RANK_COLOR,
   // 注入美术图。**只在调试/截图里用**：正片由 GroveBattle 走 resources.load
   // 拿 ImageAsset 再注进来。导出它，截图脚本才能拍出"有 UI 图"的样子 ——
   // 不导出的话 file:// 打开的 grove.html 永远是代码回退图形，截图和真机对不上。

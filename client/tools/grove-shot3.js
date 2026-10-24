@@ -70,6 +70,21 @@ if (!args.length) { console.log("给个 tag，例如 s1 / clear:3"); process.exi
         const G = window.GROVE, S = G.S;
         S.phase = "fail";
       });
+    } else if (kind === "pick") {
+      /* 挑一屏。不带数字 = 全通（27 格全亮，每格带评级）；
+         带数字 = 只通到那一屏，后面的格子应该是锁的。 */
+      await page.evaluate((pr) => {
+        const G = window.GROVE, S = G.S;
+        const n = G.LEVELS.length;
+        const k = (pr === null || pr === undefined || pr === "") ? n : Number(pr);
+        S.progress = k;
+        for (let i = 0; i < n; i++) {
+          // 造一组有分布的评级：全 S 看不出色阶，全 B 看不出金色
+          S.best[i] = i < k ? ["S", "A", "B"][i % 3] : null;
+        }
+        S.hoverStage = -1;
+        G.openPick();
+      }, s === undefined ? "" : s);
     } else {
       const st = Number(a.replace("s", "")) - 1;
       await page.evaluate((n) => { window.GROVE._start(0, n); window.GROVE.S.phase = "play"; }, st);

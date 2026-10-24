@@ -141,7 +141,18 @@ console.log('  源 ' + path.relative(ROOT, TS));
 const G = load();
 ok(typeof G.groveBoot === 'function', '模块可执行，groveBoot 已导出');
 ok(G.GROVE && Array.isArray(G.GROVE.LEVELS), 'GROVE.LEVELS 已导出');
-ok(G.GROVE.LEVELS.length === 8, '八关都在', 'n=' + G.GROVE.LEVELS.length);
+/* 27 屏：3 产地 × 8 屏 + 三屏收尾（苔原 / 枯木坡 / 泥沼）。
+   这里**不写死关数** —— 它要验的是"抽取没丢东西"，不是"关数没变"。
+   写死 8 的时候，内容一扩它就红，红的原因还跟抽取无关（踩过一次）。
+   所以改成三条结构性断言：够长、首尾对得上、每屏的主题都在 THEMES 里。 */
+ok(G.GROVE.LEVELS.length >= 24, "至少 24 屏（3 产地 × 8 屏）", "n=" + G.GROVE.LEVELS.length);
+ok(G.GROVE.LEVELS[0].id === 'entry', "第一屏是苔原入口", G.GROVE.LEVELS[0].id);
+ok(G.GROVE.LEVELS[G.GROVE.LEVELS.length - 1].id === 'marsh_boss',
+    "最后一屏是泥沼收尾", G.GROVE.LEVELS[G.GROVE.LEVELS.length - 1].id);
+{
+    const bad = G.GROVE.LEVELS.filter(l => !G.GROVE.THEMES[l.theme]).map(l => l.id);
+    ok(bad.length === 0, "每屏的主题都能在 THEMES 里找到", bad.join(",") || "全部命中");
+}
 
 G.groveAttachCanvas(canvasStub);
 

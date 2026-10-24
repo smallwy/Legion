@@ -2382,11 +2382,11 @@ console.log("\n=== 29. 宠物解锁 / 分章几何 / 弹菇衰减 ===");
   }
 
   /* ④ 进度点必须绕开右上目标卡。
-     `gap=22` 是写死的；27 颗点跨 572px，右端 766 —— 而目标卡左边界 672，
-     **压进去 94px**（截图上右边的点被奶白卡片盖掉，玩家以为只画了一半）。
+     `gap=22` 是写死的；27 颗点跨 572px，右端 766 —— 而目标卡左边界 644，
+     **压进去 122px**（截图上右边的点被奶白卡片盖掉，玩家以为只画了一半）。
      只画当前产地 9 颗才留得出余量，这条断言就是这个改动的护栏。 */
   {
-    const GAP = 22, CARD_X = 960 - 288;
+    const GAP = 22, CARD_X = P.GOAL_CARD.x;
     const n = P.chapterOfStage(9).count;
     const total = (n - 1) * GAP;
     const right = 480 + total / 2;
@@ -2395,6 +2395,53 @@ console.log("\n=== 29. 宠物解锁 / 分章几何 / 弹菇衰减 ===");
     const allRight = 480 + ((N - 1) * GAP) / 2;
     ok(allRight > CARD_X, "（反证）27 颗点画在一行确实会撞卡",
        "27 颗右端 " + allRight.toFixed(0) + " > " + CARD_X);
+  }
+
+  /* ④b **目标卡不许压住任何一屏的落脚面。**
+     用户连报两轮"目标 UI 和战斗场景重叠"。量下来是真的：
+     原来的 272×168 @ (672,14) 下沿到 182，而第 8 屏「双塔」有一块台面
+     x660~860 / y156 —— 玩家站上去头顶 ≈116，**整只被卡片盖住**，
+     而且在 x672~860 这段是真盖，不是擦边。
+
+     这条断言把"卡片压不压场地"从一眼看不出的审美问题，变成一条几何题：
+     扫 27 屏所有台子 / 坡 / 木桩，凡是落在卡片矩形里的都必须为 0。
+     角色头顶高度按 40px 算（role 高 34 + 一点余量），台面上沿减它就是头顶。 */
+  {
+    const GC = P.GOAL_CARD;
+    const cardBottom = GC.y + GC.h;
+    let worst = 999, worstName = "", hitArea = 0, hitWhere = "";
+    for (let i = 0; i < N; i++) {
+      P._start(0, i);
+      const boxes = [];
+      for (const p of P.PLATS) {
+        boxes.push({ x0: p.x, x1: p.x + p.w, y0: p.y, y1: p.y + p.h });
+      }
+      for (const r of P.RAMPS) {
+        boxes.push({
+          x0: Math.min(r.xL, r.xR), x1: Math.max(r.xL, r.xR),
+          y0: Math.min(r.yL, r.yR), y1: Math.max(r.yL, r.yR) + 26,
+        });
+      }
+      for (const s of (P.STUMPS || [])) boxes.push({ x0: s.x, x1: s.x + 26, y0: s.y - 46, y1: s.y + 4 });
+      for (const b of boxes) {
+        if (b.x1 <= GC.x || b.x0 >= GC.x + GC.w) continue;
+        const oy = Math.min(b.y1, cardBottom) - Math.max(b.y0, GC.y);
+        if (oy <= 0) continue;
+        const ox = Math.min(b.x1, GC.x + GC.w) - Math.max(b.x0, GC.x);
+        hitArea += ox * oy;
+        if (!hitWhere) hitWhere = "屏" + (i + 1) + " 台 x" + Math.round(b.x0) + "~" + Math.round(b.x1) + " y" + Math.round(b.y0);
+      }
+      /* 右半最高的落脚面 → 站在上面的人头顶 */
+      for (const b of boxes) {
+        if (b.x1 < GC.x) continue;
+        if (b.y0 < worst) { worst = b.y0; worstName = P.LEVELS[i].name; }
+      }
+    }
+    ok(hitArea === 0, "目标卡不压任何台面 / 坡 / 木桩",
+       hitArea ? "压住 " + Math.round(hitArea) + " px²：" + hitWhere : "27 屏全清");
+    ok(worst - 40 >= GC.y + GC.h, "右半最高台面上的人头顶也在卡下面",
+       "最高台面 y=" + worst + "（" + worstName + "）头顶 ≈" + (worst - 40) +
+       " vs 卡下沿 " + (GC.y + GC.h));
   }
 
   /* ⑤ 弹菇的弹起必须**衰减**，不然球落回同一朵就永远停不下来。

@@ -47,10 +47,10 @@ import {
     Node, UITransform, UIOpacity, Label, Sprite, Graphics, Color,
     EventTouch, Vec3, tween, director, Director, game,
     assetManager, SceneAsset,
-    resources, SpriteFrame,
+    resources, SpriteFrame, ImageAsset, Texture2D,
 } from 'cc';
 import { EDITOR } from 'cc/env';
-import { MAX_SQUAD, PETS, petGap, squadSize, unlockedPets } from './config/Roster';
+import { MAX_SQUAD, PETS, petByNode, petGap, petById, squadSize, unlockedPets } from './config/Roster';
 import type { PetDef } from './config/Roster';
 import { CHAPTERS, STAGE_COUNT, chapterOf, stageLabel, stageInChapter } from './config/Stages';
 import type { TaskDef } from './config/HomeBiz';
@@ -59,8 +59,8 @@ import type { SaveState } from './config/SaveData';
 import { SATIETY } from './config/BattleConfig';
 import {
     MEALS, RECIPES, PET_LINE, DISPATCH_SEC, DISPATCH_CAP,
-    feed, craft, recordPat, startDispatch, collectDispatch, peekDispatch,
-    toggleMute, toggleCrisp, heartText, heartsOf, canDispatch,
+    feed, craft, recordPat, setActive, startDispatch, collectDispatch, peekDispatch,
+    toggleMute, toggleCrisp, heartText, heartsOf, canDispatch, yieldText,
     TASKS, taskPhase, claimTask, claimableCount,
 } from './config/HomeBiz';
 
@@ -700,6 +700,8 @@ class HomeController {
         this.bindAmbient();
         /* 图标是异步的，先发起加载再摆任务按钮 —— 加载完的回调会自己刷新徽标 */
         this.loadIcons();
+        /* 宠物头像同理：图鉴 / 底部槽 / 出战卡都等它，回调里自己刷 */
+        this.loadHeads();
         this.placeTaskBtn();
         this.placeDispatchCard();
         if (this.save.lastReward) {
@@ -777,6 +779,270 @@ class HomeController {
         sp.sizeMode = Sprite.SizeMode.CUSTOM;
         sp.spriteFrame = sf;
         return n;
+    }
+
+    /* ----------------------------------------------------------------------
+     * 1a2. 宠物头像：图鉴格 / 底部槽 / 出战卡共用同一份
+     *
+     * **这一块是"图鉴只有汉字首字、太 low"那条的修法。** 在这之前，
+     * 图鉴格子里写的是 `p.name.slice(0, 1)`（"尖""短""胖"），底部槽位
+     * 连这个都没有 —— 六只宠物在 UI 上**一张脸都没露过**，只有草地上的立绘。
+     * 玩家认脸比认字快，"回家的是谁"本来就是个脸的问题。
+     *
+     * 图从 `resources/grove/head/<short>.png` 来（96×96，`gen_grove_art.py`
+     * 从 `ui/home/heads-circle/` 收缩，和战斗 HUD 左上角那个头像是同一份）。
+     *
+     * 加载走三条路，谁成功用谁（原因见 loadIcons 里那段注释）：
+     *   ① `/spriteFrame` 子资源 —— 标准做法，但**这批图 meta 是 `type: texture`**，
+     *      只生成 texture 子资源，所以这条大概率失败；
+     *   ② `resources.load(path, SpriteFrame)` —— 同理会静默失败；
+     *   ③ 取 ImageAsset，**运行时自己拼一个 SpriteFrame**（Texture2D 的 image
+     *      = ImageAsset）。这条不依赖 meta 配置，永远能用。
+     * 三条都失败就把节点藏掉 —— 留一个白框比没有图更像 bug。
+     * -------------------------------------------------------------------- */
+
+    /** 键 = `PetDef.short`。加载不到就是缺 key */
+    private heads: Record<string, SpriteFrame> = {};
+
+    private loadHeads() {
+        for (const p of PETS) {
+            const put = (sf: SpriteFrame | null | undefined) => {
+                if (sf) {
+                    this.heads[p.short] = sf;
+                    this.refreshGoCard();
+                    this.refreshSlots();
+                    this.refreshCodexHeads();
+                }
+            };
+            resources.load(`grove/head/${p.short}/spriteFrame`, SpriteFrame, (e1, sf1) => {
+                if (!e1 && sf1) { put(sf1); return; }
+                resources.load(`grove/head/${p.short}`, SpriteFrame, (e2, sf2) => {
+                    if (!e2 && sf2) { put(sf2); return; }
+                    resources.load(`grove/head/${p.short}`, ImageAsset, (e3, img) => {
+                        if (e3 || !img) {
+                            console.warn(`[Home] 头像没加载上（会退回文字）：grove/head/${p.short}`, e3);
+                            return;
+                        }
+                        const tex = new Texture2D();
+                        tex.image = img;
+                        const sf = new SpriteFrame();
+                        sf.texture = tex;
+                        put(sf);
+                    });
+                });
+            });
+        }
+    }
+
+    /* 出战卡里那排心的几何。场景里 hearts-on 在 x=67、hearts-off 在 x=106，
+       "♥♥♥" 占 23.62px → 每颗 7.87px 步进。
+       为什么要这个数：`♡` 那几个必须**跟在实心心的右边**，而实心的数量随亲密度变。
+       读 Label.width 不可靠（内容高度是下一帧才重算），所以用实测步进推。 */
+    private static readonly HEART_X = 67;
+    private static readonly HEART_ADV = 7.87;
+
+    /**
+     * 头像比图鉴面板晚到一步时，把已经建好的格子补上脸。
+     *
+     * 时序是真的会反过来的：`ensureCodex()` 是**点开图鉴那一刻**同步建的，
+     * 而 `loadHeads()` 是 9 次 resources.load 的异步回调。玩家在主界面
+     * 第一秒就点图鉴的话，格子先建出来、图后到 —— 不补就会出现
+     * "开得早的那一次没有图，退出再进才有"这种鬼现象。
+     */
+    private refreshCodexHeads() {
+        if (!this.codex) return;
+        const card = this.codex.getChildByName('card');
+        if (!card) return;
+        for (const p of PETS) {
+            const cell = card.getChildByName(`cell-${p.id}`);
+            const head = cell?.getChildByName('head');
+            const sf = this.heads[p.short];
+            if (!cell || !head || !sf) continue;
+            const hs = head.getComponent(Sprite);
+            if (!hs) continue;
+            const got = this.save.cleared >= p.at;
+            hs.sizeMode = Sprite.SizeMode.CUSTOM;
+            hs.color = got ? WHITE : new Color(110, 100, 92, 255);
+            hs.spriteFrame = sf;
+            head.active = true;
+            /* 已收服那格原来用"名字首字"占位，有脸了就把那个字删掉；
+               未收服那格的问号要留着（它回答的是"能不能带"）。 */
+            if (got) {
+                const mark = cell.getChildByName('mark');
+                if (mark && mark.isValid) { mark.removeFromParent(); mark.destroy(); }
+            }
+        }
+    }
+
+    /**
+     * 刷新出战卡：头像 / 名字 / 心。
+     *
+     * **这三个原来全是场景里写死的** —— `av` 永远是砂糖那张图、`name` 永远
+     * 写着「砂 糖」、心永远是 ♥♥♥。于是不管换谁出战，卡片都长一个样，
+     * 读起来就是"这卡片跟我的队伍没关系"，这是"完全不知道有啥用"的一半。
+     */
+    private refreshGoCard() {
+        const card = this.canvas.getChildByName('Dock')?.getChildByName('GoCard');
+        if (!card) return;
+        const def = petById(this.save.active) ?? PETS[0];
+
+        const av = card.getChildByName('av');
+        if (av) {
+            const sp = av.getComponent(Sprite);
+            const sf = this.heads[def.short];
+            if (sp && sf) {
+                sp.sizeMode = Sprite.SizeMode.CUSTOM;
+                sp.spriteFrame = sf;
+                sp.color = WHITE;
+            }
+        }
+
+        const nm = card.getChildByName('name')?.getComponent(Label);
+        if (nm) {
+            nm.string = def.name;
+            /* 场景里这个名字的容器宽只有 31（够"砂 糖"两个字加空格）。
+               "尖耳猫"要 40.5px —— 不放开就会缩成一个看不懂的小字。
+               右边 star 在 106，名字从 63 起，可给 42。 */
+            nm.overflow = Label.Overflow.SHRINK;
+            const ut = nm.node.getComponent(UITransform);
+            if (ut) ut.setContentSize(42, 18.9);
+        }
+
+        const h = heartsOf(this.save.pats[def.id] || 0);
+        const on = card.getChildByName('hearts-on')?.getComponent(Label);
+        const off = card.getChildByName('hearts-off')?.getComponent(Label);
+        /* 两个心形 Label 的容器宽是场景里按"3 颗 / 2 颗"写死的（23.6 / 15.7），
+           而根数随亲密度变 —— 不放开会把字**裁掉**（"换了只宠物，心不见了"）。
+           但也不能无脑放到 44：两个容器都 44 宽时它们的矩形整个互相压住，
+           文字审计直接报 `hearts-on × hearts-off 44×20 重叠`。
+           所以**按实际心数分格**：实心占 h 格、空心占 (5-h) 格，右邻接左、不留缝也不重叠。
+           锚点是 (0,1)，x0 = pos.x，所以右边界 = 位置 + 宽度，紧挨着就正好贴边。 */
+        const ADV = HomeController.HEART_ADV;
+        const H0 = HomeController.HEART_X;
+        if (on) {
+            on.overflow = Label.Overflow.NONE;
+            on.string = '♥'.repeat(h);
+            /* 场景里 hearts-off 的 alpha 只有 **41**（16%），压在奶白卡片上等于隐形，
+               所以"0 颗心"和"这排心根本不存在"在玩家眼里长得一样。
+               两档都给实色，靠色相区分有没有 —— 空槽要看得见，才有"可以涨"的信息。 */
+            on.color = new Color(232, 104, 124, 255);
+            const ut = on.node.getComponent(UITransform);
+            if (ut) ut.setContentSize(h * ADV, 20.16);
+            on.node.setPosition(H0, on.node.position.y, 0);
+        }
+        if (off) {
+            /* 空心 `♡` 在中文字体里没有字形，渲染成方块（图鉴上那排方块）。
+               所以空的那几颗也用 `♥`，靠 hearts-off 自己的浅色区分 ——
+               形状一样、颜色两档，比"一半方块"清楚得多。 */
+            off.overflow = Label.Overflow.NONE;
+            const n = Math.max(0, 5 - h);
+            off.string = '♥'.repeat(n);
+            off.color = new Color(184, 168, 148, 255);
+            const ut = off.node.getComponent(UITransform);
+            if (ut) ut.setContentSize(n * ADV, 20.16);
+            off.node.setPosition(H0 + h * ADV, off.node.position.y, 0);
+        }
+    }
+
+    /**
+     * 刷新底部六个槽：头像 / 锁 / 「这趟带谁」的金圈。
+     *
+     * 改造前这里只有一个 16×16 的锁图标 + 一行 `差N关`，**六只宠物一张脸都没露**。
+     * 玩家看到的是一排密码锁，难怪"完全不知道有啥用"。
+     *
+     * 现在每格是一张头像：
+     *  · 已到家 → 原色 + 名字；
+     *  · 没到家 → 压暗 + 锁 + 「差N关」；
+     *  · 这趟带的那只 → 金圈。
+     */
+    private refreshSlots() {
+        const root = this.canvas.getChildByName('Dock');
+        if (!root) return;
+        const active = this.save.active;
+
+        for (const n of root.children.slice()) {
+            if (!n.name.startsWith('Slot-')) continue;
+            const def = petByNode(n.name.slice(5));
+            if (!def) continue;
+            const need = petGap(this.save.cleared, def.id);
+            const owned = need <= 0;
+            const on = owned && def.id === active;
+
+            /* ---- 头像 ----
+               28×28 @ (9.5, -15)：槽位 47×72，tag 从 -51 起，
+               所以脸占 -15..-43、正中在 -29 —— 和原来那个 16×16 的锁
+               （-21..-37，中心 -29）同一个视觉中心。上一版放 -9 顶上去了，
+               截图里头像是从盒子上沿冒出来的。 */
+            const sf = this.heads[def.short];
+            let head = n.getChildByName('__head');
+            if (sf) {
+                if (!head || !head.isValid) {
+                    head = new Node('__head');
+                    head.parent = n;
+                    head.addComponent(UITransform).setContentSize(28, 28);
+                    const hs = head.addComponent(Sprite);
+                    hs.sizeMode = Sprite.SizeMode.CUSTOM;
+                    head.setSiblingIndex(0);
+                }
+                head.active = true;
+                head.setPosition(9.5, -15, 0);
+                const hs = head.getComponent(Sprite);
+                if (hs) {
+                    hs.spriteFrame = sf;
+                    /* 没到家的压暗而不是隐身：玩家要看见"这一格是谁"，
+                       只是知道"还不能带它"。 */
+                    hs.color = owned ? WHITE : new Color(126, 112, 98, 255);
+                }
+            } else if (head && head.isValid) {
+                head.active = false;
+            }
+
+            /* ---- 锁：只在没到家时显示 ---- */
+            const lock = n.getChildByName('av-bg');
+            if (lock) lock.active = !owned;
+
+            /* ---- 金圈：这趟带的那一只 ---- */
+            let ring = n.getChildByName('__pick');
+            if (on) {
+                if (!ring || !ring.isValid) {
+                    ring = new Node('__pick');
+                    ring.parent = n;
+                    ring.addComponent(UITransform).setContentSize(34, 34);
+                    ring.setPosition(6.5, -12, 0);
+                    const rg = ring.addComponent(Graphics);
+                    rg.lineWidth = 2.6;
+                    rg.strokeColor = new Color(245, 185, 60, 255);
+                    rg.roundRect(-17, -17, 34, 34, 11);
+                    rg.stroke();
+                }
+                ring.active = true;
+            } else if (ring && ring.isValid) {
+                ring.active = false;
+            }
+
+            /* ---- 透明度：没到家 140，已到家 255 ---- */
+            const op = n.getComponent(UIOpacity) ?? n.addComponent(UIOpacity);
+            op.opacity = owned ? 255 : 140;
+
+            /* ---- tag：已到家写名字，没到家写还差几关，出战那只写「出战」 ----
+             * 场景里这行是**写死**的「第1关 / 第3关」，HomeRuntime 从来没人改过。
+             * 两个后果叠在一起就是玩家看到的「解锁了但主界面没有」：
+             *   ① 文字永远是「第N关」，玩家读成关卡编号而不是"还差几关"；
+             *   ② 已到家的那几格也挂着「第N关」+ 55% 灰，和没解锁的一模一样。 */
+            const tag = n.getChildByName('tag')?.getComponent(Label);
+            if (tag) {
+                tag.string = !owned ? `差${need}关` : on ? '出战' : def.name;
+                /* 场景里这行是 **8px / alpha 133**（给「第1关」这种短标签定的）。
+                   8px 的中文在 1280 宽下是 4 行以后就糊掉的大小，
+                   而这里要读的是名字 —— 换成 11px + 实色，
+                   「没到家」那几格的灰由父节点 UIOpacity(140) 统一压，不在这层减。 */
+                tag.fontSize = 11;
+                tag.overflow = Label.Overflow.SHRINK;
+                tag.color = on ? new Color(170, 108, 26, 255) : new Color(122, 80, 52, 255);
+                const tut = tag.node.getComponent(UITransform);
+                if (tut) tut.setContentSize(44, 14);
+            }
+        }
     }
 
     /* ----------------------------------------------------------------------
@@ -1095,8 +1361,18 @@ class HomeController {
             /* 关卡进度：**报总数不报产地**。
              * 原来是「苔原 x / 8」—— 8 是写死的，27 屏下第 9 屏就撞上界。
              * 现在报「x / 27 关」，产地由下面那排点分组表达，
-             * 不必再挤进这个 66px 宽的 Label（它旁边紧挨着「苔 原」两个字）。 */
-            if (txt) txt.string = `${s.cleared} / ${STAGE_COUNT} 关`;
+             * 不必再挤进这个 66px 宽的 Label（它旁边紧挨着「苔 原」两个字）。
+             *
+             * ⚠ 容器宽只有 35（场景里按「1 / 8 关」一位数写的）。两位数就会溢出：
+             * 文字审计报 `txt-prog [NONE] 文字 40px > 容器 35px 「11 / 27 关」`，
+             * 溢出部分直接画到容器外 —— 而且它跟「苔 原」是上下叠放的，
+             * 横向加宽不会撞到谁。所以放到 46 并加 SHRINK 兜住三位数。 */
+            if (txt) {
+                txt.overflow = Label.Overflow.SHRINK;
+                const ut = txt.node.getComponent(UITransform);
+                if (ut && ut.contentSize.width < 46) ut.setContentSize(46, ut.contentSize.height);
+                txt.string = `${s.cleared} / ${STAGE_COUNT} 关`;
+            }
             /* 关卡格：已通关的点亮。`pip-on` / `pip` 是两张不同的贴图，
                换图要换 spriteFrame + 尺寸，这里只做透明度降权 —— 
                保持"已确认版式不动"的原则，不引入新的切图。 */
@@ -1111,17 +1387,24 @@ class HomeController {
 
         /* ---- 出门按钮副标题：原来烘死在 Label 里写着"带砂糖" ----
            能量门禁删掉之后这里没有"还够不够出门"要报了，
-           换成这一趟最关键的两个数：几个人、饿到什么程度。 */
+           换成这一趟最关键的两个数：**带谁**、饿到什么程度。
+           写"3 只"是错的 —— 战斗里只有 1 个单位（一宠出征），
+           玩家会以为三个都上场。 */
         const go = this.canvas.getChildByName('Dock')?.getChildByName('Btn-Go');
         const gl = go?.getChildByName('line')?.getComponent(Label);
         if (gl) {
             gl.overflow = Label.Overflow.SHRINK;
-            gl.string = `${squadSize(s.cleared)} 只 · 饱食 ${Math.round(s.satiety)}`;
+            gl.string = `带 ${this.carrierText()} · 饱食 ${Math.round(s.satiety)}`;
         }
         this.refreshTaskBtn();
 
         /* ---- 饱食度：与战斗同一个 0~100 的数 ---- */
         this.refreshSatiety();
+        /* ---- 出战卡的头像 / 名字 / 心，以及底部槽的「这趟带谁」金圈 ----
+           这两件事原来**完全没有**：卡片和槽位都是场景里写死的静态图，
+           换谁出战都不变 —— 玩家看不出 bottom 那排格子和"出门"有关系。 */
+        this.refreshGoCard();
+        this.refreshSlots();
     }
 
     /**
@@ -1252,11 +1535,12 @@ class HomeController {
 
     /** 出战卡的文案（多处复用，避免各写一份各说一套） */
     private goCardText(): string {
-        const id = this.save.active;
-        const def = PETS.find((p) => p.id === id);
-        const name = def ? def.name : '砂糖';
+        const def = petById(this.save.active) ?? PETS[0];
         const v = Math.round(clamp(this.save.satiety, 0, SATIETY.max));
-        return `${name} · 心情 3 颗心 · 饱食 ${v} / ${SATIETY.max}`;
+        /* 心情读**这只自己的**亲密度。上一版这里写死 "心情 3 颗心" ——
+           六只共用一个假数字，而图鉴里同一只明明白白写着 ♥♡♡♡♡。 */
+        const h = heartsOf(this.save.pats[def.id] || 0);
+        return `${def.name} · 招式「${def.tag}」· 亲密度 ${h} / 5 · 饱食 ${v} / ${SATIETY.max}`;
     }
 
     /** 队伍一句话（出战卡 / 出发卡共用） */
@@ -1268,6 +1552,18 @@ class HomeController {
             ? `　再通 ${petGap(this.save.cleared, next.id)} 关 ${next.name} 回家`
             : '　全员到齐';
         return `${squadSize(this.save.cleared)} 只　${names.join(' / ')}${tail}`;
+    }
+
+    /**
+     * 这趟带谁 —— 出门按钮副标题 / 出发卡第一行共用。
+     *
+     * **"队伍 3 只"是个会误导人的说法。** 战斗里只有 1 个单位
+     * （宪法红线：一宠出征、六宠看家），所以玩家需要知道的是
+     * **哪一只**，而不是"一共几只"。写"3 只"会让人以为三个都上场。
+     */
+    private carrierText(): string {
+        const def = petById(this.save.active) ?? PETS[0];
+        return `${def.name} · ${def.tag}`;
     }
 
     /* ----------------------------------------------------------------------
@@ -1299,7 +1595,8 @@ class HomeController {
            否则派出去/收回来一次，垫子又回到一只。 */
         const onKinds: { n: Node; def: PetDef }[] = [];
         for (const n of kids) {
-            const def = PETS.find((p) => p.name === n.name);
+            /* 用 node 匹配，不是 name —— name 是显示文案，随文案改就会断 */
+            const def = petByNode(n.name);
             const on = !!def && this.save.cleared >= def.at;
             n.active = on;
             if (on && def) onKinds.push({ n, def });
@@ -2123,47 +2420,39 @@ class HomeController {
             });
         }
 
-        /* —— 锁定槽：视觉降到 55% 表达不可用，点击给出还差几关 —— */
+        /* —— 底部六格：**这就是「这趟带谁出门」的开关** ——
+         *
+         * 改造前这六格点下去只弹一句「已经在家了 · 待解锁出战位」——
+         * 一个指向"以后会有"的功能，而它当时没有任何写入路径。
+         * `save.active` 从头到尾只有开局那只，于是：
+         *   主界面解锁了五只 → 进战斗还是尖耳猫 → 「解锁有什么用」。
+         *
+         * 现在点一下 = 换出战（`setActive` 写存档），卡片、金圈、出门按钮
+         * 同一帧跟着变，`launchBattle` 带的就是它。
+         * **出场人数仍然是 1 只**（宪法红线：一宠出征，六宠看家）——
+         * 换的是"哪一只"，不是"几只"。
+         */
         for (const n of root.children.slice()) {
             if (!n.name.startsWith('Slot-')) continue;
             const pet = n.name.slice(5);
             /* 还差几关从**花名册 + 存档**算，不再查一张写死的表 ——
                那张表在家园和战斗各有一份，改了解锁节奏必然漏一处。 */
-            const def = PETS.find((p) => p.name === pet);
-            const need = def ? petGap(this.save.cleared, def.id) : 0;
-
-            const op = n.getComponent(UIOpacity) ?? n.addComponent(UIOpacity);
-            /* 已解锁的槽位必须**亮起来**。
-             *
-             * 原来这里对**所有** Slot 一律 `opacity = 140`（55% 透明）——
-             * 玩家把宠物接回家了，底部那一格还是灰的，读成"根本没解锁"。
-             * 这是「解锁了主界面没有」最直观的那一刀：草地上的判据错了是看不见，
-             * 槽位这里错了是**看得见的灰**，杀伤更大。
-             *
-             * 140 = 未解锁（必须灰，否则玩家以为能换出战位）；
-             * 255 = 已到家（原色，和旁边资源卡同一亮度档）。 */
-            op.opacity = need > 0 ? 140 : 255;
-
-            /* tag 是场景里**写死**的「第N关」，HomeRuntime 从来没人改过它。
-             *
-             * 两个后果叠在一起，就是玩家看到的「解锁了但主界面没有」：
-             *   ① 文字永远是「第1关 / 第3关」这种名词短语，玩家读成关卡编号，
-             *      而不是「我还差几关」；
-             *   ② 已到家的那几格也还挂着「第N关」，加上 55% 灰 ——
-             *      看起来和没解锁的一模一样。
-             *
-             * 已到家 → 写宠物名（这一格从此是「我的伙伴」，不是「待办」）；
-             * 未到家 → 写「差N关」，把距离写在脸上。
-             * 口径和 game.html 的 `.tag` 保持一致，两边读起来是同一句话。 */
-            const tag = n.getChildByName('tag')?.getComponent(Label);
-            if (tag) tag.string = need > 0 ? `差${need}关` : pet;
+            const def = petByNode(pet);
+            if (!def) continue;
 
             this.press(n, 0.94);
             n.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
                 e.propagationStopped = true;
-                this.toast(need > 0
-                    ? `${pet} · 再通过 ${need} 关就会回家`
-                    : `${pet} 已经在家了 · 待解锁出战位`);
+                const r = setActive(this.save, def.id);
+                this.toast(r.say);
+                if (!r.ok) return;
+                /* commit 会跑 bindSave → refreshGoCard / refreshSlots，
+                   卡片和六格同一帧换脸，不需要在这里手工刷。 */
+                this.commit(r.next);
+                /* 草地上那只跳一下：让"换人"在世界里也有回执，
+                   否则玩家只看见底栏变了，怀疑是不是真换了。 */
+                const lawn = this.pets.find((p) => petByNode(p.node.name)?.id === def.id);
+                if (lawn) lawn.pop = 0.5;
             });
         }
     }
@@ -2492,6 +2781,7 @@ class HomeController {
         const s = this.save;
         const squad = squadSize(s.cleared);
         const names = unlockedPets(s.cleared).slice(0, MAX_SQUAD).map((p) => p.name);
+        const carry = petById(s.active) ?? PETS[0];
         const mul = s.satiety >= SATIETY.fullLine
             ? SATIETY.mulFull
             : s.satiety >= SATIETY.hungryLine
@@ -2528,7 +2818,9 @@ class HomeController {
         lg.rect(-240, -1, 480, 2);
         lg.fill();
 
-        mkLabel(card, 'row1', `队伍   ${squad} 只 · ${names.join(' / ')}`, 20, INK, 500, 32)
+        /* 第一行报**这趟带谁**，不是"队伍几只"。
+           一宠出征，场上只有一个单位 —— 写"3 只"会让人以为三个人上场。 */
+        mkLabel(card, 'row1', `这趟带   ${this.carrierText()}`, 20, INK, 500, 32)
             .node.setPosition(0, 8, 0);
         mkLabel(card, 'row2',
             `饱食   ${Math.round(s.satiety)}/${SATIETY.max} · 火力 ×${mul.toFixed(2)}` +
@@ -2607,7 +2899,7 @@ class HomeController {
            不能再用「只留 lead 一只」—— 派遣一次回来，草地又只剩一只，
            玩家会以为自己的解锁被吞了。 */
         for (const p of this.pets) {
-            const def = PETS.find((x) => x.name === p.node.name);
+            const def = petByNode(p.node.name);
             if (!def) continue;
             p.node.active = this.save.cleared >= def.at && def.id !== away;
         }
@@ -2722,6 +3014,7 @@ class HomeController {
     private mkRow(
         parent: Node, name: string, title: string, meta: string, action: string,
         x: number, y: number, onClick: () => void, enabled = true, h = 62,
+        headShort = '',
     ) {
         const w = 560;
         const row = new Node(name);
@@ -2746,8 +3039,23 @@ class HomeController {
         g.roundRect(ax - aw / 2, -ah / 2, aw, ah, 16);
         g.fill();
 
-        mkLabel(row, 'mark', title.slice(0, 1), 18, new Color(92, 60, 24, 255), 36, 26)
-            .node.setPosition(-w / 2 + 36, 0, 0);
+        /* 左边那枚圆：有头像就贴头像，没有才用"名字首字"。
+           派遣 / 工坊这些面板里全是宠物，一个汉字对着一排汉字认不出谁是谁 ——
+           头像比首字快一个量级，而且和底部槽 / 图鉴是同一张图。 */
+        const hsf = headShort ? this.heads[headShort] : undefined;
+        if (hsf) {
+            const hn = new Node('head');
+            hn.parent = row;
+            hn.addComponent(UITransform).setContentSize(34, 34);
+            hn.setPosition(-w / 2 + 36, 0, 0);
+            const hs = hn.addComponent(Sprite);
+            hs.sizeMode = Sprite.SizeMode.CUSTOM;
+            hs.spriteFrame = hsf;
+            hs.color = enabled ? WHITE : new Color(150, 138, 126, 255);
+        } else {
+            mkLabel(row, 'mark', title.slice(0, 1), 18, new Color(92, 60, 24, 255), 36, 26)
+                .node.setPosition(-w / 2 + 36, 0, 0);
+        }
         const two = h >= 56;
         const tl = mkLabel(row, 'title', title, two ? 20 : 16, enabled ? INK : INK_SOFT, 220, two ? 26 : 22);
         tl.horizontalAlign = Label.HorizontalAlign.LEFT;
@@ -2986,55 +3294,101 @@ class HomeController {
         return null;
     }
 
+    /**
+     * 派遣面板。
+     *
+     * **改造前它只有一个「派出」按钮和一句 toast** —— 面板上既没有产出预期、
+     * 也没有"已经攒了几趟"、更没有"这些产出拿去干嘛"。玩家的原话是
+     * 「派遣也是很简单，不知道有啥用」。三件事一起补：
+     *
+     *   ① **产出预期写在每一行上**（`yieldText`，和结算读同一张表）；
+     *   ② **攒了几趟 / 还差多少秒**写出来 —— 60 秒一趟、最多 10 趟，
+     *      所以"先去打一局再回来收"是一个算得出来的决定；
+     *   ③ **把用途接上**：产出里有**干粮**，而干粮是灶台直接吃的东西。
+     *      饱食度每关 −16、饿了火力降 —— 派遣第一次接进了战力那条链。
+     *
+     * 这里不出"多宠并行"：存档里 `dispatch` 是单只（`{id, since}`），
+     * 改成数组要迁移存档，而"一次一只"本身也是这套养成的节奏
+     * （一宠出征、六宠看家 —— 出去的永远只有一只）。
+     */
     private openDispatch() {
         const s = this.save;
         const job = s.dispatch;
+        const peek = peekDispatch(s, Date.now());
+
+        const bits: string[] = [];
         if (job) {
-            const peek = peekDispatch(s, Date.now());
-            const name = PETS.find((p) => p.id === job.id);
-            const who = name ? name.name : '它';
-            const sub = peek.hauls > 0
-                ? `${who} 可以收回 ${peek.hauls} 趟 · 果子 ${peek.apples} · 材料 ${peek.logs} · 吧唧 ${peek.coins}`
-                : `${who} 还要 ${peek.left} 秒 · 一趟 ${DISPATCH_SEC} 秒，最多 ${DISPATCH_CAP} 趟`;
-            this.openSheet('派遣', sub, (card) => {
-                this.mkRow(
-                    card, 'back', who,
-                    peek.hauls > 0
-                        ? `果子 ${peek.apples} · 材料 ${peek.logs} · 吧唧 ${peek.coins}`
-                        : `还要 ${peek.left} 秒`,
-                    peek.hauls > 0 ? '收回' : '等着',
-                    0, 20,
-                    () => { this.act(collectDispatch(this.save, Date.now()), () => this.openDispatch()); },
-                    peek.hauls > 0,
-                );
-            });
-            return;
+            const who = petById(job.id);
+            const n = who ? who.name : '它';
+            bits.push(peek.hauls >= DISPATCH_CAP
+                ? `${n} 攒满 ${DISPATCH_CAP} 趟了，先收回`
+                : peek.hauls > 0
+                    ? `${n} 攒了 ${peek.hauls} 趟 · 还能再攒 ${DISPATCH_CAP - peek.hauls} 趟`
+                    : `${n} 还要 ${peek.left} 秒才攒满第一趟`);
+        } else {
+            bits.push('留在家里的能出门采集 · 干粮能直接喂肚子');
         }
-        const owned = unlockedPets(s.cleared);
-        this.openSheet(
-            '派遣',
-            owned.length < 2
-                ? '家里只有一只，先去苔原带同伴回来'
-                : '留在家里的去采集。跟你出门的那只这趟不派。',
-            (card) => {
-                const choices = owned.filter((p) => p.id !== s.active);
-                if (!choices.length) {
-                    mkLabel(card, 'none', '没有能派的同伴', 18, INK_SOFT, 400, 32).node.setPosition(0, 20, 0);
-                    return;
-                }
-                choices.forEach((p, i) => {
-                    const ok = canDispatch(s, p.id);
-                    this.mkRow(
-                        card, p.id, p.name,
-                        ok ? '留在家里，可以去采' : '跟你出门，这趟不派',
-                        ok ? '派出' : '不能派',
-                        0, 78 - i * 70,
-                        () => { this.act(startDispatch(this.save, p.id, Date.now()), () => this.openDispatch()); },
-                        ok,
+        bits.push(`一趟 ${DISPATCH_SEC} 秒 · 最多攒 ${DISPATCH_CAP} 趟`);
+
+        this.openSheet('派遣', bits.join('　·　'), (card) => {            const owned = unlockedPets(s.cleared);
+            /* 出门在外的排最前 —— 玩家点进这个面板十次有九次是来收东西的。 */
+            const list = owned.slice().sort((a, b) => {
+                const ra = job && job.id === a.id ? 0 : a.id === s.active ? 2 : 1;
+                const rb = job && job.id === b.id ? 0 : b.id === s.active ? 2 : 1;
+                return ra - rb;
+            });
+
+            list.forEach((p, i) => {
+                const isAway = !!job && job.id === p.id;
+                const isOut = p.id === s.active;
+
+                let meta: string;
+                let action: string;
+                let ok = false;
+                let onClick = () => {};
+
+                if (isAway) {
+                    const ready = peek.hauls > 0;
+                    /* 收成明细和"还差几秒"分两段写：玩家要的是"现在能不能点"，
+                       而不是一个混合了两种状态的句子。 */
+                    meta = ready
+                        ? `${peek.hauls} 趟 · ${[
+                            peek.ration ? `干粮 ${peek.ration}` : '',
+                            peek.apples ? `果子 ${peek.apples}` : '',
+                            peek.logs ? `材料 ${peek.logs}` : '',
+                            peek.coins ? `吧唧 ${peek.coins}` : '',
+                        ].filter(Boolean).join(' · ')}`
+                        : `${peek.left} 秒后来收`;
+                    action = ready ? '收回' : '等着';
+                    ok = ready;
+                    onClick = () => this.act(
+                        collectDispatch(this.save, Date.now()),
+                        () => this.openDispatch(),
                     );
-                });
-            },
-        );
+                } else if (isOut) {
+                    meta = `跟你出门 · ${yieldText(p.id)}`;
+                    action = '出战';
+                } else if (job) {
+                    meta = '一次只能派一只，先收回外面的';
+                    action = '不能派';
+                } else {
+                    meta = yieldText(p.id);
+                    action = '派出';
+                    ok = canDispatch(s, p.id);
+                    onClick = () => this.act(
+                        startDispatch(this.save, p.id, Date.now()),
+                        () => this.openDispatch(),
+                    );
+                }
+
+                this.mkRow(card, p.id, p.name, meta, action, 0, 132 - i * 64, onClick, ok, 58, p.short);
+            });
+
+            if (!owned.length) {
+                mkLabel(card, 'none', '家里还没有伙伴', 18, INK_SOFT, 400, 32)
+                    .node.setPosition(0, 20, 0);
+            }
+        }, 640, 560);
     }
 
     private openSettings() {
@@ -3095,10 +3449,14 @@ class HomeController {
      * 图鉴面板。**内容全部从存档现算**，和锁定槽、出发卡共用同一份
      * `PETS` / `petGap()` —— 三处写三个解锁节奏，改一次必然漏两处。
      *
-     * 头像不用贴图：六个头像分别绑在场景节点上（`ui/home/heads-circle/*`），
-     * 不在 `resources` 下，运行时 load 不到。这里用 Graphics 画圆 + 首字，
-     * 已收服的用暖黄、未收服用灰 —— 一眼分得清"有"和"没有"就够，
-     * 图鉴的职责是陈列状态，不是展示立绘（立绘在主界面场景里已经能看）。
+     * 头像走 `this.heads`（`resources/grove/head/<short>.png`，和战斗 HUD
+     * 左上角那个头像是同一份图）。**上一版这里画的是名字首字** ——
+     * 格子里是「尖」「短」「胖」，玩家管这叫"图鉴不显示 ICON，太 low"。
+     * 当时不贴图的理由是"头像不在 resources 下、运行时 load 不到"，
+     * 而 `gen_grove_art.py` 早就把 `ui/home/heads-circle/` 收缩进
+     * `resources/grove/head/` 了 —— 那个理由当时就不成立，只是一直没人回头看。
+     *
+     * 图没加载上时仍然退回"圆底 + 首字"：不留白框，也不崩。
      */
     private ensureCodex() {
         if (this.codex) return;
@@ -3134,8 +3492,10 @@ class HomeController {
         const owned = PETS.filter((p) => cleared >= p.at).length;
 
         mkLabel(card, 'title', '图鉴', 34, INK, 400, 48).node.setPosition(0, 190, 0);
+        /* 标题容器 [166,214]、副标题容器 [140,168] 原来差 2px 就咬在一起，
+           文字审计报 `card/title × card/sub 400×2px`。下移到 148 → 净间隙 4px。 */
         mkLabel(card, 'sub', `已收服 ${owned} / ${PETS.length}`, 18, INK_SOFT, 400, 28)
-            .node.setPosition(0, 154, 0);
+            .node.setPosition(0, 148, 0);
 
         /* ---- 战绩条：每关的最佳评级 ----
          *
@@ -3190,31 +3550,67 @@ class HomeController {
             cell.setPosition(cx0, cy0, 0);
             const cg = cell.addComponent(Graphics);
 
-            /* 圆底：已收服暖黄、未收服灰。半径 42，直径 84 —— 
-               手指点不到不是问题（这一格不可点），但要一眼看清"有没有"。 */
-            cg.fillColor = got ? new Color(246, 206, 128, 255) : new Color(206, 198, 186, 255);
-            cg.circle(0, 34, 42);
-            cg.fill();
-            cg.lineWidth = 3;
-            cg.strokeColor = got ? new Color(176, 122, 60, 255) : new Color(158, 148, 136, 255);
-            cg.circle(0, 34, 42);
-            cg.stroke();
+            /* 圆底：**只作兜底**。头像本身是自带奶油底的圆片（96×96，
+               四角透明），贴上去就把这个圆盖住了。没有图时才靠它。 */
+            const sf = this.heads[p.short];
+            if (!sf) {
+                cg.fillColor = got ? new Color(246, 206, 128, 255) : new Color(206, 198, 186, 255);
+                cg.circle(0, 34, 42);
+                cg.fill();
+                mkLabel(cell, 'mark', got ? p.name.slice(0, 1) : '?', 34,
+                        got ? new Color(92, 60, 24, 255) : new Color(120, 112, 104, 255), 80, 44)
+                    .node.setPosition(0, 34, 0);
+            }
 
-            /* 圆里放名字首字 / 问号。用 Label 而不是画图形：
-               中文首字只有 Label 能保证对齐。 */
-            mkLabel(cell, 'mark', got ? p.name.slice(0, 1) : '?', 34,
-                    got ? new Color(92, 60, 24, 255) : new Color(120, 112, 104, 255), 80, 44)
-                .node.setPosition(0, 34, 0);
+            /* 头像（84×84，和原来的圆同直径）。没到家的压暗 —— 不是隐身：
+               玩家要看见"这一格是谁"，只是知道"还不能带它"。 */
+            const head = new Node('head');
+            head.parent = cell;
+            head.addComponent(UITransform).setContentSize(84, 84);
+            head.setPosition(0, 34, 0);
+            const hs = head.addComponent(Sprite);
+            hs.sizeMode = Sprite.SizeMode.CUSTOM;
+            if (sf) {
+                hs.spriteFrame = sf;
+                hs.color = got ? WHITE : new Color(110, 100, 92, 255);
+            } else {
+                head.active = false;
+            }
 
+            /* 描边画在头像**上面**：Graphics 挂在 cell 上会先于子节点绘制，
+               所以另起一个节点。这一圈是"收服了"和"没解锁"唯一的硬区别 ——
+               只靠压暗的话，暖黄底下压暗一档还是暖的。 */
+            const ring = new Node('ring');
+            ring.parent = cell;
+            ring.addComponent(UITransform).setContentSize(88, 88);
+            ring.setPosition(0, 34, 0);
+            const rg2 = ring.addComponent(Graphics);
+            rg2.lineWidth = 3;
+            rg2.strokeColor = got ? new Color(176, 122, 60, 255) : new Color(158, 148, 136, 255);
+            rg2.circle(0, 0, 42);
+            rg2.stroke();
+
+            /* 没到家的在头像上盖一个问号 —— 压暗的头像仍然认得出是谁，
+               问号回答的是"能不能带"，两件事分开说。 */
+            if (!got) {
+                mkLabel(cell, 'mark', '?', 40, new Color(255, 250, 240, 235), 80, 52)
+                    .node.setPosition(0, 34, 0);
+            }
+
+            /* 三行的容器高宽是 24/20/18，按 4px 净间隙排开：
+               name [-32,-8] / state [-56,-36] / line [-79,-61]。
+               原来 26/22/20 挤在 -22/-48/-68 上，state 与 line 的容器
+               直接咬 1px（审计报 `state × line 180×1px`）——
+               换心形文案后读起来就是"亲密度这行贴着台词"。 */
             mkLabel(cell, 'name', got ? p.name : '未收服', 19,
-                    got ? INK : INK_SOFT, 180, 26).node.setPosition(0, -22, 0);
+                    got ? INK : INK_SOFT, 180, 24).node.setPosition(0, -20, 0);
 
             const pats = this.save.pats[p.id] || 0;
-            mkLabel(cell, 'state', got ? `${heartText(pats)}  摸 ${pats}` : `还差 ${gap} 关`, 14,
-                    got ? new Color(63, 125, 36, 255) : INK_SOFT, 180, 22)
-                .node.setPosition(0, -48, 0);
-            mkLabel(cell, 'line', got ? (PET_LINE[p.id] || '') : '', 13, INK_SOFT, 180, 20)
-                .node.setPosition(0, -68, 0);
+            mkLabel(cell, 'state', got ? `${heartText(pats)} · 摸 ${pats}` : `还差 ${gap} 关`, 14,
+                    got ? new Color(63, 125, 36, 255) : INK_SOFT, 180, 20)
+                .node.setPosition(0, -46, 0);
+            mkLabel(cell, 'line', got ? (PET_LINE[p.id] || '') : '', 13, INK_SOFT, 180, 18)
+                .node.setPosition(0, -70, 0);
         });
 
         mkLabel(card, 'tip', '点空白处关闭', 14, INK_SOFT, 400, 22).node.setPosition(0, -206, 0);

@@ -43,8 +43,9 @@ client/prototype/*.bak-*.html
 .playwright-mcp/
 client/prototype/_check2/
 
-# client/shots 已于 c6c06fc 定性为纯工具落点、零运行时引用，目录整体废弃不再保留。
-# 残留的 README 放行规则一并移除；今后所有评审图直接归档到 client/art/04-review/。
+# client/shots 是 `_home-rt-shot.js` / `grove-shot3.js` 的落图点（纯工具产物、零运行时引用）。
+# 整个目录忽略：跑一次截图就冒出一堆 _t-*.png，不入库。要归档的评审图另存 client/art/04-review/。
+client/shots/
 
 # Cocos Creator 的用户级缓存（每个机器的编辑器状态，不是项目资产）
 client/.creator/

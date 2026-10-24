@@ -49,6 +49,7 @@ import {
     groveSetExitHook, groveTick, GROVE,
 } from './GroveRuntime';
 import { loadSave, saveSave, LEVEL_COUNT } from '../config/SaveData';
+import { heroIndexOf } from '../config/Roster';
 import { applyRunReward, payoutFromRun } from '../config/HomeBiz';
 
 const { ccclass } = _decorator;
@@ -161,7 +162,20 @@ export class GroveBattle extends Component {
         groveAttachCanvas(cv);
         groveSetExitHook((kind) => this._backHome(kind));
         this._loadArt();
-        groveBoot();
+
+        /* **带着主界面选好的那只出门。**
+         *
+         * 这一行是「主界面解锁了五只，进战斗还是尖耳猫」那条链的最后一环。
+         * 上一版这里是裸的 `groveBoot()` —— 不传 hero，运行时就用默认值 0，
+         * 于是不管你在主界面选谁，场上永远是第一只。玩家读成
+         * 「解锁有什么用」，而实际上中间只差这一次换算。
+         *
+         * 数据源只有一个：存档的 `active`。不另开一条跨场景通道 ——
+         * **同一件事存两份必然漂移**（这个项目已经为这条交过两次学费）。
+         * `heroIndexOf` 是 id → HEROES 下标的唯一换算点。
+         */
+        const save = loadSave();
+        groveBoot(heroIndexOf(save.active));
 
         this._bindCocosInput();
         this._ready = true;

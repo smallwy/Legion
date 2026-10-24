@@ -2298,6 +2298,32 @@ const GOALS = {
   },
 };
 
+/* ---------------------------------------------------------------------------
+   右上目标卡的版式
+   ---------------------------------------------------------------------------
+   **这个矩形不是审美选择，是一条几何约束。** 用户连着两轮报"目标 UI 那么大，
+   和战斗场景重叠" —— 量下来是真事，不是错觉：
+
+     第 8 屏「双塔」有一块台面 x660~860 / y156；
+     第 23 屏「芦苇荡」是 x480~700 / y156。
+     玩家站在这两块上，脚踩 156、头顶 ≈116。
+
+   原来卡片是 272×168 @ (672, 14)，下沿 182 —— 把那块台子的**上半截连同站在
+   上面的人一起盖住**，而且在 x 672~860 这段是真盖（不是擦边）。
+
+   27 屏扫一遍：右半最高台面 y=156。所以只要 **卡片下沿 ≤ 112**，
+   就永远碰不到任何落脚面（离最低的那块还留 44px）。
+   收窄到 300×96 @ (644, 14) 之后，行高只有 24px，内容必须重排 ——
+   见 drawHud 里目标卡那一段。
+
+   **冒烟和绘制必须读同一份。** 上一版两处各写死一个 672：卡片挪了位置，
+   断言还在验旧位置，测试全绿而界面已经压住台子 —— 这是"最贵的教训"第 2 条。
+   ------------------------------------------------------------------------- */
+const GOAL_CARD = { x: 644, y: 14, w: 300, h: 96, ds: 26 };
+/* 卡片内四条基线的 y。写在这里而不是散在绘制里，是为了让"内容有没有超出卡片"
+   变成一道能算的题（内容底 = COND_Y + 8.5 = 96.5，卡片底 110）。 */
+const GOAL_ROW = { title: 30, brief: 48, bar: 66, cond: 88 };
+
 /** 当前场景的四件套 + 三种特殊件。loadLevel() 换掉它们，其余代码照旧引用。 */
 let PLATS = LEVELS[0].plats;
 let PITS = LEVELS[0].pits;
@@ -9503,64 +9529,69 @@ function drawHUD(g) {
 
   /* ---------------- 目标卡（右上） ----------------
    *
-   * 版式从"两行字 + 一条胶囊 + 一行小字"改成四段：
-   *   ① 玩家语言的目标名（`title`，不是 `name`）
+   * 内容四段，纵向四条基线（GOAL_ROW）：
+   *   ① 玩家语言的目标名（`title`，不是 `name`）+ 手上的口粮 + 倒数几句
    *   ② 一句能照着做的说明（往哪推、推到哪）
    *   ③ **一颗豆子 = 一只小怪** 的进度阵列
-   *   ④ 绝对数 + 手上的口粮
+   *   ④ 读数带：用时 / 用球 / 本关奖励
    *
-   * ③ 是这次改版的核心。上一版是一根连续填充条、条内印 10px 的字：
-   * "已送 4 / 12" 是**这一局唯一的目标读数**，却被压进 14px 高的胶囊里，
-   * 字号只能给到 10px —— 玩家得凑近才读得出，读不出就只能猜"我还差几个"。
-   * 拆成十几颗豆子之后，"还剩几个空圈"是扫一眼就有的答案，根本不用读字。
+   * ③ 是上一版留下的核心：一条连续填充条、条内印 10px 的字，
+   * "已送 4 / 12" 是这一局唯一的目标读数却被压进 14px 高的胶囊里，
+   * 玩家得凑近才读得出。拆成十几颗豆子之后，"还剩几个空圈"是扫一眼就有的答案。
    *
-   * 卡片尺寸 272×130 → 272×168：多出来的 38px 是**S 的两个条件**（⑤）。
-   * 顶到 y=182 也不挡东西 —— 关卡名在正中（x 380~580），卡片从 x=672 起。
+   * **尺寸从 272×168 收到 300×96 是一次纠正，不是缩水。** 上一版那句
+   * "顶到 y=182 也不挡东西"是错的：它只算了关卡名，没算**关卡几何**。
+   * 第 8 屏「双塔」的台面在 y=156、x660~860，玩家站在那上面头顶 ≈116，
+   * 整只被卡片盖住。27 屏扫下来右半最高台面就是 156，所以把下沿压到 110
+   * 就彻底安全 —— 具体推理见文件上方 GOAL_CARD 那段。
    */
-  panelBg(g, "ui-cream", W - 288, 14, 272, 168, 26, "rgba(12,26,20,.72)", 14);
+  panelBg(g, "ui-cream", GOAL_CARD.x, GOAL_CARD.y, GOAL_CARD.w, GOAL_CARD.h,
+          GOAL_CARD.ds, "rgba(12,26,20,.72)", 14);
 
-  const GX = W - 270, GW = 236;
+  const GX = GOAL_CARD.x + 14, GW = GOAL_CARD.w - 28;
   const pr = goalProgress();
 
-  // ① 目标名（玩家语言）
+  // ① 目标名（玩家语言）+ 手上的口粮，同一行
   g.textAlign = "left";
   g.textBaseline = "middle";
   g.fillStyle = K.hi;
-  g.font = "bold 19px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.fillText(curGoal().title || curGoal().name, GX, 32);
+  g.font = "bold 17px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  const goalTitle = curGoal().title || curGoal().name;
+  g.fillText(goalTitle, GX, GOAL_ROW.title);
+  const gtw = g.measureText(goalTitle).width;
 
-  // 口粮挪到第一行右端。它和信息行是两件事（"这局要什么" / "我身上有多少"），
-  // 挤在同一行末尾会和"造球 3 / 10"连成一串数字。
+  /* 口粮紧跟在目标名右边（不是钉在卡片右端）。
+   * 卡片右端要留给「还差 12 只」那句 —— 两个都钉右端就会打架，
+   * 而"我手上还有几份口粮"和"目标要几份"本来就该挨着读。 */
   const coinArt = artOf("ui-coin");
   const coinTxt = "" + S.food;
-  g.font = "bold 14px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  const cw = g.measureText(coinTxt).width;
-  const cxRight = W - 34;
+  g.font = "bold 13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  const coinTxtW = g.measureText(coinTxt).width;
+  const coinX = GX + gtw + 13;
   if (coinArt) {
-    g.drawImage(coinArt, cxRight - cw - 19, 24, 15, 15);
+    g.drawImage(coinArt, coinX, GOAL_ROW.title - 7.5, 15, 15);
   } else {
     g.fillStyle = "#FFD86B";
     g.beginPath();
-    g.arc(cxRight - cw - 12, 32, 6.5, 0, 6.283);
+    g.arc(coinX + 7.5, GOAL_ROW.title, 6.5, 0, 6.283);
     g.fill();
   }
-  g.textAlign = "right";
   g.fillStyle = K.hi;
-  g.fillText(coinTxt, cxRight, 32);
-  g.textAlign = "left";
+  g.fillText(coinTxt, coinX + 19, GOAL_ROW.title);
 
-  // ② 说明。fitText 兜底：七套 brief 长短不一，最长那句在 236 宽里会顶出去。
+  // ② 说明。fitText 兜底：七套 brief 长短不一，最长那句 206.7px / 可用 272
   g.fillStyle = K.ink2;
-  g.font = "11.5px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.fillText(fitText(g, curGoal().brief(curStage(), S.total), GW), GX, 51);
+  g.font = "11px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  g.fillText(fitText(g, curGoal().brief(curStage(), S.total), GW), GX, GOAL_ROW.brief);
 
-  // ③ 进度：能数清的关走豆子，数不清的关（收成 70 份）走连续条
-  /* BY 从 76 提到 72、BH 从 16 收到 14 —— 原来连续条的下沿在 92，
-     而下一行「还差 N 只」的 12.5px 字从中线 97 往上长到 90.75，
-     **两条真的叠在一起**（截图里那行字是压在条的下边框上的）。
-     豆子那条路径不会撞（豆心在 BY+1、半径 5.8，下沿只到 79），
-     所以这个错只在"收成 / 连锁 / 零崩 / 无伤"这几关出现。 */
-  const BX = GX, BY = 72, BW = GW, BH = 14;
+  /* ③ 进度：能数清的关走豆子，数不清的关（收成 70 份）走连续条
+   *
+   * BY 从 72 提到 66、BH 从 14 收到 11 —— 卡片整体压到 96 高（见 GOAL_CARD
+   * 那段注释），四条基线之间只剩 18px。豆子那条路径不受影响
+   * （豆心在 BY+1、半径 5.8，上沿 61.2 下沿 72.8，夹在 48 和 88 之间），
+   * 连续条的槽变成 11 高：`pr.inner` 那条 10px 的字本来就永远不成立
+   * （goalProgress 从来没有返回过 inner），所以没有字号问题。 */
+  const BX = GX, BY = GOAL_ROW.bar, BW = GW, BH = 11;
   if (pr.cells > 0) {
     /* 一颗豆子 = 一只小怪（或一颗球）。**固定豆径、整体居中**：
      * 按 N 均分宽度会让 8 只的关豆子散得像省略号、14 只的关挤成一串珠子。
@@ -9622,108 +9653,112 @@ function drawHUD(g) {
     }
   }
 
-  /* ④ 信息行：左「已送 / 还差」，右「造球 n / S 线」
+  /* ④ 倒数 + ⑤ S 的两个条件 + 本关奖励 —— **压成同一行**
    *
-   * **左侧一律给"还差几只"而不是"已送几只"。**
-   * 玩家站在场上问的问题是"我还要推几次"，不是"我推了几次"——
-   * 后者是复盘用的，前者才是能立刻变成动作的。豆子阵列已经表达了绝对进度，
-   * 这里补一句倒数的中文，两种读法互相兜底。 */
+   * 卡片从 272×168 收到 300×96 之后，四条基线之间只剩 18px，
+   * 原来"倒数一行 / S 条件一行 / 奖励一行"的三行纵向排法放不下了。
+   *
+   * 但这不是"被逼着挤在一起"，是本来就该在一起：
+   *   倒数   = 主目标还差多少
+   *   用时/用球 = 拿 S 的两个条件
+   *   奖励   = 这一屏打完能挣到什么
+   * 四者都是"这一屏的读数"，横向排成一条读数带比纵向堆成表格更扫得快。
+   *
+   * 宽度实测（真字体量过）：用时 75.6 + 用球 58.3 + 奖励 76，
+   * 加上间距 256 < 可用 272 —— 有富余，所以奖励存在时不用缩字。 */
   const pendingInBall = S.killed >= S.total && S.balls.length > 0;
+  /* 这句原来叫「把球里剩下的送走！」（117px），收窄后会把口粮挤出去。
+   * 改短不是妥协：玩家此刻要做的动作是"把已经在场上的球推过去"，
+   * 「把球推去营地！」更短也更像指令。 */
   const leftTxt = pendingInBall
-    ? "把球里剩下的送走！"
+    ? "把球推去营地！"
     : pr.done ? "全送走了 ✓"
     : "还差 " + Math.max(0, S.total - S.killed) + " 只";
 
+  /* 倒数句钉在卡片右端。它和标题、口粮同一行 —— 三者加起来
+     102(标题最长) + 13 + 40(口粮) = 155，右端再放 91 的倒数，共 246 < 272。 */
+  g.textAlign = "right";
   g.fillStyle = pendingInBall ? "#FFB060" : (pr.done ? K.good : K.ink);
   g.font = (pendingInBall ? "bold " : "") +
-    "12.5px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  g.fillText(fitText(g, leftTxt, 118), GX, 97);
+    "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  g.fillText(fitText(g, leftTxt, 110), GX + GW, GOAL_ROW.title);
+  g.textAlign = "left";
 
-  /* ---------------- ⑤ S 的两个条件 · 常驻 ----------------
-   *
-   * **这是"一屏三目标"落地的地方。** 一屏其实一直有三个目标：
-   *   ① 主目标（右上第一行，不过就判负）
-   *   ② 用时压在 S 线内
-   *   ③ 用球压在 S 线内
-   * 但 ②③ 原来只活在**结算卡**上 —— 打的时候完全不知道自己离 S 有多远，
-   * 打完了才被告知"用时 41.2s / S 线 60s"。那是一条复审信息，
-   * 不是一条能改变动作的信息。
-   *
-   * 现在 ②③ 常驻在卡片里，实时读秒、**达标染绿、超了染红**。
-   * 于是"要不要再省一颗球"变成一个每一秒都能自己回答的问题 ——
-   * 这也正是重打刷 S 的全部动机所在。
-   *
-   * 上一版把「造球 3 / 10」塞在信息行右端，孤零零一串数字，
-   * 玩家读成"球的上限是 10"。给一个"条件"的样子（一颗指示灯 + 一条对照），
-   * 它才读成"目标"。 */
+  /* 读数带：最底一行。三枚胶囊从左往右排，谁在场谁占位。 */
   {
     const par = curStage().par;
-    const conds = [
-      { ok: S.playT <= par.time,
-        txt: "用时 " + Math.floor(S.playT) + " / " + par.time + "s" },
-      { ok: S.stat.made <= par.made,
-        txt: "用球 " + S.stat.made + " / " + par.made },
-    ];
-    const cw2 = (GW - 8) / 2, cy2 = 121;
-    for (let i = 0; i < conds.length; i++) {
-      const cd = conds[i];
-      const x = GX + i * (cw2 + 8);
-      g.fillStyle = cd.ok ? "rgba(120,178,54,.18)" : "rgba(150,110,80,.13)";
-      rr(g, x, cy2 - 8.5, cw2, 17, 8.5);
-      g.fill();
-      // 指示灯：绿 = 这一条已经达标，褐 = 还没
-      g.fillStyle = cd.ok ? "#63A82A" : (K.cream ? "rgba(122,92,60,.42)" : "rgba(255,255,255,.30)");
-      g.beginPath();
-      g.arc(x + 9, cy2, 3.2, 0, 6.283);
-      g.fill();
-      g.textAlign = "left";
-      g.fillStyle = cd.ok ? "#3E7A18" : (K.cream ? "rgba(74,53,36,.56)" : "rgba(220,240,220,.60)");
-      g.font = "bold 10px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-      g.fillText(cd.txt, x + 17, cy2);
-    }
-    g.textAlign = "left";
-  }
-  g.textAlign = "left";
-  g.textBaseline = "middle";
+    const reward = stageUnlockReward(S.stage);
+    const cy2 = GOAL_ROW.cond;
+    const F10 = "bold 10px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+    const F11 = "bold 11px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+    const PILL_H = 17;
+    let x = GX;
 
-  /* ---------------- 本关奖励（卡片内最后一行） ----------------
-   *
-   * 上一版把它挂在**卡片外面**（y=140 一条独立白胶囊）。
-   * 那个位置正好压在第 3 层台面（156）边缘上，玩家读成"场地里的一个物件"，
-   * 而不是 HUD —— 悬在 HUD 与场地之间的东西，默认归类为场地。
-   *
-   * 现在收回卡内：奖励和目标本来就是同一件事（打这关能挣到什么），
-   * 拆成两个容器放反而割裂。卡片 118 → 138 就是为它留的那一行。
-   *
-   * **不闪、不动、不弹。** 奖励是一条"事实"，不是"事件"；
-   * 事件留给结算卡上方那条横幅。挂在这里是为了让人**打之前**就知道在挣什么。
-   */
-  const reward = stageUnlockReward(S.stage);
-  if (reward) {
-    const ry = 147;   // S 条件那一行占了 121，奖励顺延到 147（卡片底 182）
-    /* 头像圆片。玩家认脸比认字快，而"到家的是谁"本来就是个脸的问题 ——
-     * 只有名字的话，"星屑"对还没见过它的玩家是一个没有形状的词。 */
-    const hd = artOf("head-" + reward.id);
-    if (hd) {
-      g.save();
-      g.beginPath();
-      g.arc(GX + 8.5, ry, 8.5, 0, 6.283);
-      g.clip();
-      g.drawImage(hd, GX, ry - 8.5, 17, 17);
-      g.restore();
-    } else {
-      g.fillStyle = "#F5B93C";
-      g.beginPath();
-      g.arc(GX + 8.5, ry, 8.5, 0, 6.283);
+    /* 胶囊画法抽成小函数：三枚的口径必须一样，否则读成三种控件。 */
+    const pill = (w, fill, dotColor, text, font, textColor, lead) => {
+      g.fillStyle = fill;
+      rr(g, x, cy2 - PILL_H / 2, w, PILL_H, PILL_H / 2);
       g.fill();
+      let tx = x + 9;
+      if (dotColor) {
+        g.fillStyle = dotColor;
+        g.beginPath();
+        g.arc(tx, cy2, 3.2, 0, 6.283);
+        g.fill();
+        tx += 8;
+      }
+      if (lead) {
+        g.save();
+        g.beginPath();
+        g.arc(tx + 7.5, cy2, 7.5, 0, 6.283);
+        g.clip();
+        g.drawImage(lead, tx, cy2 - 7.5, 15, 15);
+        g.restore();
+        tx += 19;
+      }
+      g.textAlign = "left";
+      g.textBaseline = "middle";
+      g.font = font;
+      g.fillStyle = textColor;
+      g.fillText(text, tx, cy2);
+      x += w + 6;
+    };
+
+    const condStyle = (ok) => ({
+      fill: ok ? "rgba(120,178,54,.18)" : "rgba(150,110,80,.13)",
+      dot: ok ? "#63A82A" : (K.cream ? "rgba(122,92,60,.42)" : "rgba(255,255,255,.30)"),
+      ink: ok ? "#3E7A18" : (K.cream ? "rgba(74,53,36,.56)" : "rgba(220,240,220,.60)"),
+    });
+
+    /* ① 用时：绿 = 还在 S 线内 */
+    const tOk = S.playT <= par.time;
+    const tTxt = "用时 " + Math.floor(S.playT) + " / " + par.time + "s";
+    const tSt = condStyle(tOk);
+    g.font = F10;
+    const tW = g.measureText(tTxt).width + 25;
+    pill(tW, tSt.fill, tSt.dot, tTxt, F10, tSt.ink);
+
+    /* ② 用球 */
+    const bOk = S.stat.made <= par.made;
+    const bTxt = "用球 " + S.stat.made + " / " + par.made;
+    const bSt = condStyle(bOk);
+    const bW = g.measureText(bTxt).width + 25;
+    pill(bW, bSt.fill, bSt.dot, bTxt, F10, bSt.ink);
+
+    /* ③ 本关奖励。**不闪、不动、不弹** —— 奖励是一条"事实"，不是"事件"。
+     * 头像圆片不能省：玩家认脸比认字快，而"到家的是谁"本来就是个脸的问题，
+     * 只有名字的话，"影狐"对还没见过它的玩家是一个没有形状的词。 */
+    if (reward && x + 80 < GX + GW) {
+      const rTxt = reward.name + " 到家";
+      const hd = artOf("head-" + reward.id);
+      g.font = F11;
+      const rW = Math.min(GX + GW - x, g.measureText(rTxt).width + (hd ? 34 : 25));
+      pill(rW, "rgba(245,185,60,.16)", null, rTxt, F11, "#8A4A18", hd);
     }
     g.textAlign = "left";
     g.textBaseline = "middle";
-    g.fillStyle = "#8A4A18";
-    g.font = "bold 11.5px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-    g.fillText("通这关 · " + reward.name + " 到家", GX + 22, ry);
   }
-  g.textAlign = "left";
+
 
   // 卡片里不再挂"ESC 回选 · R 重来 · Shift 预测线"。
   // 屏幕底部本来就有那条 8 秒操作提示（含 Shift），两处都说等于都没说 ——
@@ -12098,6 +12133,10 @@ window.GROVE = {
   // 锁着的点不动、全通后进得去"
   openPick, pickStage, pickCell, pickHit, drawPick, allDone, maxOpen,
   PICK, FACTIONS, RANK_COLOR,
+  /* 右上目标卡的矩形与内部基线。**冒烟必须能读到它** ——
+     "卡片不许压住任何落脚面"这条要拿真实几何去量，写死 672/182 的那一次
+     就是断言在验旧位置、界面已经压住台子。 */
+  GOAL_CARD: Object.assign({}, GOAL_CARD, { rows: GOAL_ROW }),
   // 注入美术图。**只在调试/截图里用**：正片由 GroveBattle 走 resources.load
   // 拿 ImageAsset 再注进来。导出它，截图脚本才能拍出"有 UI 图"的样子 ——
   // 不导出的话 file:// 打开的 grove.html 永远是代码回退图形，截图和真机对不上。

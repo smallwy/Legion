@@ -25,10 +25,29 @@ import type { AbilityKind } from './BattleConfig';
  * ========================================================================== */
 
 export interface PetDef {
-    /** 与 Home.scene 里 `home/pets/<id>` 贴图名一致 */
+    /** 存档 key + 立绘贴图名（`home/pets/<id>`）。**永远不改**，改了存档就断 */
     id: string;
+    /** grove 侧的短 id（cat/dog/ham/rab/ox/fox）。头像资源 `grove/head/<short>.png` 用它 */
+    short: string;
+    /**
+     * `Home.scene` 里的**节点名**（中文旧名：砂糖/年糕/…）。
+     *
+     * **它是匹配键，不是显示名。** 草地上的六只、底部六个锁定槽都是场景里
+     * 预置的节点，代码靠 `node.name` 把它们和花名册对上。改成新名字的那一刻
+     * 三处 `PETS.find(p => p.name === n.name)` 全部失配 —— 表现为
+     * 「主界面一只宠物都没有、六个槽全灰」，比改之前更糟。
+     * 所以名字分成三个：id 给存档、node 给场景、name 给玩家。
+     */
+    node: string;
+    /** 玩家看到的名字。必须和 `grove.html` 的 `HEROES[].name` 逐字一致 */
     name: string;
-    /** 通关多少关之后回家（0 = 开局就在） */
+    /**
+     * 这只的**招式名**（"溜溜球 / 音波喇叭 …"）。必须和 `grove.html` 的
+     * `HEROES[].tag` 逐字一致 —— 战斗 HUD 上写的是它，主界面换人时说的也是它。
+     * 两处不一致的话，玩家按主界面说的招式去找，场上根本没有那个东西。
+     */
+    tag: string;
+    /** 通关多少屏之后回家（0 = 开局就在） */
     at: number;
 }
 
@@ -43,20 +62,50 @@ export interface PetDef {
  *   泥沼 19-27  → 全齐，负责练熟
  * 第 9、18 是两屏收尾 BOSS，通关即到家，奖励和成就同一刻。
  *
- * ⚠️ `id` 保留 `sugar-stand` 这些老写法：它们是 `Home.scene` 里
- *    `home/pets/<id>` 的节点名，改 id 就要动场景文件。`name` 才是给玩家看的，
- *    必须和 `grove.html` 的 `HEROES[].name` 逐字一致 ——
- *    上一版这里叫「砂糖」、场上叫「尖耳猫」，解锁提示说"砂糖到家了"，
- *    玩家在院子里找不到"砂糖"。
+ * ⚠️ **不要用 `name` 去做任何匹配。** 它只给玩家看，随文案改；匹配一律用
+ *    `node`（场景节点）或 `id`（存档/贴图）。上一轮把 name 从"砂糖"改成
+ *    "尖耳猫"时，三处 `p.name === n.name` 当场全断，主界面变成"一只都没有"。
  */
 export const PETS: ReadonlyArray<PetDef> = [
-    { id: 'sugar-stand', name: '尖耳猫', at: 0 },
-    { id: 'nian-gao-dog', name: '短尾犬', at: 2 },
-    { id: 'tuan-zi-ham', name: '胖仓鼠', at: 5 },
-    { id: 'xue-tuan-rab', name: '长耳兔', at: 9 },
-    { id: 'dou-nai-ox', name: '老实牛', at: 14 },
-    { id: 'xing-xie-fox', name: '影狐', at: 18 },
+    { id: 'sugar-stand', short: 'cat', node: '砂糖', name: '尖耳猫', tag: '溜溜球', at: 0 },
+    { id: 'nian-gao-dog', short: 'dog', node: '年糕', name: '短尾犬', tag: '音波喇叭', at: 2 },
+    { id: 'tuan-zi-ham', short: 'ham', node: '团子', name: '胖仓鼠', tag: '滚坚果', at: 5 },
+    { id: 'xue-tuan-rab', short: 'rab', node: '雪团', name: '长耳兔', tag: '萝卜炮', at: 9 },
+    { id: 'dou-nai-ox', short: 'ox', node: '豆奶', name: '老实牛', tag: '飞刀', at: 14 },
+    { id: 'xing-xie-fox', short: 'fox', node: '星屑', name: '影狐', tag: '影分身', at: 18 },
 ];
+
+/** 按场景节点名找（草地/锁定槽用）。找不到返回 undefined，调用方必须判空 */
+export function petByNode(node: string): PetDef | undefined {
+    return PETS.find((p) => p.node === node);
+}
+
+/** 按存档 id 找 */
+export function petById(id: string): PetDef | undefined {
+    return PETS.find((p) => p.id === id);
+}
+
+/**
+ * `grove.html` 里 `HEROES[]` 的顺序。**必须逐字等于那张表的顺序。**
+ *
+ * 为什么要有这么一张"重复的表"：战斗侧 `groveBoot(heroIdx)` 收的是**下标**，
+ * 而存档里存的是 **id**。两者之间必须有一处换算，而且只能有一处 ——
+ * 换个地方各写一遍 `['cat','dog',...]` 就是"同一件事存两份"，迟早漂移。
+ *
+ * 冒烟里有一条断言拿 `grove.html` 的 HEROES 逐个比这张表（顺序 + 短 id）。
+ */
+const HERO_ORDER: ReadonlyArray<string> = ['cat', 'dog', 'ham', 'rab', 'ox', 'fox'];
+
+/**
+ * 存档 id → 战斗里的英雄下标。找不到 / 表不一致时兜回 0（尖耳猫），
+ * 绝不返回 -1 —— 那会让 `groveBoot` 静默按默认值开局，玩家以为是随机。
+ */
+export function heroIndexOf(id: string): number {
+    const p = petById(id);
+    if (!p) return 0;
+    const i = HERO_ORDER.indexOf(p.short);
+    return i < 0 ? 0 : i;
+}
 
 /** 已解锁的宠物（按解锁顺序） */
 export function unlockedPets(cleared: number): PetDef[] {

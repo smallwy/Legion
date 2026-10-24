@@ -63,16 +63,29 @@ BOOT = '''/* ---------- Cocos 侧入口 ----------
    Cocos 里没有 URL，改成显式传参。不传就按存档推。 */
 export function groveBoot(hero?: number, stage?: number): void {
   loadProgress();
+  loadBest();
   resetRun();
+  /* 主界面的 cleared 更全时补进来（老存档 / 只在浏览器里玩过的机器）。
+     必须排在 readHomeSave 之前 —— 下面"第一个没通的"读的就是它写的那份。 */
+  adoptHomeMirror();
 
   if (typeof hero === "number" && hero >= 0 && hero < HEROES.length) S.heroIdx = hero;
 
-  // 起始关跟着主界面的"第一个没通的关"走 —— 两边用同一份 cleared，不会打架
+  /* 起始关跟着主界面的"第一个没通的关"走 —— 两边用同一份 cleared，不会打架。
+   *
+   * **全通是必须单独处理的第三种情况。** 原写法是
+   *   `let st = 0; for (...) if (!done.has(i)) { st = i; break; }`
+   * 全通时循环一次都不命中，`st` 保持初值 0 —— "27 屏打完"和"一关没打"
+   * 在代码里长得一模一样，玩家每次进战斗都被塞回第一屏。
+   * 这不是漏了一句提示，是**那个变量表达不了"没有下一关"**。
+   * 现在用 -1 表示"没有下一个"，落到挑一屏。 */
   const s: any = readHomeSave();
   const done = new Set(Array.isArray(s.cleared) ? s.cleared : []);
-  let st = 0;
+  let st = -1;
   for (let i = 0; i < LEVELS.length; i++) { if (!done.has(i)) { st = i; break; } }
+
   if (typeof stage === "number" && stage >= 0 && stage < LEVELS.length) st = stage;
+  if (st < 0) { S.progress = LEVELS.length; openPick(); return; }
   S.progress = st;
   beginRun(st);
 }

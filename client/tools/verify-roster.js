@@ -21,9 +21,9 @@ const fs = require('fs');
 const path = require('path');
 
 const BUILD = path.join(__dirname, '_rt-build', 'config');
-const { PETS, MAX_SQUAD, unlockedPets, lockedPets, petGap, squadSize, rolesFor, powerScale } =
+const { PETS, MAX_SQUAD, unlockedPets, lockedPets, petGap, squadSize, rolesFor, powerScale, heroIndexOf } =
     require(path.join(BUILD, 'Roster.js'));
-const { DEFAULT_SAVE, LOOT, REST_SATIETY, loadSave, saveSave, resetSave, lootOf, settleInto } =
+const { DEFAULT_SAVE, LEVEL_COUNT, LOOT, REST_SATIETY, loadSave, saveSave, resetSave, lootOf, settleInto } =
     require(path.join(BUILD, 'SaveData.js'));
 
 let pass = 0;
@@ -72,6 +72,70 @@ const files = fs.existsSync(PET_DIR)
     : [];
 ok(ids.every((id) => files.includes(id)), '每只宠物都有立绘贴图',
     `缺失：${ids.filter((id) => !files.includes(id)).join(', ') || '无'}`);
+
+/* --------------------------------------------------------------------------
+ * 1b. 三个名字 / 头像 / 招式 —— 和 grove.html 的 HEROES 逐字比对
+ *
+ * **这一节是为一次真实事故加的把关。** `PetDef` 上现在有四个字符串：
+ *   id    存档 key + 立绘贴图名
+ *   short grove 短 id + 头像文件名
+ *   node  Home.scene 的节点名（匹配键）
+ *   name  给玩家看的名字
+ * 上一轮把 `name` 从"砂糖"改成"尖耳猫"，而它当时**同时充当匹配键** ——
+ * 三处 `PETS.find(p => p.name === n.name)` 当场全断，主界面一只宠物都没有。
+ * 拆成四个字段之后，还需要一道"两边没写岔"的论证，否则同一个坑换个地方挖。
+ * ------------------------------------------------------------------------ */
+const shorts = PETS.map((p) => p.short);
+ok(new Set(shorts).size === shorts.length, 'short 无重复', shorts.join(','));
+const nodes = PETS.map((p) => p.node);
+ok(new Set(nodes).size === nodes.length, 'node 无重复', nodes.join(','));
+
+/* 头像：resources/grove/head/<short>.png 必须存在（图鉴 / 底部槽 / 出战卡都读它） */
+const HEAD_DIR = path.join(__dirname, '..', 'assets', 'resources', 'grove', 'head');
+const heads = fs.existsSync(HEAD_DIR)
+    ? fs.readdirSync(HEAD_DIR).filter((f) => f.endsWith('.png')).map((f) => f.slice(0, -4))
+    : [];
+ok(shorts.every((s) => heads.includes(s)), '每只宠物都有头像图（图鉴 / 槽位 / 出战卡要用）',
+    `缺失：${shorts.filter((s) => !heads.includes(s)).join(', ') || '无'}`);
+
+/* grove.html 的 HEROES：顺序、id、name、tag 四项都必须逐字对上。
+   顺序尤其要紧 —— `heroIndexOf()` 把存档 id 换成**下标**传给 groveBoot，
+   两边顺序一错，玩家选雪团会被带去砂糖。 */
+const GROVE = path.join(__dirname, '..', 'prototype', 'grove.html');
+let heroes = [];
+try {
+    const html = fs.readFileSync(GROVE, 'utf8');
+    const i = html.indexOf('const HEROES = [');
+    const j = html.indexOf('\n];', i);
+    const block = html.slice(i, j);
+    const re = /id:\s*"([^"]+)",\s*name:\s*"([^"]+)",\s*tag:\s*"([^"]+)"/g;
+    let m;
+    while ((m = re.exec(block))) heroes.push({ id: m[1], name: m[2], tag: m[3] });
+} catch (e) {
+    heroes = [];
+}
+ok(heroes.length === PETS.length, 'grove.html 里读到 6 只英雄',
+    `读到 ${heroes.length}`);
+
+let orderOk = true, nameOk = true, tagOk = true;
+for (let i = 0; i < Math.min(heroes.length, PETS.length); i++) {
+    if (heroes[i].id !== PETS[i].short) orderOk = false;
+    if (heroes[i].name !== PETS[i].name) nameOk = false;
+    if (heroes[i].tag !== PETS[i].tag) tagOk = false;
+}
+ok(orderOk, 'PETS 顺序 = HEROES 顺序（heroIndexOf 靠它换算）',
+    PETS.map((p) => p.short).join(',') + ' vs ' + heroes.map((h) => h.id).join(','));
+ok(nameOk, '显示名和战斗里逐字一致（否则"到家的是谁"对不上）',
+    PETS.map((p, i) => `${p.name}/${heroes[i] && heroes[i].name}`).join(' '));
+ok(tagOk, '招式名和战斗里逐字一致（主界面说的招式场上得有）',
+    PETS.map((p, i) => `${p.tag}/${heroes[i] && heroes[i].tag}`).join(' '));
+
+let heroIdxOk = true;
+for (let i = 0; i < PETS.length; i++) if (heroIndexOf(PETS[i].id) !== i) heroIdxOk = false;
+ok(heroIdxOk, 'heroIndexOf 逐只换算出正确下标',
+    PETS.map((p) => `${p.id}→${heroIndexOf(p.id)}`).join(' '));
+ok(heroIndexOf('不存在的 id') === 0, '未知 id 兜回 0（不返回 -1，否则 groveBoot 静默按默认开局）',
+    String(heroIndexOf('不存在的 id')));
 
 /* ==========================================================================
  * 2. 出战人数（家园 ↔ 战斗的第一条等式）
@@ -153,7 +217,10 @@ globalThis.localStorage.setItem('pawpack.save.v1', JSON.stringify({
     cleared: 999, apples: -5, satiety: 5000, active: '', runs: 3.7,
 }));
 const dirty = loadSave();
-ok(dirty.cleared === 8, '越界的关卡进度夹到 8', `cleared = ${dirty.cleared}`);
+/* 上界是 STAGE_COUNT（27），不是 8。这三条断言原来写的是 8 —— 那时
+   `LEVEL_COUNT` 还是别名到写死的 8，改成 27 屏之后它们一直红着。
+   **红着的断言和没有断言一样糟**：没人再看它，真出问题时也分不清是新的还是旧的。 */
+ok(dirty.cleared === LEVEL_COUNT, `越界的关卡进度夹到 ${LEVEL_COUNT}`, `cleared = ${dirty.cleared}`);
 ok(dirty.apples === 0, '负数资源夹到 0', `apples = ${dirty.apples}`);
 ok(dirty.satiety === 100, '越界饱食度夹到 100', `satiety = ${dirty.satiety}`);
 ok(dirty.active === DEFAULT_SAVE.active, '空 active 回落到默认宠物', `active = ${dirty.active}`);
@@ -230,19 +297,20 @@ const h1 = settleInto(before, Object.assign({}, FULL, { endReason: 'hp0' }), 0);
 ok(h1.next.cleared === before.cleared, 'HP 归零不推进关卡（红线②没有游戏结束）');
 ok(h1.next.satiety === 0, '空肚子回家就是 0', `satiety = ${h1.next.satiety}`);
 
-/* 关卡上限：打十场也只到 8 */
+/* 关卡上限：打满也只到 LEVEL_COUNT（27） */
 let s = Object.assign({}, DEFAULT_SAVE);
-for (let i = 0; i < 10; i++) s = settleInto(s, FULL, 100).next;
-ok(s.cleared === 8, '关卡进度封顶在 8', `cleared = ${s.cleared}`);
+for (let i = 0; i < LEVEL_COUNT + 5; i++) s = settleInto(s, FULL, 100).next;
+ok(s.cleared === LEVEL_COUNT, `关卡进度封顶在 ${LEVEL_COUNT}`, `cleared = ${s.cleared}`);
 
-/* 出战人数必须随结算自己长起来 —— 这是"打赢一场 → 多一只跟班"的完整链路 */
+/* 出战人数必须随结算自己长起来 —— 这是"打赢 → 多一只跟班"的完整链路。
+   **门槛跟着解锁表走，不写死场次**：`PETS[1].at = 2`、`PETS[2].at = 5`，
+   所以是"通 2 场变 2 只、通 5 场满编"。写死 1 场 / 3 场的那一版已经过期。 */
 let t = Object.assign({}, DEFAULT_SAVE);
 ok(squadSize(t.cleared) === 1, '开局出战 1 只');
-t = settleInto(t, FULL, 100).next;
-ok(squadSize(t.cleared) === 2, '打赢一场后出战变 2 只', `cleared = ${t.cleared}`);
-t = settleInto(t, FULL, 100).next;
-t = settleInto(t, FULL, 100).next;
-ok(squadSize(t.cleared) === 3, '通关 3 场后满编 3 只', `cleared = ${t.cleared}`);
+for (let i = 0; i < PETS[1].at; i++) t = settleInto(t, FULL, 100).next;
+ok(squadSize(t.cleared) === 2, `通关 ${PETS[1].at} 场后出战变 2 只`, `cleared = ${t.cleared}`);
+for (let i = t.cleared; i < PETS[2].at; i++) t = settleInto(t, FULL, 100).next;
+ok(squadSize(t.cleared) === 3, `通关 ${PETS[2].at} 场后满编 3 只`, `cleared = ${t.cleared}`);
 
 ok(rolesFor(squadSize(t.cleared)).length === 3, '满编后战斗真的会实例化 3 个角色');
 

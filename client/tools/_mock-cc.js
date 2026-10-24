@@ -4,6 +4,8 @@
  * 目的：不打开 Cocos 编辑器，也能证明「宠物会动 / 按钮被点到了 / 弹层出现了」。
  * 只 mock HomeRuntime 用到的 API，不追求行为完整。
  */
+const fs = require('fs');
+const path = require('path');
 
 class Vec3 {
     constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
@@ -314,17 +316,52 @@ class SpriteFrame {
     }
 }
 
-/* resources：和 assetManager 同样默认失败。
-   要验证的正是「图不在时主界面照常进」—— 所以这里**必须回调 err**，
-   而不是永不回调：永不回调会让 _rt-check 挂在那儿等，比报错更难查。 */
+/* ImageAsset / Texture2D：只有「运行时从 ImageAsset 自己拼 SpriteFrame」那条
+   兜底路径会用到（`grove/head/*` 的 meta 是 type:texture，没有 spriteFrame 子资源）。
+   桩里给个空壳 —— 真正要验证的是"这条路不会崩"，不是纹理内容。 */
+class ImageAsset {
+    constructor() { this.width = 0; this.height = 0; this.data = null; }
+}
+class Texture2D {
+    constructor() { this.image = null; }
+}
+
+/* resources：默认失败，但**能读到盘上的真图**就走真图。
+   要验证的正是「图不在时主界面照常进」—— 所以缺图时**必须回调 err**，
+   而不是永不回调：永不回调会让 _rt-check 挂在那儿等，比报错更难查。
+
+   为什么现在要真读：图鉴 / 底部槽 / 出战卡的头像是运行时 `resources.load`
+   拿到的（`grove/head/<short>`）。桩里一律失败的话，截图永远是"没有 ICON 的
+   那一版"—— 拿它验收"ICON 补上了没有"会得出完全错的结论。
+   约定：造出来的 SpriteFrame 用 `res:<相对 resources 的路径>` 当 `__uuid__`，
+   截图脚本按这个前缀去 assets/resources 下找文件。 */
+const RES_ROOT = path.join(__dirname, '..', 'assets', 'resources');
 const resources = {
-    load(path, type, cb) {
+    load(rel, type, cb) {
         /* 回调在**第三个**参数，不是"第一个函数参数"。
            写成 `typeof type === 'function' ? type : cb` 会把 SpriteFrame 这个
            类当成回调直接调用 —— 症状是 "Class constructor cannot be invoked
            without 'new'"，看起来像 HomeRuntime 写错了。 */
         const done = typeof cb === 'function' ? cb : type;
-        if (typeof done === 'function') done(new Error('mock: 无资源包'), null);
+        if (typeof done !== 'function') return;
+        /* 形参不能叫 path —— 会把 node 的 path 模块盖掉，
+           报的是 "path.join is not a function"，看着像模块坏了。 */
+        const file = rel ? path.join(RES_ROOT, rel + '.png') : '';
+        if (file && fs.existsSync(file)) {
+            if (type === SpriteFrame) {
+                const sf = new SpriteFrame(rel);
+                sf.__uuid__ = 'res:' + rel;
+                done(null, sf);
+                return;
+            }
+            if (type === ImageAsset) {
+                const ia = new ImageAsset();
+                ia.__uuid__ = 'res:' + rel;
+                done(null, ia);
+                return;
+            }
+        }
+        done(new Error('mock: 无资源包 ' + rel), null);
     },
 };
 
@@ -333,6 +370,7 @@ const exportsObj = {
     Node, Scene, UITransform, UIOpacity, Label, Sprite, Graphics,
     Color, Vec3, EventTouch, tween, director, Director,
     game, assetManager, SceneAsset, resources, SpriteFrame,
+    ImageAsset, Texture2D,
 };
 Object.defineProperty(exportsObj, 'EDITOR', {
     get() { return globalThis.__MOCK_EDITOR === true; },

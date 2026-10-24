@@ -14,9 +14,9 @@ import type { SaveState } from './SaveData';
 /** 5 点一颗心，和主界面规格里「连摸 5 次亲密度 +1」一致 */
 export const PATS_PER_HEART = 5;
 export const MAX_HEARTS = 5;
-/** 一趟采集要这么多秒。最多连收 3 趟，再待着也不多给 */
-export const DISPATCH_SEC = 30;
-export const DISPATCH_CAP = 3;
+/** 一趟采集要这么多秒。最多攒 10 趟，第十趟之后待着也不多给 */
+export const DISPATCH_SEC = 60;
+export const DISPATCH_CAP = 10;
 
 /* ---- 能量门禁已移除（2026-10-22） ----
  *
@@ -74,15 +74,45 @@ export const RECIPES: ReadonlyArray<RecipeDef> = [
     { id: 'basket', name: '收集篮', apples: 0, logs: 5, coins: 1, give: 'basket' },
 ];
 
-/** 每趟带回的量。种类跟这只平时干的活一致 */
-const YIELD: Record<string, { apples: number; logs: number; coins: number }> = {
-    'sugar-stand': { apples: 10, logs: 0, coins: 0 },
-    'nian-gao-dog': { apples: 0, logs: 4, coins: 0 },
-    'tuan-zi-ham': { apples: 6, logs: 0, coins: 1 },
-    'xue-tuan-rab': { apples: 6, logs: 2, coins: 0 },
-    'dou-nai-ox': { apples: 0, logs: 6, coins: 0 },
-    'xing-xie-fox': { apples: 4, logs: 0, coins: 2 },
+/**
+ * 每趟带回的量。种类跟这只平时干的活一致。
+ *
+ * **`ration`（干粮）这一格是"派遣到底有什么用"的答案。**
+ * 改造前派遣只给果子 / 材料 / 吧唧 —— 那三样战斗一局就给，而且给得更多。
+ * 于是"派一只出去等 30 秒收 30 个果子"在玩家眼里完全不如"再打一局"，
+ * 派遣就成了一个占位按钮。
+ *
+ * 现在把**干粮**接进来：干粮是灶台直接吃的东西（不扣果子），
+ * 而饱食度每关 −16、饿了火力下降 —— 于是
+ *   派遣 → 干粮 → 肚子 → 战力
+ * 是一条**别的系统补不上**的链：干粮在工坊里要花果子+材料做，
+ * 让宠物自己去捡，就省下了那笔开销。
+ */
+const YIELD: Record<string, { apples: number; logs: number; coins: number; ration: number }> = {
+    'sugar-stand': { apples: 10, logs: 0, coins: 0, ration: 0 },
+    'nian-gao-dog': { apples: 0, logs: 4, coins: 0, ration: 1 },
+    'tuan-zi-ham': { apples: 6, logs: 0, coins: 1, ration: 2 },
+    'xue-tuan-rab': { apples: 6, logs: 2, coins: 0, ration: 1 },
+    'dou-nai-ox': { apples: 0, logs: 6, coins: 0, ration: 1 },
+    'xing-xie-fox': { apples: 4, logs: 0, coins: 2, ration: 1 },
 };
+
+/** 一只宠物**一趟**能带回什么。派遣面板的"产出预期"和收成结算读同一张表 —— 
+ *  写两份的话，面板上写着"干粮 2"，收回来只有 1，玩家只会觉得被骗。 */
+export function yieldOf(id: string): { apples: number; logs: number; coins: number; ration: number } {
+    return YIELD[id] || { apples: 6, logs: 2, coins: 0, ration: 1 };
+}
+
+/** 一趟收益的一行文案（面板里反复用，免得每处各写一套拼接） */
+export function yieldText(id: string): string {
+    const y = yieldOf(id);
+    const bits = [];
+    if (y.ration) bits.push(`干粮 ${y.ration}`);
+    if (y.apples) bits.push(`果子 ${y.apples}`);
+    if (y.logs) bits.push(`材料 ${y.logs}`);
+    if (y.coins) bits.push(`吧唧 ${y.coins}`);
+    return (bits.join(' · ') || '空手') + ' / 趟';
+}
 
 export type ActResult =
     | { ok: true; next: SaveState; say: string }
@@ -90,11 +120,15 @@ export type ActResult =
 
 export interface DispatchPreview {
     hauls: number;
-    /** 离下一趟还差的秒数。已经收满 3 趟时是 0 */
+    /** 离下一趟还差的秒数。已经收满 cap 趟时是 0 */
     left: number;
     apples: number;
     logs: number;
     coins: number;
+    /** 干粮。它是这条链真正值钱的东西（见 YIELD 上面那段） */
+    ration: number;
+    /** 还差多少秒到 cap（玩家问"我还能不能先去打一局再来收"） */
+    toFull: number;
 }
 
 export function heartsOf(pats: number): number {
@@ -102,9 +136,19 @@ export function heartsOf(pats: number): number {
     return Math.min(MAX_HEARTS, Math.floor(n / PATS_PER_HEART));
 }
 
+/**
+ * 亲密度的文字表达。
+ *
+ * **不要用 `♡`（空心心）画那一排。** 这个字形不在中文字体里，靠系统字体兜底 ——
+ * 图鉴上那整排方块就是这么来的（`♥♥□□□ 摸 12`）。实心 `♥` 有字形，
+ * 但一排全实心又看不出"还差几颗"。所以这里直接给数字：
+ * "亲密度 2 / 5" 信息量完全等价，而且不可能缺字形。
+ *
+ * 主界面出战卡上那排心仍然用图形（`hearts-on` / `hearts-off` 两个 Label
+ * 用不同颜色画同一批 `♥`）—— 那里要的是"扫一眼的形状"，不是读数字。
+ */
 export function heartText(pats: number): string {
-    const h = heartsOf(pats);
-    return '♥'.repeat(h) + '♡'.repeat(MAX_HEARTS - h);
+    return `亲密度 ${heartsOf(pats)} / ${MAX_HEARTS}`;
 }
 
 function clone(s: SaveState): SaveState {
@@ -140,6 +184,40 @@ export function recordPat(prev: SaveState, id: string): ActResult {
     const into = next.pats[id] % PATS_PER_HEART;
     const rest = into === 0 ? PATS_PER_HEART : PATS_PER_HEART - into;
     return { ok: true, next, say: `${pet.name} · ${line}（再摸 ${rest} 次更亲）` };
+}
+
+/**
+ * 换出战宠 —— 底部那六个槽点下去就是这一句。
+ *
+ * **这是"解锁了但进战斗只有一只"那条链的最后一环。** 在那之前：
+ * 底部槽位点击只弹一句 toast（"待解锁出战位"），`save.active` 永远是开局那只，
+ * 于是 `launchBattle` 带出门的永远是同一只 —— 玩家看不出解锁有什么用。
+ *
+ * 三道门禁都不是形式：
+ *   · 没到家的不能选（否则点一下就能带还没解锁的）；
+ *   · 正在外面采集的不能选（`dispatch.id` 那只不在家，草地上也确实是空的）；
+ *   · 已经选中的再点一次就明说，不要静默 no-op —— 玩家会以为点不动是 bug。
+ *
+ * 不返回错误码而是 ok:false + 一句话：调用方统一 `toast(r.say)`，
+ * 一处文案口径，不会出现"面板说 A、提示说 B"。
+ */
+export function setActive(prev: SaveState, id: string): ActResult {
+    const pet = PETS.find((p) => p.id === id);
+    if (!pet) return { ok: false, say: '没有这只' };
+    if (prev.cleared < pet.at) {
+        return { ok: false, say: `${pet.name} 还差 ${pet.at - prev.cleared} 关才回家` };
+    }
+    if (prev.dispatch && prev.dispatch.id === id) {
+        return { ok: false, say: `${pet.name} 正在外面采集，${DISPATCH_SEC} 秒一趟` };
+    }
+    if (prev.active === id) return { ok: false, say: `${pet.name} 已经是这趟的伙伴了` };
+
+    const next = clone(prev);
+    next.active = id;
+    /* 饱食度是**每只自己的**吗？现在不是 —— 存档里只有一个 satiety 字段，
+       它跟着"出战那只"走。换人时不去动它，因为饿的是队伍不是某一只；
+       真按只算需要给 SaveState 加一张表，那是另一件事（记在待办）。 */
+    return { ok: true, next, say: `这趟带 ${pet.name} 出门 · 招式「${pet.tag}」` };
 }
 
 export function feed(prev: SaveState, mealId: string): ActResult {
@@ -184,21 +262,26 @@ export function craft(prev: SaveState, recipeId: string): ActResult {
 }
 
 export function peekDispatch(prev: SaveState, now: number): DispatchPreview {
-    const empty = { hauls: 0, left: 0, apples: 0, logs: 0, coins: 0 };
+    const empty = { hauls: 0, left: 0, apples: 0, logs: 0, coins: 0, ration: 0, toFull: 0 };
     const job = prev.dispatch;
     if (!job) return empty;
-    const y = YIELD[job.id] || { apples: 6, logs: 2, coins: 0 };
+    const y = YIELD[job.id] || { apples: 6, logs: 2, coins: 0, ration: 1 };
     const elapsed = Math.max(0, now - job.since) / 1000;
     const hauls = Math.min(DISPATCH_CAP, Math.floor(elapsed / DISPATCH_SEC));
     const mul = prev.bag.basket > 0 ? 1.5 : 1;
     const scale = (n: number) => Math.floor(n * hauls * mul);
     const left = hauls >= DISPATCH_CAP ? 0 : Math.max(1, Math.ceil(DISPATCH_SEC - (elapsed % DISPATCH_SEC)));
+    const toFull = hauls >= DISPATCH_CAP
+        ? 0
+        : Math.max(0, Math.ceil(DISPATCH_CAP * DISPATCH_SEC - elapsed));
     return {
         hauls,
         left,
         apples: scale(y.apples),
         logs: scale(y.logs),
         coins: scale(y.coins),
+        ration: scale(y.ration),
+        toFull,
     };
 }
 
@@ -211,27 +294,37 @@ export function startDispatch(prev: SaveState, id: string, now: number): ActResu
     if (id === prev.active) return { ok: false, say: `${pet.name} 这趟要跟你出门` };
     const next = clone(prev);
     next.dispatch = { id, since: now };
-    return { ok: true, next, say: `${pet.name} 去采东西了 · ${DISPATCH_SEC} 秒后能收回第一趟` };
+    return {
+        ok: true,
+        next,
+        say: `${pet.name} 出门了 · ${DISPATCH_SEC} 秒一趟，最多攒 ${DISPATCH_CAP} 趟`,
+    };
 }
 
 export function collectDispatch(prev: SaveState, now: number): ActResult {
     if (!prev.dispatch) return { ok: false, say: '没有派出去的宠物' };
     const name = petName(prev.dispatch.id);
     const peek = peekDispatch(prev, now);
-    if (peek.hauls < 1) return { ok: false, say: `${name} 还要 ${peek.left} 秒` };
+    if (peek.hauls < 1) return { ok: false, say: `${name} 还要 ${peek.left} 秒才攒满一趟` };
     const next = clone(prev);
     next.apples += peek.apples;
     next.logs += peek.logs;
     next.coins += peek.coins;
+    next.bag.ration += peek.ration;
     const usedBasket = next.bag.basket > 0;
     if (usedBasket) next.bag.basket -= 1;
     next.dispatch = null;
     next.dispatches += 1;
+    const bits = [];
+    if (peek.apples) bits.push(`果子 ${peek.apples}`);
+    if (peek.logs) bits.push(`材料 ${peek.logs}`);
+    if (peek.coins) bits.push(`吧唧 ${peek.coins}`);
+    if (peek.ration) bits.push(`干粮 ${peek.ration}`);
     const basket = usedBasket ? ' · 收集篮用掉了' : '';
     return {
         ok: true,
         next,
-        say: `${name} 带回 果子 ${peek.apples} · 材料 ${peek.logs} · 吧唧 ${peek.coins}${basket}`,
+        say: `${name} 带回 ${bits.join(' · ') || '空手'}${basket}`,
     };
 }
 

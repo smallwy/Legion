@@ -81,6 +81,21 @@ const sfToPng = new Map();
     }
 })(ASSETS);
 
+/* 运行时 `resources.load` 造出来的 SpriteFrame 没有资产 uuid ——
+   `_mock-cc.js` 里它们被标成 `res:<相对 resources 的路径>`。
+   这里把整棵 resources 树按同一个约定登记进去，否则图鉴/槽位/出战卡的头像
+   会走 `missed` 分支，截图永远是"没有 ICON"的那一版。 */
+(function walkRes(dir, rel) {
+    if (!fs.existsSync(dir)) return;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        const r = rel ? rel + '/' + e.name : e.name;
+        if (e.isDirectory()) { walkRes(p, r); continue; }
+        if (!e.name.endsWith('.png')) continue;
+        sfToPng.set('res:' + r.slice(0, -4), { file: p });
+    }
+})(path.join(ASSETS, 'resources'), '');
+
 /* ---------- 构造场景树（带组件数据） ---------- */
 const SCENE = path.join(ASSETS, 'scenes', 'Home.scene');
 const raw = JSON.parse(fs.readFileSync(SCENE, 'utf8'));
@@ -137,13 +152,23 @@ director.setScene(scene);
 
 /* ---------- 跑起来 ---------- */
 const OPT = { out: '_home-rt', t: 1200, touch: null, press: null };
-for (const a of process.argv.slice(2)) {
+/* 带值参数的白名单。`--cleared 8`（空格写法）原来会被拆成「开关 --cleared=1」+
+   「位置参数 8」，于是 OPT.out 变成 `8`、关卡还是 0 —— 截图文件名对、内容全错，
+   属于**静默错**，比报错难查十倍。已知带值的键后面跟的不是 `--xxx` 就当值吃掉。 */
+const VALUED = new Set(['out', 'cleared', 'save', 't', 'touch', 'touch2', 'press']);
+const ARGV = process.argv.slice(2);
+for (let i = 0; i < ARGV.length; i++) {
+    const a = ARGV[i];
     const m = /^--(\w+)=(.*)$/.exec(a);
-    if (m) OPT[m[1]] = m[2];
-    /* 无值开关：--petbox / --dbg / --audit 这种写法原来会被**静默丢掉**，
-       表现是明明加了参数却没输出，很容易怀疑到别的地方去。 */
-    else if (a.startsWith('--')) OPT[a.slice(2)] = '1';
-    else OPT.out = a;
+    if (m) { OPT[m[1]] = m[2]; continue; }
+    if (a.startsWith('--')) {
+        const k = a.slice(2);
+        const next = ARGV[i + 1];
+        if (VALUED.has(k) && next !== undefined && !next.startsWith('--')) { OPT[k] = next; i++; }
+        else OPT[k] = '1';
+        continue;
+    }
+    OPT.out = a;
 }
 fakeNow = 0;
 

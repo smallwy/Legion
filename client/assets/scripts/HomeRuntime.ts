@@ -52,13 +52,14 @@ import {
 import { EDITOR } from 'cc/env';
 import { MAX_SQUAD, PETS, petGap, squadSize, unlockedPets } from './config/Roster';
 import type { PetDef } from './config/Roster';
+import type { TaskDef } from './config/HomeBiz';
 import { loadSave, saveSave } from './config/SaveData';
 import type { SaveState } from './config/SaveData';
 import { SATIETY } from './config/BattleConfig';
 import {
     MEALS, RECIPES, PET_LINE, DISPATCH_SEC, DISPATCH_CAP,
     feed, craft, recordPat, startDispatch, collectDispatch, peekDispatch,
-    toggleMute, toggleCrisp, heartText, canDispatch,
+    toggleMute, toggleCrisp, heartText, heartsOf, canDispatch,
     TASKS, taskPhase, claimTask, claimableCount,
 } from './config/HomeBiz';
 
@@ -303,10 +304,11 @@ const LAWN_SPOT: [number, number] = [874, 578];
  * 所以这些文案在点击时以 toast 形式常驻显示，不依赖悬停。
  * -------------------------------------------------------------------------- */
 const BADGE_INFO: Record<string, string> = {
-    '工作台': '工作台 · 升级装备与宠物配件（待实装）',
+    // 「家」= 原工作台 + 灶台，已经是真面板（openHome），这里只为兜底
+    '工作台': '家 · 喂饭与制作都在这里',
     // 图鉴已经是真面板了（openCodex），这里留着只为兜底 —— 它不会再被读到
     '图鉴': '图鉴 · 查看已收服的宠物',
-    '灶台': '灶台 · 喂饭提升饱食与心情（待实装）',
+    '灶台': '灶台 · 已并入「家」',
     '派遣': '派遣 · 让宠物出门带资源回来（待实装）',
     '去苔原': '苔原 · 下一关的入口（已由底部「出门」承担）',
 };
@@ -369,6 +371,23 @@ function mkLabel(
     lb.horizontalAlign = Label.HorizontalAlign.CENTER;
     lb.verticalAlign = Label.VerticalAlign.CENTER;
     lb.overflow = Label.Overflow.NONE;
+    return lb;
+}
+
+/**
+ * 左对齐标签：`x` 是**文字左缘**，不是中心。
+ *
+ * `mkLabel` 的定位语义是"中心"（锚点 0.5），做左对齐时要在调用处写
+ * `x + w/2`，这个转换在六个面板里各写一遍必然写错一个（差 w/2 就是整块文字飞出去）。
+ * 所以单独封一个"我说左缘就是左缘"的版本。
+ */
+function mkLeftLabel(
+    parent: Node, name: string, text: string,
+    size: number, color: Color, x: number, y: number, w: number, h: number,
+): Label {
+    const lb = mkLabel(parent, name, text, size, color, w, h);
+    lb.horizontalAlign = Label.HorizontalAlign.LEFT;
+    lb.node.setPosition(x + w / 2, y, 0);
     return lb;
 }
 
@@ -593,6 +612,34 @@ class HomeController {
     private dispatchPing = false;
 
     /**
+     * UI 图标缓存（key → SpriteFrame）。
+     *
+     * **加载是异步的，绘制是同步的** —— 所以这里不阻塞面板：拿不到图就返回 null，
+     * 调用方退回"圆点 + 首字"的老画法。加载完成后把 `iconsReady` 置真，
+     * 下次开面板自动升级。这条"有图贴图、没图回退"和战斗侧 `ART` 表同一套思路。
+     *
+     * 资源在 `assets/resources/ui/icons/`（从 `assets/ui/icons/` 收缩复制来的 64px 版）。
+     * 原始 128px 图**不动**，主界面顶部资源条还直连着它们。
+     */
+    private icons: Record<string, SpriteFrame> = {};
+    private iconsReady = false;
+
+    /** 任务抽屉（右侧滑出，不压暗场景）。同时只开一个 */
+    private drawer: Node | null = null;
+    private drawerOp: UIOpacity | null = null;
+    /** 抽屉正在滑出/滑入，期间拒绝重开 —— 否则连点两下会建出两个抽屉 */
+    private drawerBusy = false;
+
+    /** 顶部资源数字的滚动动画：节点名 → { 起点, 终点, 已过秒数 } */
+    private resAnim: Record<string, { from: number; to: number; t: number }> = {};
+    /** 首次写值不走动画（场景里的初值是手写假数，滚出来像资源蒸发） */
+    private resReady = false;
+
+    /** 任务徽标的脉冲幅度（0 = 不脉冲）。有可领时才动 */
+    private taskPulse = 0;
+    private taskBtn: Node | null = null;
+
+    /**
      * 存档快照。战斗结算写战利品，这里写喂饭 / 制作 / 派遣 / 亲密度。
      * 改完立刻 `saveSave`，顶部三个数字和饱食条同一帧刷新。
      */
@@ -616,6 +663,8 @@ class HomeController {
            它们绑的事件回调里会读 this.save（比如出战卡文案），
            先刷一遍能保证第一帧看到的就是真值。 */
         this.bindSave();
+        /* 首帧写值不走滚动动画（原因见 setResVal）—— 必须紧跟 bindSave */
+        this.resReady = true;
         this.syncLawn();
         this.applyPrefs();
         this.bindBadges();
@@ -623,6 +672,8 @@ class HomeController {
         this.bindHud();
         this.placeResources();
         this.bindAmbient();
+        /* 图标是异步的，先发起加载再摆任务按钮 —— 加载完的回调会自己刷新徽标 */
+        this.loadIcons();
         this.placeTaskBtn();
         this.placeDispatchCard();
         if (this.save.lastReward) {
@@ -630,6 +681,76 @@ class HomeController {
             this.commit({ ...this.save, lastReward: '' });
             this.toast(msg);
         }
+    }
+
+    /* ----------------------------------------------------------------------
+     * 1a. UI 图标：异步加载 + 无图回退
+     * -------------------------------------------------------------------- */
+
+    /** 面板里要用到的全部图标。命名与 `resources/ui/icons/<key>.png` 一致 */
+    private static readonly ICON_KEYS = [
+        'apple', 'log', 'coin', 'hammer', 'pot', 'paw', 'paw-red', 'flag', 'mail',
+        'gear', 'stew', 'basket', 'ration',
+    ];
+
+    /**
+     * 预加载图标集。
+     *
+     * 为什么不用 `resources.loadDir`：loadDir 拿到的是一个数组、类型靠猜，
+     * 而这里要的是"key → SpriteFrame"的确定性映射（`mkIcon('stew')` 必须拿到热汤）。
+     * 逐个 load 的代价是 13 次回调，但每次都是同一路径，错了会立刻在控制台报出来。
+     *
+     * ⚠ 这些 PNG 是**脚本复制**进 assets 的，没有 .meta ——
+     * Cocos 编辑器首次打开会自动生成。生成前 `resources.load` 找不到资源，
+     * 表现为面板退回文字画法（不报错、不崩），属于预期降级。
+     */
+    private loadIcons() {
+        const keys = HomeController.ICON_KEYS;
+        let left = keys.length;
+        const done = () => {
+            if (--left > 0) return;
+            this.iconsReady = true;
+            this.refreshTaskBtn();
+            this.paintHomeBadge();
+        };
+        for (const k of keys) {
+            /* ⚠ 先试 `/spriteFrame` 后缀。Cocos 的图片在 resources 里是三层
+               （ImageAsset → Texture2D → SpriteFrame），不带后缀可能拿到 ImageAsset，
+               赋给 `Sprite.spriteFrame` 在运行时**静默失败** —— 不报错、图不显示。
+               但后缀能不能用又取决于 meta 里 `userData.type`：
+               本项目现有的 `post-overlay.png` meta 是 `type: texture`、只生成 texture 子资源，
+               而代码里走的是 `/spriteFrame` —— 两种写法在项目里同时存在。
+               所以这里**两条路都试**，谁成功用谁；都失败就退回文字画法（不崩、不空框）。 */
+            const store = (sf: SpriteFrame | null | undefined) => {
+                if (sf) this.icons[k] = sf;
+                done();
+            };
+            resources.load(`ui/icons/${k}/spriteFrame`, SpriteFrame, (err, sf) => {
+                if (!err && sf) { store(sf); return; }
+                resources.load(`ui/icons/${k}`, SpriteFrame, (err2, sf2) => {
+                    store(err2 ? null : sf2);
+                });
+            });
+        }
+    }
+
+    /**
+     * 往面板里放一颗图标。**没有图就返回 null，让调用方画回退样式** ——
+     * 绝不留一个空白方块（那比没有图标更像 bug）。
+     */
+    private mkIcon(parent: Node, name: string, key: string, size: number, x: number, y: number): Node | null {
+        const sf = this.icons[key];
+        if (!sf) return null;
+        const n = new Node(name);
+        n.parent = parent;
+        n.addComponent(UITransform).setContentSize(size, size);
+        n.setPosition(x, y, 0);
+        const sp = n.addComponent(Sprite);
+        /* Sprite 默认 TRIMMED 会把 contentSize 改回贴图尺寸，
+           这里要的是"我指定的 size"，必须 CUSTOM */
+        sp.sizeMode = Sprite.SizeMode.CUSTOM;
+        sp.spriteFrame = sf;
+        return n;
     }
 
     /* ----------------------------------------------------------------------
@@ -742,16 +863,25 @@ class HomeController {
      * -------------------------------------------------------------------- */
 
     /**
-     * 四个建筑入口用场景里摆好的位置：工作台在木桌，图鉴在屋门，
-     * 灶台在石灶，派遣在告示板。运行时再挪一次，就会飘到宠物头上、
-     * 或者压进出门按钮。
-     * 「去苔原」藏掉：右下角的出门按钮已经是这条路。
+     * 系统入口：从"散贴在地图上的五个"收成三个建筑入口 + 一个设置。
+     *
+     * **收敛依据**：灶台和工作台做的事情是同一类 —— "花资源换一个数值"。
+     * 分成两个入口的代价是玩家要记住食物在哪个炉子旁、配方在哪个桌子旁，
+     * 而两边加起来只有 5 个可选项目。合并成「家」之后点一次进去左右分栏，
+     * 喂饭和制作在同一个面板里，还省掉一块牌子。
+     *
+     * 改前：工作台 / 图鉴 / 灶台 / 派遣（四块牌子）+ 右上角设置。
+     * 改后：家 / 图鉴 / 派遣（三块牌子）+ 右上角设置 = **四个入口**。
+     * 「去苔原」仍然藏掉 —— 右下角的出门按钮已经是这条路。
      */
     private layoutRail() {
         const badges = this.canvas.getChildByName('Badges');
         if (!badges) return;
 
-        const keep = new Set(['图鉴', '工作台', '灶台', '派遣']);
+        /* 「家」沿用工作台那块牌子的位置（木桌旁）。
+           为什么不搬到灶台那边：木桌更靠画面中部，是玩家视线落点；
+           灶台在左侧偏下、离宠物群太近，牌子和宠物会挤。 */
+        const keep = new Set(['图鉴', '工作台', '派遣']);
         for (const n of badges.children.slice()) {
             if (n.name.indexOf('-hot') >= 0) continue;
             const key = n.name.startsWith('Badge-') ? n.name.slice(6)
@@ -759,6 +889,45 @@ class HomeController {
             if (!key || keep.has(key)) continue;
             n.active = false;
         }
+
+        /* 工作台 → 家：把说明牌从"工作台"（三个字、52 宽）改成"家"（一个字）。
+           底板同时收到 40 宽 —— 和图鉴 / 派遣一致，一排看过去才是齐的。
+           ⚠ 改了宽度必须重摆位置：alignHud 是按 52 宽算的，直接用会偏右 6px，
+           单看一块牌子看不出来，三块并排就一眼歪。 */
+        const cap = badges.getChildByName('Cap-工作台');
+        const lbl = cap?.getChildByName('txt')?.getComponent(Label);
+        if (lbl) lbl.string = '家';
+        const cut = cap?.getComponent(UITransform);
+        const bd = badges.getChildByName('Badge-工作台');
+        const bt = bd?.getComponent(UITransform);
+        if (cap && cut && bd && bt) {
+            cut.setContentSize(40, cut.contentSize.height);
+            const txt = cap.getChildByName('txt');
+            const tut = txt?.getComponent(UITransform);
+            if (txt && tut) txt.setPosition((40 - tut.contentSize.width) / 2, txt.position.y, 0);
+            cap.setPosition(bd.position.x + (bt.contentSize.width - 40) / 2, cap.position.y, 0);
+        }
+
+        /* 图标换成锅（pot）。图是异步来的，这里先试一次，
+           没图就保留原来那把锤子 —— 等 loadIcons 回来会再调一次。
+           不能画个空方块等它，那在首帧就是一块白板。 */
+        this.paintHomeBadge();
+    }
+
+    /**
+     * 给「家」换锅图标。幂等，可以随便多调。
+     * 幂等是有必要的：`layoutRail` 和 `loadIcons` 的回调都会调它，
+     * 谁先到谁先生效，后到的不该把已经换好的图再换回去。
+     */
+    private paintHomeBadge() {
+        const sf = this.icons['pot'];
+        if (!sf) return;
+        const ico = this.canvas.getChildByName('Badges')
+            ?.getChildByName('Badge-工作台')?.getChildByName('ico');
+        const sp = ico?.getComponent(Sprite);
+        if (!sp || sp.spriteFrame === sf) return;
+        sp.sizeMode = Sprite.SizeMode.CUSTOM;
+        sp.spriteFrame = sf;
     }
 
     /**
@@ -876,11 +1045,49 @@ class HomeController {
     }
 
     /** 写一个资源卡的数值（`Res-*` 节点下名为 `val` 的 Label） */
+    /**
+     * 顶栏资源数字。
+     *
+     * **首次直接写，之后的变化才滚动** —— 这两件事必须分开：
+     * 场景里这三个数是手工写的（248 / 36 / 12），存档里可能是 3。
+     * 如果第一帧也走滚动动画，玩家看到的是"248 一路掉到 3"，
+     * 读作资源蒸发；而"喂一次饭 +22"的滚动才是他真正该看到的信息。
+     */
     private setResVal(nodeName: string, v: number) {
+        const lbl = this.resLabel(nodeName);
+        if (!lbl) return;
+        if (!this.resReady) { lbl.string = String(v); return; }
+        const cur = Number(lbl.string) || 0;
+        if (cur === v) return;
+        this.resAnim[nodeName] = { from: cur, to: v, t: 0 };
+    }
+
+    private resLabel(nodeName: string): Label | null {
         const dock = this.canvas.getChildByName('Dock');
         const card = dock?.getChildByName(nodeName);
-        const lbl = card?.getChildByName('val')?.getComponent(Label);
-        if (lbl) lbl.string = String(v);
+        return card?.getChildByName('val')?.getComponent(Label) ?? null;
+    }
+
+    /**
+     * 资源数字滚动。0.34s cubicOut。
+     *
+     * 为什么值得为三个数字写一段动画：资源变化是家园里**唯一的高频反馈** ——
+     * 喂一次饭扣果子、派遣回来加材料，全是数字跳变。
+     * 直接跳变玩家注意不到（数字从 12 变 4，扫一眼以为没变），
+     * 滚一下就有了"东西进来了/出去了"的读数。
+     */
+    private tickResAnim(dt: number) {
+        const keys = Object.keys(this.resAnim);
+        if (!keys.length) return;
+        for (const k of keys) {
+            const a = this.resAnim[k];
+            a.t = Math.min(0.34, a.t + dt);
+            const p = a.t / 0.34;
+            const e = 1 - Math.pow(1 - p, 3);
+            const lbl = this.resLabel(k);
+            if (lbl) lbl.string = String(Math.round(a.from + (a.to - a.from) * e));
+            if (p >= 1) delete this.resAnim[k];
+        }
     }
 
     /**
@@ -1720,8 +1927,7 @@ class HomeController {
             if (!n.active) continue;
 
             const open = key === '图鉴' ? () => this.openCodex()
-                : key === '灶台' ? () => this.openKitchen()
-                : key === '工作台' ? () => this.openBench()
+                : key === '工作台' ? () => this.openHome()
                 : key === '派遣' ? () => this.openDispatch()
                 : null;
             if (open) {
@@ -2048,6 +2254,15 @@ class HomeController {
 
         this.tickSmoke(dt);
         this.tickBirds(dt);
+        this.tickResAnim(dt);
+
+        /* 任务徽标脉冲：**只在有可领的时候动**。
+           常驻脉冲会变成噪音，玩家三分钟后就当它不存在了 ——
+           动起来的唯一理由是"现在有事可做"。 */
+        if (this.taskBtn && this.taskBtn.isValid) {
+            const s = this.taskPulse > 0 ? 1 + Math.sin(this.t * 4.0) * this.taskPulse : 1;
+            this.taskBtn.setScale(s, s, 1);
+        }
 
         if (this.arrow) {
             this.arrow.setPosition(this.arrowBaseX + Math.sin(this.t * Math.PI * 2 / 1.9) * 3, this.arrow.position.y, 0);
@@ -2292,8 +2507,9 @@ class HomeController {
      * 一张米白卡片盖在院子上。点空白关掉。
      * 内容每次现画，所以喂完、做完、收回来，数字都是刚写进存档的。
      */
-    private openSheet(title: string, sub: string, fill: (card: Node) => void) {
+    private openSheet(title: string, sub: string, fill: (card: Node) => void, cw = 640, ch = 520) {
         this.closeSheet();
+        this.closeDrawer();
         if (this.codex) {
             this.codex.removeFromParent();
             this.codex.destroy();
@@ -2301,8 +2517,8 @@ class HomeController {
             this.codexOp = null;
         }
 
-        const CW = 640;
-        const CH = 520;
+        const CW = cw;
+        const CH = ch;
         const root = new Node('__Sheet');
         root.parent = this.canvas;
         root.addComponent(UITransform).setContentSize(W, H);
@@ -2333,6 +2549,15 @@ class HomeController {
         subLb.node.setPosition(0, CH / 2 - 88, 0);
         fill(card);
         mkLabel(card, 'tip', '点空白处关闭', 14, INK_SOFT, 400, 22).node.setPosition(0, -CH / 2 + 26, 0);
+
+        /* 进场：0.94 → 1 的 backOut（会略微过冲再回落）+ 淡入。
+           直接"啪"出现读作切换页面，弹一下才读作"这张卡被打开了"。
+           0.20s 是上限 —— 再长就成了等待，玩家点开之后想立刻看到内容。 */
+        card.setScale(0.94, 0.94, 1);
+        const cop = card.addComponent(UIOpacity);
+        cop.opacity = 0;
+        tween(card).to(0.20, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' }).start();
+        tween(cop).to(0.14, { opacity: 255 }).start();
     }
 
     private mkBtn(parent: Node, name: string, text: string, x: number, y: number, onClick: () => void, h = 52) {
@@ -2429,46 +2654,200 @@ class HomeController {
         });
     }
 
-    private openKitchen() {
+    /** 家面板的分栏。跨次打开保持 —— 上次在看制作，下次多半还想制作 */
+    private homeTab: 'feed' | 'craft' = 'feed';
+
+    /**
+     * 「家」= 灶台 + 工作台。
+     *
+     * 合并的依据是**同类**：两个都是"花资源换一个数值"，加起来只有 5 个可选项目。
+     * 分成两个入口的代价是玩家要记住食物在哪个炉子旁 —— 而它们本来就都在院子里。
+     *
+     * **它和别的面板最大的不同：界面里有一只宠物。**
+     * 改造前灶台的全部内容是"砂糖 的肚子 42/100 · 果子 3 · 材料 5 · 干粮 0"一行字：
+     * 你给谁做饭、它现在饿成什么样，全靠读数字。这里把当前出战那只的立绘摆进来，
+     * 饱食做成可视条 —— 喂完立刻看见条涨，比 toast 里一句"饱食 +22"强得多。
+     */
+    private openHome() {
         const s = this.save;
         const who = PETS.find((p) => p.id === s.active);
+        const wn = who ? who.name : '砂糖';
+
         this.openSheet(
-            '灶台',
-            `${who ? who.name : '出战'} 的肚子 ${Math.round(s.satiety)}/100 · 果子 ${s.apples} · 材料 ${s.logs} · 干粮 ${s.bag.ration}`,
+            '家',
+            `果子 ${s.apples} · 材料 ${s.logs} · 吧唧 ${s.coins} · 干粮 ${s.bag.ration} · 收集篮 ${s.bag.basket}`,
             (card) => {
-                MEALS.forEach((m, i) => {
-                    const cost = [
-                        m.apples ? `果子 ${m.apples}` : '',
-                        m.logs ? `材料 ${m.logs}` : '',
-                        m.ration ? '背包 1' : '',
-                    ].filter(Boolean).join(' + ');
-                    this.mkRow(card, m.id, m.name, `${cost}   饱食 +${m.sat}`, '喂', 0, 78 - i * 76, () => {
-                        this.act(feed(this.save, m.id), () => this.openKitchen());
-                    });
+                /* 装饰层单独一个节点：Cocos 一个节点只能挂一个 Graphics 组件，
+                   后面还要画饱食条、卡片底、分割线，全挤在 card 上会互相覆盖 */
+                const deco = new Node('deco');
+                deco.parent = card;
+                deco.addComponent(UITransform).setContentSize(700, 520);
+                const g = deco.addComponent(Graphics);
+
+                /* 分割线：左栏 | 右栏 */
+                g.fillColor = new Color(214, 176, 140, 120);
+                g.rect(-118, -196, 2, 340);
+                g.fill();
+                g.rect(-330, 150, 640, 2);
+                g.fill();
+
+                /* ---------- 左栏：这一趟陪你出门的那只 ---------- */
+                const LX = -230;
+                const H = 160;
+                const sf = this.petFrame(wn);
+                if (sf) {
+                    /* `rect` 在真机上一定有，但离屏渲染桩（tools/_mock-cc.js）里没有 ——
+                       直接读 `.width` 会在截图工具里崩在 openSheet 里，
+                       而崩在 openSheet 的表现是"点了没反应"，最难查的那种。
+                       取不到就按 1:1 放，立绘轻微变形好过整个面板打不开。 */
+                    const r = sf.rect;
+                    const ratio = r && r.height ? r.width / r.height : 1;
+                    const w = H * ratio;
+                    const n = new Node('portrait');
+                    n.parent = card;
+                    n.addComponent(UITransform).setContentSize(w, H);
+                    /* 脚底落在 y=-28：立绘是"站"在这里的，中心对齐会读成浮着 */
+                    n.setPosition(LX, -28 + H / 2, 0);
+                    const sp = n.addComponent(Sprite);
+                    sp.sizeMode = Sprite.SizeMode.CUSTOM;
+                    sp.spriteFrame = sf;
+                } else {
+                    /* 没有立绘就画个圆占位 —— 绝不空着。
+                       空着的位置玩家会以为是加载失败，画个底至少读作"肖像框" */
+                    g.fillColor = new Color(238, 226, 208, 255);
+                    g.circle(LX, 60, 52);
+                    g.fill();
+                }
+
+                mkLabel(card, 'who', wn, 22, INK, 200, 30).node.setPosition(LX, -56, 0);
+
+                const sat = Math.round(clamp(s.satiety, 0, SATIETY.max));
+                const full = s.satiety >= SATIETY.fullLine;
+                const hungry = s.satiety >= SATIETY.hungryLine;
+                mkLabel(card, 'satTxt', `肚子 ${sat}/${SATIETY.max}`, 12, INK_SOFT, 200, 18)
+                    .node.setPosition(LX, -84, 0);
+
+                /* 饱食条：颜色沿用出战卡的三档（满饱绿 / 半饿金 / 全饿红）。
+                   **金是"最强区间"的招牌色** —— 玩家在战斗里见过的那个金，
+                   在家园里必须还是同一个意思，两个界面不能各用一套配色 */
+                const BW = 176, BH = 14, BY = -106;
+                g.fillColor = new Color(228, 214, 196, 255);
+                g.roundRect(LX - BW / 2, BY - BH / 2, BW, BH, 7);
+                g.fill();
+                const col = full ? new Color(107, 203, 119, 255)
+                    : hungry ? new Color(255, 215, 0, 255)
+                        : new Color(255, 82, 82, 255);
+                g.fillColor = col;
+                g.roundRect(LX - BW / 2, BY - BH / 2, Math.max(8, BW * (s.satiety / SATIETY.max)), BH, 7);
+                g.fill();
+
+                /* ⚠ **不要用 `heartText`（♥♡）画心**。
+                   这个符号靠字体兜底：Cocos 的系统字体通常有，但换设备/换引擎渲染
+                   就可能整排显示成方块（离屏渲染桩里就是五个方块）。
+                   "亲密度 2 / 5" 信息量完全等价，而且不可能缺字形。 */
+                mkLabel(card, 'heart', `亲密度 ${heartsOf(s.pats[s.active] || 0)} / 5`,
+                    13, new Color(170, 116, 96, 255), 200, 20).node.setPosition(LX, -134, 0);
+
+                /* ---------- 右栏：分栏 + 可选项目 ---------- */
+                const TABS: Array<{ k: 'feed' | 'craft'; t: string }> = [
+                    { k: 'feed', t: '喂饭' },
+                    { k: 'craft', t: '制作' },
+                ];
+                TABS.forEach((tab, i) => {
+                    const on = this.homeTab === tab.k;
+                    this.mkPill(card, `tab-${tab.k}`, tab.t, 128, 40, -27 + i * 142, 112, true, () => {
+                        this.homeTab = tab.k;
+                        this.openHome();
+                    }, on);
                 });
+
+                if (this.homeTab === 'feed') {
+                    const ICON: Record<string, string> = { fruit: 'apple', stew: 'stew', ration: 'ration' };
+                    MEALS.forEach((m, i) => {
+                        const cost = [
+                            m.apples ? `果子 ${m.apples}` : '',
+                            m.logs ? `材料 ${m.logs}` : '',
+                            m.ration ? '背包 1' : '',
+                        ].filter(Boolean).join(' + ');
+                        const lack = (m.apples > s.apples) || (m.logs > s.logs) || (m.ration > s.bag.ration);
+                        this.mkItemCard(card, m.id, ICON[m.id] ?? '', m.name, cost, `饱食 +${m.sat}`,
+                            110, 48 - i * 96, !lack, '喂', () => {
+                                this.act(feed(this.save, m.id), () => this.openHome());
+                            });
+                    });
+                } else {
+                    const ICON: Record<string, string> = { ration: 'ration', basket: 'basket' };
+                    RECIPES.forEach((r, i) => {
+                        const cost = [
+                            r.apples ? `果子 ${r.apples}` : '',
+                            r.logs ? `材料 ${r.logs}` : '',
+                            r.coins ? `吧唧 ${r.coins}` : '',
+                        ].filter(Boolean).join(' + ');
+                        const lack = (r.apples > s.apples) || (r.logs > s.logs) || (r.coins > s.coins);
+                        const use = r.give === 'ration' ? '喂饭时能直接吃' : '派遣产量多一半';
+                        this.mkItemCard(card, r.id, ICON[r.id] ?? '', r.name, cost, use,
+                            110, 48 - i * 96, !lack, '制作', () => {
+                                this.act(craft(this.save, r.id), () => this.openHome());
+                            });
+                    });
+                }
             },
+            700, 520,
         );
     }
 
-    private openBench() {
-        const s = this.save;
-        this.openSheet(
-            '工作台',
-            `果子 ${s.apples} · 材料 ${s.logs} · 吧唧 ${s.coins} · 干粮 ${s.bag.ration} · 收集篮 ${s.bag.basket}`,
-            (card) => {
-                RECIPES.forEach((r, i) => {
-                    const cost = [
-                        r.apples ? `果子 ${r.apples}` : '',
-                        r.logs ? `材料 ${r.logs}` : '',
-                        r.coins ? `吧唧 ${r.coins}` : '',
-                    ].filter(Boolean).join(' + ');
-                    const use = r.give === 'ration' ? '拿到灶台就能吃' : '派遣产量多一半';
-                    this.mkRow(card, r.id, r.name, `${cost}   ${use}`, '制作', 0, 36 - i * 84, () => {
-                        this.act(craft(this.save, r.id), () => this.openBench());
-                    });
-                });
-            },
-        );
+    /**
+     * 一张"有对象的"选项卡：左边是**那个东西的图**，右边是做这件事的代价。
+     *
+     * 这就是对象型面板和清单型面板的全部区别 —— 原来这里只有一行字
+     * `野果 | 果子 8 | 饱食 +22 | 喂`，玩家不知道野果长什么样。
+     */
+    private mkItemCard(
+        parent: Node, name: string, icon: string, title: string, cost: string, gain: string,
+        x: number, y: number, enabled: boolean, action: string, onClick: () => void,
+    ) {
+        const W0 = 400, H0 = 86;
+        const card = new Node(name);
+        card.parent = parent;
+        card.addComponent(UITransform).setContentSize(W0, H0);
+        card.setPosition(x, y, 0);
+        const g = card.addComponent(Graphics);
+        g.fillColor = enabled ? ROW_FILL : ROW_OFF;
+        g.roundRect(-W0 / 2, -H0 / 2, W0, H0, 16);
+        g.fill();
+        g.lineWidth = 2;
+        g.strokeColor = enabled ? new Color(214, 176, 140, 255) : new Color(196, 184, 168, 255);
+        g.roundRect(-W0 / 2, -H0 / 2, W0, H0, 16);
+        g.stroke();
+
+        /* 产物图 52×52。没有图就画个圆底 —— 位置留着，形态不变 */
+        const ix = -W0 / 2 + 10 + 26;
+        if (!this.mkIcon(card, 'ico', icon, 52, ix, 0)) {
+            g.fillColor = enabled ? new Color(246, 232, 206, 255) : new Color(224, 218, 208, 255);
+            g.circle(ix, 0, 24);
+            g.fill();
+        }
+
+        const tx = -W0 / 2 + 76;
+        mkLeftLabel(card, 'nm', title, 18, enabled ? INK : INK_SOFT, tx, 16, 140, 24);
+        /* 代价与收益分两色：代价是**要扣的**（灰），收益是**得到的**（深棕）。
+           同一行两段同色读作一句话，玩家得自己找断点 */
+        mkLeftLabel(card, 'cost', cost, 12, enabled ? INK_SOFT : new Color(190, 120, 110, 255), tx, -12, 160, 18);
+        const gainLb = mkLeftLabel(card, 'gain', gain, 12, new Color(122, 146, 88, 255), tx + 168, -12, 120, 18);
+        gainLb.fontSize = 12;
+
+        const bw = 84, bh = 36;
+        this.mkPill(card, 'act', action, bw, bh, W0 / 2 - 10 - bw / 2, 0, enabled, onClick);
+    }
+
+    /** 从院子里那只宠物身上取立绘 —— 同步、零加载，且和玩家刚看到的是同一张图 */
+    private petFrame(name: string): SpriteFrame | null {
+        for (const p of this.pets) {
+            if (p.name !== name || !p.node || !p.node.isValid) continue;
+            const sp = p.node.getComponent(Sprite);
+            if (sp && sp.spriteFrame) return sp.spriteFrame;
+        }
+        return null;
     }
 
     private openDispatch() {
@@ -2938,25 +3317,320 @@ class HomeController {
     }
 
     private refreshTaskBtn() {
-        const lb = this.canvas.getChildByName('Badges')
-            ?.getChildByName('TaskBtn')
-            ?.getChildByName('txt')
-            ?.getComponent(Label);
-        if (!lb) return;
+        const btn = this.canvas.getChildByName('Badges')?.getChildByName('TaskBtn');
+        const lb = btn?.getChildByName('txt')?.getComponent(Label);
+        if (!btn || !lb) return;
+        this.taskBtn = btn;
         const n = claimableCount(this.save);
+        /* 数字直接写进牌子：玩家不用点开就知道"有几件事等着"。
+           没有可领时回到光秃秃的"任务"，不显示 0 —— 0 是个比空白更没信息的字。 */
         lb.string = n > 0 ? `任务 ${n}` : '任务';
+        this.taskPulse = n > 0 ? 0.035 : 0;
+        if (n <= 0) btn.setScale(1, 1, 1);
     }
 
+    /* ----------------------------------------------------------------------
+     * 任务抽屉：右侧滑出，不压暗场景
+     * -------------------------------------------------------------------- */
+
+    /** 抽屉宽度。360 = 屏宽 28%，够放"图标 + 名字 + 两件奖励 + 状态"，又不盖住宠物区 */
+    private static readonly DRAWER_W = 360;
+
+    /**
+     * 为什么任务不是弹窗。
+     *
+     * 任务是**随时瞟一眼**的东西，不是"进入一个地方"。弹窗压暗全屏、
+     * 必须点空白才关，等于每看一次任务就打断一次院子里的玩法。
+     * 抽屉从右侧滑出，左边场景照旧可见 —— 玩家能一边看任务一边看见草地上的宠物。
+     *
+     * 代价：抽屉占住右侧 360 宽，底下的徽标点不到了。用一个**透明**拦截层
+     * 吃掉这块的触摸（不压暗，只是不让点击穿透到下面的徽标），
+     * 点它就关抽屉 —— 行为上等价于弹窗的"点空白关闭"，视觉上不打断。
+     */
     private openTasks() {
-        const n = claimableCount(this.save);
-        this.openSheet('任务', n > 0 ? `${n} 件可以领 · 做完就领，不每天刷新` : '做完就领，不每天刷新', (card) => {
-            TASKS.forEach((t, i) => {
-                const phase = taskPhase(this.save, t.id);
-                const mark = phase === 'claimed' ? '已领' : phase === 'ready' ? '领取' : '未完成';
-                this.mkRow(card, t.id, t.name, `${t.desc} · ${t.reward}`, mark, 0, 96 - i * 50, () => {
-                    this.act(claimTask(this.save, t.id), () => this.openTasks());
-                }, phase === 'ready', 46);
+        if (this.drawerBusy) return;
+        if (this.drawer) { this.closeDrawer(); return; }
+        this.closeSheet();
+
+        const DW = HomeController.DRAWER_W;
+        const OPEN_X = W / 2 - DW / 2;
+        const SHUT_X = W / 2 + DW / 2;
+
+        const root = new Node('__Drawer');
+        root.parent = this.canvas;
+        root.addComponent(UITransform).setContentSize(W, H);
+        root.setSiblingIndex(-1);
+        this.drawer = root;
+        const op = root.addComponent(UIOpacity);
+        op.opacity = 0;
+        this.drawerOp = op;
+
+        /* 透明拦截层：**不能省**。省了的话点抽屉旁边的草地会直接触发底下
+           的徽标 / 宠物 / 出门按钮 —— 关抽屉的同时顺手打开别的面板。 */
+        const hit = new Node('hit');
+        hit.parent = root;
+        hit.addComponent(UITransform).setContentSize(W, H);
+        const hg = hit.addComponent(Graphics);
+        /* alpha 1 而不是 0：Cocos 的触摸命中看 UITransform，
+           但某些后端对 alpha=0 的 Graphics 会跳过绘制也就跳过命中，画 1 最稳 */
+        hg.fillColor = new Color(0, 0, 0, 1);
+        hg.rect(-W / 2, -H / 2, W, H);
+        hg.fill();
+        hit.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
+            e.propagationStopped = true;
+            this.closeDrawer();
+        });
+
+        const panel = new Node('panel');
+        panel.parent = root;
+        panel.addComponent(UITransform).setContentSize(DW, H);
+        panel.setPosition(SHUT_X, 0, 0);
+        /* 抽屉自己的触摸不吃掉会冒到 hit 上，点哪儿都关 —— 必须 stop */
+        panel.on(Node.EventType.TOUCH_END, (e: EventTouch) => { e.propagationStopped = true; });
+
+        const bg = panel.addComponent(Graphics);
+        bg.fillColor = CARD_FILL_SOLID;
+        bg.rect(-DW / 2, -H / 2, DW, H);
+        bg.fill();
+        /* 只描左边一条竖线：抽屉是"从边上拉出来的板"，画整圈会读成漂浮的卡 */
+        bg.fillColor = new Color(122, 80, 52, 255);
+        bg.rect(-DW / 2, -H / 2, 4, H);
+        bg.fill();
+        /* 左缘一道暖光，把"板"和"背后的草地"分开 */
+        bg.fillColor = new Color(214, 176, 140, 70);
+        bg.rect(-DW / 2 + 4, -H / 2, 3, H);
+        bg.fill();
+
+        this.paintTaskBody(panel);
+
+        /* 滑入。0.24s quadOut —— 再快读不出"从右边来"，再慢就挡着玩家操作 */
+        tween(panel).to(0.24, { position: new Vec3(OPEN_X, 0, 0) }, { easing: 'quadOut' }).start();
+        tween(op).to(0.20, { opacity: 255 }, { easing: 'quadIn' }).start();
+    }
+
+    private closeDrawer() {
+        const n = this.drawer;
+        if (!n || this.drawerBusy) return;
+        this.drawer = null;
+        this.drawerOp = null;
+        this.drawerBusy = true;
+        const DW = HomeController.DRAWER_W;
+        const panel = n.getChildByName('panel');
+        const op = n.getComponent(UIOpacity);
+        if (op) tween(op).to(0.14, { opacity: 0 }).start();
+        if (!panel) { n.removeFromParent(); n.destroy(); this.drawerBusy = false; return; }
+        /* 滑出去再销毁。直接 destroy 是"啪一下没了"，和 0.24s 滑入不对称 */
+        tween(panel)
+            .to(0.16, { position: new Vec3(W / 2 + DW / 2, 0, 0) }, { easing: 'quadIn' })
+            .call(() => {
+                this.drawerBusy = false;
+                if (n.isValid) { n.removeFromParent(); n.destroy(); }
+            })
+            .start();
+    }
+
+    /**
+     * 画抽屉内容。领取之后整块重画（数字、状态全部现算），
+     * 所以这里必须是"纯函数式"的：进来先拆旧的 body 再建新的。
+     */
+    private paintTaskBody(panel: Node) {
+        const old = panel.getChildByName('body');
+        if (old) { old.removeFromParent(); old.destroy(); }
+
+        const DW = HomeController.DRAWER_W;
+        const body = new Node('body');
+        body.parent = panel;
+        body.addComponent(UITransform).setContentSize(DW, H);
+        body.on(Node.EventType.TOUCH_END, (e: EventTouch) => { e.propagationStopped = true; });
+
+        const s = this.save;
+        const ready = TASKS.filter((t) => taskPhase(s, t.id) === 'ready');
+        const open = TASKS.filter((t) => taskPhase(s, t.id) === 'open');
+        const done = TASKS.filter((t) => taskPhase(s, t.id) === 'claimed');
+
+        /* 标题：左边"任务"，右边"2 件可领"。副标题**只放状态**，
+           不再是"做完就领，不每天刷新" —— 那是产品说明，每开一次念一遍 */
+        mkLeftLabel(body, 'title', '任务', 26, INK, -DW / 2 + 22, 310, 160, 36);
+        const cnt = ready.length > 0 ? `${ready.length} 件可领` : `共 ${TASKS.length} 件`;
+        const cntLb = mkLabel(body, 'cnt', cnt, 13, INK_SOFT, 120, 22);
+        cntLb.node.setPosition(DW / 2 - 22 - 60, 308, 0);
+
+        /* 分割线画在**独立节点**上：body 自己没挂 Graphics，
+           而一个节点只能有一个 Graphics 组件 —— 后面任务行各自还要画圆角底，
+           全挤在 body 上会互相覆盖（Cocos 的 fill() 只作用在新增路径上） */
+        const dline = new Node('line');
+        dline.parent = body;
+        dline.addComponent(UITransform).setContentSize(DW, H);
+        const dg = dline.addComponent(Graphics);
+        dg.fillColor = new Color(214, 176, 140, 140);
+        dg.rect(-DW / 2 + 20, 244, DW - 40, 2);
+        dg.fill();
+
+        /* 聚合领取。六个任务逐个点六次是没必要的仪式，
+           尤其是它们全都只是加资源 —— 合成一颗按钮，顺手把总数写出来 */
+        let listTop = 214;
+        if (ready.length > 0) {
+            const sum: Record<string, number> = {};
+            for (const t of ready) for (const r of t.rewardList) sum[r.kind] = (sum[r.kind] ?? 0) + r.n;
+            const txts: string[] = [];
+            for (const k of ['apple', 'log', 'coin']) {
+                if (sum[k]) txts.push(`${k === 'apple' ? '果子' : k === 'log' ? '材料' : '吧唧'} +${sum[k]}`);
+            }
+            this.mkPill(body, 'claimAll', `全部领取 · ${txts.join('  ')}`, DW - 44, 46, 0, 208, true,
+                () => this.claimAllTasks());
+            listTop = 168;
+        }
+
+        let y = listTop;
+        const drawGroup = (list: ReadonlyArray<TaskDef>, label: string) => {
+            if (!list.length) return;
+            if (label) {
+                mkLeftLabel(body, `g-${label}`, label, 12, INK_SOFT, -DW / 2 + 22, y, 200, 20);
+                y -= 26;
+            }
+            for (const t of list) {
+                this.mkTaskRow(body, t, y);
+                y -= 72;
+            }
+            y -= 8;
+        };
+
+        drawGroup(ready, ready.length && (open.length || done.length) ? '可以领了' : '');
+        drawGroup(open, ready.length ? '还没做完' : '');
+        drawGroup(done, done.length && (ready.length || open.length) ? '已完成' : '');
+
+        if (!TASKS.length) {
+            mkLabel(body, 'none', '暂时没有任务', 15, INK_SOFT, 240, 30).node.setPosition(0, 180, 0);
+        }
+    }
+
+    /** 一行任务：竖条 + 图标 + 名字 + 进度/奖励 + 状态。三种状态三种形状 */
+    private mkTaskRow(parent: Node, t: TaskDef, y: number) {
+        const RW = HomeController.DRAWER_W - 36;   // 324
+        const phase = taskPhase(this.save, t.id);
+        const isReady = phase === 'ready';
+        const isDone = phase === 'claimed';
+
+        const row = new Node(t.id);
+        row.parent = parent;
+        row.addComponent(UITransform).setContentSize(RW, 64);
+        row.setPosition(0, y, 0);
+        const op = row.addComponent(UIOpacity);
+        /* 已领的整行降到 115/255 —— 不是删掉，是"退到背景里"。
+           玩家偶尔要回看领过什么，但平时不该跟可领的抢注意力 */
+        op.opacity = isDone ? 115 : 255;
+
+        const g = row.addComponent(Graphics);
+        g.fillColor = isReady ? new Color(255, 249, 234, 255) : ROW_FILL;
+        g.roundRect(-RW / 2, -32, RW, 64, 16);
+        g.fill();
+        g.lineWidth = 2;
+        g.strokeColor = isReady ? BTN_DEEP : new Color(226, 212, 194, 255);
+        g.roundRect(-RW / 2, -32, RW, 64, 16);
+        g.stroke();
+        /* 可领的行左缘一道杏黄竖条 —— 缩略图测试靠它，
+           六行等高的情况下这是唯一能在 10% 尺寸下分出"哪行能点"的形状 */
+        if (isReady) {
+            g.fillColor = BTN_FILL;
+            g.roundRect(-RW / 2 + 4, -26, 5, 52, 2.5);
+            g.fill();
+        }
+
+        /* 图标：没有图就退回"首字圆"（老画法），绝不空着 */
+        const iconX = -RW / 2 + 8 + 18;
+        if (!this.mkIcon(row, 'ico', t.icon, 36, iconX, 0)) {
+            g.fillColor = isReady ? new Color(246, 214, 150, 255) : new Color(232, 222, 208, 255);
+            g.circle(iconX, 0, 18);
+            g.fill();
+            mkLabel(row, 'mark', t.name.slice(0, 1), 17, new Color(92, 60, 24, 255), 36, 26)
+                .node.setPosition(iconX, 0, 0);
+        }
+
+        const textX = -RW / 2 + 8 + 36 + 10;
+        mkLeftLabel(row, 'name', t.name, 17, isDone ? INK_SOFT : INK, textX, 9, 150, 24);
+
+        /* 第二行：可领/已领给奖励，进行中给进度。
+           **奖励必须是图标 + 数字**，不能是"果子 +12 · 材料 +2"一句话 ——
+           玩家点开任务只有一个诉求，就是"领什么"，读数字比读中文快一个数量级 */
+        if (isReady || isDone) {
+            let rx = textX;
+            for (const r of t.rewardList) {
+                this.mkIcon(row, `r-${r.kind}`, r.kind, 15, rx + 7, -13);
+                mkLeftLabel(row, `n-${r.kind}`, `+${r.n}`, 13, INK_SOFT, rx + 16, -13, 40, 18);
+                rx += 50;
+            }
+        } else {
+            mkLeftLabel(row, 'prog', `${Math.min(t.cur(this.save), t.target)} / ${t.target}`,
+                13, INK_SOFT, textX, -13, 80, 18);
+        }
+
+        /* 状态三态三形：实心杏黄按钮 / 无 / 一句"已领" */
+        const ax = RW / 2 - 8 - 36;
+        if (isReady) {
+            this.mkPill(row, 'act', '领取', 72, 32, ax, 0, true, () => {
+                this.act(claimTask(this.save, t.id), () => {
+                    /* 不关抽屉、不重开 —— 原地重画。领完还留在任务列表里
+                       才符合"一次把能领的都领了"的实际行为 */
+                    const p = this.drawer?.getChildByName('panel');
+                    if (p) this.paintTaskBody(p);
+                });
             });
+        } else if (isDone) {
+            mkLabel(row, 'done', '已领', 14, INK_SOFT, 60, 20).node.setPosition(ax, 0, 0);
+        }
+
+        return row;
+    }
+
+    /** 把所有可领的一次领完 */
+    private claimAllTasks() {
+        let s = this.save;
+        let n = 0;
+        for (const t of TASKS) {
+            if (taskPhase(s, t.id) !== 'ready') continue;
+            const r = claimTask(s, t.id);
+            if (r.ok && r.next) { s = r.next; n++; }
+        }
+        if (!n) { this.toast('没有可以领的'); return; }
+        this.commit(s);
+        const p = this.drawer?.getChildByName('panel');
+        if (p) this.paintTaskBody(p);
+        this.toast(`${n} 件奖励都收下了`);
+    }
+
+    /**
+     * 窄版药丸按钮。**不能复用 `mkBtn`** —— 那个是写死 520 宽的卡内主按钮，
+     * 塞进 324 宽的抽屉行里会撑破。
+     *
+     * `active` 是分栏 tab 的选中态：选中用深棕底 + 米白字（反转），
+     * 未选用杏黄底 + 深棕字。两个都用杏黄会读成"两个都能点，但不知道现在在哪个"。
+     */
+    private mkPill(
+        parent: Node, name: string, text: string, w: number, h: number,
+        x: number, y: number, enabled: boolean, onClick: () => void, active = false,
+    ) {
+        const btn = new Node(name);
+        btn.parent = parent;
+        btn.addComponent(UITransform).setContentSize(w, h);
+        btn.setPosition(x, y, 0);
+        const g = btn.addComponent(Graphics);
+        const fill = !enabled ? new Color(206, 196, 184, 255)
+            : active ? BTN_DEEP : BTN_FILL;
+        g.fillColor = fill;
+        g.roundRect(-w / 2, -h / 2, w, h, Math.min(17, h / 2));
+        g.fill();
+        g.lineWidth = 2;
+        g.strokeColor = enabled ? BTN_DEEP : new Color(176, 160, 144, 255);
+        g.roundRect(-w / 2, -h / 2, w, h, Math.min(17, h / 2));
+        g.stroke();
+        const ink = active ? new Color(255, 250, 240, 255) : new Color(96, 58, 28, 255);
+        const lb = mkLabel(btn, 'txt', text, 15, enabled ? ink : new Color(150, 140, 128, 255), w - 14, h - 6);
+        lb.overflow = Label.Overflow.SHRINK;
+        if (!enabled) return;
+        this.press(btn, 0.95);
+        btn.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
+            e.propagationStopped = true;
+            onClick();
         });
     }
 

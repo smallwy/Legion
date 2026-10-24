@@ -289,55 +289,100 @@ export function applyRunReward(prev: SaveState, payout: RunPayout): SaveState {
     return next;
 }
 
+/** 奖励的一件：图标 key + 数量。面板按这个画"图标 + 数字"，不解析中文 */
+export interface TaskReward {
+    kind: 'apple' | 'log' | 'coin';
+    n: number;
+}
+
 export interface TaskDef {
     id: string;
     name: string;
     desc: string;
     reward: string;
+    /** 任务图标（`resources/ui/icons/<icon>.png`）。没有图时面板退回首字圆 */
+    icon: string;
+    /**
+     * 当前进度。**和 `ready` 同源** —— `ready` 由 `mkTask` 用 `cur >= target` 生成，
+     * 不允许各写一套。改之前是 `ready: (s) => s.runs >= 1` 一句话，
+     * 界面想显示"打了几次"就得再写一遍判定，两处迟早漂移
+     * （症状：界面显示 1/1 却点不动，或 0/1 却已经能领）。
+     */
+    cur: (s: SaveState) => number;
+    target: number;
+    /** 结构化奖励。`reward` 那个字符串只留给 toast 文案，不参与绘制 */
+    rewardList: TaskReward[];
     ready: (s: SaveState) => boolean;
     grant: (s: SaveState) => void;
 }
 
+/** 造一条任务：`ready` 从 `cur/target` 推出来，唯一真值 */
+function mkTask(t: Omit<TaskDef, 'ready'>): TaskDef {
+    return { ...t, ready: (s) => t.cur(s) >= t.target };
+}
+
 export const TASKS: ReadonlyArray<TaskDef> = [
-    {
+    mkTask({
         /* 任务奖励里的"能量 +X"全部换成了实际资源 —— 能量门禁删了之后，
            再发能量就是发一个没人用的数字，等于奖励是空的。
            换的标准：**每件任务给的东西要能立刻花出去**（喂饭/做东西/买东西）。 */
         id: 'out', name: '出门一趟', desc: '打完回来一次',
         reward: '果子 +12 · 材料 +2',
-        ready: (s) => s.runs >= 1,
+        icon: 'flag',
+        cur: (s) => s.runs, target: 1,
+        rewardList: [{ kind: 'apple', n: 12 }, { kind: 'log', n: 2 }],
         grant: (s) => { s.apples += 12; s.logs += 2; },
-    },
-    {
+    }),
+    mkTask({
         id: 'feed', name: '喂一顿', desc: '在灶台喂一次',
         reward: '材料 +4 · 果子 +6',
-        ready: (s) => s.feeds >= 1,
+        icon: 'stew',
+        cur: (s) => s.feeds, target: 1,
+        rewardList: [{ kind: 'log', n: 4 }, { kind: 'apple', n: 6 }],
         grant: (s) => { s.logs += 4; s.apples += 6; },
-    },
-    {
+    }),
+    mkTask({
         id: 'craft', name: '做一份干粮', desc: '在工作台做出干粮或收集篮',
         reward: '果子 +8',
-        ready: (s) => s.crafts >= 1,
+        icon: 'hammer',
+        cur: (s) => s.crafts, target: 1,
+        rewardList: [{ kind: 'apple', n: 8 }],
         grant: (s) => { s.apples += 8; },
-    },
-    {
+    }),
+    mkTask({
         id: 'send', name: '派人去采', desc: '派遣收回一次',
         reward: '吧唧 +2 · 果子 +10',
-        ready: (s) => s.dispatches >= 1,
+        icon: 'basket',
+        cur: (s) => s.dispatches, target: 1,
+        rewardList: [{ kind: 'coin', n: 2 }, { kind: 'apple', n: 10 }],
         grant: (s) => { s.coins += 2; s.apples += 10; },
-    },
-    {
+    }),
+    mkTask({
         id: 'pal', name: '带同伴回家', desc: '通关 1 关',
         reward: '果子 +20 · 材料 +6',
-        ready: (s) => s.cleared >= 1,
+        icon: 'paw',
+        cur: (s) => s.cleared, target: 1,
+        rewardList: [{ kind: 'apple', n: 20 }, { kind: 'log', n: 6 }],
         grant: (s) => { s.apples += 20; s.logs += 6; },
-    },
-    {
+    }),
+    mkTask({
         id: 'pat', name: '跟它熟一点', desc: '任意一只摸到 1 颗心',
         reward: '果子 +15',
-        ready: (s) => Object.keys(s.pats).some((id) => heartsOf(s.pats[id] || 0) >= 1),
+        icon: 'paw-red',
+        /* 取"最高的那只"而不是"有心的一共几只"：任务说的是**任意一只**，
+           用最大值才和 `ready` 的语义完全对上 */
+        cur: (s) => {
+            let mx = 0;
+            for (const id of Object.keys(s.pats)) {
+                const h = heartsOf(s.pats[id] || 0);
+                if (h > mx) mx = h;
+            }
+            return mx;
+        },
+        target: 1,
+        rewardList: [{ kind: 'apple', n: 15 }],
         grant: (s) => { s.apples += 15; },
-    },
+    }),
 ];
 
 export function taskPhase(prev: SaveState, id: string): 'claimed' | 'ready' | 'open' {

@@ -196,11 +196,15 @@ const clickable = collectClickable(canvas);
 ok(clickable.length >= 10, '可点元素数量达到预期', `${clickable.length} 个：${clickable.join(', ')}`);
 
 /* 注意：徽标本体不绑触摸，点击目标是它的 88×88 热区（视觉尺寸与点击区分离） */
-const need = ['Btn-Go', 'GoCard', 'Badge-工作台-hot', 'Badge-图鉴-hot', 'Badge-灶台-hot',
+const need = ['Btn-Go', 'GoCard', 'Badge-工作台-hot', 'Badge-图鉴-hot',
     'IconBtn-hot', 'HudProgress', 'Slot-年糕', 'Slot-星屑', '砂糖-hot'];
 for (const n of need) {
     ok(clickable.includes(n), `入口可点：${n}`);
 }
+/* 入口收敛之后灶台并进了「家」—— 断言要跟着设计走。
+   ⚠ 这条原来写的是"灶台也必须可点"，收敛后永远红。测试红着不管，
+   下次真出问题就没人分辨得出来了。 */
+ok(!clickable.includes('Badge-灶台-hot'), '灶台入口已并入「家」（不再单独可点）');
 
 /* --- 5.4 点出门 → 出发卡出现 --- */
 const goBtn = canvas.getChildByName('Dock').getChildByName('Btn-Go');
@@ -248,7 +252,8 @@ ok(!!sheetNode, '点徽标后打开了面板（__Sheet）');
 const sheetTitle = sheetNode && sheetNode.getChildByName('card')
     && sheetNode.getChildByName('card').getChildByName('title');
 const sheetTitleComp = sheetTitle && sheetTitle.getComponent(cc.Label);
-ok(!!sheetTitleComp && sheetTitleComp.string === '工作台',
+/* 「家」= 工作台 + 灶台合并后的入口，所以标题断言的是「家」而不是「工作台」 */
+ok(!!sheetTitleComp && sheetTitleComp.string === '家',
     '面板标题指向被点的入口', sheetTitleComp ? sheetTitleComp.string : '(无)');
 
 for (let i = 0; i < 12; i++) {

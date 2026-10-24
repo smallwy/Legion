@@ -201,7 +201,14 @@ Label.HorizontalAlign = { LEFT: 0, CENTER: 1, RIGHT: 2 };
 Label.VerticalAlign = { TOP: 0, CENTER: 1, BOTTOM: 2 };
 Label.Overflow = { NONE: 0, CLAMP: 1, SHRINK: 2, RESIZE_HEIGHT: 3 };
 
-class Sprite { constructor() { this.color = new Color(); this.spriteFrame = null; } }
+class Sprite {
+    constructor() { this.color = new Color(); this.spriteFrame = null; this.sizeMode = 0; this.type = 0; }
+}
+/* 枚举要补齐：HomeRuntime 里 `sp.sizeMode = Sprite.SizeMode.CUSTOM` 是常见写法，
+   桩里没有 SizeMode 就会在**运行时**抛 undefined.CUSTOM，
+   而这行在 openSheet 里 —— 表现是"点了没反应"，比渲染错还难查。 */
+Sprite.SizeMode = { CUSTOM: 0, TRIMMED: 1, RAW: 2 };
+Sprite.Type = { SIMPLE: 0, SLICED: 1, TILED: 2, FILLED: 3 };
 
 class Graphics {
     constructor() {
@@ -298,7 +305,13 @@ const assetManager = {
 };
 
 class SpriteFrame {
-    constructor(name = 'SpriteFrame') { this._name = name; }
+    constructor(name = 'SpriteFrame') {
+        this._name = name;
+        /* rect / originalSize 必须有：主界面按立绘宽高比算摆放宽度（`sf.rect.width/height`），
+           桩里没有就是 undefined.width 直接崩在 openHome 里 */
+        this.rect = { x: 0, y: 0, width: 64, height: 64 };
+        this.originalSize = { width: 64, height: 64 };
+    }
 }
 
 /* resources：和 assetManager 同样默认失败。

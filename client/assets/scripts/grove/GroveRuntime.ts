@@ -391,6 +391,82 @@ const FOES = {
 const GROUND_Y = 556;
 const WALL_L = 26, WALL_R = 934;
 
+/* ============================================================================
+   空间语法 · 一：地面材质带（N1 地脉）
+   ----------------------------------------------------------------------------
+   **必须理解这一条再改数字：本作的地面是"完全无摩擦"的。**
+   上面 updateBalls 里写得很清楚 —— 球一旦推起来就一路滚，唯一的衰减是撞墙
+   ×0.62。这不是疏漏，是"往哪推是一次真赌注"的手感来源。
+
+   所以材质带**不能**做成"三种摩擦系数" —— 那等于给无摩擦世界偷偷加摩擦，
+   27 屏的落点、竖井、营地全按 620 的巡航速度调过，一动就会集体偏。
+   这里的做法是：
+     · ice 冰面 → **给球加速**（不是"少减速"，是这个物理里根本没有减速）
+     · mud 泥面 → 给球减速（唯一一处主动加摩擦，只作用在泥上）
+     · moss 苔面 → 常规，什么都不做（绝大多数地面的默认值）
+
+   对**人**才是真正的摩擦差异：`fr` 本来就在那儿（见 updatePlayer 里那段
+   "雪地上摩擦变小，这才是打滑"）。材质带只是把那个全局雪深换成局部的。
+
+   幅度都压在 ±25% 内。冰面让球多滚 200px、泥面让它早停 150px ——
+   足够改变"这一推去哪"，不足以让某一屏从可通变成不可通。
+   -------------------------------------------------------------------------- */
+const MAT = {
+  moss: { ballGain: 0,    ballDrag: 0,    heroFr: 1.00, tint: null },
+  ice:  { ballGain: 0.45, ballDrag: 0,    heroFr: 0.10, tint: "#BFE9FF" },
+  mud:  { ballGain: 0,    ballDrag: 1.10, heroFr: 2.10, tint: "#7A5A38" },
+};
+
+/** 球心 x 落在哪条材质带上。没写 grounds 的屏永远返回 moss */
+function matAt(x) {
+  for (const g of GROUNDS) {
+    if (x >= g.x && x <= g.x + g.w) return g.kind in MAT ? g.kind : "moss";
+  }
+  return "moss";
+}
+
+/* ============================================================================
+   空间语法 · 二：反射板（N2）
+   ----------------------------------------------------------------------------
+   一块悬空的斜板。球撞上去**按镜面反射，速度一点不衰减** —— 这一点是刻意的，
+   它和"撞墙 ×0.62"的区别必须让玩家一摸就知道：墙是惩罚，板是机会。
+
+   ★ 这个函数被 updateBalls 和 predictBall **共用**。
+     本作最不能犯的错是"预瞄线骗人"，而反射板是唯一一个"6px 的撞点差异
+     → 20 度的出射差异"的件，两处各写一遍必然漂移。所以做成单函数，
+     连那个临时对象都是共用的（不会同时调用）。
+   -------------------------------------------------------------------------- */
+const _rb = { x: 0, y: 0, vx: 0, vy: 0, nx: 0, ny: 0 };
+
+/** 圆 vs 线段：命中就地把 o 的 {x,y,vx,vy} 改成反射后的值，返回 true */
+function reflectStep(o, r) {
+  if (!REFLECTS.length) return false;
+  for (const d of REFLECTS) {
+    const dx = d.x2 - d.x1, dy = d.y2 - d.y1;
+    const len2 = dx * dx + dy * dy;
+    if (len2 < 1) continue;
+    // 球心在线段上的投影（夹到 0..1，所以端点也参与判定）
+    let t = ((o.x - d.x1) * dx + (o.y - d.y1) * dy) / len2;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const cx = d.x1 + dx * t, cy = d.y1 + dy * t;
+    let ux = o.x - cx, uy = o.y - cy;
+    const dist = Math.hypot(ux, uy);
+    if (dist > r + 2 || dist < 0.01) continue;
+    ux /= dist; uy /= dist;
+    // 正在离开就不再反射 —— 不加这条，球会被贴在板上反复反射，原地抖动
+    const vn = o.vx * ux + o.vy * uy;
+    if (vn > 0) continue;
+    o.vx -= 2 * vn * ux;
+    o.vy -= 2 * vn * uy;
+    o.x = cx + ux * (r + 1.5);
+    o.y = cy + uy * (r + 1.5);
+    o.nx = ux; o.ny = uy;
+    return true;
+  }
+  return false;
+}
+
+
 /** 雪从 0 积到最厚要这么多秒。第 2 关 par 是 60 秒，所以通常打到一半才过半厚 */
 const SNOW_BUILD_SEC = 90;
 /** 雪最厚时敌人还剩多少速度。−30%：看得出"它们慢了"，又不至于变成站桩 */
@@ -973,6 +1049,17 @@ const LEVELS = [
       // w=226 是 2.4·H 量出来的（H=94）；原来 140 的峰值 57°，是从地面"竖"上去的。
       { x: 300, w: 226, yL: 462, yR: GROUND_Y },
     ],
+    /* 地面材质（N1）：泥坑右缘 160 → 坡脚 300，正好 140px 干净平地。
+       选这一屏有三条理由：
+         1) 主题本来就是雪，冰面不需要额外解释；
+         2) 这段是**整盘唯一的干净地面**（左边泥坑、右边水塘和火坑），
+            球从左边滚过来、玩家从出生点往右走，都会真的踩上去；
+         3) 出生点 230 就落在带子中间 —— 第一脚就滑，不需要教学。
+       冰在这套物理里是**加速**（地面本来无摩擦），所以它给的是"多滚一截"，
+       不是"打滑站不住"；人的那半是 friction×0.10，松手会多滑一段。 */
+    grounds: [
+      { x: 160, w: 140, kind: "ice" },
+    ],
     pits: [
       { x: 60,  y: GROUND_Y, w: 100, kind: "mud"   },
       // 水塘必须同时落在 350 和 462 两层的缺口里，球才能从上面砸进去。
@@ -1084,6 +1171,10 @@ const LEVELS = [
       // 但也不能一路铺到营地：上一版铺到 820，坡底下就变成一条**只能从一头进的洞**，
       // BOSS 站进去以后玩家只能站在坡上朝它干瞪眼（机器人当场卡死 240 秒）。
       // 收到 700：右边留 150px 空地给最后一波，球滑到底还能自己滚进营地。
+      // ★ w 保持 494（坡脚 794）：试过收到 400 让坡脚右侧腾出空地铺冰面，
+      //   结果坡变陡 0.42→0.52，坡上那排敌人的 y 全部错位，机器人单球只卷到
+      //   2 只、达不到 chain 3 —— ALL9 当场报红。**这条坡是道具不是背景板**，
+      //   冰面最后铺到了「雪原」（第 2 屏），那里本来就有 140px 干净平地。
       { x: 300, w: 494, yL: 350, yR: GROUND_Y },
     ],
     pits: [
@@ -1095,6 +1186,10 @@ const LEVELS = [
     // 坡脚往右只剩 150px 空地，桩子摆哪儿都在球的必经路上（实测：摆在 730，
     // 球滑到底撞桩弹回来，落袋直接断）。可破坏件不是每关都必须有的零件。
     stumps: [],
+    /* 地面材质（N1）：坡脚往右到营地是一段冰面。
+       球从 494 长坡冲下来（坡面本身给加速），落到地面后这一段让它
+       再多滑一截 —— 第 4 屏的全部设计就是"一球滚到底"，冰面把这件事
+       做得更彻底，同时第一次让玩家看见"地面是有材质的"。 */
     camp: { x: 852, y: GROUND_Y, w: 82 },
     waves: [
       [
@@ -1234,53 +1329,98 @@ const LEVELS = [
   },
 
   /* ---------------- 7 ----------------
-     四层真阶梯，每层往右错 110。右侧挂一条 110 的短滑梯落向营地。 */
+     回弹井（2026-10-24 重做）。
+     ------------------------------------------------------------------
+     旧版是"四层台阶每层往右错 110"，7 块台面、4 层洞 —— 和其余 26 屏
+     读起来是同一张图（见 docs/assets/level-skeleton-audit.html）。
+     重做的理由不是"不好看"，是那一屏**没有任何一刻需要玩家做空间决策**：
+     每层都能跳上去，球在哪层推都行。
+
+     这一屏只教一件事：**地面那块斜板把球打回上层，打多高完全由推出去的速度决定。**
+
+     ★ 为什么板要"埋进地里"（y1 = 600，在画布外）：
+       球心贴地滚（y = GROUND_Y）。如果板从地面 556 起，球先碰到的是
+       **板的端点** —— 端点的法线沿径向，反射结果接近"水平弹回"，不会上抛。
+       把下端伸到 600，球撞的就是**板面中段**，法线是板面法线，才是真正的镜面反射。
+       另外球心必须落在板的**左侧**才会向上抛（u 的 y 分量为负）——
+       所以这一屏的推法只有一个方向：从左往右推。这是几何决定的，不是设计偏好。
+
+     ★ 数字（实测，不是估算）：球从 400 出发、滚过 480..570 的泥沼再撞板
+         普通推（620） → 最高点 y=514，上升  42px → 够不到 462 层
+         助跑满（1209）→ 最高点 y=389，上升 167px → 越过 462 层，落回 526
+       462 层比地面高 94px。**42 < 94 < 167** ——
+       "能不能上二层"是一条由助跑长度决定的硬门槛。
+       注意实测只有理论值的 54%（理论 309px）：**泥沼那 90px 把球速削了 15%，
+       而上升高度是速度的平方** —— 15% 的速度损失 = 31% 的高度损失。
+       这正是泥沼放在这条路上而不是别处的理由。
+     ================================================================== */
   {
-    id: "stairs", name: "阶梯塔", sub: "四层真阶梯 · 右端滑梯",
-    note: "四层台阶一路往右错，像爬楼梯。顶层 156，只有这一关有第五层高",
+    id: "rebound", name: "回弹井", sub: "斜板弹射 · 助跑决定高度",
+    note: "地面那块斜板会把球打回上层。助跑跑满才够得着 —— 随手推只会摔回地面，一路滚回营地",
     theme: "stairs",
-    goal: "limit", ballLimit: 7, par: { time: 70, made: 9 },
+    goal: "limit", ballLimit: 8, par: { time: 90, made: 9 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-      // **四层整梯，每层一条。**
-      // 上一版是 9 个碎片（120~280 宽），平均一段只有 188 ——
-      // 球滚两步就掉下去，一层最多撞到两只，"推一次清一片"在这关根本不存在。
-      // 合成整条之后每层 410~440，球能横穿整层；层与层之间往右错 90~130，
-      // 站在下一层的左端能看见上一层的台沿，阶梯感来自错位，不来自碎片。
-      // 462 和 350 的缺口必须**竖直对齐**（270..400 对 340..420，交 340..400 = 60）。
-      // 上一版两层的缺口只错开 40px，球从上面掉不下来，整关只能看到球在层间弹。
-      { x: WALL_L, y: 462, w: 244, h: 20, kind: "ledge" },   // 26..270
-      { x: 400,    y: 462, w: 390, h: 20, kind: "ledge" },   // 400..790 ← 底层主球道
-      { x: 130,    y: 350, w: 210, h: 20, kind: "ledge" },   // 130..340
-      { x: 420,    y: 350, w: 440, h: 20, kind: "ledge" },   // 420..860 ← 二层主球道
-      { x: 240,    y: 248, w: 280, h: 20, kind: "ledge" },   // 240..520
-      { x: 600,    y: 248, w: 260, h: 20, kind: "ledge" },   // 600..860
-      { x: 350,    y: 156, w: 220, h: 20, kind: "ledge" },   // 顶层
+      /* 462 层同时是**球的落点层**和**玩家的路**（离地 94px，最弱的牛
+         jump=700 → 117px 跳得上去）。左端 380 必须罩住实测弹射终点：526。
+         实测比估算少得多 —— 球在路上被泥沼拖慢了 15%，所以"理论上 309px"
+         实际只有 167px。**落点层是按实测定的，不是按公式定的。** */
+      { x: 380, y: 462, w: 300, h: 20, kind: "ledge" },   // 380..680
     ],
-    // 这一关**不放坡**：350 右段末端 860 离右墙只有 74px，球一推出去就撞墙，
-    // 有了坡反而会被弹回坡上、往左滚回 462 层，永远进不了营地。
-    // "阶梯"这个形状本身就是这关的差异，不需要再加一个坡。
+    /* 52° 斜板。下端 600 在画布外（埋进地里），球撞的是板面不是端点。
+       ★ 端点从 (646,535) 延到 (656,522)：**斜率一模一样，还是 -1.3**，
+         反弹角一个数都没动，只是让地面以上那截从 21px 变成 41px。
+         原来露出来的只有一小段，截图里读作"一道莫名其妙的蓝线" ——
+         一个只有 21px 的机关，玩家不会把它当机关看。 */
+    reflects: [
+      { x1: 596, y1: 600, x2: 656, y2: 522 },
+    ],
+    /* 泥沼段放在**球的去路上**（480..570）：球滚过它会被拖慢 16%，
+       助跑没跑满的球过完泥就彻底上不去了 —— 这是"别在这儿省距离"的物理提醒。 */
+    /* 三个坑各管一件事，位置全是按球路定的：
+         mud   480..570 —— 在**去板子**的路上，削 28% 球速，抬高助跑门槛
+         fire  340..440 —— 在「球被打上 462 层、自己往左滚下来」的落点正下方：
+                           不管它，球就烧了（收成×2 但断连锁）
+         water 240..320 —— 在火坑更左边，接住"连火坑都没掉进去"的球
+       而 **680 → 852 这一整段地面必须是空的** ——
+       那是「球被打上 462 层、玩家在二层把它往右推下去」的回家路。 */
     pits: [
-      { x: 100, y: GROUND_Y, w: 100, kind: "mud"  },
-      { x: 620, y: GROUND_Y, w: 100, kind: "fire" },
+      { x: 480, y: GROUND_Y, w: 90,  kind: "mud" },
+      { x: 340, y: GROUND_Y, w: 100, kind: "fire" },
+      { x: 240, y: GROUND_Y, w: 80,  kind: "water" },
     ],
-    stumps: [{ x: 540, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
-    camp: { x: 848, y: GROUND_Y, w: 86 },
+    /* **这一屏不放木桩。** 桩的唯一可放位置 646..852 正好是回家路：
+       球从板上弹上 462 层、玩家在二层把它往右推下来，落地后必须一路滚进营地。
+       桩杵在 760 的话球撞上去就弹回左边，直接掉进 340..440 的火坑 ——
+       "打上去了"和"没打上去"结局一样，正反馈就没了。
+       和上一屏（缓坡）删桩是同一条理由：可破坏件不是每屏都必须有的零件。 */
+    stumps: [],
+    /* 营地回到右边（852）—— 和其余 26 屏一致。上一版试着搬到左边，
+       结果"球被打上二层"和"没打上去"两条路的结局一模一样，
+       正反馈消失了。这一屏的辨识度靠**板**，不靠把家搬走。 */
+    camp: { x: 852, y: GROUND_Y, w: 82 },
     waves: [
       [
-        { foe: "bug",  x: 120, y: 462 },
-        { foe: "bug",  x: 450, y: 462 },
-        { foe: "bug",  x: 730, y: 462 },
-        { foe: "bug",  x: 200, y: 350 },
+        { foe: "bug",  x: 430, y: GROUND_Y },
+        { foe: "bug",  x: 530, y: GROUND_Y },
+        { foe: "bug",  x: 600, y: GROUND_Y },
+        { foe: "bug",  x: 800, y: GROUND_Y },
       ],
       [
-        { foe: "bug",  x: 500, y: 350 },
-        { foe: "bug",  x: 600, y: 350 },
-        { foe: "bug",  x: 450, y: 156 },
+        /* 第二波**必须站在 462 层上** —— 那一层是弹射的落点。
+           第一版写的是 y:350（旧几何的层高），删掉 350 层之后
+           这三只就悬在半空，球永远卷不到它们。 */
+        { foe: "bug",  x: 440, y: 462 },
+        { foe: "bug",  x: 560, y: 462 },
+        { foe: "boar", x: 640, y: 462 },
+        { foe: "crow", x: 300, y: 300, fly: 1 },
       ],
-      [{ foe: "boss", x: 300, y: GROUND_Y, lv: 4 }],
+      [{ foe: "boss", x: 760, y: GROUND_Y, lv: 4 }],
     ],
-    spawn: { x: 70, y: GROUND_Y },
+    /* 出生点从 640 挪到 596：板的地面接触点在 628，原来角色就站在板上，
+       截图里整个机关被角色挡死 ——「这一屏的主角」玩家一眼看不见。
+       596 落在泥沼(480..570)和板(628)之间那段干净地面里，往右两步就是板。 */
+    spawn: { x: 596, y: GROUND_Y },
   },
 
   /* ---------------- 8 ----------------
@@ -2296,6 +2436,20 @@ let PLAYER_SPAWN = LEVELS[0].spawn;
 let RAMPS = [];
 let BOUNCERS = [];
 let PORTALS = [];
+/* ---- 空间语法层（2026-10-24 加）--------------------------------------------
+ * 之前 27 屏只有"台面 + 坑 + 坡"三件，每屏读起来都是同一张图换皮。
+ * 这一层加两个东西，都不改几何、只改**球和地面怎么交互**：
+ *
+ *   GROUNDS  地面材质带：同一层地面分成 ice / mud / moss 三段，
+ *            球滚过不同的段速度不同，人也一样。它让"往哪一层推"之外，
+ *            第一次出现了"沿哪条地推"的决策。
+ *
+ *   REFLECTS 反射板：一块悬空的斜板，球撞上去按镜面反射，**速度不衰减**。
+ *            它是唯一一个"必须看预瞄线才能用好"的件 —— 撞点差 6px，
+ *            出射角差 20 度。这一条正好咬合本作独有的 predictBall。
+ * ------------------------------------------------------------------------- */
+let GROUNDS = [];
+let REFLECTS = [];
 
 /** 当前关的主题配色。背景/平台/空气中的浮尘都从这里取色 */
 let TH = THEMES[LEVELS[0].theme];
@@ -2311,6 +2465,8 @@ function loadLevel(i) {
   RAMPS = L.ramps || [];
   BOUNCERS = L.bouncers || [];
   PORTALS = L.portals || [];
+  GROUNDS = L.grounds || [];
+  REFLECTS = L.reflects || [];
   WAVES = L.waves;
   PLAYER_SPAWN = L.spawn;
 }
@@ -3072,6 +3228,21 @@ function bellyWord() {
 
 /** 每过一屏掉多少饱食。**唯一真值** —— 通关判定和结算卡副标题都读它。
  *  原来这个 20 在两处各写一次，改一处另一处就骗人。 */
+/* ============================================================================
+   这一脚推出去有多重
+   ----------------------------------------------------------------------------
+   **推球和预瞄线必须共用这一个函数。**
+   分开算过一次：predictBall 里写死 PUSH_BASE，于是玩家助跑跑满了，
+   按住 Shift 看到的线还是"上不去"，照着线判断就放弃了。
+   第 7 屏（回弹井）的整屏机制就建立在"助跑长度决定弹射高度"上，
+   预瞄线不跟着助跑变，那一屏等于没有预瞄 —— 比不画更糟。
+   ========================================================================== */
+function pushPowerNow() {
+  const p = S.p;
+  const runUp = p ? Math.min(1, (p.runD || 0) / 380) : 0;
+  return PUSH_BASE * (1 + PUSH_RUN * runUp) * bellyPower();
+}
+
 const BELLY_PER_CLEAR = 20;
 
 /** 结算卡「继续」副标题上的力气变化。**三态，不是两态。**
@@ -3250,7 +3421,9 @@ function updatePlayer(dt) {
        * 真正有摩擦、也真正能被打滑影响的是**猫**：松手之后会再滑出去一段。
        * 慢是惩罚，滑是手感变化，后者才是雪的"物理感"。
        * 0.55 是在第 2 关试出来的：再小（0.7）像在冰上，越过弯道直接掉进坑里。 */
-      const fr = p.onGround ? 2600 * (1 - 0.55 * S.snowDepth) : 420;
+      const fr = p.onGround
+        ? 2600 * (1 - 0.55 * S.snowDepth) * (GROUNDS.length ? MAT[matAt(p.x)].heroFr : 1)
+        : 420;
       if (Math.abs(p.vx) <= fr * dt) p.vx = 0;
       else p.vx -= sign(p.vx) * fr * dt;
     }
@@ -3390,7 +3563,8 @@ function updatePlayer(dt) {
   const runUp = Math.min(1, (p.runD || 0) / 380);
   // 肚子接进来（见 bellyPower）。它乘在整条链路上：
   // 助跑还是那个助跑，"七分饱"的人推出去的每一球都更远一点。
-  const pushPow = PUSH_BASE * (1 + PUSH_RUN * runUp) * bellyPower();
+  // **必须是 pushPowerNow()，不能在这儿再写一遍算式**（预瞄线读的是同一个）。
+  const pushPow = pushPowerNow();
   for (const b of S.balls) {
     if (b.dead) continue;
     // 判定窗口 = 两个圆刚好相切再加 2px。上一版是 -4 ——
@@ -4041,6 +4215,7 @@ function updateBalls(dt) {
   for (const b of list) {
     if (b.dead) continue;
     b.t += dt;
+    if (b.reflectCd > 0) b.reflectCd = Math.max(0, b.reflectCd - dt);
     // 推球形变回弹：0.3 秒内从压扁回到圆。不衰减的话，球会一直是个横椭圆。
     if (b.pushSquash > 0) b.pushSquash = Math.max(0, b.pushSquash - dt * 1.9);
 
@@ -4083,6 +4258,34 @@ function updateBalls(dt) {
     // 玩家必须提前决定，而不是跟在球屁股后面慢慢修 —— 这正是想要的手感。
     b.x += b.vx * dt;
     b.spin += b.vx * dt * 0.05;
+
+    /* ---- 地面材质（N1）。用**上一帧**的 onGround 判，和 predictBall 同构 ——
+       两处都必须在"位移之后、落地判定之前"用旧状态，否则差一帧就漂 10px。 */
+    if (b.onGround && GROUNDS.length && b.y >= GROUND_Y - 26) {
+      const mk = matAt(b.x);
+      if (mk === "ice") b.vx *= 1 + MAT.ice.ballGain * dt;
+      else if (mk === "mud") b.vx *= 1 - MAT.mud.ballDrag * dt;
+    }
+
+    /* ---- 反射板（N2）。放在撞墙判定**之前**：板是悬空的，不该先被墙夹一次。
+       撞板不消耗撞墙次数（那是墙的规矩），但会记一笔，给 rebound 类目标用。
+
+       `reflectCd` 只挡**文字和粒子**，不挡物理 —— 连撞两块板是设计里
+       要的多段谜题，不能被特效节流误伤。 */
+    if (REFLECTS.length) {
+      _rb.x = b.x; _rb.y = b.y; _rb.vx = b.vx; _rb.vy = b.vy;
+      if (reflectStep(_rb, b.r)) {
+        b.x = _rb.x; b.y = _rb.y; b.vx = _rb.vx; b.vy = _rb.vy;
+        b.onGround = false;
+        b.rebounds = (b.rebounds || 0) + 1;
+        S.shake = Math.max(S.shake, 4);
+        if (!(b.reflectCd > 0)) {
+          b.reflectCd = 0.15;
+          for (let i = 0; i < 5; i++) addFrag(b.x - _rb.nx * b.r, b.y - _rb.ny * b.r, 5, "#9FE4FF");
+          addText(b.x, b.y - b.r * 2 - 6, "弹!", "#BFEFFF", 15, 0.45);
+        }
+      }
+    }
     /* 滚动扬尘：只在贴地且够快时冒。节流 0.07s 一粒 —— 每帧都冒
        会糊成一条尾巴（拖尾已经有一条了，尘土再连成线就是双重残影）。
        出尘点在球**后脚跟**（运动反方向 0.6r），球往前滚、土往后扬。 */
@@ -4441,10 +4644,12 @@ function updateBalls(dt) {
    -------------------------------------------------------------------------- */
 const AIM_DT = 1 / 60;
 
-function predictBall(b, dir) {
+function predictBall(b, dir, pow) {
   const r = b.r;
   let x = b.x, y = b.y;
-  let vx = dir * PUSH_BASE, vy = -40;
+  /* pow 不传就按基准 620 算（旧调用点全都还是两参数，行为不变）。
+     传了就按真实推球力度算 —— 见 pushPowerNow()。 */
+  let vx = dir * (pow || PUSH_BASE), vy = -40;
   let air = b.air;
   let mud = b.mud;
   let onGround = false;
@@ -4474,6 +4679,26 @@ function predictBall(b, dir) {
     // 线就会画短，玩家按线推出去球多滚一截，"预瞄骗人"是这一版最不能犯的错。
     x += vx * AIM_DT;
     travel += Math.abs(vx) * AIM_DT;
+
+    /* 材质（N1）—— 和 updateBalls 里那三行**逐字同源**。
+       顺序也一样：先位移，再用**上一帧**的 onGround 判材质。 */
+    if (onGround && GROUNDS.length && y >= GROUND_Y - 26) {
+      const mk = matAt(x);
+      if (mk === "ice") vx *= 1 + MAT.ice.ballGain * AIM_DT;
+      else if (mk === "mud") vx *= 1 - MAT.mud.ballDrag * AIM_DT;
+    }
+
+    /* 反射板（N2）—— 同一把 reflectStep，连临时对象都是同一个。
+       线在这里必须**拐弯**：如果预瞄线走直线而球撞了板，玩家照着直线推
+       会得到完全不同的结果，这比不画预瞄线更坏。 */
+    if (REFLECTS.length) {
+      _rb.x = x; _rb.y = y; _rb.vx = vx; _rb.vy = vy;
+      if (reflectStep(_rb, r)) {
+        x = _rb.x; y = _rb.y; vx = _rb.vx; vy = _rb.vy;
+        onGround = false;
+        marks.push({ x, y: y - r, kind: "reflect" });
+      }
+    }
 
     /* 和 updateBalls 同一条：地面层两端是开口，上层才是墙。
        预瞄线在这里必须严格一致 —— 线上画着"会弹回来"、实际滚出去了，
@@ -4582,6 +4807,12 @@ function predictBall(b, dir) {
       } else if (pit.kind === "mud" && !mud) {
         if (x > pit.x && x < pit.x + pit.w && y >= pit.y - 8) {
           mud = true;
+          /* ★ 2026-10-24 补：这里原来只标了 `mud = true`，**漏了实跑那一下
+             `b.vx *= 0.72`**。于是所有穿过泥坑的预瞄线都比真实轨迹长 39%
+             —— 玩家照着线推，球早停一截。这条骗了很多屏，一直没人发现，
+             因为泥坑很少正好在球的必经路上。
+             撞板那屏把它暴露了：预测说能上二层，实跑差 60px 上不去。 */
+          vx *= 0.72;
           marks.push({ x, y: y - r, kind: "mud" });
         }
       }
@@ -4602,12 +4833,15 @@ function predictBall(b, dir) {
 /** 取缓存：球没动、气没变、敌人没死，就不用重算 */
 function aimFor(b, dir) {
   b._aim = b._aim || {};
-  const key = [Math.round(b.x / 6), Math.round(b.y / 6), Math.round(b.air * 24),
+  /* pow 必须进缓存 key —— 玩家一边跑一边看预瞄线，助跑长度每帧都在变，
+     不进 key 的话线会一直画第一次算的那条（"怎么跑都不动"）。 */
+  const pow = Math.round(pushPowerNow());
+  const key = [Math.round(b.x / 6), Math.round(b.y / 6), Math.round(b.air * 24), pow,
                S.foes.map(f => (f.dead || f.coat >= (f.cm || 3)) ? 0 : 1).join(""),
                S.stumps.map(s => s.hp).join("")].join("|");
   const slot = b._aim[dir];
   if (slot && slot.key === key) return slot.val;
-  const val = predictBall(b, dir);
+  const val = predictBall(b, dir, pow);
   b._aim[dir] = { key, val };
   return val;
 }
@@ -7145,6 +7379,156 @@ function drawBouncer(g, b) {
   g.stroke();
 }
 
+/* ---------- 地面材质带（N1）----------
+   画在地面顶面上，厚 9px。**只有 ice / mud 才画** —— 苔面是本作的默认地面，
+   给它加一条色带等于给所有屏幕加一条横线，反而更乱。
+
+   读法必须靠颜色本身，不靠形状：
+     冰 = 亮蓝白 + 横向高光断点（读作"滑"）
+     泥 = 深棕 + 不规则斑块（读作"陷"）
+   两条都在 30% 缩放下还能分辨，这是这个件的合格线。 */
+function drawGroundMat(g, gr) {
+  const m = MAT[gr.kind];
+  if (!m || !m.tint) return;
+  const y = GROUND_Y, h = 9;
+  g.save();
+  g.beginPath();
+  rr(g, gr.x, y - 3, gr.w, h, 3);
+  g.clip();
+
+  g.fillStyle = m.tint;
+  g.globalAlpha = gr.kind === "ice" ? 0.92 : 0.85;
+  g.fillRect(gr.x, y - 3, gr.w, h);
+
+  if (gr.kind === "ice") {
+    // 横向高光断点：每 46px 一段，长度错开，读作"结晶体"
+    g.globalAlpha = 0.95;
+    g.fillStyle = "#F2FBFF";
+    for (let x = gr.x + 6; x < gr.x + gr.w - 10; x += 46) {
+      // hash 返回 0..1 的小数，先放大成 0..40 再取模 —— 直接用 % 永远落在 0..1
+      const hx = hash(x | 0) * 40;
+      g.fillRect(x, y - 2, 10 + hx % 14, 2);
+      g.fillRect(x + 14, y + 2, 6 + (hx * 0.7) % 9, 1.6);
+    }
+  } else {
+    g.globalAlpha = 0.8;
+    g.fillStyle = "#5A4028";
+    for (let x = gr.x + 4; x < gr.x + gr.w - 8; x += 21) {
+      const hx = hash(x | 0) * 40;
+      g.beginPath();
+      g.ellipse(x + hx % 7, y + 1 + hx % 5, 4 + hx % 5, 2.2 + hx % 2, 0, 0, 6.283);
+      g.fill();
+    }
+  }
+  g.restore();
+
+  // 两端各一道竖接线，说明"这一段到这儿为止"
+  g.strokeStyle = "rgba(24,40,32,.35)";
+  g.lineWidth = 2;
+  g.beginPath();
+  g.moveTo(gr.x + 1, y - 4); g.lineTo(gr.x + 1, y + 6);
+  g.moveTo(gr.x + gr.w - 1, y - 4); g.lineTo(gr.x + gr.w - 1, y + 6);
+  g.stroke();
+}
+
+/* ---------- 反射板（N2）----------
+   一块悬空的金属斜板。**它必须看起来像"能用"的东西**，不能像装饰 ——
+   所以给它：深色投影（说明悬空）、厚板身、上下两条高光（说明金属）、
+   两端各一颗螺栓（说明是被人钉上去的、可靠）。
+
+   高光沿板身画，所以在任何角度下都能读出"这是一块有厚度的板"而不是一条线。 */
+function drawReflect(g, d) {
+  const dx = d.x2 - d.x1, dy = d.y2 - d.y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  // 板法线（朝上那一侧）
+  let nx = -uy, ny = ux;
+  if (ny > 0) { nx = -nx; ny = -ny; }
+
+  /* 板是「从地里长出来」的，**只画地面线以上那一截**。
+     整条线段一半埋在画布外（y1=600 比画布还高），不切这一刀，
+     板会画在地面带上面，读起来像"地上躺着一根蓝棍子"，不像机关。 */
+  const GY = GROUND_Y + 2;
+  let bx = d.x1, by = d.y1;
+  if (by > GY) {
+    const t = (GY - d.y1) / dy;             // dy < 0（往上走），t 落在 0..1
+    bx = d.x1 + dx * t; by = GY;
+  }
+
+  g.lineCap = "round";
+
+  // 底座：一小段梯形，说明板是插在地上的。纯装饰，不参与判定 ——
+  // 判定永远是 d.x1..d.x2 那一条线段，视觉不许比判定大一圈。
+  g.fillStyle = "#2A4450";
+  g.globalAlpha = 0.9;
+  g.beginPath();
+  g.moveTo(bx - 14, GROUND_Y + 10);
+  g.lineTo(bx + 14, GROUND_Y + 10);
+  g.lineTo(bx + 8, GROUND_Y - 7);
+  g.lineTo(bx - 8, GROUND_Y - 7);
+  g.closePath();
+  g.fill();
+  g.globalAlpha = 1;
+
+  // 投影：往右下偏 5px，说明板是悬空的
+  g.strokeStyle = "rgba(16,30,38,.30)";
+  g.lineWidth = 12;
+  g.beginPath();
+  g.moveTo(bx + 5, by + 5); g.lineTo(d.x2 + 5, d.y2 + 5);
+  g.stroke();
+
+  // 板身：比球（直径 44）细一点，但不能细到像根线 —— 它是这一屏的机关本体
+  g.strokeStyle = "#6FA8C0";
+  g.lineWidth = 16;
+  g.beginPath(); g.moveTo(bx, by); g.lineTo(d.x2, d.y2); g.stroke();
+
+  // 板面的亮面：往法线方向偏 1.6px，读作"上面受光"
+  g.strokeStyle = "#D8F4FF";
+  g.lineWidth = 6;
+  g.beginPath();
+  g.moveTo(bx + nx * 1.6, by + ny * 1.6);
+  g.lineTo(d.x2 + nx * 1.6, d.y2 + ny * 1.6);
+  g.stroke();
+
+  /* 两枚箭头沿法线往外指 —— 这是这一屏唯一「必须看出来」的信息：
+     板不是墙，它把你往那个方向送。没有这两个箭头，玩家只看见一块金属片。 */
+  const pulse = 0.5 + 0.5 * Math.sin(S.t * 2.6);
+  g.strokeStyle = "rgba(196,242,255," + (0.35 + 0.4 * pulse).toFixed(3) + ")";
+  g.lineWidth = 2.6;
+  for (const f of [0.3, 0.78]) {
+    const px = bx + (d.x2 - bx) * f + nx * 15;
+    const py = by + (d.y2 - by) * f + ny * 15;
+    const L = 12 + 5 * pulse;
+    g.beginPath();
+    g.moveTo(px - ux * 5, py - uy * 5);
+    g.lineTo(px + nx * L, py + ny * L);
+    g.lineTo(px + ux * 5, py + uy * 5);
+    g.stroke();
+  }
+
+  // 反光扫过（每 2.6 秒一次）—— 静止的金属板会被误读成木头
+  const ph = (S.t * 0.38) % 1;
+  if (ph < 0.34) {
+    const t = ph / 0.34;
+    const mx = bx + (d.x2 - bx) * t, my = by + (d.y2 - by) * t;
+    g.strokeStyle = "rgba(255,255,255,.55)";
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(mx - ux * 5 + nx * 2, my - uy * 5 + ny * 2);
+    g.lineTo(mx + ux * 5 + nx * 2, my + uy * 5 + ny * 2);
+    g.stroke();
+  }
+
+  // 螺栓：只画两端露出来的那两处
+  for (const q of [{ x: bx, y: by }, { x: d.x2, y: d.y2 }]) {
+    g.fillStyle = "#24414F";
+    g.beginPath(); g.arc(q.x, q.y, 5, 0, 6.283); g.fill();
+    g.fillStyle = "#CFEFFA";
+    g.beginPath(); g.arc(q.x - 0.8, q.y - 0.8, 2.2, 0, 6.283); g.fill();
+  }
+}
+
+
 /* ---------- 传送洞 ---------- */
 function drawPortal(g, pt) {
   const cy = pt.y - 16;
@@ -7287,9 +7671,12 @@ function drawLevel() {
   // 看上去就是"木头架完没收拾"。把地面挪到坡后面就干净了。
   for (const r of RAMPS) drawRamp(g, r);
   for (const p of PLATS) if (p.kind === "ground") drawPlat(g, p);
+  // 材质带必须在地面之后、坑之前：坑是"地面被挖开"，理应盖住色带
+  for (const gr of GROUNDS) drawGroundMat(g, gr);
   for (const pit of PITS) drawPit(g, pit);
   for (const p of PLATS) if (p.kind !== "ground") drawPlat(g, p);
   for (const b of BOUNCERS) drawBouncer(g, b);
+  for (const d of REFLECTS) drawReflect(g, d);
   for (const pt of PORTALS) drawPortal(g, pt);
   for (const s of S.stumps) drawStump(g, s);
 }
@@ -12365,6 +12752,10 @@ export const GROVE: any = {
   spawnWave, foeFromSpec, updateShocks, hurtPlayer, leavePrints,
   dropChest, dropFrom, DROP_KINDS,
   predictBall, aimFor, ballBudget, checkGoal, rate, goalProgress,
+  /* 空间语法（N1 地脉 / N2 反射板）。导出这三样是为了让冒烟能验真身：
+     "冰真的更快、泥真的更慢、45° 板真的把水平速度转成垂直速度、
+     预瞄线和实跑是不是同一条轨迹" —— 这四条截图全都看不出来。 */
+  MAT, matAt, reflectStep, pushPowerNow,
   curStage, curGoal, loadLevel, rampAt, nextLevel, saveProgress,
   hitSelect, pickHero, MOODS, DOOR_SLOTS, VOICE,
   goHome, bellyTier, bellyPower, bellyWord, sayLine, finishSay, settleBtns, inRect,
@@ -12426,6 +12817,8 @@ Object.defineProperty(GROVE, "PLAYER_SPAWN", { get: () => PLAYER_SPAWN });
 Object.defineProperty(GROVE, "RAMPS", { get: () => RAMPS });
 Object.defineProperty(GROVE, "BOUNCERS", { get: () => BOUNCERS });
 Object.defineProperty(GROVE, "PORTALS", { get: () => PORTALS });
+Object.defineProperty(GROVE, "GROUNDS", { get: () => GROUNDS });
+Object.defineProperty(GROVE, "REFLECTS", { get: () => REFLECTS });
 // 结算卡的几何：按钮/文字都按它排，冒烟断言要拿它判"按钮有没有掉出卡片"，
 // 写死 544 那种事干过一次 —— 卡片一加高，断言就变成在验一个不存在的尺寸。
 GROVE.CARD = { w: CARD_W, y: CARD_Y, h: CARD_H, btnY: BTN_Y, btnH: BTN_H, btnW: BTN_W };

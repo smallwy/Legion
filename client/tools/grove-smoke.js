@@ -553,8 +553,12 @@ console.log("\n=== 11. 八关几何：每关都得能下到地面、推得到营
     ok(P.PITS.some(p => p.kind === "mud"), R.name + "：有泥坑");
     ok(P.CAMP && P.CAMP.w > 0, R.name + "：有营地");
     // 教学关不放桩（出生点就在旁边，所有弹丸出门第一帧就被它吃掉）；
-    // 缓坡也不放 —— 它是一条通往营地的长滑道，桩子摆哪儿都在球的必经路上。
-    if (R.id !== "entry" && R.id !== "slope") ok(S.stumps.length > 0, R.name + "：有木桩");
+    // 缓坡也不放 —— 它是一条通往营地的长滑道，桩子摆哪儿都在球的必经路上；
+    // 回弹井同样不放 —— 唯一可放的位置 646..852 正是"打上 462 层再推下来"的
+    // 回家路，桩杵在那儿球撞上去就弹回左边的火坑，打不打上去结局一样。
+    // **可破坏件不是每屏都必须有的零件**，硬塞一个就是给球道添堵。
+    const NO_STUMP = ["entry", "slope", "rebound"];
+    if (!NO_STUMP.includes(R.id)) ok(S.stumps.length > 0, R.name + "：有木桩");
 
     const shaft = shaftOf(P, 350, 462);
     ok(shaft && shaft.w >= 55, R.name + "：竖井够宽（球能穿过）",
@@ -2647,6 +2651,255 @@ console.log("\n=== 29. 宠物解锁 / 分章几何 / 弹菇衰减 ===");
     ok(typeof (S.stat.lost) === "number" || S.stat.lost === undefined,
        "stat.lost 是数字或未初始化", "=" + S.stat.lost);
     ok(lostBefore >= 0, "白推计数非负", "=" + lostBefore);
+  }
+}
+
+console.log("\n=== 30. 空间语法：地面材质 / 反射板 / 回弹井 ===");
+{
+  /* 27 屏同质化的病根不是「美术长得像」，是**空间不给玩家新的动词**。
+     这一节钉三个新原语：材质（地面自己有物理）、反射板（速度守恒）、
+     以及被它们撑起来的第 7 屏。断言一律落在「物理真的变了」上 ——
+     「字段还在但没接进物理」是这套代码里最常见的假通过。 */
+
+  /* ① 材质表：moss 必须绝对中性。
+     moss 一旦不是 (0,0,1)，27 屏里没写 grounds 的那 26 屏会一起被改，
+     而且改得无声无息 —— 没人会去点开第 19 屏看球速对不对。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    const M = P.MAT;
+    ok(!!M && !!M.moss && !!M.ice && !!M.mud, "三种地面材质都在表里",
+       M ? Object.keys(M).join("/") : "没有 MAT");
+    eq(M.moss.ballGain, 0, "moss：球不加速");
+    eq(M.moss.ballDrag, 0, "moss：球不减速");
+    eq(M.moss.heroFr, 1, "moss：玩家摩擦系数 = 1（基准值）");
+    ok(M.ice.ballGain > 0,
+       "ice：球被**加速**（本作地面完全无摩擦，「冰」只能是加速）",
+       "gain=" + M.ice.ballGain);
+    eq(M.ice.ballDrag, 0,
+       "ice：不同时写减速（一边加速一边减速 = 互相抵消的假特效）");
+    ok(M.ice.heroFr < 1, "ice：玩家在上面站不住脚", "fr=" + M.ice.heroFr);
+    ok(M.mud.ballDrag > 0, "mud：球被拖慢", "drag=" + M.mud.ballDrag);
+    ok(M.mud.heroFr > 1, "mud：玩家在上面更难刹住", "fr=" + M.mud.heroFr);
+  }
+
+  /* ② matAt：没写 grounds 的屏必须退回 moss，且边界是**闭区间**。
+     写成开区间的话，冰带最右那 1px 会变回苔原 —— 球在那儿莫名减速，
+     玩家看不见任何东西，只会觉得这游戏的手感时好时坏。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    P._start(0, 0);                            // 第 1 屏「苔原入口」没写 grounds
+    eq(P.GROUNDS.length, 0, "第 1 屏没有材质带");
+    eq(P.matAt(100), "moss", "没写 grounds 的屏：左边是苔原");
+    eq(P.matAt(860), "moss", "没写 grounds 的屏：右边也是苔原（不是「无材质」）");
+
+    P._start(0, 1);                            // 第 2 屏「雪原」：泥坑右缘 → 坡脚
+    eq(P.GROUNDS.length, 1, "第 2 屏有 1 条材质带");
+    const g = P.GROUNDS[0];
+    eq(g.kind, "ice", "第 2 屏那条带是冰");
+    ok(g.x + g.w <= P.CAMP.x,
+       "冰带整段在营地左边（压在营地底下的那段玩家永远踩不到，等于没写）",
+       "冰 " + g.x + ".." + (g.x + g.w) + " vs 营地 " + P.CAMP.x);
+    /* 冰带右端必须**正好**贴住坡脚。多铺 1px 进坡里，那 1px 会按 x 判定成冰，
+       而球在坡上的 y 又够不到地面判定 —— 于是"坡脚的球有一瞬间既不加速也不受坡影响"。
+       这种 1px 的缝没人看得见，但会让手感在坡脚抖一下。 */
+    const ramp = P.RAMPS[0];
+    ok(ramp && Math.abs(ramp.x - (g.x + g.w)) <= 1,
+       "冰带右端正好接上坡脚（不多铺 1px 进坡里）",
+       ramp ? "坡脚 " + ramp.x + " vs 冰带右端 " + (g.x + g.w) : "没有坡");
+    /* 左边不能压到泥坑：泥坑自己有「进坑 ×0.72」，两套减速叠一起，
+       球会在泥坑边缘掉两次速，读起来像"卡了一下"。 */
+    const mud = P.PITS.find(q => q.kind === "mud");
+    ok(mud && g.x >= mud.x + mud.w, "冰带左端在泥坑右缘之外（两套规则不叠）",
+       mud ? "泥坑到 " + (mud.x + mud.w) + " vs 冰带 " + g.x : "没有泥坑");
+    ok(g.w >= 120, "冰带够长，玩家能感觉到「这段不一样」", "w=" + g.w);
+    eq(P.matAt(g.x - 1), "moss", "冰带左界外还是苔原");
+    eq(P.matAt(g.x), "ice", "冰带左界上是冰（闭区间左端）");
+    eq(P.matAt(g.x + g.w), "ice", "冰带右界上是冰（闭区间右端）");
+    eq(P.matAt(g.x + g.w + 1), "moss", "冰带右界外还是苔原");
+  }
+
+  /* ③ 冰面物理：真的更快，而且增量对得上公式。
+     只断言 vx > v0 是不够的 —— 那可能来自坡、来自弹菇、来自任何东西。
+     按 (1+gain·dt) 逐帧算，错一个常数就红。 */
+  {
+    const sb = boot(), P = sb.GROVE, S = P.S;
+    P._start(0, 1);                            // 第 2 屏「雪原」
+    P.coatFoe(S.foes[0], 3);
+    const b = S.balls[0];
+    const gy = P.GROUND_Y, g = P.GROUNDS[0];
+    // ★ 球的 y 是**底边**，不是圆心（坑用 `y >= pit.y - 8` 判）。
+    //   放到 gy-22 会悬空 22px：材质照样生效（判定是 y >= GROUND_Y-26），
+    //   但泥坑、火坑、落袋全都判不到 —— 之前这里就是靠"碰巧不报错"过的。
+    b.x = g.x + g.w / 2; b.y = gy; b.vx = 200; b.vy = 0;
+    b.onGround = true; b.ground = null;
+    S.p.x = 820; S.p.y = gy;                   // 人挪到右边空地，别去推球
+    const v0 = b.vx;
+    P.tick(1 / 60);
+    near(b.vx, v0 * (1 + P.MAT.ice.ballGain / 60), 1.5,
+         "冰面一帧：vx = v0 × (1 + gain·dt)");
+    ok(b.vx > v0, "（方向）冰上球越滚越快", v0.toFixed(1) + " → " + b.vx.toFixed(1));
+  }
+
+  /* ④ 人的摩擦也要接材质，否则「冰」只对球生效 ——
+     玩家在冰上走路完全正常，冰面就退化成一张贴图。 */
+  {
+    /* 同屏对照。跨屏比是没意义的 —— 第 2 屏雪深 1，本身就把摩擦乘了 0.45，
+       拿它和第 1 屏的苔原比，量到的是"雪"不是"冰"，两个变量搅在一起。 */
+    const slide = (px) => {
+      const sb = boot(), P = sb.GROVE, S = P.S;
+      P._start(0, 1);
+      const gy = P.GROUND_Y;
+      S.p.x = px; S.p.y = gy; S.p.vy = 0; S.p.vx = 320; S.p.onGround = true;
+      // 键盘必须全松：按着方向键会每帧把 vx 重置成 H.spd，摩擦根本轮不到
+      P._press("left", false); P._press("right", false);
+      const x0 = S.p.x;
+      for (let i = 0; i < 24; i++) P.tick(1 / 60);
+      return Math.abs(S.p.x - x0);
+    };
+    const sb1 = boot(), P1 = sb1.GROVE;
+    P1._start(0, 1);
+    const g1 = P1.GROUNDS[0];
+    // 冰上从带子左端往里 5px 起滑（右边就是坡脚，别冲上坡）；
+    // 苔上走右边那段空地（760..852，火坑和水塘之间）。
+    const onIce = slide(g1.x + 5), onMoss = slide(800);
+    ok(onMoss > 0 && onMoss < 70, "苔原上松手很快停住", onMoss.toFixed(1) + "px");
+    ok(onIce > onMoss * 1.8, "冰面松手后滑得远得多（摩擦真的接了材质）",
+       "冰 " + onIce.toFixed(0) + "px vs 苔 " + onMoss.toFixed(0) + "px");
+  }
+
+  /* ⑤ 反射板：速度**一点不衰减**。这是它和「撞墙 ×0.62」的全部区别 ——
+     墙是惩罚，板是机会。哪天有人顺手给它乘个 0.8，这条会红。
+     另一条同样重要：正在**离开**板面的球不能再反射，否则球会贴着板原地抖。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    P._start(0, 6);                            // 第 7 屏「回弹井」
+    eq(P.REFLECTS.length, 1, "第 7 屏有 1 块斜板");
+    const d = P.REFLECTS[0];
+    const mx = (d.x1 + d.x2) / 2, my = (d.y1 + d.y2) / 2;
+    const dx = d.x2 - d.x1, dy = d.y2 - d.y1;
+    const len = Math.hypot(dx, dy);
+    const nx = dy / len, ny = -dx / len;       // 板面法线（朝左上那侧）
+    const SP = 300;
+    const o = { x: mx + nx * 10, y: my + ny * 10, vx: -nx * SP, vy: -ny * SP };
+    const hit = P.reflectStep(o, 22);
+    ok(hit, "球撞到板面：反射生效");
+    near(Math.hypot(o.vx, o.vy), SP, 0.6, "反射后速度大小不变（撞墙才 ×0.62）");
+    ok(o.vx * -nx + o.vy * -ny < -0.5 * SP,
+       "反射后沿法线朝反方向飞出（打回上层，不是被拍进地里）",
+       "v=" + o.vx.toFixed(0) + "," + o.vy.toFixed(0));
+
+    const o2 = { x: mx + nx * 10, y: my + ny * 10, vx: nx * SP, vy: ny * SP };
+    const vx2 = o2.vx, vy2 = o2.vy;
+    ok(!P.reflectStep(o2, 22), "（反证）正在离开板面的球不再反射");
+    ok(o2.vx === vx2 && o2.vy === vy2, "（反证）它的速度一点没动");
+
+    const sb0 = boot(), P0 = sb0.GROVE;
+    P0._start(0, 0);
+    eq(P0.REFLECTS.length, 0, "第 1 屏没有斜板");
+    ok(!P0.reflectStep({ x: 500, y: 500, vx: 300, vy: 0 }, 22),
+       "没有板的屏：reflectStep 直接返回 false（不是抛异常）");
+  }
+
+  /* ⑥ 第 7 屏的几何不变量。这一屏是「板」撑起来的，几何一错就变成
+     「球莫名撞墙弹回来」—— 玩家读不出原因，只会觉得这关坏了。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    P._start(0, 6);
+    const gy = P.GROUND_Y, d = P.REFLECTS[0];
+    ok(d.y1 > gy, "板的下端埋在地面以下（球撞的是板面，不是端点）",
+       "y1=" + d.y1 + " vs 地面 " + gy);
+    /* 端点判定是径向的：撞端点的话法线指向球心方向，出射角完全跑掉，
+       实测斜着射出去 42px 就落地。这条注释就是为了拦住「把 y1 改回 556」。 */
+    // y 向下增长：上端必须在 462 层**下面**（y 更大），否则球是往上撞而不是
+    // 被人往板上打；同时不能低到贴地，那板就成了一道 40px 的台阶。
+    ok(d.y2 > 462 && d.y2 < gy, "板的上端落在 462 层与地面之间",
+       "y2=" + d.y2 + "（层 462 / 地 " + gy + "）");
+    const ledge = P.PLATS.find(q => q.y === 462);
+    ok(!!ledge, "有 462 落点层（球的落点 + 玩家的路）");
+    ok(ledge && ledge.w >= 260, "落点层够宽，球不会每次都擦边掉下去",
+       "w=" + (ledge ? ledge.w : 0));
+    /* 回家路：646..852 必须干净。放一根桩在这儿，球撞上去就弹回左边的火坑，
+       于是「打上去了」和「没打上去」结局一样 —— 正反馈当场消失。 */
+    const onWay = (o) => o.x + (o.w || 0) > 646 && o.x < 852;
+    eq(P.STUMPS.filter(onWay).length, 0, "646..852 回家路上没有木桩");
+    eq(P.PITS.filter(onWay).length, 0, "646..852 回家路上没有坑");
+    ok(P.PITS.some(q => q.kind === "fire"), "地面有火坑（接住没打上去、滚回来的球）");
+    ok(P.PITS.some(q => q.kind === "mud"), "球去板的路上有泥沼（抬高助跑门槛）");
+    eq(P.CAMP.x, 852, "营地仍在 852（和其余 26 屏一致）");
+    /* 出生点必须在板的地面接触点**左边**：球要往右推进板，
+       玩家站在右边就只能把球往左推，这一屏就废了。同时不能落进泥沼。 */
+    const foot = d.x1 + (gy - d.y1) * (d.x2 - d.x1) / (d.y2 - d.y1);
+    ok(P.PLAYER_SPAWN.x < foot - 10,
+       "出生点在板左边（不然只能把球往反方向推）",
+       "spawn=" + P.PLAYER_SPAWN.x + " vs 板脚 " + foot.toFixed(0));
+    const mudPit = P.PITS.find(q => q.kind === "mud");
+    ok(!mudPit || P.PLAYER_SPAWN.x > mudPit.x + mudPit.w || P.PLAYER_SPAWN.x < mudPit.x,
+       "出生点不在泥沼里", "spawn=" + P.PLAYER_SPAWN.x);
+  }
+
+  /* ⑦ 预瞄线的力度必须跟助跑走。原先是写死 PUSH_BASE，
+     助跑跑满了线还画「上不去」—— 玩家照着线走就会摔，这比不画线更坏。 */
+  {
+    const sb = boot(), P = sb.GROVE, S = P.S;
+    P._start(0, 6);
+    S.p.runD = 0;
+    const base = P.pushPowerNow();
+    S.p.runD = 190;
+    const half = P.pushPowerNow();
+    ok(half > base, "助跑一半，力度变大", base.toFixed(0) + " → " + half.toFixed(0));
+    S.p.runD = 380;
+    const full = P.pushPowerNow();
+    near(full / base, 1.95, 0.02, "满助跑 = 基准 ×1.95（bellyPower 在比值里约掉）");
+    S.p.runD = 99999;
+    near(P.pushPowerNow(), full, 0.01, "runD 超过 380 不再涨（clamp，不是无限叠）");
+    S.p.runD = 0;
+  }
+
+  /* ⑧ 泥沼必须进预瞄线。这里曾经漏掉一行 `vx *= 0.72`，
+     所有穿过泥坑的预瞄线长 39%，骗了一整轮没人发现 ——
+     因为「线短一点」看起来永远像画风问题，不像 bug。 */
+  {
+    const sb = boot(), P = sb.GROVE, S = P.S;
+    P._start(0, 3);                            // 第 4 屏：泥沼 200..280 在平地上
+    P.coatFoe(S.foes[0], 3);
+    const b = S.balls[0];
+    const gy = P.GROUND_Y;
+    S.foes.forEach(f => { f.x = 4000; f.dead = true; });// 只测地形
+    b.x = 290; b.y = gy; b.vx = 0; b.vy = 0; b.air = 1;
+    b.onGround = true; b.ground = null; b.mud = false;
+    S.p.x = 800; S.p.y = gy;
+    const PITS = P.PITS;
+    const mi = PITS.findIndex(q => q.kind === "mud");
+    ok(mi >= 0, "第 4 屏有泥沼段");
+    const lenOf = (pts) => {
+      let t = 0;
+      for (let i = 1; i < pts.length; i++) {
+        t += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      }
+      return t;
+    };
+    // predictBall 返回 { pts, marks, end, hits } —— 拿 pts 量路径长度，
+    // 不拿 marks：marks 只在"事件"处打点，一段没有事件的球道长度是 0。
+    /* 力度必须小到「寿命用尽」为止都撞不到左墙 —— 撞到墙的话，
+       路径长度只由几何决定（起点到墙 264px），泥沼快不快都是同一个数，
+       这条断言会变成永远通过的摆设。实测 60 是唯一干净的一档：
+       40/50 会低速陷在泥里（end=stop），80 会滚出左边界（end=out）。 */
+    const POW = 60;
+    b.x = 290;
+    const withMud = lenOf(P.predictBall(b, -1, POW).pts);
+    const keep = PITS.splice(mi, 1)[0];
+    b.x = 290;
+    const noMud = lenOf(P.predictBall(b, -1, POW).pts);
+    PITS.splice(mi, 0, keep);
+    ok(noMud > withMud, "泥沼真的进了预瞄线（把泥沼拿掉，同样一球滚得更远）",
+       "有泥 " + withMud.toFixed(0) + " / 无泥 " + noMud.toFixed(0));
+    /* 阈值 0.85：漏掉「进泥一次性 ×0.72」的话比值就是 1.00（路上没有任何
+       别的减速），所以这一档卡得很死，改小或改大都说明物理被动过。 */
+    ok(withMud < noMud * 0.85, "进泥那一下的 ×0.72 确实进了预瞄线",
+       (withMud / noMud).toFixed(2) + "×");
+    ok(withMud > noMud * 0.5, "（反证）线没短到「球直接陷在泥里」的程度",
+       (withMud / noMud).toFixed(2) + "×");
+    eq(PITS.findIndex(q => q.kind === "mud"), mi, "测完把泥沼放回去了");
   }
 }
 

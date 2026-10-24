@@ -121,7 +121,16 @@ function boot() {
       createElement: () => mkCanvas(1, 1),
     },
     performance: { now: () => Date.now() },
-    addEventListener: noop,
+    /* 原来是 noop —— 于是"浏览器直开 grove.html 按 F2"这条真实通路
+       **从来没被任何断言碰过**。这次 Cocos 键盘 bug 的盲区正在这儿：
+       转发链有断言，真实事件没有。收集起来，需要时自己 _fire。 */
+    _ls: {},
+    addEventListener: (name, fn) => {
+      (sb._ls[name] || (sb._ls[name] = [])).push(fn);
+    },
+    _fire: (name, ev) => {
+      for (const fn of (sb._ls[name] || [])) fn(ev);
+    },
     innerWidth: 1280, innerHeight: 800,
   };
   sb.window = sb;
@@ -2340,6 +2349,47 @@ console.log("\n=== 27c. Cocos 键盘转发（GROVE._key）===");
   while (Date.now() - t0 < 50) { /* 等过去重窗口 */ }
   P._key("ArrowRight");
   eq(S.jumpCur, 1, "_key(ArrowRight) 在跳关面板里移动光标");
+}
+
+console.log("\n=== 27d. DOM 键盘通路（真实 window 监听）===");
+{
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+  const key = (code, repeat) => ({ code: code, repeat: !!repeat, preventDefault() {} });
+
+  /* 这一节守的是**另一条路**：浏览器直开 grove.html 时，按键走的是
+     运行时自己挂的 window.addEventListener。27c 验的是 Cocos 转发链，
+     两者共用 onKeyDown，但"监听到底挂上了没有"只能从这条路看出来 ——
+     挂漏了的表现就是"转发正常、真人按键没反应"。 */
+  ok((sb._ls.keydown || []).length > 0, "keydown 监听真的挂上了 window");
+  eq((sb._ls.keydown || []).length, 1, "只挂一个（多挂会一次按键执行两遍）");
+  ok((sb._ls.keyup || []).length > 0, "keyup 监听也挂上了");
+
+  P._start(0, 6);
+  sb._fire("keydown", key("F2"));
+  eq(S.phase, "jump", "真实 keydown F2 → 打开跳关面板");
+
+  // 让过 40ms 去重窗口，再验"再按一次 = 关掉"
+  const t = Date.now();
+  while (Date.now() - t < 50) { /* 等 */ }
+  sb._fire("keydown", key("F2"));
+  eq(S.phase, "play", "再按一次 F2 → 关掉面板回战斗（F2 是开关）");
+
+  // 按住不放：浏览器会连发 repeat，面板光标必须不动
+  P.openJump();
+  S.jumpCur = 4;
+  sb._fire("keydown", key("ArrowLeft", true));
+  eq(S.jumpCur, 4, "按住方向键（repeat）在面板里不移动");
+  const t2 = Date.now();
+  while (Date.now() - t2 < 50) { /* 等 */ }
+  sb._fire("keydown", key("ArrowLeft"));
+  eq(S.jumpCur, 3, "真按一下方向键才移动");
+
+  // 收尾：Escape 回战斗，别把后面的测试留在面板里
+  const t3 = Date.now();
+  while (Date.now() - t3 < 50) { /* 等 */ }
+  sb._fire("keydown", key("Escape"));
+  eq(S.phase, "play", "Escape 从面板回战斗");
 }
 
 console.log("\n=== 28. 三目标 / 越饱越强 ===");

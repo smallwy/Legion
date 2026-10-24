@@ -3374,6 +3374,132 @@ console.log("\n=== 33. BOSS 流派：三个产地三套打法 ===");
   }
 }
 
+console.log("\n=== 34. 球额度是关卡字段，不是目标类型 ===");
+{
+  /* 用户两次说「没感觉」「策略感和空间设计感」。审计下来根因不在机关数量，
+     在**目标结构**：
+
+       7 种目标（clear/limit/chain/bank/collect/tour/intact/nohit）是**互斥单选**，
+       一屏只能考一件事。而 `ballBudget` 原来写死 `if (st.goal !== "limit") return Infinity`
+       —— 于是「球不够」这件事也只能作为**目标**存在，不能和别的东西叠加。
+
+     结果是「约束」和「价值差」永远不在同一屏出现：
+       这屏考连锁（球免费，随便造）
+       那屏考限球（球有限，但没有价值差可权衡）
+       另一屏考收成（火坑双份，但球免费，可以反复试）
+
+     而**球免费时最优解是"每只单独推一次"** —— 落袋给 `holds+1`，
+     拆开比卷起来还赚（1 只落袋 2 分，3 只卷一起落袋只有 4 分）。
+     也就是说「一球卷多只」在旧规则下是**亏的**，所有坡、滑道、缺口
+     都退化成"更好看的解法"，玩家没有一次需要读地形。
+
+     改法：额度降级成关卡字段，任意目标都能叠。这一节钉住三件事：
+       A. 解耦真的生效（collect 屏也限额）；
+       B. 额度是**真**约束（造不出球，不是只显示一个数）；
+       C. 额度必须留出解（不能上来就不可能）。
+  */
+
+  /* ① 解耦：collect 屏也能带额度 */
+  {
+    const sb = boot(), P = sb.GROVE, S = P.S;
+    const st = P.LEVELS[1];
+    eq(st.goal, "collect", "第 2 屏目标仍是 collect");
+    eq(st.ballLimit, 5, "第 2 屏带了 ballLimit");
+    P._start(0, 1);
+    eq(P.ballBudget(), 5, "★ collect 屏的额度被认（解耦生效）");
+    S.stat.made = 2;
+    eq(P.ballBudget(), 3, "额度按已造球数递减");
+  }
+
+  /* ② 额度是**真**约束：糊满不造球。只看 ballBudget 的返回值不算证据 ——
+     它只是个数字，真正要证明的是"造不出来"。 */
+  {
+    const sb = boot(), P = sb.GROVE, S = P.S;
+    P._start(0, 1);
+    const boss = P.S.foes.length > 0;
+    ok(boss, "第 2 屏有敌人可糊");
+    const f = P.S.foes[0];
+    const cm = f.cm || 3;
+
+    // 还有额度时能造
+    P.coatFoe(f, cm, null);
+    eq(S.balls.length, 1, "有额度：糊满 → 造出一颗球");
+    eq(S.stat.made, 1, "made 记 1 颗");
+
+    // 额度耗尽后造不出
+    S.stat.made = 5;   // 额度用满
+    const f2 = P.S.foes[1];
+    const before = S.balls.length;
+    P.coatFoe(f2, 3, null);
+    P.coatFoe(f2, 3, null);
+    P.coatFoe(f2, 3, null);
+    eq(S.balls.length, before, "★ 额度用完：再糊也造不出球");
+    eq(S.stat.made, 5, "★ made 不再增长（没有偷偷超额）");
+    eq(f2.coat, (f2.cm || 3) - 1, "敌人被卡在「还差一层」—— 还能被路过的球卷走，这才是那条退路");
+
+    /* 卷进球里**不扣额度**。不钉这条的话，「限 5 颗」和一个"造球次数计数器"
+       没区别 —— 玩家会发现"先用满 5 颗再造就只能卷"，而卷才是这道题本身。 */
+    const f3 = P.S.foes[2] || f2;
+    const b0 = S.balls[0];
+    const holds0 = b0 ? b0.holds : 0;
+    P.coatFoe(f3, 3, b0);
+    eq(S.stat.made, 5, "★ 卷进球里不扣额度（额度只算「新造一颗」）");
+    if (b0) ok(b0.holds > holds0 || f3.coat < 3, "被卷的那只真的进了球");
+  }
+
+  /* ③ 死局：额度耗尽 + 场上没球 + 还有敌人 → 立刻判负。
+     这一条原来写的是 `goal === "limit"`，解耦之后必须跟着改 ——
+     否则 collect/chain 加额度的屏会卡在"造不出球也不能结束"的死循环里。 */
+  {
+    const sb = boot(), P = sb.GROVE, S = P.S;
+    P._start(0, 1);
+    S.phase = "play";
+    S.stat.made = 5;
+    S.balls.length = 0;
+    ok(S.foes.length > 0, "场上确实还有敌人");
+    P.tick(1 / 60);
+    eq(S.phase, "fail", "★ 非 limit 目标也会因额度耗尽判负");
+    ok(!!S.failWhy, "给了失败原因", S.failWhy);
+  }
+
+  /* ④ 额度必须显示出来，而且显示的是**已经可见的那条通路**。
+     ★ 这里踩过一次：我先给 `_goalBase()` 加了包装，往 `text` 里追加「球剩 N/M」，
+       单元测试全绿 —— 但 HUD 从来没用过 `pr.text`（只用 cells / frac / inner），
+       所以那句字**一次都没有出现在屏幕上**。测试测的是函数返回值，
+       不是玩家看到的东西。这类"测了但看不见"和"做了但看不见"是同一个病。
+
+     真正可见的是卡片底部那行「用时 x/s · 用球 made / par.made」。
+     `par.made` 跟着额度走之后，「用球 0/5」就是"还剩 5 颗"。
+     所以这里钉的是**那条绘制语句**，不是某个函数的返回值。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    const st = P.LEVELS[1];
+    eq(st.par.made, st.ballLimit,
+       "★ par.made 跟着额度（留在旧值 9 的话，额度 5 的关永远白送评级那一分）");
+
+    const src = fs.readFileSync(HTML, "utf8");
+    ok(/"用球 " \+ S\.stat\.made \+ " \/ " \+ par\.made/.test(src),
+       "★ 卡片底部真的画了「用球 made / par.made」");
+    ok(/const bOk = S\.stat\.made <= par\.made/.test(src),
+       "用球数超了标准要变色（额度用完 = 这一分没了，不能还是绿的）");
+  }
+
+  /* ⑤ 额度必须留出解。
+     判据用"一颗球实测最多卷 3 只"这条经验值（ALL9 里跑出来的）：
+       额度 < 敌人数  → 不靠卷一定清不完（约束是真的）
+       额度 ≥ 敌/3    → 理论上还有解（不是"上来就不可能"）
+     两条同时成立才是"有策略"，少一条就是"无解"或"无脑"。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    const st = P.LEVELS[1];
+    const foes = st.waves.reduce((a, w) => a + w.length, 0);
+    eq(foes, 8, "第 2 屏 8 只敌人");
+    ok(st.ballLimit < foes, "★ 额度比敌人少 → 不卷一定清不完", st.ballLimit + " < " + foes);
+    ok(st.ballLimit >= Math.ceil(foes / 3), "★ 额度够到「每球卷 3 只」的下限 → 有解",
+       st.ballLimit + " >= " + Math.ceil(foes / 3));
+  }
+}
+
 console.log("\n" + "=".repeat(56));
 if (fail) {
   console.log("通过 " + pass + " · 失败 " + fail);

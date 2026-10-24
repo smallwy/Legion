@@ -1070,7 +1070,25 @@ const LEVELS = [
     id: "snowfield", name: "雪原", sub: "三池 · 中间一条长坡",
     note: "左冰泥、中冰水、右火。中间那条 226 长的坡能上能下，球滚下去会自己爬回 462",
     theme: "snow",
-    goal: "collect", collect: 12, par: { time: 60, made: 9 },
+    /* ★ `ballLimit` 和 `collect` 同时给 —— 这是全游戏第一次「有限资源 × 价值差」。
+       解耦之前这两件事**不可能同时出现**（额度只能挂在 limit 目标上），
+       所以 27 屏里没有一屏要求玩权衡。 */
+    /* ★ 这屏是全游戏第一次「有限资源 × 价值差」同时成立。
+       解耦之前不可能：额度只能挂在 `limit` 目标上，而目标是互斥单选，
+       所以「球不够」和「火坑双份」永远不在同一屏出现 —— 没有权衡，就没有策略。
+
+       三个数字各自管一件事，缺一个这屏就退回"推就完事"：
+         · `ballLimit 5`：8 只敌人、5 颗球 → **必须有一球卷多只**。
+           球免费时这个要求不存在（落袋给 holds+1，每只单独推一次反而更赚）。
+           实测机器人：5 球 20 秒清完 8/8，单球最多卷 3 —— 地形支持，
+           但它不会规划，4 球就只清到 7/8。**额度是真约束，不是装饰。**
+         · `collect 12`：这条**不承担约束**，只当引子。实测产出 33，
+           所以它逼不出"必须烧"（要逼得设到 26 以上，而掉落有随机，
+           卡在边界会变成运气关）。它教的是"火坑给双份"，不是考点。
+         · `par.made 5`：评级里"用球 ≤ par"这一分要跟着额度走。
+           留在 9 的话，额度 5 的关永远白送这一分，省球就没有回报。
+       合成一句话：**8 只、5 颗球、每颗都得卷。想拿双份就得放弃一颗球。** */
+    goal: "collect", collect: 12, ballLimit: 5, par: { time: 60, made: 5 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
       { x: 96, y: 462, w: 204, h: 20, kind: "ledge" },   // 96..300，左端留口，球不会顶死在墙角
@@ -3065,10 +3083,26 @@ function stepBody(b, dt) {
 function curStage() { return LEVELS[S.stage] || LEVELS[0]; }
 function curGoal() { return GOALS[curStage().goal]; }
 
-/** 限球关还剩几颗额度；不限球返回 Infinity */
+/** 还剩几颗造球额度；没写 `ballLimit` 的关卡返回 Infinity。
+ *
+ * ★ **额度是关卡字段，不是目标类型。**
+ *
+ * 原来这里是 `if (st.goal !== "limit") return Infinity;` —— 也就是说
+ * 「球是有限的」这件事只能作为**目标**存在，一屏只能考它，不能和别的
+ * 目标叠加。而 7 种目标本来就是互斥的单选，于是整部游戏变成了
+ * 「一屏考一件事」：这屏考连锁、那屏考限球、另一屏考收成。
+ *
+ * 但**策略需要两件事同时成立**：有约束（球不够）× 有价值差（火坑双份）。
+ * 单选结构把这两件事永远隔开，所以 27 屏里没有一屏真的要求玩家权衡 ——
+ * 球免费的时候"每只单独推一次"就是最优解（落袋给 holds+1，拆开比卷起来还赚），
+ * 所有坡、滑道、缺口都退化成"更好看的解法"。
+ *
+ * 解耦之后 `clear / collect / chain / bank` 任意目标都能叠加球额度。
+ * 老的四屏 `limit` 行为完全不变（它们本来就带 ballLimit）。
+ */
 function ballBudget() {
   const st = curStage();
-  if (st.goal !== "limit") return Infinity;
+  if (st.ballLimit == null) return Infinity;
   return Math.max(0, st.ballLimit - S.stat.made);
 }
 
@@ -12720,7 +12754,7 @@ function tick(dt) {
 
     // 死局：限球关额度用完、场上没球、还有人没送走 —— 这局没救了。
     // 直接判负比让人干等着好，留一个"还能翻"的假象最伤。
-    if (S.phase === "play" && curStage().goal === "limit") {
+    if (S.phase === "play" && curStage().ballLimit != null) {
       const st = curStage();
       const alive = S.foes.length;
       if (st.ballLimit - S.stat.made <= 0 && S.balls.length === 0 && alive > 0) {
@@ -14281,6 +14315,9 @@ Object.defineProperty(window.GROVE, "crackTarget", { get: () => crackTarget });
    靠机器人打到最后一波去拍照，拍出来的是什么全看运气。
    **能直接造，就不要靠"跑到那一步"**。 */
 Object.defineProperty(window.GROVE, "foeFromSpec", { get: () => foeFromSpec });
+/* 糊敌人是"造球"唯一的入口。额度到底拦不拦得住，只能从这里打进去验 ——
+   看 `ballBudget()` 的返回值证明不了任何事，它只是个数字。 */
+Object.defineProperty(window.GROVE, "coatFoe", { get: () => coatFoe });
 Object.defineProperty(window.GROVE, "mudSpot", { get: () => mudSpot });
 Object.defineProperty(window.GROVE, "drawCrackMark", { get: () => drawCrackMark });
 Object.defineProperty(window.GROVE, "drawMudWarn", { get: () => drawMudWarn });

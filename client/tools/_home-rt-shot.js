@@ -269,6 +269,93 @@ function audit() {
     console.log(hits ? `  共 ${hits} 处` : '  无');
 }
 
+/* ---------- 文字溢出体检 ----------
+   `audit()` 比的是**容器矩形**，而 Label 的容器是写死的（400 / 580 …）——
+   文字超出容器时矩形一点没变，所以"字压到邻居身上"这件事它永远查不出来。
+   这里换成量**实际文本宽度**：中文按字体度量逐字累加，和 contentSize 比。
+
+   为什么要分 overflow 模式：
+     · NONE   —— 超出直接画到容器外面，**会压住邻居**，是真问题；
+     · CLAMP  —— 超出被裁掉，不压人但会截断（"收集篮 0" 变 "收集篮"），要报；
+     · SHRINK —— 引擎自动缩字号，不会溢出，不算问题。
+   只报前两种。 */
+function auditText() {
+    const mctx = createCanvas(8, 8).getContext('2d');
+    console.log('\n=== 文字溢出（实际宽度 vs 容器宽）===');
+    let over = 0, clipped = 0;
+    const walk = (n, depth) => {
+        if (!n.active) return;
+        const lb = n._comps.find((c) => c instanceof Label);
+        if (lb && lb.string !== '' && lb.string != null) {
+            const size = lb.fontSize * (n._scale ? n._scale.x : 1);
+            mctx.font = `${size}px sans-serif`;
+            const tw = mctx.measureText(String(lb.string)).width;
+            const ut = n.getComponent(UITransform);
+            const cw = ut ? ut.contentSize.width : 0;
+            if (cw > 1 && tw > cw + 1) {
+                const mode = lb.overflow;
+                const tag = mode === 2 ? 'SHRINK' : mode === 1 ? 'CLAMP' : 'NONE';
+                if (mode === 2) { /* 自动缩字号，安全 */ }
+                else {
+                    const kind = mode === 1 ? 'clipped' : 'over';
+                    if (mode === 1) clipped++; else over++;
+                    console.log(`  ${mode === 1 ? '⚠' : '✗'} ${n.name.padEnd(16)} ` +
+                        `[${tag}] 文字 ${tw.toFixed(0)}px > 容器 ${cw.toFixed(0)}px  「${lb.string}」`);
+                }
+            }
+        }
+        for (const c of n.children) walk(c, depth + 1);
+    };
+    walk(scene, 0);
+    console.log(`  NONE 溢出 ${over} 处 / CLAMP 截断 ${clipped} 处`);
+
+    /* ---------- 文字间距体检 ----------
+       "文字压在一起"**不是**溢出问题：两个 Label 各自都在自己容器里，
+       矩形审计也通过，但它们挨得太近，肉眼就是一团。
+       判据：同一父节点下两个 Label，在另一轴上有重叠时，净间隙 < 4px 就报。
+       只看同父（跨层的 Label 本来就该叠，比如标题压在卡上）。 */
+    console.log('\n=== 文字间距 < 4px（同父节点）===');
+    let tight = 0, collide = 0;
+    const eachNode = (n) => {
+        const kids = n.children.filter((c) => c.active && c._comps.some((x) => x instanceof Label));
+        const boxes = kids.map((c) => {
+            const ut = c.getComponent(UITransform);
+            const w = ut ? ut.contentSize.width : 0;
+            const h = ut ? ut.contentSize.height : 0;
+            const sc = c._scale ? c._scale.x : 1;
+            /* ⚠ 锚点**不是** (0.5,0.5)：Home.scene 里的 Label 绝大多数是 (0,1) /
+               (0.5,1)。把锚点当 0.5 硬算，会把"并排"的标签报成"重叠"
+               （Btn-Go/txt 和 /line 就这么被误报过 61×16），
+               然后照着假数据去改 UI —— 越改越乱。 */
+            const ax = ut && ut._anchorPoint ? ut._anchorPoint.x : 0.5;
+            const ay = ut && ut._anchorPoint ? ut._anchorPoint.y : 0.5;
+            const W2 = w * sc, H2 = h * sc;
+            return {
+                name: c.name, text: (c._comps.find((x) => x instanceof Label) || {}).string,
+                x0: c._pos.x - ax * W2, x1: c._pos.x + (1 - ax) * W2,
+                y0: c._pos.y - ay * H2, y1: c._pos.y + (1 - ay) * H2,
+            };
+        });
+        for (let i = 0; i < boxes.length; i++) {
+            for (let j = i + 1; j < boxes.length; j++) {
+                const a = boxes[i], b = boxes[j];
+                const ox = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
+                const oy = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+                if (ox > 0 && oy > 0) {
+                    collide++;
+                    console.log(`  ✗ 重叠 ${n.name}/${a.name} × ${n.name}/${b.name}  ${ox.toFixed(0)}×${oy.toFixed(0)}px  「${a.text}」「${b.text}」`);
+                } else if (ox > 0 && oy > -4) {
+                    tight++;
+                    console.log(`  · 太近 ${n.name}/${a.name} × ${b.name}  纵向 ${(-oy).toFixed(1)}px  「${a.text}」「${b.text}」`);
+                }
+            }
+        }
+        for (const c of n.children) eachNode(c);
+    };
+    eachNode(scene);
+    console.log(`  重叠 ${collide} 处 / 净间隙 < 4px ${tight} 处`);
+}
+
 /* ---------- 宠物遮挡体检 ----------
    "六只互不遮挡"这件事不能靠看截图：一张 1280 宽的图缩到 640 显示，
    叠掉的耳朵和没叠掉的耳朵长得几乎一样。这里直接算每只的屏幕矩形
@@ -330,6 +417,7 @@ const OUT = path.join(CLIENT, 'shots', OPT.out + '.png');
 
 if (OPT.audit) audit();
 if (OPT.petbox) petBox();
+if (OPT.text) auditText();
 
 /* ---------- 渲染 ---------- */
 

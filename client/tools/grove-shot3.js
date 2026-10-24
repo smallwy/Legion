@@ -86,12 +86,18 @@ if (!args.length) { console.log("给个 tag，例如 s1 / clear:3"); process.exi
         G.openPick();
       }, s === undefined ? "" : s);
     } else {
-      const st = Number(a.replace("s", "")) - 1;
-      await page.evaluate((n) => { window.GROVE._start(0, n); window.GROVE.S.phase = "play"; }, st);
+      /* `s8` = 第 8 屏带默认那只（尖耳猫）；`s8#3` = 第 8 屏带第 3 只（长耳兔）。
+         加这个后缀是为了**用画面证明"换宠物真的换了"** ——
+         光看 `heroIndexOf()` 的断言只能证明算出了数字，证明不了场上换成了谁。 */
+      const m = /^s(\d+)(?:#(\d+))?$/.exec(a);
+      const st = m ? Number(m[1]) - 1 : Number(a.replace("s", "")) - 1;
+      const hero = m && m[2] !== undefined ? Number(m[2]) : 0;
+      await page.evaluate(({ n, h }) => { window.GROVE._start(h, n); window.GROVE.S.phase = "play"; }, { n: st, h: hero });
     }
     await sleep(700);
-    await page.screenshot({ path: path.join(OUT, "_t-" + a.replace(":", "") + ".png") });
-    console.log("  ✓ _t-" + a.replace(":", "") + ".png");
+    const nm = "_t-" + a.replace(/[:#]/g, "-") + ".png";
+    await page.screenshot({ path: path.join(OUT, nm) });
+    console.log("  ✓ " + nm);
   }
   await browser.close();
 })();

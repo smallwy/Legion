@@ -45,3 +45,6 @@ client/prototype/_check2/
 
 # client/shots 已于 c6c06fc 定性为纯工具落点、零运行时引用，目录整体废弃不再保留。
 # 残留的 README 放行规则一并移除；今后所有评审图直接归档到 client/art/04-review/。
+
+# Cocos Creator 的用户级缓存（每个机器的编辑器状态，不是项目资产）
+client/.creator/

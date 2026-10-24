@@ -17,6 +17,7 @@
  */
 
 import { PETS } from './Roster';
+import { STAGE_COUNT } from './Stages';
 
 /* ==========================================================================
  * 1. 存储后端
@@ -152,8 +153,14 @@ function blankPats(): Record<string, number> {
     return o;
 }
 
-/** 关卡数。与 `grove.html` 的 `LEVELS.length` 一致，`best` 的长度恒等于它 */
-export const LEVEL_COUNT = 8;
+/**
+ * 关卡数。**唯一真值在 `config/Stages.ts`**，这里只是旧名字的别名 ——
+ * 它的调用点遍布存档 / 图鉴 / 战斗结算，保留这个名字比全量改名安全。
+ *
+ * 历史坑：这个数原来写死 8，于是 `cleared` 被 clamp 到 8、`settleInto` 也只加到 8。
+ * 玩家打到第 10 屏，主界面永远报「8 / 8 关」，第 9 屏之后的成绩无处落盘。
+ */
+export const LEVEL_COUNT = STAGE_COUNT;
 
 export const DEFAULT_SAVE: SaveState = {
     cleared: 0,
@@ -277,7 +284,7 @@ export function loadSave(): SaveState {
     if (!o || typeof o !== 'object') return freshSave();
 
     return {
-        cleared: Math.floor(clampNum(o.cleared, DEFAULT_SAVE.cleared, 0, 8)),
+        cleared: Math.floor(clampNum(o.cleared, DEFAULT_SAVE.cleared, 0, LEVEL_COUNT)),
         apples: Math.floor(clampNum(o.apples, DEFAULT_SAVE.apples, 0, 9_999_999)),
         logs: Math.floor(clampNum(o.logs, DEFAULT_SAVE.logs, 0, 9_999_999)),
         coins: Math.floor(clampNum(o.coins, DEFAULT_SAVE.coins, 0, 9_999_999)),
@@ -427,7 +434,7 @@ export function settleInto(
         apples: prev.apples + loot.apples,
         logs: prev.logs + loot.logs,
         coins: prev.coins + loot.coins,
-        cleared: won ? Math.min(8, prev.cleared + 1) : prev.cleared,
+        cleared: won ? Math.min(LEVEL_COUNT, prev.cleared + 1) : prev.cleared,
         satiety: sat < 0 ? 0 : sat,
         runs: prev.runs + 1,
     };

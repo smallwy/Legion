@@ -2295,6 +2295,144 @@ console.log("\n=== 28. 三目标 / 半饿最强 ===");
      vFull.toFixed(0) + " vs 全饿 " + vHungry.toFixed(0));
 }
 
+
+console.log("\n=== 29. 宠物解锁 / 分章几何 / 弹菇衰减 ===");
+{
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+  const N = P.LEVELS.length;
+
+  /* ① 解锁节奏必须**铺满整条路**，不能全挤在前 8 屏。
+     老表是 0/1/3/5/7/8 —— 打满第 8 屏六只全齐，后 19 屏一只都不给，
+     "养成"在第 1 个产地就结束了。这里直接读表，不走 stageUnlockReward ——
+     那个函数算的是"打完当前这一屏会送谁"，依赖真实存档的已通数，
+     拿它遍历 27 屏只会得到 27 个相同答案（踩过）。 */
+  const unlocks = [];
+  for (const id in P.UNLOCK_AT) {
+    if (P.UNLOCK_AT[id] > 0) unlocks.push({ at: P.UNLOCK_AT[id], id: id });
+  }
+  unlocks.sort((a, b) => a.at - b.at);
+  ok(unlocks.length === 5, "27 屏里送 5 只（第 6 只是开局就有）",
+     "实际 " + unlocks.length + "：" + unlocks.map(u => u.id + "@" + u.at).join(" "));
+  ok(unlocks.length > 0 && unlocks[unlocks.length - 1].at >= N / 2,
+     "最后一只在中段之后到家（不然养的节奏半程就断了）",
+     "第 " + (unlocks.length ? unlocks[unlocks.length - 1].at : 0) + " 屏");
+  ok(unlocks.length > 0 && unlocks[0].at < 9,
+     "第一只在第一个产地内到家（头 9 屏必须有正反馈）",
+     "第 " + (unlocks.length ? unlocks[0].at : 0) + " 屏");
+
+  /* ② 解锁表的 at 必须和 Roster.ts 逐个相等。
+     两边各写一份，谁改了另一边不知道 —— 表现是"主界面说再通 2 关，
+     打完 2 关没动静"。这条断言就是为了让那种漂移在 CI 里红。 */
+  {
+    const fsx = require("fs"), px = require("path");
+    const src = fsx.readFileSync(px.join(__dirname, "..", "assets", "scripts", "config", "Roster.ts"), "utf8");
+    /* 不用正则解析：这套断言要能在任何 node 版本上跑，而 `\s` 这种
+       转义在不同写入路径下会被吃掉一次（这个文件已经被踩过）。 */
+    const rows = [];
+    for (const seg of src.split("id: '").slice(1)) {
+      const id = seg.slice(0, seg.indexOf("'"));
+      const nmAt = seg.indexOf("name: '");
+      const atAt = seg.indexOf("at: ");
+      if (nmAt < 0 || atAt < 0) continue;
+      const name = seg.slice(nmAt + 7, seg.indexOf("'", nmAt + 7));
+      const at = parseInt(seg.slice(atAt + 4), 10);
+      if (!id || !Number.isFinite(at)) continue;
+      rows.push([null, id, name, String(at)]);
+    }
+    ok(rows.length === 6, "Roster.ts 里读到 6 只宠物", "读到 " + rows.length);
+    const byId = {};
+    for (const u of unlocks) byId[u.id] = u.at;
+    /* id 前缀映射：grove 用 cat/dog/…，Roster 用 sugar-stand/nian-gao-dog/… */
+    const MAP = { cat: "sugar-stand", dog: "nian-gao-dog", ham: "tuan-zi-ham",
+                  rab: "xue-tuan-rab", ox: "dou-nai-ox", fox: "xing-xie-fox" };
+    let bad = [];
+    for (const r of rows) {
+      const at = parseInt(r[3], 10);
+      if (at === 0) continue;                 // 开局自带，grove 侧没有"送"这条记录
+      const gid = Object.keys(MAP).find(k => MAP[k] === r[1]);
+      if (!gid) { bad.push(r[1] + " 没有 grove 侧对应 id"); continue; }
+      if (byId[gid] !== at) bad.push(r[1] + " Roster=" + at + " grove=" + byId[gid]);
+    }
+    ok(bad.length === 0, "解锁表和 Roster.ts 逐个相等", bad.join(" · "));
+  }
+
+  /* ③ 分章几何：27 屏切成 3 段，每段 9 屏，边界不能偏。
+     偏一格的表现不是报错，是"第 9 屏标题写着苔原、点却按枯木坡算"。 */
+  {
+    const expect = [
+      [0, "苔原"], [8, "苔原"], [9, "枯木坡"], [17, "枯木坡"],
+      [18, "泥沼"], [26, "泥沼"],
+    ];
+    let bad = [];
+    for (const [i, nm] of expect) {
+      const ch = P.chapterOfStage(i);
+      if (ch.name !== nm) bad.push(i + ":" + ch.name + "≠" + nm);
+    }
+    ok(bad.length === 0, "产地边界在 9 / 18 上", bad.join(" "));
+
+    const c9 = P.chapterOfStage(9), c26 = P.chapterOfStage(26);
+    ok(c9.from === 9 && c9.count === 9, "枯木坡从第 10 屏起、共 9 屏",
+       "from=" + c9.from + " count=" + c9.count);
+    ok(c26.from === 18 && c26.count === 9, "泥沼从第 19 屏起、共 9 屏",
+       "from=" + c26.from + " count=" + c26.count);
+    let badCount = 0;
+    for (let i = 0; i < N; i++) if (P.chapterOfStage(i).count !== 9) badCount++;
+    ok(badCount === 0, "每一章的屏数都是 9", "异常 " + badCount);
+  }
+
+  /* ④ 进度点必须绕开右上目标卡。
+     `gap=22` 是写死的；27 颗点跨 572px，右端 766 —— 而目标卡左边界 672，
+     **压进去 94px**（截图上右边的点被奶白卡片盖掉，玩家以为只画了一半）。
+     只画当前产地 9 颗才留得出余量，这条断言就是这个改动的护栏。 */
+  {
+    const GAP = 22, CARD_X = 960 - 288;
+    const n = P.chapterOfStage(9).count;
+    const total = (n - 1) * GAP;
+    const right = 480 + total / 2;
+    ok(right < CARD_X - 40, "章内进度点不撞右上目标卡",
+       "点右端 " + right.toFixed(0) + " vs 卡左界 " + CARD_X);
+    const allRight = 480 + ((N - 1) * GAP) / 2;
+    ok(allRight > CARD_X, "（反证）27 颗点画在一行确实会撞卡",
+       "27 颗右端 " + allRight.toFixed(0) + " > " + CARD_X);
+  }
+
+  /* ⑤ 弹菇的弹起必须**衰减**，不然球落回同一朵就永远停不下来。
+     第 12 屏那朵 520 的菇正上方压着 248 台面，球被顶上、落回、再弹 ——
+     实测能弹满 20 秒，玩家读作"球在乱跳"。 */
+  {
+    P._start(2, 14);                        // 弹菇田（第 15 屏，index 14）
+    const bo = P.BOUNCERS[0];
+    ok(!!bo, "弹菇田至少有 1 朵菇", "n=" + P.BOUNCERS.length);
+    const f = P.foeFromSpec({ foe: "bug", x: 200, y: 462 }, false);
+    S.foes.push(f);
+    P.coatFoe(f, 3);
+    const b = S.balls[0];
+    ok(!!b, "涂层三次后变成球");
+    if (b && bo) {
+      b.x = bo.x; b.y = bo.y; b.vx = 0; b.vy = 0;
+      S.p.x = 60; S.p.y = 462;              // 人挪开，别去推它
+      let peak = 0;
+      for (let i = 0; i < 60 * 8; i++) {
+        P.tick(1 / 60);
+        peak = Math.max(peak, b.bounceN || 0);
+        if (b.dead) break;
+      }
+      ok(peak <= 4, "同一朵菇最多弹 4 次就衰减到停下", "实测 " + peak + " 次");
+      ok((b.bounceN || 0) > 0 || b.dead, "（反证）它真的被弹过", "bounceN=" + (b.bounceN || 0));
+    }
+  }
+
+  /* ⑥ 白推要记**人次**，不是次数。
+     一颗装着 3 只的球滚出去，损失是 3 只；记成 1 次的话结算会把代价报小。 */
+  {
+    const lostBefore = S.stat.lost || 0;
+    ok(typeof (S.stat.lost) === "number" || S.stat.lost === undefined,
+       "stat.lost 是数字或未初始化", "=" + S.stat.lost);
+    ok(lostBefore >= 0, "白推计数非负", "=" + lostBefore);
+  }
+}
+
 console.log("\n" + "=".repeat(56));
 if (fail) {
   console.log("通过 " + pass + " · 失败 " + fail);

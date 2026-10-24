@@ -52,6 +52,7 @@ import {
 import { EDITOR } from 'cc/env';
 import { MAX_SQUAD, PETS, petGap, squadSize, unlockedPets } from './config/Roster';
 import type { PetDef } from './config/Roster';
+import { CHAPTERS, STAGE_COUNT, chapterOf, stageLabel, stageInChapter } from './config/Stages';
 import type { TaskDef } from './config/HomeBiz';
 import { loadSave, saveSave } from './config/SaveData';
 import type { SaveState } from './config/SaveData';
@@ -1091,7 +1092,11 @@ class HomeController {
         const prog = this.canvas.getChildByName('HUD')?.getChildByName('HudProgress');
         if (prog) {
             const txt = prog.getChildByName('txt-prog')?.getComponent(Label);
-            if (txt) txt.string = `${s.cleared} / 8 关`;
+            /* 关卡进度：**报总数不报产地**。
+             * 原来是「苔原 x / 8」—— 8 是写死的，27 屏下第 9 屏就撞上界。
+             * 现在报「x / 27 关」，产地由下面那排点分组表达，
+             * 不必再挤进这个 66px 宽的 Label（它旁边紧挨着「苔 原」两个字）。 */
+            if (txt) txt.string = `${s.cleared} / ${STAGE_COUNT} 关`;
             /* 关卡格：已通关的点亮。`pip-on` / `pip` 是两张不同的贴图，
                换图要换 spriteFrame + 尺寸，这里只做透明度降权 —— 
                保持"已确认版式不动"的原则，不引入新的切图。 */
@@ -2189,9 +2194,12 @@ class HomeController {
             hud.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
                 e.propagationStopped = true;
                 const c = this.save.cleared;
-                this.toast(c >= 8
-                    ? '苔原 8/8 · 全部通关，回草原养老吧'
-                    : `苔原 ${c}/8 · 打一场推进 1 关，新伙伴会回家`);
+                /* 全通判定必须读 STAGE_COUNT。写死 8 的时候，玩家打到第 10 屏
+                 * 就会收到「苔原 8/8 · 全部通关」—— 一句假话，而且是他手感上
+                 * 明显不对的假话（第 11 屏还在前面等着）。 */
+                this.toast(c >= STAGE_COUNT
+                    ? `${STAGE_COUNT} 屏全部走完 · 挑一屏重打可以刷 S`
+                    : `${stageLabel(c)} · 打一场推进 1 屏，新伙伴会回家`);
             });
         }
     }
@@ -2491,12 +2499,17 @@ class HomeController {
                 : SATIETY.mulStarving;
         const nextPet = PETS.find((p) => p.at > s.cleared);
 
-        mkLabel(card, 'title', `苔原 ${Math.min(8, s.cleared + 1)} / 8`, 40, INK, 500, 56)
+        /* 出发卡的标题 **报章节，不报「第 10 / 27 关」**。
+         * 27 是内部数字：玩家在枯木坡第 1 屏，告诉他"第 10 关"只会让他
+         * 觉得前面还有 26 个一样的东西 —— 这正是"关卡搞得那么长"的观感来源。
+         * 章的边界由文案给出，产地名比总数更能建立"我走到哪了"。 */
+        const nextIdx = Math.min(STAGE_COUNT - 1, s.cleared);
+        mkLabel(card, 'title', stageLabel(nextIdx), 40, INK, 500, 56)
             .node.setPosition(0, 108, 0);
         /* 副标题从"能量够不够"换成**这一关你打过多好**。
            出门前是最适合告诉玩家"S 线在哪"的位置：他还没进去，
            正好带着一个目标进去。没有战绩就说实话（还没打过）。 */
-        const stageIdx = Math.min(8, s.cleared + 1) - 1;
+        const stageIdx = Math.min(STAGE_COUNT - 1, s.cleared);
         const bestHere = s.best[stageIdx] || '';
         mkLabel(card, 'sub',
             bestHere
@@ -3155,8 +3168,8 @@ class HomeController {
             const any = cnt.S + cnt.A + cnt.B > 0;
             mkLabel(row, 'txt',
                 any
-                    ? `S ×${cnt.S}    A ×${cnt.A}    B ×${cnt.B}    已通 ${cleared} / 8 关`
-                    : `已通 ${cleared} / 8 关 · 结算会给 S / A / B，最好成绩记在这里`,
+                    ? `S ×${cnt.S}    A ×${cnt.A}    B ×${cnt.B}    已通 ${cleared} / ${STAGE_COUNT} 屏`
+                    : `已通 ${cleared} / ${STAGE_COUNT} 屏 · 结算会给 S / A / B，最好成绩记在这里`,
                 16, any ? INK : INK_SOFT, 540, 20).node.setPosition(0, 0, 0);
         }
 

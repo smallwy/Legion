@@ -33,18 +33,29 @@ export interface PetDef {
 }
 
 /**
- * 解锁表。`at` 必须与 `Home.scene` 的初始状态（CLEARED = 0 时只建砂糖节点）
- * 和 `HomeRuntime` 的锁定文案（"再通过 N 关就会回家"）三方一致。
+ * 解锁表。`at` 必须与 `grove.html` 的 `UNLOCK_AT` 和 `HomeRuntime` 的锁定文案
+ * 三方一致。改这里 = 改解锁节奏，主界面与战斗会同时跟着变。
  *
- * 改这里 = 改解锁节奏，主界面与战斗会同时跟着变。
+ * **`at` 是按 27 屏重排的。** 原来是 0/1/3/5/7/8 —— 打完第 8 屏六只全齐，
+ * 后 19 屏一只都不给。现在按产地分：
+ *   苔原 1-9    → 尖耳猫(0) 短尾犬(2) 胖仓鼠(5) 长耳兔(9)
+ *   枯木坡 10-18 → 老实牛(14) 影狐(18)
+ *   泥沼 19-27  → 全齐，负责练熟
+ * 第 9、18 是两屏收尾 BOSS，通关即到家，奖励和成就同一刻。
+ *
+ * ⚠️ `id` 保留 `sugar-stand` 这些老写法：它们是 `Home.scene` 里
+ *    `home/pets/<id>` 的节点名，改 id 就要动场景文件。`name` 才是给玩家看的，
+ *    必须和 `grove.html` 的 `HEROES[].name` 逐字一致 ——
+ *    上一版这里叫「砂糖」、场上叫「尖耳猫」，解锁提示说"砂糖到家了"，
+ *    玩家在院子里找不到"砂糖"。
  */
 export const PETS: ReadonlyArray<PetDef> = [
-    { id: 'sugar-stand', name: '砂糖', at: 0 },
-    { id: 'nian-gao-dog', name: '年糕', at: 1 },
-    { id: 'tuan-zi-ham', name: '团子', at: 3 },
-    { id: 'xue-tuan-rab', name: '雪团', at: 5 },
-    { id: 'dou-nai-ox', name: '豆奶', at: 7 },
-    { id: 'xing-xie-fox', name: '星屑', at: 8 },
+    { id: 'sugar-stand', name: '尖耳猫', at: 0 },
+    { id: 'nian-gao-dog', name: '短尾犬', at: 2 },
+    { id: 'tuan-zi-ham', name: '胖仓鼠', at: 5 },
+    { id: 'xue-tuan-rab', name: '长耳兔', at: 9 },
+    { id: 'dou-nai-ox', name: '老实牛', at: 14 },
+    { id: 'xing-xie-fox', name: '影狐', at: 18 },
 ];
 
 /** 已解锁的宠物（按解锁顺序） */

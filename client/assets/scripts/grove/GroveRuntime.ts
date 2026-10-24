@@ -1616,9 +1616,10 @@ const LEVELS = [
   },
 
   /* ---------------- 15 ----------------
-     三朵菇。地面 → 462 → 248 一条完整的上升链。 */
+     两朵菇。地面 → 462 → 248 一条完整的上升链。
+     **副标题原来写「三朵菇」，数据里只有 2 朵** —— 玩家数菇数就会发现对不上。 */
   {
-    id: "wither_shrooms", name: "弹菇田", sub: "三朵菇 · 连弹上三层",
+    id: "wither_shrooms", name: "弹菇田", sub: "两朵菇 · 连弹上三层",
     note: "地面那朵把球弹上 462，462 那朵再弹到 248。想上顶得连弹两次",
     theme: "wither3",
     goal: "bank", bank: 4, par: { time: 85, made: 10 },
@@ -1639,7 +1640,7 @@ const LEVELS = [
       { x: 820, y: GROUND_Y, w: 80,  kind: "fire" },
     ],
     // 一根桩立在长台左段（278..322）：不是挡路，是给"要不要先清桩"一个决断点。
-    // 三个弹菇的落点都不在它上面，别把桩摆到菇的弹道里 —— 球会被顶下来。
+    // 两朵菇的落点都不在它上面，别把桩摆到菇的弹道里 —— 球会被顶下来。
     stumps: [{ x: 300, y: 462, w: 44, h: 78, hp: 2 }],
     camp: { x: 852, y: GROUND_Y, w: 82 },
     waves: [
@@ -2904,9 +2905,17 @@ function beginRun(i) {
    * 同样的四个字，而且卡片是常驻的、字更大、旁边还有进度。
    * 同一句话说两遍不会让人更清楚，只会让"全部送回家"这行字看起来
    * 像关卡名字的一部分 —— 玩家读成「这关叫'双塔·全部送回家'」。
+   *
+   * **编号也改成章节口径。** 这里原来写「第 10 关 枯木坡口」——
+   * 玩家一进场就被告知"这是第 10 关"，于是 27 屏被读成一条 27 长的直线。
+   * 顶部 HUD 已经改成「枯木坡 · 1 / 9」，开场大字必须同源，
+   * 否则同一块屏幕上两种编号打架。
    */
-  addText(W / 2, 150, "第 " + (S.stage + 1) + " 关  " + SI.name,
-          "#FFFFFF", 26, 1.6);
+  {
+    const ch = chapterOfStage(S.stage);
+    addText(W / 2, 150, ch.name + " 第 " + (S.stage - ch.from + 1) + " 屏 · " + SI.name,
+            "#FFFFFF", 26, 1.6);
+  }
   // 全饿的第一关必须说明白。不说的话，玩家按 K 没反应只会觉得游戏坏了
   if (bellyTier() === 0) {
     addText(W / 2, 194, "它饿得跑不动了 —— 推不动就收工回家", "#FFC9A8", 17, 4.2);
@@ -3278,6 +3287,9 @@ function updatePlayer(dt) {
         b.pushed = true;
         b.relT = 0;
         b.wallHits = 0;
+        /* 玩家重新推它 = 这一球是新的。弹菇的衰减计数必须归零，
+         * 否则这颗球弹满 6 次之后，之后路过任何菇都不会再被弹起来。 */
+        b.bounceN = 0;
         // 球被顶瘪一下：沿运动方向压短、垂直方向鼓起来 ——
         // 这是"它真的被撞了"唯一不靠文字的表达。
         b.pushSquash = 0.30 + runUp * 0.14;
@@ -4069,20 +4081,46 @@ function updateBalls(dt) {
       b.vx -= GRAV * rp.slope * 0.45 * dt;
     }
 
-    // ---- 弹簧菇（第 5 关）
-    // 弹起 228px（980²/2g）：556 → 328，刚够越过 350 那层。
-    // 再高就会顶到 248 层的底面，球在两层之间来回弹，看起来像卡住了。
+    // ---- 弹簧菇
+    /* 这里修过三个病，**三个都在同一条链上**，少修一个还剩乱跳：
+     *
+     * ① 弹起速度原来是 `b.vy = -980` 的**赋值** —— 每次都一模一样高。
+     *    球落回同一朵菇就再弹一次，永远收不了尾（实测能在几朵菇之间弹满 20 秒）。
+     *    改成逐次衰减 0.72：980 → 706 → 508 → 366 → 264，第 5 次不足 300，
+     *    当作普通地面放过，球自己滚开。
+     * ② `bounceCd` 原来是 0.35s，而一个完整来回要 **1 秒**（上 0.5 + 下 0.5）——
+     *    冷却早就过了，等于没有。提到 0.7s 才真正能"隔一次"。
+     * ③ `b.vx` 被覆写成 ±200 —— 一颗 vx=-50 的慢球经过菇时速度突变成 -200，
+     *    读起来就是"球自己窜了出去"。改成只补下限 120，方向永远跟着原 vx。
+     *
+     * 还有一个更隐蔽的：`b.bounceN` 只在**玩家重新推它**时清零（见 pushBall）。
+     * 不清零的话球弹过 6 次就永远不再被弹 —— 下一次路过同一个关会以为菇坏了。
+     */
     b.bounceCd = Math.max(0, (b.bounceCd || 0) - dt);
+    /* 衰减计数按**位置**重置，不按时间。
+     *
+     * 一开始是"玩家重新推才清零"，结果是第 5 关（两级弹菇塔）直接废掉：
+     * 地面那朵弹一次、350 那朵弹一次，第三朵就没劲了 —— 球堆在 350 层下不来。
+     * 而如果改成"落地就清零"，第 12 关那朵被 248 台面压在正下方的菇又会
+     * 无限反复弹（球落回同一处、清零、再弹满）。
+     *
+     * 分清这两种情况的唯一线索是**空间**：换了一朵菇，球横向走过了；
+     * 同一朵反复弹，球几乎留在原地。所以按 120px 位移判。 */
+    if (b.lastBounceX === undefined || Math.abs(b.x - b.lastBounceX) > 120) b.bounceN = 0;
     if (b.bounceCd <= 0) {
       for (const bo of BOUNCERS) {
         if (Math.abs(b.x - bo.x) > 30) continue;
         if (b.y < bo.y - 60 || b.y > bo.y + 10) continue;
-        b.vy = -980;
-        // 几乎停住的球会被弹成"原地上下跳"，一直跳到漏气崩开（实测 12 次）。
-        // 给一点水平推力，保证它会飞出去。
-        if (Math.abs(b.vx) < 180) b.vx = (b.vx < 0 ? -1 : 1) * 200;
+        const k = Math.min(5, b.bounceN || 0);
+        const pow = 980 * Math.pow(0.72, k);
+        if (pow < 300) continue;              // 衰减到弹不动了，当普通地面
+        b.vy = -pow;
+        b.bounceN = k + 1;
+        b.lastBounceX = b.x;
+        // 慢球要有一点水平位移才离得开这朵菇，但**不覆盖方向**（见 ③）
+        if (Math.abs(b.vx) < 120) b.vx = (b.vx < 0 ? -1 : 1) * 120;
         b.onGround = false;
-        b.bounceCd = 0.35;
+        b.bounceCd = 0.7;
         addText(bo.x, bo.y - 74, "弹!", "#C9F27A", 18);
         for (let i = 0; i < 8; i++) addFrag(bo.x, bo.y - 6, 6, "#8ED36A");
         S.shake = Math.max(S.shake, 4);
@@ -4166,19 +4204,43 @@ function updateBalls(dt) {
          必须先做这一条再做任何夹紧，否则 clamp 会把球按回场地里，
          玩家看到的是"球在边缘抖了一下又回来了"。
 
-         滚丢要给人一个交代：装在里面的人放回场上。直接 dead 的话
-         玩家看到的是"莫名其妙少了两只"，那会读成 bug。 */
-      /* 判出界的线是**画面边缘**，不是逻辑墙 WALL_L。
+         ------------------------------------------------------------------
+         **这里改过一次设计，因为上一版被玩家当成 bug 报上来。**
+         ------------------------------------------------------------------
+         旧写法是 `respawnPacked(b, 1, WALL_L + 46)` —— 球消失，装在里面的人
+         原地放回 x=72。当时的理由是"直接 dead 的话玩家看到莫名其妙少了两只"。
+         实测证明这个理由站不住：玩家读到的是「我把它撞下去了，它又活过来了」，
+         违反因果，比"少了两只"更像故障。
+
+         但人不能真的凭空消失 —— `S.total` 是固定的波次总数，`S.killed` 只统计
+         **送进营地/火坑**的。人若蒸发又不计 killed，这一屏永远差几只，关卡
+         直接变成不可通关。所以人必须回到场上，能做的是把**代价做得可见**：
+
+           · 浮字说清是什么代价：「滚出去了 · 3 只白推」，不再是含糊的"滚出去了"
+           · `stat.lost` 记**人次**（原来记次数），结算卡拿它报"白推"
+           · 放回来的人裹壳层数不变（还是 1 层），惩罚在"白推了这一趟"，
+             不在"要多糊三下" —— 后者会让这一屏直接崩盘
+
+          **放回位置试过改，退回去了。** 先改成 `PLAYER_SPAWN.x`（想让它"退回起点"），
+         第 8 屏当场从 48 秒达标变成 240 秒超时：出生点 x≈60 正好在某块台面底下，
+         放回来的人起跳顶到台底，永远出不来 —— 和以前第 19 屏那个
+         "机器人在 (46,481) 站死"是同一个病。12px 的差别就够踩中。
+         所以位置保持 `WALL_L + 46`（这是被 27 屏验证过的安全值），
+         要改观感只能改文案和特效，不能动坐标。
+
+         判出界的线是**画面边缘**，不是逻辑墙 WALL_L。
          上一版写 `b.x + b.r < WALL_L - 2`（球心 < 46），球在离左缘 46px 的
          地方就没了 —— 那时左端有一根封口树干挡着，看起来像"滚进树根下面"。
          现在两端都是敞开的地面，球必须真的滚出屏幕才消失，
          否则就成了"在草地上凭空不见"。 */
       if (b.x + b.r < -4) {
         b.dead = true;
-        S.stat.lost = (S.stat.lost || 0) + 1;
+        const lostN = Math.max(1, b.holds);
+        S.stat.lost = (S.stat.lost || 0) + lostN;
         const back = respawnPacked(b, 1, WALL_L + 46);
         for (const f of back) S.foes.push(f);
-        addText(72, GROUND_Y - 110, "滚出去了…", "#CBD8E8", 18);
+        addText(WALL_L + 90, GROUND_Y - 118,
+                "滚出去了 · " + lostN + " 只白推", "#CBD8E8", 18);
         for (let i = 0; i < 8; i++) addFrag(14, GROUND_Y - 10, 5, "#8B5A32");
         continue;
       }
@@ -4267,7 +4329,7 @@ function predictBall(b, dir) {
   let air = b.air;
   let mud = b.mud;
   let onGround = false;
-  let bounce = 0, travel = 0, portalCd = 0, bouncerCd = 0, relT = 0;
+  let bounce = 0, travel = 0, portalCd = 0, bouncerCd = 0, relT = 0, bounceN = 0;
 
   const pts = [{ x, y: y - r }];
   const marks = [];
@@ -4344,14 +4406,20 @@ function predictBall(b, dir) {
       vx -= GRAV * rp.slope * 0.45 * AIM_DT;
     }
 
-    // 弹簧菇
+    // 弹簧菇。**和 updateBalls 里的主物理必须逐字同源** ——
+    // 预测线算的是 980 的固定弹起、实际却是衰减弹起的话，玩家照着预瞄线推
+    // 会发现球落点差一大截，那比不画预测线更糟。
     bouncerCd = Math.max(0, bouncerCd - AIM_DT);
     if (bouncerCd <= 0) {
       for (const bo of BOUNCERS) {
         if (Math.abs(x - bo.x) > 30) continue;
         if (y < bo.y - 60 || y > bo.y + 10) continue;
-        vy = -980; onGround = false; bouncerCd = 0.35;
-        if (Math.abs(vx) < 180) vx = (vx < 0 ? -1 : 1) * 200;
+        const k = Math.min(5, bounceN);
+        const pow = 980 * Math.pow(0.72, k);
+        if (pow < 300) continue;
+        vy = -pow; bounceN = k + 1;
+        onGround = false; bouncerCd = 0.7;
+        if (Math.abs(vx) < 120) vx = (vx < 0 ? -1 : 1) * 120;
         marks.push({ x: bo.x, y: bo.y - 46, kind: "bounce" });
       }
     }
@@ -8899,7 +8967,22 @@ function rate() {
 /* 关卡轨迹：顶上一排点。推关的「进度感」全靠这一条 ——
    没有它，玩家打第 5 关和打第 1 关的感觉是一样的。 */
 function drawTrail(g) {
-  const n = LEVELS.length;
+  /* ---- 顶部：产地 · 屏序 / 本章屏数 ----
+   *
+   * **原来的「第 10 / 27 关」是"关卡无脑搞那么长"这个抱怨的真正来源。**
+   * 27 是内部数字：玩家站在枯木坡第 1 屏，却被告知这是"第 10 关" ——
+   * 他读到的是"前面还有 26 个长得一样的东西"，而不是"我刚进第二章"。
+   *
+   * 章的信息一直都在（`FACTIONS` 三产地），只是从来没画到 HUD 上。
+   * 现在标题报「枯木坡 · 1 / 9」，进度点也只画**当前产地那 9 颗** ——
+   * 这两件事一起做才成立：只改文案不改点，玩家看到 27 颗点仍然是一条直线。
+   *
+   * 顺带解决的硬 bug：27 颗点 × 22px = 572px，横跨 x 194…766，
+   * 而目标卡左边界是 672 —— **重叠 94px**（截图上右边的点被奶白卡片盖掉）。
+   * 9 颗只跨 176px，居中在 392…568，离卡片还有 104px 余量。
+   */
+  const CH = chapterOfStage(S.stage);
+  const n = CH.count;
   const gap = 22;
   const cx = W / 2;
   const total = (n - 1) * gap;
@@ -8909,7 +8992,8 @@ function drawTrail(g) {
   g.font = "bold 13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
   g.lineWidth = 3.4;
   g.strokeStyle = "rgba(6,20,14,.55)";
-  const label = "第 " + (S.stage + 1) + " / " + n + " 关   " + curStage().name;
+  const label = CH.name + " · " + (S.stage - CH.from + 1) + " / " + CH.count +
+                "   " + curStage().name;
 
   /* 波次：一关 2~3 波，最后一波是 BOSS。没有这一行，玩家不知道"还剩多久"。
    *
@@ -8938,13 +9022,13 @@ function drawTrail(g) {
   for (let i = 0; i < n; i++) {
     const x = cx - total / 2 + i * gap;
     const y = 45;
-    /* **"通过了"必须读 S.best，不能读 `i < S.stage`。**
-     * 后者的含义是"在第几屏之前"，只在一条直线推到黑的时候等于"通了"。
-     * 有挑一屏之后它会骗人：第 20 屏回头去打第 3 屏，第 4..19 屏的灯全灭，
-     * 看起来像存档丢了。 */
-    const rk = S.best[i];
+    /* 点的序号是**产地内序号**，评级和"当前屏"必须查全局索引 ——
+     * 直接用 i 的话，站在枯木坡第 1 屏（全局 9）会读到 `S.best[0]`，
+     * 整排点显示的是苔原的成绩。 */
+    const gi = CH.from + i;
+    const rk = S.best[gi];
     const done = !!rk;
-    const cur = i === S.stage;
+    const cur = gi === S.stage;
 
     if (pipOff && pipOn) {
       // 有点/亮点图就贴图。深色底圈必须留着 —— 亮天空主题里，
@@ -9799,6 +9883,28 @@ const FACTIONS = [
   { id: "wither", name: "枯木坡" },
   { id: "marsh",  name: "泥沼" },
 ];
+
+/* ---------------------------------------------------------------------------
+   当前屏属于哪个产地
+   ---------------------------------------------------------------------------
+   HUD（顶部标题 + 进度点）和「挑一屏」面板必须用**同一份**分章几何，
+   否则会出现"标题说枯木坡、面板把这一屏画在苔原那一行"这种错位。
+
+   每章屏数按 `LEVELS.length / 产地数` 向上取整算，**不写死 9**：
+   写死以后再加一屏（比如中间插一屏）就会算出负数或越界行。
+   最后一章取余量，允许和前两章不等长。
+   --------------------------------------------------------------------------- */
+function chapterOfStage(idx) {
+  const per = Math.ceil(LEVELS.length / FACTIONS.length);
+  const row = clamp(Math.floor(idx / per), 0, FACTIONS.length - 1);
+  const from = row * per;
+  return {
+    row,
+    name: FACTIONS[row].name,
+    from,
+    count: Math.max(1, Math.min(per, LEVELS.length - from)),
+  };
+}
 
 /** 格子几何。**绘制和点击判定共用这一份** —— 分开算必错开，改布局时必踩。 */
 function pickCell(i) {
@@ -11329,14 +11435,19 @@ function render() {
         g.textBaseline = "middle";
       }
 
-      // ---- 顶部两个角标：第几关 / 这一趟连走了几关 ----
+      // ---- 顶部两个角标：产地屏序 / 这一趟连走了几屏 ----
+      // 角标同样走章节口径，理由见 drawHUD 顶部那段。
       g.fillStyle = K.ink3;
       g.font = "12px " + FONT;
       g.textAlign = "left";
-      g.fillText("第 " + (S.stage + 1) + " / " + LEVELS.length + " 关", cardX + 30, cardY + 24);
+      {
+        const ch = chapterOfStage(S.stage);
+        g.fillText(ch.name + " " + (S.stage - ch.from + 1) + " / " + ch.count,
+                   cardX + 30, cardY + 24);
+      }
       if (S.trip.stages > 1) {
         g.textAlign = "right";
-        g.fillText("连走 " + S.trip.stages + " 关", cardX + CARD_W - 30, cardY + 24);
+        g.fillText("连走 " + S.trip.stages + " 屏", cardX + CARD_W - 30, cardY + 24);
       }
 
       // ---- 关卡 · 目标 ----
@@ -11753,14 +11864,77 @@ function groveExit(kind: string): boolean {
   return false;
 }
 
-/* 解锁表：通关数 ≥ at 时，这只到家。必须和 game.html 的 PETS[].at 一致 */
-const UNLOCK_AT = { cat: 0, dog: 1, ham: 3, rab: 5, ox: 7, fox: 8 };
-const HERO_CN = { cat: "砂糖", dog: "年糕", ham: "团子", rab: "雪团", ox: "豆奶", fox: "星屑" };
+/* 解锁表：通关数 ≥ at 时，这只到家。必须和 Roster.ts 的 PETS[].at 一致。
+ *
+ * **这张表是按 27 屏重排的，不是按 8 关。** 原来是 0/1/3/5/7/8 —— 打满第 8 屏
+ * 就把 6 只全送完，后 19 屏一只都不给，"养成"在第 1 个产地就结束了。
+ *
+ * 现在的节奏是「每个产地送出 2~3 只，产地收尾前一定有一只」：
+ *   苔原 1-9    → 尖耳猫(0) 短尾犬(2) 胖仓鼠(5) 长耳兔(9)
+ *   枯木坡 10-18 → 老实牛(14) 影狐(18)
+ *   泥沼 19-27  → 已全齐，这里负责把它们练熟
+ *
+ * rab=9 / fox=18 精确落在两个产地的收尾屏上 —— 那是难度最高的一屏，
+ * 通关即到家，奖励和成就同一时刻到账。
+ */
+const UNLOCK_AT = { cat: 0, dog: 2, ham: 5, rab: 9, ox: 14, fox: 18 };
+/* 名字必须和 `HEROES[].name` 逐字一致。
+ * 上一版这里写的是「砂糖/年糕/团子…」（家园旧昵称），而场上叫「尖耳猫/短尾犬…」，
+ * 于是解锁提示说"年糕到家了"，玩家在院子里找不到"年糕" —— 一个名字两套叫法。 */
+const HERO_CN = { cat: "尖耳猫", dog: "短尾犬", ham: "胖仓鼠", rab: "长耳兔", ox: "老实牛", fox: "影狐" };
 const HOME_SAVE_KEY = "pawpack.save";
+/* 主界面的存档 key。**两边必须互相能看见** —— 见 syncHomeMirror 的说明。 */
+const HOME_MIRROR_KEY = "pawpack.save.v1";
 
 function readHomeSave() {
   try { return JSON.parse(localStorage.getItem(HOME_SAVE_KEY) || "{}") || {}; }
   catch (e) { return {}; }
+}
+
+/* ---------------------------------------------------------------------------
+   把通关数镜像给主界面（`pawpack.save.v1`）
+   ---------------------------------------------------------------------------
+   病根：**同一份成绩存了两个 key，而且没有任何一方会主动去读对方。**
+     · 推球（这里）      `pawpack.save`     cleared 是**数组**（通过了哪几屏）
+     · 主界面（SaveData） `pawpack.save.v1`  cleared 是**数字**（通了几屏）
+   跨过去原本只有一条通道：`GroveBattle._syncProgressToHome()`，
+   而它跑在 **Cocos 战斗里**。于是在浏览器直接打开 grove.html 玩的时候，
+   主界面读到的 cleared 恒为 0 —— 玩家打了 10 屏，家里还是只有一只。
+
+   修法不是"再记得调一次同步"，是**让写入点自己带上镜像**：
+   凡是改 cleared 的地方都走这里，主界面永远是通的。
+   反方向（主界面 → 这里）由 `adoptHomeMirror()` 在启动时补一次。
+   --------------------------------------------------------------------------- */
+function syncHomeMirror(count) {
+  try {
+    const raw = localStorage.getItem(HOME_MIRROR_KEY);
+    let home = {};
+    try { home = raw ? (JSON.parse(raw) || {}) : {}; } catch (e) { home = {}; }
+    /* 只增不减：重打老屏不该把主界面的进度拍回去 */
+    const prev = typeof home.cleared === "number" ? home.cleared : 0;
+    home.cleared = Math.max(prev, count);
+    home.v = home.v || 1;
+    localStorage.setItem(HOME_MIRROR_KEY, JSON.stringify(home));
+  } catch (e) {}
+}
+
+/** 主界面的进度比本档新时，把它补进来（老存档 / 只玩过 Cocos 侧的机器）。 */
+function adoptHomeMirror() {
+  try {
+    const raw = localStorage.getItem(HOME_MIRROR_KEY);
+    if (!raw) return;
+    const home = JSON.parse(raw) || {};
+    const n = typeof home.cleared === "number" ? Math.floor(home.cleared) : 0;
+    if (n <= 0) return;
+    const s = readHomeSave();
+    const c = Array.isArray(s.cleared) ? s.cleared.filter(Number.isInteger) : [];
+    if (new Set(c).size >= n) return;           // 本档更全，不动它
+    /* 主界面只知道"通了几屏"、不知道是哪几屏。按顺序补前 n 屏 ——
+       这是唯一能做的假设，而它和"一条线推到黑"的实际路径一致。 */
+    for (let i = 0; i < n && i < LEVELS.length; i++) if (!c.includes(i)) c.push(i);
+    s.cleared = c; s.v = 1;
+    localStorage.setItem(HOME_SAVE_KEY, JSON.stringify(s));
+  } catch (e) {}
 }
 
 /** 通关记账 + 顺手报一句"谁到家了" */
@@ -11772,6 +11946,9 @@ function recordClear(idx) {
   const after = new Set(c).size;
   s.cleared = c; s.v = 1;
   try { localStorage.setItem(HOME_SAVE_KEY, JSON.stringify(s)); } catch (e) {}
+  /* 同一刻把数字口径镜像过去。**必须在写盘之后** —— 先镜像后写盘的话，
+     中途抛错会留下"主界面说 9 关、推球存档还是 3 屏"的分叉。 */
+  syncHomeMirror(after);
 
   // 只在"这一关刚好跨过阈值"时报，重打老关卡不会重复弹
   const fresh = Object.keys(UNLOCK_AT)
@@ -11854,6 +12031,9 @@ export const GROVE: any = {
   hitSelect, pickHero, MOODS, DOOR_SLOTS, VOICE,
   goHome, bellyTier, bellyPower, bellyWord, sayLine, finishSay, settleBtns, inRect,
   recordClear, readHomeSave, FROM_HOME,
+  /* 解锁节奏与分章几何：冒烟要能直接问"第 20 屏属于哪个产地""这屏送谁"。
+     问不出来的话，只能靠截图目测，而截图看不出边界到底在 9 还是 10。 */
+  stageUnlockReward, chapterOfStage, syncHomeMirror, adoptHomeMirror, UNLOCK_AT, HERO_CN,
   // 挑一屏：几何/命中/进出口全部导出，冒烟才能验"27 格都点得到、
   // 锁着的点不动、全通后进得去"
   openPick, pickStage, pickCell, pickHit, drawPick, allDone, maxOpen,

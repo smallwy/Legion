@@ -3865,6 +3865,88 @@ console.log("\n=== 37. 评级给奖励 + 战绩落盘 ===");
      "★ GroveBattle 把 rankLogs 传给 payoutFromRun（不传就等于白做）");
 }
 
+console.log("\n=== 38. 本趟目标：抽签 / 读取 / 真的画在 HUD 上 ===");
+{
+  /* 用户第三次提同一个问题：「任务是一次性的 完成了 后面再也不用完成了 怎么玩？」
+     根因查清了：6 条任务 target 全是 1、条件全是"玩着自动满足"、claimed 只增不减。
+     换成「每趟抽 2 条」之后，这一节钉四件事：
+
+       A. 存档里那两条能被正确读出来（脏 id 要丢掉，最多 2 条）；
+       B. **HUD 真的画了** —— 这是本项目栽过 5 次的地方
+          （机制没画 / HUD 没读 pr.text / 前景测了空集），所以钉的是
+          `drawTrail` 里的那条 `strokeText(t, cx, 44)`，不是 `S.tripGoals` 有值；
+       C. 两边的 id/文案对齐（`HomeBiz.TRIP_GOALS` ↔ `grove.html` 的 `TRIP_CN`）；
+       D. 判定函数在 TS 侧（roster 里测），战斗侧只负责把 stat 喂进去。
+  */
+  const sb = boot(), P = sb.GROVE;
+  const store38 = Object.create(null);
+  sb.localStorage = {
+    getItem: (k) => (k in store38 ? store38[k] : null),
+    setItem: (k, v) => { store38[k] = String(v); },
+    removeItem: (k) => { delete store38[k]; },
+  };
+  const KEY38 = "pawpack.save.v1";
+
+  /* ---- A. 读取 ---- */
+  store38[KEY38] = JSON.stringify({ tripGoals: ["nofire", "bigchain"] });
+  P._start(0, 0);
+  eq(P.S.tripGoals.length, 2, "读进来两条");
+  eq(P.S.tripGoals[0], "nofire", "顺序不变（HUD 上先出现的先写）");
+
+  store38[KEY38] = JSON.stringify({ tripGoals: ["nofire", "__evil", "nohit"] });
+  P._start(0, 0);
+  eq(P.S.tripGoals.length, 2, "★ 未知 id 被丢掉（只剩 nofire + nohit）");
+  ok(P.S.tripGoals.indexOf("__evil") < 0, "★ 脏 id 不会印到 HUD 上");
+
+  store38[KEY38] = JSON.stringify({ tripGoals: ["nofire", "bigchain", "nohit", "nolost"] });
+  P._start(0, 0);
+  eq(P.S.tripGoals.length, 2, "最多 2 条（多了看不过来）");
+
+  delete store38[KEY38];
+  P._start(0, 0);
+  eq(P.S.tripGoals.length, 0, "没抽过 → 空数组");
+
+  store38[KEY38] = "{坏的 json";
+  P._start(0, 0);
+  eq(P.S.tripGoals.length, 0, "★ 坏档 → 空，不崩");
+
+  store38[KEY38] = JSON.stringify({ tripGoals: ["nofire", "nofire"] });
+  P._start(0, 0);
+  eq(P.S.tripGoals.length, 1, "重复的只留一条");
+
+  /* ---- B. ★ 真的画出来了 ---- */
+  const src38 = fs.readFileSync(HTML, "utf8");
+  const t0 = src38.indexOf("function drawTrail");
+  ok(t0 > 0, "drawTrail 存在");
+  const trail = src38.slice(t0, t0 + 9000);
+  ok(/S\.tripGoals/.test(trail), "★ drawTrail 读了 S.tripGoals");
+  ok(/strokeText\(t, cx, 68\)/.test(trail) && /fillText\(t, cx, 68\)/.test(trail),
+     "★ 本趟目标真的被 strokeText+fillText 画在 y=68（不是只塞进 S）");
+  ok(/S\.tripGoals = readTripGoals\(\)/.test(src38),
+     "★ beginRun 里真的读了（不是永远空数组）");
+
+  /* ---- C. 两边对齐 ---- */
+  const path38 = require("path");
+  const hb38 = fs.readFileSync(
+    path38.join(__dirname, "..", "assets", "scripts", "config", "HomeBiz.ts"), "utf8");
+  const g0 = hb38.indexOf("export const TRIP_GOALS");
+  const g1 = hb38.indexOf("/** 一趟抽几条");
+  ok(g0 > 0 && g1 > g0, "HomeBiz 里的 TRIP_GOALS 段能定位");
+  const seg38 = hb38.slice(g0, g1);
+  const defs38 = [...seg38.matchAll(/id: '(\w+)', name: '([^']+)'/g)].map((m) => [m[1], m[2]]);
+  eq(defs38.length, 5, "HomeBiz 里有 5 条目标");
+
+  const cn0 = src38.indexOf("const TRIP_CN = {");
+  const cn1 = src38.indexOf("};", cn0);
+  const cnSeg = src38.slice(cn0, cn1);
+  for (const [id, name] of defs38) {
+    ok(cnSeg.indexOf(id + ': "' + name + '"') >= 0,
+       `★ 「${name}」在战斗侧的名字逐字一致（${id}）`);
+  }
+  eq((cnSeg.match(/^\s+\w+: "/gm) || []).length, defs38.length,
+     "两边条数相同（战斗侧不多不少）");
+}
+
 console.log("\n" + "=".repeat(56));
 if (fail) {
   console.log("通过 " + pass + " · 失败 " + fail);

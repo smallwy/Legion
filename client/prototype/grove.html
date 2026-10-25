@@ -3319,6 +3319,8 @@ function resetRun() {
 
 /** 开一关：装几何 -> 铺敌人 -> 放玩家 */
 function beginRun(i) {
+  /* 本趟目标：每次起一屏都重读 —— 玩家可能在主界面换了一趟再进来。 */
+  S.tripGoals = readTripGoals();
   if (typeof i === "number") S.stage = clamp(i, 0, LEVELS.length - 1);
   S.playT = 0;
   S.clearT = 0;
@@ -3648,6 +3650,37 @@ function loadBest() {
    坏档一律当空处理：清一次纪录，好过崩一次。
    --------------------------------------------------------------------------- */
 const STATS_KEY = "pawpack.stats";
+
+/* ---------------------------------------------------------------------------
+   本趟目标（2026-10-25）
+   ---------------------------------------------------------------------------
+   主界面出门时抽 2 条，写进 `pawpack.save.v1.tripGoals`；这里只读。
+
+   **缩写表必须和 `HomeBiz.TRIP_GOALS` 的 `name` 逐字相等** ——
+   两边各一份是必然的（一个 TS 一个内联脚本），所以冒烟有对齐断言
+   （§38）。不同步的症状是"主界面写了『不碰火坑』，战斗 HUD 上显示 `nofire`"。
+   --------------------------------------------------------------------------- */
+const TRIP_CN = {
+  nofire: "不碰火坑",
+  bigchain: "大打卷",
+  nohit: "一毛不拔",
+  nolost: "一只不丢",
+  noshell: "壳不破",
+};
+
+function readTripGoals() {
+  try {
+    const o = JSON.parse(localStorage.getItem(HOME_MIRROR_KEY) || "{}") || {};
+    if (!Array.isArray(o.tripGoals)) return [];
+    const out = [];
+    for (const id of o.tripGoals) {
+      if (typeof id === "string" && TRIP_CN[id] && out.indexOf(id) < 0) out.push(id);
+    }
+    return out.slice(0, 2);
+  } catch (e) {
+    return [];
+  }
+}
 
 /** 清屏时调。只快不慢、只高不低 —— 和评级"只升不降"是同一条原则。 */
 function recordStats(idx) {
@@ -11111,6 +11144,23 @@ function drawTrail(g) {
   g.strokeText(wtxt, x0 + w1 + PAD, 22);
   g.fillStyle = (S.wave >= WAVES.length - 1) ? "#FF9E82" : "rgba(255,255,255,.82)";
   g.fillText(wtxt, x0 + w1 + PAD, 22);
+
+  /* ---- 本趟目标（2026-10-25）----
+   * **必须画在战斗里。** 只在结算时说"目标达成"，等于打完才发考卷 ——
+   * 玩家没法为了它改打法，那和原来那 6 条一次性任务没有区别。
+   * 放第二行、居中小字：它是"约束"，不该抢关卡名的视觉重量。 */
+  if (S.tripGoals && S.tripGoals.length) {
+    const t = "本趟 · " + S.tripGoals.map(function (id) { return TRIP_CN[id] || id; }).join(" · ");
+    g.font = "12px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+    g.lineWidth = 3;
+    g.strokeStyle = "rgba(6,20,14,.52)";
+    /* y=68 不是 44：44 正好压在关卡进度那排绿点上（截图 `_t-tripHUD` 第一版
+       就是"本趟 · 不碰火坑"和五颗绿点叠在一起）。68 在绿点下方 24px，
+       底下是中景树冠，有描边读得清。 */
+    g.strokeText(t, cx, 68);
+    g.fillStyle = "rgba(255,236,190,.92)";
+    g.fillText(t, cx, 68);
+  }
   g.textAlign = "center";
 
   const pipOff = artOf("ui-pip");

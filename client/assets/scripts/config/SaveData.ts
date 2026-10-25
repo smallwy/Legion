@@ -149,8 +149,22 @@ export interface SaveState {
     feeds: number;
     crafts: number;
     dispatches: number;
-    /** 已经领过奖的任务 id */
+    /**
+     * 已经领过奖的任务 id。
+     *
+     * **2026-10-25 起是死字段**：那 6 条一次性任务被换成了「每趟目标」
+     * （`tripGoals`），没有"领奖"这个动作了。保留只为读旧档不炸，
+     * 以及让老玩家的历史痕迹还在。
+     */
     claimed: string[];
+    /**
+     * 这一趟抽到的目标 id（2 条）。出门时抽，结算后清空。
+     *
+     * 为什么存在存档里而不是只在战斗内存里：玩家可能在战斗中退出、
+     * 也可能从主界面重进 —— 目标必须跟着"这一趟"走，不能跟着"这次进程"走。
+     * 空数组 = 这一趟还没抽（或已经结算完）。
+     */
+    tripGoals: string[];
     /**
      * 已购的改造件 id。**这是全游戏唯一的"永久变强"凭证。**
      *
@@ -207,6 +221,7 @@ export const DEFAULT_SAVE: SaveState = {
     crafts: 0,
     dispatches: 0,
     claimed: [],
+    tripGoals: [],
     perks: [],
     lastReward: '',
 };
@@ -354,6 +369,10 @@ export function loadSave(): SaveState {
         crafts: Math.floor(clampNum(o.crafts, 0, 0, 999_999)),
         dispatches: Math.floor(clampNum(o.dispatches, 0, 0, 999_999)),
         claimed: Array.isArray(o.claimed) ? o.claimed.filter((id) => typeof id === 'string') : [],
+        /* 只留字符串、去重、上限 `TRIP_PICK` —— 存档是外部输入，手改能塞 50 条 */
+        tripGoals: Array.isArray(o.tripGoals)
+            ? o.tripGoals.filter((id, i, a) => typeof id === 'string' && a.indexOf(id) === i).slice(0, 2)
+            : [],
         /* 旧存档没有这个字段（本批才加）。缺了就 0，**不能继承 DEFAULT_SAVE.shards** ——
            以后如果改了初始赠送，老玩家不该凭空多出来一份。 */
         shards: Math.floor(clampNum(o.shards, 0, 0, 999_999)),

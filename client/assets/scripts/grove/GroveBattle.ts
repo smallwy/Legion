@@ -50,7 +50,7 @@ import {
 } from './GroveRuntime';
 import { loadSave, saveSave, LEVEL_COUNT } from '../config/SaveData';
 import { heroIndexOf } from '../config/Roster';
-import { applyRunReward, payoutFromRun } from '../config/HomeBiz';
+import { applyRunReward, payoutFromRun, judgeTripGoals, tripReward } from '../config/HomeBiz';
 
 const { ccclass } = _decorator;
 
@@ -591,6 +591,12 @@ export class GroveBattle extends Component {
     private _bankRun(kind: string): void {        const s = GROVE.S;
         const home = s.home || {};
         const trip = s.trip || {};
+        /* ★ 本趟目标结算（2026-10-25）。
+           `judgeTripGoals` 读的是 `S.stat`（战斗侧唯一的统计真值）——
+           判定放这里而不是"边打边判"，因为"一次都没被打到"这类
+           只有在整趟结束时才成立。 */
+        const met = judgeTripGoals(loadSave().tripGoals || [], s.stat || {});
+        const goal = tripReward(met);
         const payout = payoutFromRun({
             kind,
             lastLoot: home.lastLoot || 0,
@@ -600,8 +606,16 @@ export class GroveBattle extends Component {
             food: s.food || 0,
             /* 评级材料。**和果子走同一个出口** —— 中途退出也只按已攒下的算。 */
             rankLogs: trip.rankLogs || 0,
+            /* 目标奖励。和果子/材料走同一个出口 —— 自己写一份存档的话，这一趟的账当场分叉。 */
+            goalShards: goal.shards,
+            goalLogs: goal.logs,
         });
-        saveSave(applyRunReward(loadSave(), payout));
+        const next = applyRunReward(loadSave(), payout);
+        /* 目标一次性：结算完清空，下一趟重新抽。
+           不清的话，"上一趟的目标"一直挂着，玩家会以为下一趟还是这两条。 */
+        if (met.length) next.lastReward = (next.lastReward || '') + ` · 目标 ${met.length} 条达成`;
+        next.tripGoals = [];
+        saveSave(next);
     }
 
     /** "收工"回主界面。和 HomeRuntime 进战斗用同一套 uuid 加载方式。 */

@@ -368,6 +368,80 @@ ok(rolesFor(squadSize(t.cleared)).length === 3, '满编后战斗真的会实例�
         '★ NaN 的 rankLogs 不会把材料写成 NaN');
 }
 
+/* ---------- 10. 本趟目标：抽签 / 判定 / 奖励 ----------
+   用户第三次提「任务是一次性的」。换结构之后，这一节钉住"换得对不对"：
+   抽签不重复、判定不误判（尤其"站着不动也算达成"这类）、奖励并进同一个出口。
+   战斗侧读档 + 真的画在 HUD 上，在 grove-smoke §38 里测。 */
+{
+    const HB = require(path.join(BUILD, 'HomeBiz.js'));
+
+    /* ① 抽签：2 条、不重复、可复现（传固定种子） */
+    let seed = 12345;
+    const rng = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    const a = HB.rollTripGoals(rng);
+    ok(a.length === HB.TRIP_PICK, `一趟抽 ${HB.TRIP_PICK} 条`, 'got ' + a.length);
+    ok(new Set(a).size === a.length, '抽出来的两条不重复');
+    ok(a.every((id) => HB.tripGoal(id)), '抽出来的 id 都能查到定义');
+
+    /* 同一个种子必须抽到同一组 —— 不然"玩家抱怨总抽到 X"没法复现 */
+    let seed2 = 12345;
+    const rng2 = () => { seed2 = (seed2 * 1664525 + 1013904223) >>> 0; return seed2 / 4294967296; };
+    ok(JSON.stringify(HB.rollTripGoals(rng2)) === JSON.stringify(a), '同种子抽出同一组（可复现）');
+
+    /* 多次抽样要覆盖到全部 5 条，否则等于"目标池只有 2 条" */
+    const seen = new Set();
+    let s3 = 7;
+    const rng3 = () => { s3 = (s3 * 1664525 + 1013904223) >>> 0; return s3 / 4294967296; };
+    for (let i = 0; i < 60; i++) for (const id of HB.rollTripGoals(rng3)) seen.add(id);
+    ok(seen.size === HB.TRIP_GOALS.length,
+        `抽样 60 次覆盖全部 ${HB.TRIP_GOALS.length} 条目标`, 'seen ' + seen.size);
+
+    /* ② 判定：每条都要能"达成"也能"不达成" */
+    const base = { burned: 0, maxHolds: 1, hits: 0, lost: 0, burst: 0, made: 3 };
+    const met = (ids, patch) => HB.judgeTripGoals(ids, Object.assign({}, base, patch)).map((g) => g.id);
+
+    ok(met(['nofire'], {}).indexOf('nofire') >= 0, 'nofire：没烧球 → 达成');
+    ok(met(['nofire'], { burned: 1 }).indexOf('nofire') < 0, '★ nofire：烧了就不算');
+    ok(met(['nofire'], { made: 0 }).indexOf('nofire') < 0,
+        '★★ nofire：一球没造也不算 —— 否则"站着不动"就能完成');
+
+    ok(met(['bigchain'], { maxHolds: 3 }).indexOf('bigchain') >= 0, 'bigchain：卷 3 只 → 达成');
+    ok(met(['bigchain'], { maxHolds: 2 }).indexOf('bigchain') < 0, '★ bigchain：卷 2 只不算');
+
+    ok(met(['nohit'], {}).indexOf('nohit') >= 0, 'nohit：没被打 → 达成');
+    ok(met(['nohit'], { hits: 1 }).indexOf('nohit') < 0, '★ nohit：被打一次就不算');
+    ok(met(['nohit'], { made: 0 }).indexOf('nohit') < 0, '★★ nohit：一球没造也不算');
+
+    ok(met(['nolost'], {}).indexOf('nolost') >= 0, 'nolost：没丢球 → 达成');
+    ok(met(['nolost'], { lost: 2 }).indexOf('nolost') < 0, '★ nolost：丢过就不算');
+    ok(met(['nolost'], { lost: undefined }).indexOf('nolost') >= 0,
+        'nolost：lost 字段缺失时不崩（战斗里它是动态加的）');
+
+    ok(met(['noshell'], {}).indexOf('noshell') >= 0, 'noshell：壳没破 → 达成');
+    ok(met(['noshell'], { burst: 1 }).indexOf('noshell') < 0, '★ noshell：破了一次就不算');
+
+    /* ③ 脏输入 */
+    ok(HB.judgeTripGoals(null, base).length === 0, '★ ids 是 null → 空，不崩');
+    ok(HB.judgeTripGoals(['__evil'], base).length === 0, '★ 未知 id 被忽略');
+    ok(HB.judgeTripGoals(['nofire', 'nofire'], base).length === 2,
+        '重复 id 各算一次（上游已去重，这里不额外判）');
+
+    /* ④ 奖励合计 + 走同一个出口 */
+    /* 卷 3 只才够 bigchain —— base 里是 1，上一版就是这么写错的 */
+    const two = HB.judgeTripGoals(['nofire', 'bigchain'], Object.assign({}, base, { maxHolds: 3 }));
+    const rw = HB.tripReward(two);
+    ok(rw.shards === 2 && rw.logs === 2, '两条目标的奖励各自相加', JSON.stringify(rw));
+    ok(HB.tripReward([]).shards === 0 && HB.tripReward([]).logs === 0, '一条没达成 → 0');
+
+    const pb = { kind: 'esc', lastLoot: 0, lastStages: 0, tripLoot: 100, tripStages: 3, food: 20 };
+    const g0 = HB.payoutFromRun(pb);
+    const g1 = HB.payoutFromRun(Object.assign({}, pb, { goalShards: 2, goalLogs: 2 }));
+    ok(g0.shards === 0, '不传目标奖励：碎片还是 0（老调用方行为不变）', 'shards=' + g0.shards);
+    ok(g1.shards === 2, '★ 目标碎片并进结算', 'shards=' + g1.shards);
+    ok(g1.logs === g0.logs + 2, '★ 目标材料并进结算', `${g1.logs} vs ${g0.logs}`);
+    ok(g1.apples === g0.apples, '目标奖励不影响果子（果子已通胀 6.5×）');
+}
+
 delete globalThis.localStorage;
 
 /* ---------- 汇总 ---------- */

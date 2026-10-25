@@ -53,7 +53,6 @@ import { EDITOR } from 'cc/env';
 import { MAX_SQUAD, PETS, petByNode, petGap, petById, squadSize, unlockedPets } from './config/Roster';
 import type { PetDef } from './config/Roster';
 import { CHAPTERS, STAGE_COUNT, chapterOf, stageLabel, stageInChapter } from './config/Stages';
-import type { TaskDef } from './config/HomeBiz';
 import { loadSave, saveSave, loadBattleStats } from './config/SaveData';
 import type { SaveState } from './config/SaveData';
 import { SATIETY } from './config/BattleConfig';
@@ -62,8 +61,8 @@ import {
     feed, craft, recordPat, setActive, startDispatch, collectDispatch, peekDispatch,
     buyPerk, perkOwned,
     toggleMute, toggleCrisp, heartText, heartsOf, canDispatch, yieldText,
-    TASKS, taskPhase, claimTask, claimableCount,
-    starsOf, rankCount, perfectCount, starsTitle, STAR_MAX,
+    TRIP_GOALS, TRIP_PICK, tripGoal, rollTripGoals, judgeTripGoals, tripReward,
+    starsOf, STAR_MAX,
 } from './config/HomeBiz';
 
 /* ==========================================================================
@@ -77,27 +76,6 @@ const H = 720;
 const HOT_MIN = 88;
 
 const WHITE = new Color(255, 255, 255, 255);
-
-/**
- * 评级色。**必须和 `grove.html` 的 `RANK_COLOR` 逐字相等**
- * （S #E8951A / A #4F9B24 / B #3F82A2）。
- *
- * 理由和"金是满饱"同一条：同一个东西在两个界面里不能各用一套配色 ——
- * 玩家在战斗结算卡上认识的橙色 S，到主界面战绩榜上必须还是同一个橙。
- *
- * `WASH` 是同一套色的浅版（格子底），`INK` 是深版（数字）。
- */
-const RANK_INK: Record<string, Color> = {
-    S: new Color(232, 149, 26, 255),
-    A: new Color(79, 155, 36, 255),
-    B: new Color(63, 130, 162, 255),
-    N: new Color(176, 160, 144, 255),
-};
-const RANK_WASH: Record<string, Color> = {
-    S: new Color(232, 149, 26, 235),
-    A: new Color(79, 155, 36, 235),
-    B: new Color(63, 130, 162, 235),
-};
 
 /**
  * 卡片白 —— 这一档色值不是"我挑的白"，是**从现有 UI 贴图上采下来的**。
@@ -331,9 +309,10 @@ const LAWN_SPOT: [number, number] = [874, 578];
  * 抽屉里的一行。**高度计算和绘制读同一份清单**（`taskLayout()`）——
  * 两处各算一遍就会漂移，漂移的症状是最后一行被面板底边切掉半截。
  */
-type TaskItem =
-    | { kind: 'row'; t: TaskDef; h: number }
-    | { kind: 'fold'; h: number; n: number };
+/* 2026-10-25：只剩一个空壳。原来这里是"行 / 折叠组"两种，
+   对应 6 条任务的分组渲染；换成本趟目标之后内容固定，
+   `taskLayout()` 只返回一个写死的高度，不再需要这一套。 */
+type TaskItem = never;
 
 const BADGE_INFO: Record<string, string> = {
     // 「工坊」= 原工作台 + 灶台，已经是真面板（openHome），这里只为兜底
@@ -2444,14 +2423,23 @@ class HomeController {
 
         const hud = root.getChildByName('HudProgress');
         if (hud) {
-            /* 原来点这里只弹一句 toast（"苔原 3 / 9 · 打一场推进 1 屏"）——
-               而玩家真正想知道的是"我打得多好"，不是"推了几屏"（那个数字就在旁边）。
-               现在点开战绩面板。**没有新增入口节点**：这条路本来就有，
-               只是通向了一句废话。
+            /* ★ 2026-10-25 撤回：这里一度点开过一个「战绩面板」，
+               被用户一句话否掉 ——「这个排行榜我看不懂，你能看懂吗，没有游戏这么设计的吧」。
+               他说得对：那块面板是**四个数字 + 27 个色格 + 三项纪录**，
+               玩家要想知道自己"打得怎么样"，得先读三个数字再心算
+               —— 那是数据看板，不是游戏界面。
 
-               只用 `makeHot` 绑一次，不再给 hud 自己绑 —— 两个热区叠在一起
-               会"点一下开两次面板"（第二个盖第一个，看起来像闪了一下没反应）。 */
-            this.makeHot(hud, 'HudProgress-hot', 560, HOT_MIN, () => this.openRecord(), 0.985);
+               现在只留一句人能读懂的话。位置感本来就已经在两处给了：
+                 · HUD 每颗进度点下面那条 11×3 色条（S/A/B 一眼看出）
+                 · 「挑一屏」面板里每格的字母评级
+               两处都比一块报表直观，所以不再另起一个页面。 */
+            this.makeHot(hud, 'HudProgress-hot', 560, HOT_MIN, () => {
+                const n = starsOf(this.save);
+                const done = this.save.cleared;
+                this.toast(done >= STAGE_COUNT
+                    ? `走到头了 · 星 ${n} / ${STAR_MAX} · 挑一屏把没拿 S 的补上`
+                    : `第 ${done + 1} 屏 · 星 ${n} / ${STAR_MAX}`);
+            }, 0.985);
         }
     }
 
@@ -3423,114 +3411,6 @@ class HomeController {
         );
     }
 
-    /**
-     * 战绩面板 —— **主界面回答"我打得多好"的唯一地方**。
-     *
-     * 病理：`S.best` 从有评级那天起就在落盘，但从来没有一个界面消费它。
-     * 27 屏打完，玩家手上只有「进度 27 / 27」，而所有人最终都是 27 ——
-     * 这个数字回答不了"我比谁强"。用户的原话是「是不是要搞个排行榜
-     * 来定义主界面的推关成就感」。
-     *
-     * **为什么先做本地榜而不是云端榜**：
-     *   · 客户端上报的分数永远不可信（改个内存就第一），真榜要么做好友榜
-     *     （靠社交压力），要么接受作弊；
-     *   · 而这游戏此刻连"可比的分数"都还没有 —— 评级零奖励、没有总分。
-     *     先有分，才有榜。所以顺序是：评级给奖励（已做）→ 总星数 → 本地榜。
-     *
-     * 面板四块：
-     *   ① 总星数（大号，27×3=81）+ 一句人话（`starsTitle`）
-     *   ② 四档分布 S/A/B/未通
-     *   ③ 三项纪录：全 S 屏数 / 最快一屏 / 最高连锁
-     *   ④ 27 屏明细 3×9，颜色 = 评级，一眼看出哪几屏在拖后腿
-     */
-    private openRecord() {
-        const s = this.save;
-        const stars = starsOf(s);
-        const rc = rankCount(s);
-        const stats = loadBattleStats();
-
-        /* 最快一屏 / 最高连锁都要带**屏号** —— 只说"38.2 秒"玩家没法去复现。
-           0 表示还没记过，找最小值时必须跳过，否则全是 0 分。 */
-        let fastI = -1, fastT = 0;
-        let chainI = -1, chainN = 0;
-        for (let i = 0; i < stats.t.length; i++) {
-            const t = stats.t[i];
-            if (t > 0 && (!fastT || t < fastT)) { fastT = t; fastI = i; }
-        }
-        for (let i = 0; i < stats.c.length; i++) {
-            const c = stats.c[i];
-            if (c > chainN) { chainN = c; chainI = i; }
-        }
-
-        this.openSheet(
-            '战绩',
-            `${starsTitle(stars)} · 每屏 S=3 / A=2 / B=1 · 满分 ${STAR_MAX}`,
-            (card) => {
-                /* ---- ① 大号总分 ---- */
-                /* 大数字是这块面板的**唯一主角** —— 玩家扫一眼就要拿到"我几分"。
-                   y=96 而不是 148：openSheet 的标题和副标题吃掉到 y≈120，
-                   上一版放 148 时「26」正好压在副标题上（截图 `_t-record`）。 */
-                mkLabel(card, 'big', String(stars), 56, new Color(232, 149, 26, 255), 200, 70)
-                    .node.setPosition(0, 96, 0);
-
-                /* ---- ② 四档分布 ---- */
-                const dist: Array<[string, number, Color]> = [
-                    ['S', rc.s, RANK_INK.S],
-                    ['A', rc.a, RANK_INK.A],
-                    ['B', rc.b, RANK_INK.B],
-                    ['未通', rc.none, RANK_INK.N],
-                ];
-                dist.forEach((d, i) => {
-                    const x = -216 + i * 144;
-                    mkLabel(card, `d${i}n`, String(d[1]), 26, d[2], 80, 34).node.setPosition(x, 18, 0);
-                    mkLabel(card, `d${i}t`, d[0], 12, INK_SOFT, 80, 16).node.setPosition(x, -6, 0);
-                });
-
-                /* ---- ③ 三项纪录 ---- */
-                const rec: Array<[string, string]> = [
-                    ['全 S', `${perfectCount(s)} 屏`],
-                    ['最快一屏', fastI >= 0 ? `${stageLabel(fastI)} · ${fastT.toFixed(1)} 秒` : '还没记录'],
-                    ['最高连锁', chainI >= 0 ? `${stageLabel(chainI)} · ${chainN} 只` : '还没记录'],
-                ];
-                rec.forEach((r, i) => {
-                    const x = -216 + i * 144;
-                    mkLabel(card, `r${i}t`, r[0], 12, INK_SOFT, 132, 16).node.setPosition(x, -42, 0);
-                    const rv = mkLabel(card, `r${i}v`, r[1], 14, INK, 132, 20);
-                    rv.node.setPosition(x, -64, 0);
-                    rv.overflow = Label.Overflow.SHRINK;
-                });
-
-                /* ---- ④ 27 屏明细 3×9 ----
-                   行 = 产地，列 = 产地内屏序。和「挑一屏」面板同一套读法，
-                   玩家不用再学一遍坐标系。 */
-                const CW = 64, CH = 30, GX = 6, GY = 6;
-                for (let i = 0; i < STAGE_COUNT; i++) {
-                    const row = Math.floor(i / 9);
-                    const col = i % 9;
-                    const x = -(9 * (CW + GX) - GX) / 2 + CW / 2 + col * (CW + GX);
-                    const y = -102 - row * (CH + GY);
-                    const rk = (s.best && s.best[i]) || '';
-                    const col2 = RANK_WASH[rk] ?? new Color(224, 214, 200, 255);
-                    const g = new Node(`cell-${i}`);
-                    g.parent = card;
-                    g.addComponent(UITransform).setContentSize(CW, CH);
-                    g.setPosition(x, y, 0);
-                    const gg = g.addComponent(Graphics);
-                    gg.fillColor = col2;
-                    gg.roundRect(-CW / 2, -CH / 2, CW, CH, 8);
-                    gg.fill();
-                    gg.lineWidth = 1.5;
-                    gg.strokeColor = new Color(255, 255, 255, 140);
-                    gg.roundRect(-CW / 2, -CH / 2, CW, CH, 8);
-                    gg.stroke();
-                    mkLabel(g, 'n', String(i + 1), 11,
-                        rk ? new Color(255, 255, 255, 235) : new Color(150, 136, 120, 255),
-                        CW, CH).node.setPosition(0, 0, 0);
-                }
-            },
-            700, 520,
-        );
-    }
 
     /**
      * 派遣面板。
@@ -4101,12 +3981,13 @@ class HomeController {
         const lb = btn?.getChildByName('txt')?.getComponent(Label);
         if (!btn || !lb) return;
         this.taskBtn = btn;
-        const n = claimableCount(this.save);
-        /* 数字直接写进牌子：玩家不用点开就知道"有几件事等着"。
-           没有可领时回到光秃秃的"任务"，不显示 0 —— 0 是个比空白更没信息的字。 */
-        lb.string = n > 0 ? `任务 ${n}` : '任务';
-        this.taskPulse = n > 0 ? 0.035 : 0;
-        if (n <= 0) btn.setScale(1, 1, 1);
+        /* 2026-10-25：这里原来显示"任务 N"（N = 可领数）。
+           换成本趟目标之后**没有"可领"这个动作了** —— 奖励在结算自动发。
+           所以牌子回到光秃秃的「任务」，也不再呼吸（呼吸是"有事等你点"的信号，
+           没事还呼吸就是骗点击）。 */
+        lb.string = '任务';
+        this.taskPulse = 0;
+        btn.setScale(1, 1, 1);
     }
 
     /* ----------------------------------------------------------------------
@@ -4278,233 +4159,115 @@ class HomeController {
     }
 
     /**
-     * 抽屉的内容清单。**高度计算和绘制共用这一份** ——
-     * 两处各写一遍必然漂移，漂移的结果是最后一行被切掉半截。
+     * 抽屉内容的高度 —— **写死，不再按条目累加**。
      *
-     * 顺序按"现在能不能动手"排：能领的 → 还差一点的 → 做完了的（折起来）。
+     * 原来这里算的是"6 条任务按状态分组后一共多高"，于是领完一条纸就矮一截，
+     * 玩家读作"这页在收缩"。换成「本趟目标」之后内容固定三块（本趟 2 条 +
+     * 目标池 5 条 + 一句规则），高度自然也就固定了。
      */
     private taskLayout(): { items: TaskItem[]; height: number } {
-        const s = this.save;
-        const ready = TASKS.filter((t) => taskPhase(s, t.id) === 'ready');
-        const open = TASKS.filter((t) => taskPhase(s, t.id) === 'open');
-        const done = TASKS.filter((t) => taskPhase(s, t.id) === 'claimed');
-
-        const items: TaskItem[] = [];
-        for (const t of ready) items.push({ kind: 'row', t, h: HomeController.TASK_ROW_H });
-        for (const t of open) items.push({ kind: 'row', t, h: HomeController.TASK_ROW_H });
-        if (done.length) {
-            items.push({ kind: 'fold', h: 34, n: done.length });
-            if (this.tasksDoneOpen) {
-                for (const t of done) items.push({ kind: 'row', t, h: HomeController.TASK_ROW_H });
-            }
-        }
-        const body = items.reduce((a, b) => a + b.h, 0);
-        /* 12 上边距 + 46 标题带 + 内容 + 14 下边距 */
-        return { items, height: 12 + 46 + body + 14 };
+        return { items: [], height: 470 };
     }
 
     /**
-     * 画抽屉内容。领取 / 展开之后整块重画（数字、状态全部现算），
-     * 所以这里必须是纯函数式的：进来先拆旧的 body 再建新的。
+     * 画抽屉内容 —— 「本趟目标」。
      *
-     * **所有 y 从面板顶边往下算**（`top - offset`），不是从中心算 ——
-     * 面板高度是变的，从中心算等于每改一次高度就要重算一遍全部坐标。
+     * ★ 2026-10-25 整块重写。原来这里是 6 条任务的清单：每行一张圆角卡 +
+     *   一个"领取"按钮。用户第三次提同一个问题之后，代码都摆出来了：
+     *   `target` 全是 1、条件全是"玩着自动满足"、`claimed` 只增不减。
+     *   那不是"任务做完了"，那是**这个系统的结构就是一次性清单**。
+     *
+     *   现在三块：
+     *     ① 本趟抽到的 2 条（**出门前抽**，战斗中 HUD 上一直挂着）
+     *     ② 目标池 5 条 —— 让玩家知道"下次可能抽到什么"
+     *     ③ 一句规则：完不成不扣东西，只是拿不到奖励
+     *
+     *   没有"领取"按钮了：奖励在结算时自动并进这一趟的收成
+     *   （`payoutFromRun.goalShards`），和果子的账同一个出口。
      */
     private paintTaskBody(panel: Node, DH: number) {
         const old = panel.getChildByName('body');
         if (old) { old.removeFromParent(); old.destroy(); }
 
         const DW = HomeController.DRAWER_W;
-        const RW = DW - 28;                    // 272：左右各留 14
+        const W0 = DW - 28;                    // 272
         const top = DH / 2;
-        const { items } = this.taskLayout();
-        const readyList = TASKS.filter((t) => taskPhase(this.save, t.id) === 'ready');
 
         const body = new Node('body');
         body.parent = panel;
         body.addComponent(UITransform).setContentSize(DW, DH);
-        body.on(Node.EventType.TOUCH_END, (e: EventTouch) => { e.propagationStopped = true; });
 
-        /* 标题带：「任务」22 + 紧跟的件数 12 + 右侧「全部领取」小胶囊。
-           两个字号按**中心**对齐，对齐字底会让小字看起来往下沉。 */
-        /* 容器宽只给 48（两个 22px 字实际占 48）—— 写 110 会跟右边的件数
-           容器重叠 52px（审计报「重叠 body/title × body/cnt」），
-           视觉上因为文字没那么宽所以看不出来，但下次改文案就会撞上。 */
-        mkLeftLabel(body, 'title', '任务', 22, INK, -RW / 2, top - 35, 48, 30);
-        const cnt = readyList.length > 0 ? `${readyList.length} 件可领` : `${TASKS.length} 件`;
-        /* 件数紧贴「任务」右侧（22px 两个字实际 48 宽，所以 +56 才留出 8px 间隙），不是靠右 ——
-           靠右会和「全部领取」抢同一块地方，两个东西中间空一大段，读不成一组 */
-        mkLeftLabel(body, 'cnt', cnt, 12,
-            readyList.length > 0 ? BTN_DEEP : INK_SOFT, -RW / 2 + 56, top - 35, 80, 18);
+        const s = this.save;
+        const picked = Array.isArray(s.tripGoals) ? s.tripGoals : [];
 
-        /* 表头下的分隔线：没有它，第一条任务像是标题的一部分 */
-        const hline = new Node('hdiv');
-        hline.parent = body;
-        hline.addComponent(UITransform).setContentSize(DW, DH);
-        const hg = hline.addComponent(Graphics);
-        hg.fillColor = new Color(214, 176, 140, 110);
-        hg.rect(-RW / 2, top - 52, RW, 1.5);
-        hg.fill();
+        /* ---- 标题 ---- */
+        mkLeftLabel(body, 'ttl', '本趟目标', 17, INK, -W0 / 2, top - 30, W0, 24);
+        mkLeftLabel(body, 'sub', picked.length
+            ? `出门时抽 ${TRIP_PICK} 条 · 一趟一换`
+            : '还没出发 · 出发那一刻抽两条', 11, INK_SOFT, -W0 / 2, top - 50, W0, 16);
 
-        if (readyList.length > 0) {
-            /* 「全部领取」做在标题行里，不占一整条。
-               上一版是一行 272 宽的实心大按钮 —— 它把抽屉撑高 46px，
-               而下面的每一行本身已经写清了能领什么，汇总条纯属重复。
-               现在只留一个 84×26 的小胶囊，动作还在，版面省掉一整行。 */
-            this.mkPill(body, 'claimAll', '全部领取', 84, 28, RW / 2 - 42, top - 35,
-                true, () => this.claimAllTasks());
-        }
-
-        let y = top - 56;
-        for (const it of items) {
-            if (it.kind === 'fold') {
-                this.mkDoneFold(body, y - it.h / 2, it.n, RW);
-                y -= it.h;
-            } else {
-                this.mkTaskRow(body, it.t, y - it.h / 2, RW);
-                y -= it.h;
-            }
-        }
-    }
-
-    /**
-     * 一行任务：图标 + 名字 +（右侧）奖励组 / 进度 + 状态。
-     *
-     * **单行 48 高**。上一版是 72 高的双行（名字在上、奖励在下），六条下来 432px，
-     * 加标题和聚合条就是 606 —— 占了大半屏。而双行并没有多给信息：
-     * 第二行只放了两件小奖励，横向排开在名字右侧完全放得下。
-     */
-    private mkTaskRow(parent: Node, t: TaskDef, cy: number, RW: number) {
-        const RH = HomeController.TASK_ROW_H;
-        const half = RW / 2;
-        const phase = taskPhase(this.save, t.id);
-        const isReady = phase === 'ready';
-        const isDone = phase === 'claimed';
-
-        const row = new Node(t.id);
-        row.parent = parent;
-        row.addComponent(UITransform).setContentSize(RW, RH);
-        row.setPosition(0, cy, 0);
-        row.addComponent(UIOpacity).opacity = isDone ? 150 : 255;
-
-        const g = row.addComponent(Graphics);
-        if (isReady) {
-            /* 可领的行给整行浅杏底 + 左竖条：满屏同高的行里，
-               只有这两样能在缩略图尺寸下分出"哪行现在能点" */
-            /* 底色要够黄才看得出来（#FFF9EA 和纸底 #FFFCF4 只差 1~2 级亮度，
-               屏幕上等于没有），但**不描边** —— 描边会让每行变成一张独立小卡，
-               五条都能领的时候就是"五张黄卡堆叠"，比白底还重。 */
-            g.fillColor = new Color(255, 245, 224, 255);
-            g.roundRect(-half, -RH / 2 + 2, RW, RH - 4, 12);
-            g.fill();
-            g.fill();
-            g.fillColor = BTN_FILL;
-            g.roundRect(-half + 7, -13, 4, 26, 2);
-            g.fill();
+        /* ---- ① 本趟的 2 条 ---- */
+        let y = top - 92;
+        if (!picked.length) {
+            mkLeftLabel(body, 'none', '点「出门」就抽。每趟不一样，', 12, INK_SOFT, -W0 / 2, y, W0, 16);
+            mkLeftLabel(body, 'none2', '打完自动结算，不用领。', 12, INK_SOFT, -W0 / 2, y - 20, W0, 16);
+            y -= 60;
         } else {
-            /* 其余行不画卡片，只画一条短分隔线 —— 一行一张圆角卡会读成"六个按钮" */
-            g.fillColor = new Color(206, 186, 164, 80);
-            g.rect(-half + 10, -RH / 2, RW - 20, 1);
-            g.fill();
-        }
-
-        const icoX = -half + 10 + 11;
-        if (!this.mkIcon(row, 'ico', t.icon, 22, icoX, 0)) {
-            g.fillColor = isReady ? new Color(246, 214, 150, 255) : new Color(233, 223, 210, 255);
-            g.circle(icoX, 0, 11);
-            g.fill();
-            mkLabel(row, 'mark', t.name.slice(0, 1), 12, new Color(92, 60, 24, 255), 22, 16)
-                .node.setPosition(icoX, 0, 0);
-        }
-
-        /* 横向分配（行宽 272）：
-             图标 22 | 名字 72 | 奖励组 2×35 + 组间距 9 | 按钮 52
-           名字 5 字在 14px 下是 70，容器 72 刚好贴满；SHRINK 兜底防止以后加长任务名。 */
-        const btnW = 52, btnH = 26;
-        const btnCx = half - 10 - btnW / 2;
-        const nameX = -half + 10 + 22 + 8;
-        const nameW = isReady ? 72 : 124;
-        const nameLb = mkLeftLabel(row, 'name', t.name, 14, isDone ? INK_SOFT : INK,
-            nameX, 0, nameW, 20);
-        nameLb.overflow = Label.Overflow.SHRINK;
-
-        if (phase === 'open') {
-            mkRightLabel(row, 'prog', `${Math.min(t.cur(this.save), t.target)} / ${t.target}`,
-                12, INK_SOFT, half - 12, 0, 52, 16);
-        } else if (isDone) {
-            /* 已领的行**不列奖励**，只留一个「已领」。
-               奖励信息在领的那一刻就已经给过了，重复列出来只会和「已领」打架
-               （上一版就是 "+2 已领+6" 叠在一起，右边完全读不出是几个字）。 */
-        } else {
-            /* 奖励组：**图标贴着数字左边**，一组 = 数字 20 + 间隙 3 + 图标 12。
-               上一版把每个图标和数字分开定位、组间给了 52 宽，
-               结果"+"和图标错开一截，看着像六七个散落的数字。 */
-            const rc = isDone ? new Color(176, 156, 138, 255) : new Color(122, 146, 88, 255);
-            const numW = 20, iconW = 12, gap = 3, groupGap = 9;
-            const unit = numW + gap + iconW;
-            let rx = isReady ? btnCx - btnW / 2 - 10 : half - 12;
-            for (const r of [...t.rewardList].reverse()) {
-                mkRightLabel(row, `n-${r.kind}`, `+${r.n}`, 11, rc, rx, 0, numW, 15);
-                /* 没有图标就只留数字（不留空框 —— 空框比没有更像 bug） */
-                this.mkIcon(row, `r-${r.kind}`, r.kind, iconW, rx - numW - gap - iconW / 2, 0);
-                rx -= unit + groupGap;
+            for (const id of picked) {
+                const g = tripGoal(id);
+                if (!g) continue;
+                const card = new Node('g-' + id);
+                card.parent = body;
+                card.addComponent(UITransform).setContentSize(W0, 52);
+                card.setPosition(0, y - 26, 0);
+                const cg = card.addComponent(Graphics);
+                cg.fillColor = new Color(246, 232, 206, 255);
+                cg.roundRect(-W0 / 2, -26, W0, 52, 12);
+                cg.fill();
+                cg.lineWidth = 2;
+                cg.strokeColor = new Color(214, 176, 140, 255);
+                cg.roundRect(-W0 / 2, -26, W0, 52, 12);
+                cg.stroke();
+                mkLeftLabel(card, 'n', g.name, 14, INK, -W0 / 2 + 12, 16, 160, 20);
+                mkLeftLabel(card, 'd', g.desc, 11, INK_SOFT, -W0 / 2 + 12, -6, W0 - 80, 16);
+                const rw = [g.shards ? `碎片 ${g.shards}` : '', g.logs ? `材料 ${g.logs}` : '']
+                    .filter(Boolean).join(' · ');
+                mkRightLabel(card, 'r', rw, 11, new Color(122, 146, 88, 255), W0 / 2 - 12, -6, 90, 16);
+                y -= 60;
             }
         }
 
-        if (isReady) {
-            this.mkPill(row, 'act', '领取', btnW, btnH, btnCx, 0, true, () => {
-                /* 不关抽屉、不重开 —— 原地重画。领完的行会落进「已完成」里，
-                   才符合"一次把能领的都领了"的实际行为 */
-                this.act(claimTask(this.save, t.id), () => this.repaintDrawer());
-            });
-        } else if (isDone) {
-            /* 右缘和上面各行的进度数字对齐（half-12），不是钉在按钮位置上 ——
-               展开后整列右缘必须是一条线 */
-            mkRightLabel(row, 'done', '已领', 12, new Color(170, 148, 128, 255), half - 12, 0, 40, 16);
+        /* ---- ② 目标池 ---- */
+        y -= 6;
+        mkLeftLabel(body, 'pool', `目标池 · 共 ${TRIP_GOALS.length} 条`, 12, INK, -W0 / 2, y, W0, 18);
+        y -= 24;
+        for (const g of TRIP_GOALS) {
+            const rw = [g.shards ? `碎片 ${g.shards}` : '', g.logs ? `材料 ${g.logs}` : '']
+                .filter(Boolean).join(' · ');
+            mkLeftLabel(body, `p-${g.id}`, g.name, 12, INK_SOFT, -W0 / 2, y, 110, 16);
+            mkRightLabel(body, `r-${g.id}`, rw, 11, new Color(150, 136, 120, 255), W0 / 2, y, 80, 16);
+            y -= 26;
         }
 
-        return row;
-    }
+        /* ---- ③ 规则 ----
+           y -= 20 而不是 8：目标池最后一条和规则之间只差 8px 时，
+           两行字的包围盒会粘在一起（截图 `_t-task` 第一版就是这样）。 */
+        y -= 20;
+        mkLeftLabel(body, 'rule1', '没做到不扣东西，只是这条奖励拿不到。', 11, INK_SOFT, -W0 / 2, y, W0, 16);
+        mkLeftLabel(body, 'rule2', '一趟最多抽两条 —— 三条会互相打架。', 11, INK_SOFT, -W0 / 2, y - 18, W0, 16);
 
-    /** 「已完成 N 件」折叠行。三角用 Graphics 画 —— `▾` 靠字体兜底，缺字形就是一格方块 */
-    private mkDoneFold(parent: Node, cy: number, n: number, RW: number) {
-        const half = RW / 2;
-        const row = new Node('fold');
-        row.parent = parent;
-        row.addComponent(UITransform).setContentSize(RW, 34);
-        row.setPosition(0, cy, 0);
-
-        const g = row.addComponent(Graphics);
-        g.fillColor = new Color(206, 186, 164, 80);
-        g.rect(-half + 10, 15, RW - 20, 1);
-        g.fill();
-        /* 三角刻意比文字左缘再往左 6px：视觉重心靠左，玩家才会先读到"这是可点的" */
-        g.fillColor = INK_SOFT;
-        if (this.tasksDoneOpen) {
-            g.moveTo(-half + 18, 2); g.lineTo(-half + 28, 2); g.lineTo(-half + 23, -4); g.close(); g.fill();
-        } else {
-            g.moveTo(-half + 19, 4); g.lineTo(-half + 19, -4); g.lineTo(-half + 25, 0); g.close(); g.fill();
-        }
-
-        /* 文字左缘和上面每行的任务名对齐（都是 -half+40）——
-           不对齐的话折叠行看着像另一张表格 */
-        mkLeftLabel(row, 'txt', `已完成 ${n} 件`, 12, INK_SOFT, -half + 40, 0, 140, 16);
-        mkRightLabel(row, 'hint', this.tasksDoneOpen ? '收起' : '展开', 11,
-            new Color(178, 150, 126, 255), half - 10, 0, 44, 16);
-
-        this.press(row, 0.98);
-        row.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
-            e.propagationStopped = true;
-            this.tasksDoneOpen = !this.tasksDoneOpen;
-            this.repaintDrawer();
-        });
+        /* 内容层延迟淡入：纸是滑出来的，内容是随纸一起"显影"的 */
+        const op = body.addComponent(UIOpacity);
+        op.opacity = 0;
+        tween(op).delay(0.14).to(0.22, { opacity: 255 }).start();
     }
 
     /**
-     * 原地重画抽屉。领取或展开会让内容变高变矮，**面板跟着变**。
+     * 原地重画抽屉。**顶边钉住**：高度变了只改底边，否则纸会"往上长"，
+     * 玩家读作整张纸跳了一下。
      *
-     * 关键是**顶边钉住**：高度变了之后只改底边，否则纸会"往上长"——
-     * 玩家读作整张纸跳了一下。顶边的位置要先用旧高度反推出来。
+     * 现在内容高度是固定的（`taskLayout` 写死），所以实际上不会变高变矮；
+     * 这个函数留着是因为 `commit` 之后要重画（换人 / 买了东西都可能改状态）。
      */
     private repaintDrawer() {
         const p = this.drawer?.getChildByName('panel');
@@ -4521,20 +4284,6 @@ class HomeController {
         this.paintTaskBody(p, newH);
     }
 
-    /** 把所有可领的一次领完 */
-    private claimAllTasks() {
-        let s = this.save;
-        let n = 0;
-        for (const t of TASKS) {
-            if (taskPhase(s, t.id) !== 'ready') continue;
-            const r = claimTask(s, t.id);
-            if (r.ok && r.next) { s = r.next; n++; }
-        }
-        if (!n) { this.toast('没有可以领的'); return; }
-        this.commit(s);
-        this.repaintDrawer();
-        this.toast(`${n} 件奖励都收下了`);
-    }
 
     /**
      * 窄版药丸按钮。**不能复用 `mkBtn`** —— 那个是写死 520 宽的卡内主按钮，
@@ -4584,6 +4333,19 @@ class HomeController {
      * 立刻 loadScene 会把动画连同场景一起销毁（"闪一下"）。
      */
     private launchBattle() {
+        /* ★ 出门这一刻抽这一趟的目标（2026-10-25）。
+         *
+         * 为什么在**出发前**抽、不是回主界面抽：玩家必须在出发前看到
+         * "这趟要怎么打"，否则目标就是打完才发下来的考卷 ——
+         * 那和原来的"一次性清单"没有区别，还是事后发奖。
+         *
+         * 直接 `saveSave` 不走 `commit`：马上要切场景了，
+         * `commit` 里的 bindSave / syncLawn 全是白跑（而且会闪一下）。
+         */
+        const goals = rollTripGoals();
+        this.save = { ...this.save, tripGoals: goals };
+        saveSave(this.save);
+
         this.closeDepart(() => {
             /* 为什么不用 director.loadScene('Battle')：
                本工程 settings 里没有 scenes 注册表（program.json / builder.json

@@ -285,6 +285,7 @@ function clone(s: SaveState): SaveState {
         /* 旧存档没有 perks 字段（本批才加）。深拷贝时兜底成空数组，
            否则 `next.perks.push()` 会在 undefined 上炸。 */
         perks: Array.isArray(s.perks) ? s.perks.slice() : [],
+        tripGoals: Array.isArray(s.tripGoals) ? s.tripGoals.slice() : [],
     };
 }
 
@@ -478,6 +479,11 @@ export interface RunPayout {
     apples: number;
     logs: number;
     coins: number;
+    /**
+     * 本趟目标给的图纸碎片（2026-10-25）。
+     * 不传 / 0 = 老调用方行为完全不变（那时候还没有"本趟目标"）。
+     */
+    shards?: number;
 }
 
 /** 战斗收工时带回家的那一份。收工吃倍率后的果子；中途退出只按已经攒下的算 */
@@ -499,6 +505,14 @@ export function payoutFromRun(input: {
      * 缺省 0：老调用方（没有评级概念的那几屏）行为完全不变。
      */
     rankLogs?: number;
+    /**
+     * 本趟目标达成的碎片。和 `rankLogs` 一样，**必须走这一个出口**：
+     * 目标奖励如果自己写一份存档，就会和果子的账分叉
+     * （MEMORY 教训 2：同一件事存两份 = 必然漂移）。
+     */
+    goalShards?: number;
+    /** 本趟目标达成的材料。和 goalShards 一起并进 `logs` */
+    goalLogs?: number;
 }): RunPayout {
     const banked = input.kind === 'esc'
         ? Math.round((input.tripLoot || 0) + (input.food || 0))
@@ -506,8 +520,11 @@ export function payoutFromRun(input: {
     const stages = input.kind === 'esc' ? (input.tripStages || 0) : (input.lastStages || 0);
     return {
         apples: Math.max(1, banked),
-        logs: Math.max(0, stages) + Math.max(0, Math.round(input.rankLogs || 0)),
+        logs: Math.max(0, stages)
+            + Math.max(0, Math.round(input.rankLogs || 0))
+            + Math.max(0, Math.round(input.goalLogs || 0)),
         coins: stages >= 2 ? 1 : 0,
+        shards: Math.max(0, Math.round(input.goalShards || 0)),
     };
 }
 
@@ -516,133 +533,135 @@ export function applyRunReward(prev: SaveState, payout: RunPayout): SaveState {
     next.apples += payout.apples;
     next.logs += payout.logs;
     next.coins += payout.coins;
+    next.shards = (next.shards || 0) + (payout.shards || 0);
     next.runs += 1;
     const bits = [`果子 +${payout.apples}`];
     if (payout.logs > 0) bits.push(`材料 +${payout.logs}`);
     if (payout.coins > 0) bits.push(`吧唧 +${payout.coins}`);
+    if ((payout.shards || 0) > 0) bits.push(`碎片 +${payout.shards}`);
     next.lastReward = `这一趟带回 ${bits.join(' · ')}`;
     return next;
 }
 
-/** 奖励的一件：图标 key + 数量。面板按这个画"图标 + 数字"，不解析中文 */
-export interface TaskReward {
-    kind: 'apple' | 'log' | 'coin';
-    n: number;
-}
+/* ============================================================================
+   ★ 本趟目标 —— 替换掉原来那 6 条「一次性任务」（2026-10-25）
+   ----------------------------------------------------------------------------
+   病根（用户说了三次）：「任务是一次性的 完成了 后面再也不用完成了 怎么玩？」
 
-export interface TaskDef {
+   查代码确认他说的全是事实：
+     · 6 条任务 `target` **全部 = 1**；
+     · 条件全是"玩着玩着就自动满足"（跑过一次 / 喂过一次 / 做过一份 / 通关 1 关）；
+     · `claimed` 是只增不减的数组，领完永久消失；
+     · 总奖励 71 果 ≈ **1.5 屏收入**（一屏平均 47.3）。
+
+   → 玩家零决策，它读起来像新手引导的残留，不像一个系统。
+   把 target 从 1 改成 3、加个"每日刷新"，只是把"自动完成一次"变成"自动完成 N 次"，
+   还是零决策。**所以不是调数值，是换结构。**
+
+   新结构：**每趟出门抽 2 条「本趟条件」，趟结束失效。**
+     · 它不是清单，是"这一趟怎么打"的约束；
+     · 抽签保证每趟不一样 —— 玩家没法用同一套打法过完 27 屏；
+     · 完不成**不惩罚**（红线：不做失败惩罚），只是拿不到奖励；
+     · 奖励给碎片 / 材料，**不给果子**（果子实测通胀 6.5×）。
+
+   判定全部用 `S.stat` 里**已经存在**的字段，不新增战斗统计 ——
+   加新统计意味着 `updateBalls` 和 `checkGoal` 两条路都要动，风险远超收益。
+   ============================================================================ */
+
+export interface TripGoalDef {
     id: string;
     name: string;
+    /** 一句话条件。玩家要在**出发前**就读懂，所以必须写具体 */
     desc: string;
-    reward: string;
-    /** 任务图标（`resources/ui/icons/<icon>.png`）。没有图时面板退回首字圆 */
-    icon: string;
-    /**
-     * 当前进度。**和 `ready` 同源** —— `ready` 由 `mkTask` 用 `cur >= target` 生成，
-     * 不允许各写一套。改之前是 `ready: (s) => s.runs >= 1` 一句话，
-     * 界面想显示"打了几次"就得再写一遍判定，两处迟早漂移
-     * （症状：界面显示 1/1 却点不动，或 0/1 却已经能领）。
-     */
-    cur: (s: SaveState) => number;
-    target: number;
-    /** 结构化奖励。`reward` 那个字符串只留给 toast 文案，不参与绘制 */
-    rewardList: TaskReward[];
-    ready: (s: SaveState) => boolean;
-    grant: (s: SaveState) => void;
+    /** 达成的奖励。碎片是最值钱的（只有派遣和这里能拿） */
+    shards: number;
+    logs: number;
 }
 
-/** 造一条任务：`ready` 从 `cur/target` 推出来，唯一真值 */
-function mkTask(t: Omit<TaskDef, 'ready'>): TaskDef {
-    return { ...t, ready: (s) => t.cur(s) >= t.target };
-}
-
-export const TASKS: ReadonlyArray<TaskDef> = [
-    mkTask({
-        /* 任务奖励里的"能量 +X"全部换成了实际资源 —— 能量门禁删了之后，
-           再发能量就是发一个没人用的数字，等于奖励是空的。
-           换的标准：**每件任务给的东西要能立刻花出去**（喂饭/做东西/买东西）。 */
-        id: 'out', name: '出门一趟', desc: '打完回来一次',
-        reward: '果子 +12 · 材料 +2',
-        icon: 'flag',
-        cur: (s) => s.runs, target: 1,
-        rewardList: [{ kind: 'apple', n: 12 }, { kind: 'log', n: 2 }],
-        grant: (s) => { s.apples += 12; s.logs += 2; },
-    }),
-    mkTask({
-        id: 'feed', name: '喂一顿', desc: '在灶台喂一次',
-        reward: '材料 +4 · 果子 +6',
-        icon: 'stew',
-        cur: (s) => s.feeds, target: 1,
-        rewardList: [{ kind: 'log', n: 4 }, { kind: 'apple', n: 6 }],
-        grant: (s) => { s.logs += 4; s.apples += 6; },
-    }),
-    mkTask({
-        id: 'craft', name: '做一份干粮', desc: '在工作台做出干粮或收集篮',
-        reward: '果子 +8',
-        icon: 'hammer',
-        cur: (s) => s.crafts, target: 1,
-        rewardList: [{ kind: 'apple', n: 8 }],
-        grant: (s) => { s.apples += 8; },
-    }),
-    mkTask({
-        id: 'send', name: '派人去采', desc: '派遣收回一次',
-        reward: '吧唧 +2 · 果子 +10',
-        icon: 'basket',
-        cur: (s) => s.dispatches, target: 1,
-        rewardList: [{ kind: 'coin', n: 2 }, { kind: 'apple', n: 10 }],
-        grant: (s) => { s.coins += 2; s.apples += 10; },
-    }),
-    mkTask({
-        id: 'pal', name: '带同伴回家', desc: '通关 1 关',
-        reward: '果子 +20 · 材料 +6',
-        icon: 'paw',
-        cur: (s) => s.cleared, target: 1,
-        rewardList: [{ kind: 'apple', n: 20 }, { kind: 'log', n: 6 }],
-        grant: (s) => { s.apples += 20; s.logs += 6; },
-    }),
-    mkTask({
-        id: 'pat', name: '跟它熟一点', desc: '任意一只摸到 1 颗心',
-        reward: '果子 +15',
-        icon: 'paw-red',
-        /* 取"最高的那只"而不是"有心的一共几只"：任务说的是**任意一只**，
-           用最大值才和 `ready` 的语义完全对上 */
-        cur: (s) => {
-            let mx = 0;
-            for (const id of Object.keys(s.pats)) {
-                const h = heartsOf(s.pats[id] || 0);
-                if (h > mx) mx = h;
-            }
-            return mx;
-        },
-        target: 1,
-        rewardList: [{ kind: 'apple', n: 15 }],
-        grant: (s) => { s.apples += 15; },
-    }),
+export const TRIP_GOALS: ReadonlyArray<TripGoalDef> = [
+    {
+        id: 'nofire', name: '不碰火坑', desc: '一趟下来一次火坑都没用',
+        shards: 2, logs: 0,
+    },
+    {
+        id: 'bigchain', name: '大打卷', desc: '至少一次让一颗球卷进 3 只',
+        shards: 0, logs: 2,
+    },
+    {
+        id: 'nohit', name: '一毛不拔', desc: '一趟下来一次都没被打到',
+        shards: 2, logs: 0,
+    },
+    {
+        id: 'nolost', name: '一只不丢', desc: '一趟下来没有球滚出屏幕',
+        shards: 0, logs: 2,
+    },
+    {
+        id: 'noshell', name: '壳不破', desc: '一趟下来冰壳没被打破过',
+        shards: 0, logs: 2,
+    },
 ];
 
-export function taskPhase(prev: SaveState, id: string): 'claimed' | 'ready' | 'open' {
-    if (prev.claimed.indexOf(id) >= 0) return 'claimed';
-    const task = TASKS.find((t) => t.id === id);
-    if (task && task.ready(prev)) return 'ready';
-    return 'open';
+/** 一趟抽几条。2 条是算过的：3 条会互相打架（"不用火坑"+"卷 3 只"在窄屏上直接死锁） */
+export const TRIP_PICK = 2;
+
+/** 判定要用的战斗统计。**字段名必须和 `grove.html` 的 `S.stat` 逐字相等** */
+export interface TripStat {
+    burned: number;
+    maxHolds: number;
+    hits: number;
+    lost?: number;
+    burst: number;
+    made: number;
 }
 
-export function claimableCount(prev: SaveState): number {
-    let n = 0;
-    for (const t of TASKS) if (taskPhase(prev, t.id) === 'ready') n++;
-    return n;
+const TRIP_CHECK: Record<string, (s: TripStat) => boolean> = {
+    /* `made > 0` 是必须的：不打球就没有"用没用火坑"可言，
+       不判这一条的话，"全程站着不动"也能拿"不碰火坑"。 */
+    nofire: (s) => s.made > 0 && s.burned === 0,
+    bigchain: (s) => s.maxHolds >= 3,
+    /* 同上：一球不打也不会被打到 */
+    nohit: (s) => s.made > 0 && s.hits === 0,
+    nolost: (s) => s.made > 0 && (s.lost || 0) === 0,
+    noshell: (s) => s.made > 0 && s.burst === 0,
+};
+
+/**
+ * 抽这一趟的目标。不重复，顺序稳定（先按 id 排序再洗，测试可复现）。
+ * @param rng 随机源，默认 `Math.random`。测试传固定种子就能断言"抽到哪两条"。
+ */
+export function rollTripGoals(rng: () => number = Math.random): string[] {
+    const pool = TRIP_GOALS.map((g) => g.id);
+    for (let i = pool.length - 1; i > 0; i--) {
+        const k = Math.floor(rng() * (i + 1));
+        const t = pool[i]; pool[i] = pool[k]; pool[k] = t;
+    }
+    return pool.slice(0, Math.min(TRIP_PICK, pool.length));
 }
 
-export function claimTask(prev: SaveState, id: string): ActResult {
-    const task = TASKS.find((t) => t.id === id);
-    if (!task) return { ok: false, say: '没有这个任务' };
-    const phase = taskPhase(prev, id);
-    if (phase === 'claimed') return { ok: false, say: `${task.name} · 已经领过了` };
-    if (phase === 'open') return { ok: false, say: `${task.name} · ${task.desc}` };
-    const next = clone(prev);
-    task.grant(next);
-    next.claimed.push(id);
-    return { ok: true, next, say: `${task.name} · 领到 ${task.reward}` };
+/** 判定这一趟达成了哪几条。返回达成目标的完整定义（结算卡要拿它写文案） */
+export function judgeTripGoals(ids: string[], stat: TripStat): TripGoalDef[] {
+    const out: TripGoalDef[] = [];
+    if (!Array.isArray(ids)) return out;
+    for (const id of ids) {
+        const def = TRIP_GOALS.find((g) => g.id === id);
+        const fn = TRIP_CHECK[id];
+        if (!def || !fn) continue;
+        if (fn(stat)) out.push(def);
+    }
+    return out;
+}
+
+/** 这一趟目标的奖励合计。结算时并进 `payoutFromRun`，和果子的账同一个出口 */
+export function tripReward(met: ReadonlyArray<TripGoalDef>): { shards: number; logs: number } {
+    let shards = 0;
+    let logs = 0;
+    for (const g of met) { shards += g.shards; logs += g.logs; }
+    return { shards, logs };
+}
+
+/** 某条目标的定义（面板按 id 取文案） */
+export function tripGoal(id: string): TripGoalDef | null {
+    return TRIP_GOALS.find((g) => g.id === id) || null;
 }
 
 /** 派遣面板上，这只能不能派（跟你出门的那只、还没回家的，都不能） */

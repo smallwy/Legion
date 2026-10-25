@@ -12345,23 +12345,28 @@ function drawBubble(g, x, y, text, alpha) {
    换的是"我要去哪儿"这个决定重新回到玩家手上。
    ========================================================================== */
 const GATE = {
-  w: 340, h: 336, gap: 40, y: 138,
+  /* 216×256：第一版 340×336 被用户打回 ——「太大了，不需要展示里面的，
+     只需要一个简易的」。门是**选择器**不是海报：名字 + 一笔简笔示意 +
+     当前关卡就够。缩下来还有一层硬收益：玩法以后不止两个，
+     w=216/gap=24 时 3 门 696、4 门 936，960 宽的画布都排得下；
+     340 宽排 3 门就溢出了。 */
+  w: 216, h: 256, gap: 24, y: 196,
 };
 const GATES = [
   {
     id: "trail",
     name: "苔原古道",
     sub: "27 屏 · 一屏一屏推过去",
-    desc: "带一只宠物出门，把滚进来的小家伙送回营地",
     open: true,
   },
   {
     id: "nest",
     name: "深巢无尽",
-    sub: "越往下越深 · 地形每层都不一样",
-    desc: "没有终点，只问你敢下多深",
+    sub: "越往下越深 · 每层地形都不一样",
     open: false,
   },
+  /* desc 字段已删（2026-10-25 门卡缩型）：小卡只放得下名字 + 一行 sub，
+     "门里是什么"由 sub 一句话承担。以后加门照这个字段集来。 */
 ];
 
 /** 第 i 扇门的矩形。和命中判定共用 —— 两处各算一套坐标，改布局必然错开 */
@@ -12778,7 +12783,10 @@ function drawNightSky(g, t, HZ) {
   g.fillRect(0, HZ - 10, W, 16);
 }
 
-/** 苔原古道的概念图：**横着推** —— 平台、坑、坡、营地，一屏长什么样 */
+/** 苔原古道的概念图：**简笔版**（2026-10-25 用户打回 340 宽的精细版 ——
+ *  「不需要展示里面的，只需要一个简易的」）。只留四个符号：
+ *  地面（横版）→ 一颗球 → 向右的箭头 → 拱门营地。
+ *  一眼读出「横着把球推到门里」，坑/坡/宠物的细节是进了门才需要知道的。 */
 function drawTrailArt(g, x, y, w, h) {
   const sky = g.createLinearGradient(x, y, x, y + h);
   sky.addColorStop(0, "#1B3A46");
@@ -12786,74 +12794,45 @@ function drawTrailArt(g, x, y, w, h) {
   g.fillStyle = sky;
   g.fillRect(x, y, w, h);
 
-  const gy = y + h * 0.76;
+  // 地面：一条横线就是「横版」的全部信息
+  const gy = y + h * 0.72;
   g.fillStyle = "#2E5A3C";
-  g.fillRect(x, gy, w, h - (gy - y));
+  g.fillRect(x, gy, w, y + h - gy);
   g.fillStyle = "#3C7050";
   g.fillRect(x, gy, w, 3);
 
-  /* 平台：三个高度错开 —— 一眼看出"要往上推"，不是平地推球 */
-  const plats = [[0.16, 0.58, 0.20], [0.42, 0.44, 0.15], [0.64, 0.54, 0.13]];
-  for (const pl of plats) {
-    const rx = x + pl[0] * w, ry = y + pl[1] * h, rw = pl[2] * w;
-    g.fillStyle = "#7A5A3A";
-    g.fillRect(rx, ry, rw, 7);
-    g.fillStyle = "#5E9A48";
-    g.fillRect(rx, ry, rw, 3);
-  }
-
-  // 坑：火坑（橙红）与泥坑（褐）各一，这是"地形会咬人"的唯一线索
-  g.fillStyle = "#C4472F";
-  g.beginPath(); g.ellipse(x + 0.35 * w, gy + 5, 0.055 * w, 8, 0, 0, 6.283); g.fill();
-  g.fillStyle = "#6B4A2E";
-  g.beginPath(); g.ellipse(x + 0.55 * w, gy + 5, 0.05 * w, 7, 0, 0, 6.283); g.fill();
-
-  // 坡：从地面斜上第三个平台
-  g.fillStyle = "#8A6A44";
+  // 一颗球 + 向右箭头：这条线唯一要做的动作
+  g.fillStyle = "rgba(255,240,210,.88)";
+  g.beginPath(); g.arc(x + w * 0.30, gy - 10, 8, 0, 6.283); g.fill();
+  g.strokeStyle = "rgba(240,220,160,.75)";
+  g.lineWidth = 2.4;
   g.beginPath();
-  g.moveTo(x + 0.52 * w, gy);
-  g.lineTo(x + 0.63 * w, y + 0.54 * h + 7);
-  g.lineTo(x + 0.68 * w, y + 0.54 * h + 7);
-  g.lineTo(x + 0.59 * w, gy);
-  g.closePath();
-  g.fill();
+  g.moveTo(x + w * 0.42, gy - 10);
+  g.lineTo(x + w * 0.60, gy - 10);
+  g.stroke();
+  g.beginPath();
+  g.moveTo(x + w * 0.55, gy - 15);
+  g.lineTo(x + w * 0.60, gy - 10);
+  g.lineTo(x + w * 0.55, gy - 5);
+  g.stroke();
 
-  // 营地：光圈 + 拱门
-  const cx2 = x + 0.87 * w, cyc = gy - 16;
-  g.fillStyle = "rgba(240,200,90,.15)";
-  g.beginPath(); g.arc(cx2, cyc, 28, 0, 6.283); g.fill();
+  // 拱门营地：终点
+  const cx2 = x + w * 0.82, cyc = gy - 16;
+  g.fillStyle = "rgba(240,200,90,.14)";
+  g.beginPath(); g.arc(cx2, cyc, 24, 0, 6.283); g.fill();
   g.strokeStyle = "#E8C878";
   g.lineWidth = 3;
   g.beginPath();
-  g.moveTo(cx2 - 12, cyc + 15);
-  g.lineTo(cx2 - 12, cyc - 2);
-  g.quadraticCurveTo(cx2, cyc - 16, cx2 + 12, cyc - 2);
-  g.lineTo(cx2 + 12, cyc + 15);
+  g.moveTo(cx2 - 10, cyc + 13);
+  g.lineTo(cx2 - 10, cyc - 2);
+  g.quadraticCurveTo(cx2, cyc - 14, cx2 + 10, cyc - 2);
+  g.lineTo(cx2 + 10, cyc + 13);
   g.stroke();
-
-  // 宠物：圆头 + 身体 + 一只耳朵
-  const px2 = x + 0.10 * w, py2 = gy;
-  g.fillStyle = "#C99A62";
-  g.beginPath(); g.ellipse(px2, py2 - 8, 9, 9, 0, 0, 6.283); g.fill();
-  g.fillStyle = "#F0DDB8";
-  g.beginPath(); g.arc(px2, py2 - 21, 8, 0, 6.283); g.fill();
-  g.beginPath();
-  g.moveTo(px2 - 8, py2 - 27);
-  g.lineTo(px2 - 2, py2 - 21);
-  g.lineTo(px2 - 9, py2 - 17);
-  g.closePath();
-  g.fill();
-
-  // 空中三颗球：这条线的核心动作（把球推上去）
-  for (let i = 0; i < 3; i++) {
-    g.fillStyle = "rgba(255,240,210,.85)";
-    g.beginPath();
-    g.arc(x + (0.26 + i * 0.08) * w, y + (0.30 - i * 0.04) * h, 5 + i, 0, 6.283);
-    g.fill();
-  }
 }
 
-/** 深巢的概念图：**竖着往下** —— 层叠地形、越深越暗、底部是黑的 */
+/** 深巢的概念图：**简笔版**。只留三个符号：井口 → 逐层变暗 → 向下箭头。
+ *  「越往下越深」用三层渐暗的横线表达（这一条比画多少细节都值钱，
+ *  第一版精细图里它也是唯一被保下来的特征）。 */
 function drawNestArt(g, x, y, w, h) {
   const bg = g.createLinearGradient(x, y, x, y + h);
   bg.addColorStop(0, "#241E2E");
@@ -12862,44 +12841,33 @@ function drawNestArt(g, x, y, w, h) {
   g.fillStyle = bg;
   g.fillRect(x, y, w, h);
 
-  /* 四层。每层比上一层暗 18% —— "越往下越深"这件事必须画出来，
-     不然这张图和苔原那张只差"横竖"一个区别，概念图就白画了。 */
-  for (let i = 0; i < 4; i++) {
-    const ly = y + 30 + i * 40;
+  // 井口：一道椭圆就是「往下钻的洞」
+  g.fillStyle = "rgba(10,8,18,.85)";
+  g.beginPath(); g.ellipse(x + w * 0.5, y + 26, w * 0.30, 13, 0, 0, 6.283); g.fill();
+  g.strokeStyle = "rgba(180,160,210,.45)";
+  g.lineWidth = 2;
+  g.beginPath(); g.ellipse(x + w * 0.5, y + 26, w * 0.30, 13, 0, 0, 6.283); g.stroke();
+
+  /* 三层横线，每层比上一层暗 —— 深度感全靠它 */
+  for (let i = 0; i < 3; i++) {
+    const ly = y + 58 + i * 17;
     const dim = 1 - i * 0.18;
     g.fillStyle = "rgba(120,100,150," + (0.50 * dim).toFixed(3) + ")";
-    g.fillRect(x + 30, ly, w - 44, 2);
-
-    g.fillStyle = "rgba(150,130,180," + (0.55 * dim).toFixed(3) + ")";
-    g.fillRect(x + 52 + i * 16, ly - 8, 50, 5);
-
-    g.fillStyle = "rgba(200,80,60," + (0.78 * dim).toFixed(3) + ")";
-    g.beginPath(); g.arc(x + w - 62 - i * 8, ly + 4, 4, 0, 6.283); g.fill();
-
-    g.fillStyle = "rgba(210,200,230," + (0.44 * dim).toFixed(3) + ")";
-    g.font = "bold 9px 'Microsoft YaHei','PingFang SC',system-ui,sans-serif";
-    g.textAlign = "left";
-    g.fillText("L" + (i + 1), x + 14, ly + 1);
+    g.fillRect(x + 40 + i * 14, ly, w - 80 - i * 28, 2);
   }
 
-  // 下潜箭头（放左侧，别压住平台）
-  g.strokeStyle = "rgba(240,200,90,.50)";
-  g.lineWidth = 2;
+  // 向下箭头
+  g.strokeStyle = "rgba(240,200,90,.55)";
+  g.lineWidth = 2.4;
   g.beginPath();
-  g.moveTo(x + 18, y + h - 34);
-  g.lineTo(x + 18, y + 12);
+  g.moveTo(x + w * 0.5, y + 48);
+  g.lineTo(x + w * 0.5, y + h - 22);
   g.stroke();
   g.beginPath();
-  g.moveTo(x + 12, y + 22);
-  g.lineTo(x + 18, y + 10);
-  g.lineTo(x + 24, y + 22);
+  g.moveTo(x + w * 0.5 - 7, y + h - 29);
+  g.lineTo(x + w * 0.5, y + h - 21);
+  g.lineTo(x + w * 0.5 + 7, y + h - 29);
   g.stroke();
-
-  // 底部红点：再往下就是这个
-  g.fillStyle = "rgba(200,60,50,.42)";
-  g.beginPath(); g.arc(x + w * 0.62, y + h - 12, 14, 0, 6.283); g.fill();
-  g.fillStyle = "rgba(220,80,60,.70)";
-  g.beginPath(); g.arc(x + w * 0.62, y + h - 12, 5, 0, 6.283); g.fill();
 }
 
 /** 出征界面 */
@@ -12930,9 +12898,11 @@ function drawGates(g) {
       for (let i = 0; i < S.starBits.length; i++)
         for (const b of (S.starBits[i] || [])) if (b === 1) gotStar++;
     }
+    /* 「摘星星」（2026-10-25 用户定名）：「星靶」不符合 Q 版气质。
+       内部 id / 配靶表仍叫 Star*，只有玩家看得见的字改成摘星星。 */
     g.font = "bold 13px " + FONT;
     g.fillStyle = "#F0C060";
-    g.fillText("星靶 " + gotStar + " / " + STAR_OF_STAGE.length * 3, 88, 120);
+    g.fillText("摘星星 " + gotStar + " / " + STAR_OF_STAGE.length * 3, 88, 120);
     g.fillStyle = "rgba(200,222,200,.62)";
     g.font = "13px " + FONT;
     g.fillText("·  已通 " + done + " / " + LEVELS.length + " 屏", 196, 120);
@@ -12954,8 +12924,8 @@ function drawGates(g) {
     rr(g, r.x, r.y, r.w, r.h, 20);
     g.stroke();
 
-    // 概念图：圆角裁剪，只占卡片上半
-    const artH = 196;
+    // 概念图：圆角裁剪，只占卡片上半（简笔示意，112 高就够——门是选择器不是海报）
+    const artH = 112;
     g.save();
     g.beginPath();
     /* 只圆上面两个角：下面接着卡身，圆下角会露出一道缝 */
@@ -12982,55 +12952,55 @@ function drawGates(g) {
     g.restore();
 
     // 概念图底部压一条暗边，让标题区压得住（不然木色地面直接顶到字上）
-    const fade = g.createLinearGradient(0, r.y + artH - 46, 0, r.y + artH);
-    fade.addColorStop(0, "rgba(14,28,26,0)");
-    fade.addColorStop(1, "rgba(14,28,26,.92)");
+    /* 渐变终点对齐卡身色（rgba(18,34,32)）：终点用更暗的色会在图与卡身
+       之间留一条硬分界，缩型后卡片小，那条缝比大字版更显眼。 */
+    const fade = g.createLinearGradient(0, r.y + artH - 36, 0, r.y + artH);
+    fade.addColorStop(0, "rgba(18,34,32,0)");
+    fade.addColorStop(1, "rgba(18,34,32,.92)");
     g.fillStyle = fade;
-    g.fillRect(r.x, r.y + artH - 46, r.w, 46);
+    g.fillRect(r.x, r.y + artH - 36, r.w, 36);
 
     g.textAlign = "left";
     g.fillStyle = "#F2F7EE";
-    g.font = "bold 21px " + FONT;
-    g.fillText(p.name, r.x + 24, r.y + 226);
+    g.font = "bold 18px " + FONT;
+    g.fillText(p.name, r.x + 20, r.y + 138);
 
     g.fillStyle = "rgba(200,222,200,.62)";
-    g.font = "12.5px " + FONT;
-    g.fillText(p.sub, r.x + 24, r.y + 254);
-
-    g.fillStyle = "rgba(200,222,200,.48)";
     g.font = "12px " + FONT;
-    g.fillText(fitText(g, p.desc, r.w - 48), r.x + 24, r.y + 280);
+    g.fillText(fitText(g, p.sub, r.w - 40), r.x + 20, r.y + 162);
 
     // 状态行
     if (p.id === "trail") {
       let done = 0;
       for (let j = 0; j < LEVELS.length; j++) if (S.best[j]) done++;
-      /* 进度条 294 / 文字 320：原来 302/328 —— 字底压到卡沿（卡高 336），
-         截图里"推了 6 / 27 屏"整行贴着底边。 */
-      const bw = r.w - 48, bx = r.x + 24, by = r.y + 292;
+      /* 「当前关卡」直接写在门上（用户要求）：进度条 + 已通到第几屏。
+         216 宽的门里进度条 176、文字压 y+218，离卡底（256）还有 38。 */
+      const bw = r.w - 40, bx = r.x + 20, by = r.y + 192;
       g.fillStyle = "rgba(160,200,180,.20)";
       rr(g, bx, by, bw, 8, 4);
       g.fill();
       g.fillStyle = "#7FC24A";
       rr(g, bx, by, Math.max(4, bw * done / LEVELS.length), 8, 4);
       g.fill();
-      g.fillStyle = "rgba(200,222,200,.72)";
+      g.fillStyle = "rgba(200,222,200,.78)";
       g.font = "bold 12.5px " + FONT;
-      g.fillText("推了 " + done + " / " + LEVELS.length + " 屏", bx, by + 24);
+      g.fillText(done > 0
+        ? "推到第 " + Math.min(done + 1, LEVELS.length) + " / " + LEVELS.length + " 屏"
+        : "还没出发", bx, by + 26);
     } else {
       /* 没开放的门也要把"门后面是什么"说清楚，否则这张卡只剩一个
          "即将开放"的标签，玩家不会期待它 */
       g.fillStyle = "rgba(240,200,90,.16)";
-      rr(g, r.x + 24, r.y + 298, 96, 26, 13);
+      rr(g, r.x + 20, r.y + 196, 92, 25, 12);
       g.fill();
       g.fillStyle = "#F0C060";
-      g.font = "bold 12.5px " + FONT;
+      g.font = "bold 12px " + FONT;
       g.textAlign = "center";
-      g.fillText("即将开放", r.x + 72, r.y + 311);
+      g.fillText("即将开放", r.x + 66, r.y + 209);
       g.textAlign = "left";
       g.fillStyle = "rgba(200,222,200,.46)";
       g.font = "12px " + FONT;
-      g.fillText("正在挖", r.x + 132, r.y + 311);
+      g.fillText("正在挖", r.x + 122, r.y + 209);
     }
   }
 
@@ -13112,7 +13082,7 @@ function drawPick(g) {
     tx -= g.measureText(doneTxt).width + 14;
     g.fillStyle = "#C97A10";
     g.font = "bold 12.5px " + FONT;
-    g.fillText("星靶 " + gotStar + " / " + STAR_OF_STAGE.length * 3, tx, PICK.y + 32);
+    g.fillText("摘星星 " + gotStar + " / " + STAR_OF_STAGE.length * 3, tx, PICK.y + 32);
   }
 
   g.strokeStyle = "rgba(120,92,64,.24)";
@@ -15037,7 +15007,7 @@ function render() {
             g.fillStyle = K.cream ? "#3F6B2A" : "#BFE8A8";
             g.font = "bold 13px " + FONT;
             const gg = S.starGain || { shards: 0, logs: 0 };
-            g.fillText("星靶新达成 " + S.starFresh.length + " 个 · 碎片 +" +
+            g.fillText("新摘到 " + S.starFresh.length + " 颗星星 · 碎片 +" +
                        gg.shards + " · 材料 +" + gg.logs, cx, cardY + 400);
           }
         }

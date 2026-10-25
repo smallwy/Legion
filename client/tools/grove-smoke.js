@@ -4277,8 +4277,8 @@ console.log("\n=== 41. 出征页：两扇门 / 点开着的门进玩法 / 没开
     const ids = G41.map((g) => g.id);
     eq(new Set(ids).size, ids.length, "门的 id 不重复");
     for (const g of G41) {
-      ok(!!g.name && !!g.sub && !!g.desc,
-         `${g.id} 三件都有：名字 / 一行说明 / 门里是什么`);
+      ok(!!g.name && !!g.sub,
+         `${g.id} 两件都有：名字 / 一行说明（desc 已随门卡缩型删除）`);
     }
     eq(G41.filter((g) => g.open).length >= 1, true, "至少一扇门是开着的");
   }
@@ -4341,8 +4341,8 @@ console.log("\n=== 41. 出征页：两扇门 / 点开着的门进玩法 / 没开
      "★ 深巢那张概念图真的被调用");
   ok(/drawNightSky\(g, S\.t, HZ\)/.test(src41) && /drawNightSky\(g, T, HZ\)/.test(src41),
      "★ 夜空由出征页与门口共用一份（两处各画一遍必然漂移）");
-  ok(/drawTrailArt[\s\S]{0,1200}g\.ellipse\(x \+ 0\.35 \* w/.test(src41),
-     "苔原概念图里有坑（地形会咬人的唯一线索）");
+  ok(/drawTrailArt[\s\S]{0,800}g\.arc\(x \+ w \* 0\.30, gy - 10, 8/.test(src41),
+     "★ 苔原简笔图里有球（这条线唯一要做的动作）——2026-10-25 用户打回精细版，概念图改简笔");
   ok(/drawNestArt[\s\S]{0,2000}const dim = 1 - i \* 0\.18;/.test(src41),
      "深巢概念图逐层变暗（\"越往下越深\"必须画出来）");
   ok(/if \(!p\.open\) \{\s*\n\s*g\.fillStyle = "rgba\(8,14,20,\.30\)";/.test(src41),

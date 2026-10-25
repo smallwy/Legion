@@ -533,6 +533,50 @@ ok(rolesFor(squadSize(t.cleared)).length === 3, '满编后战斗真的会实例�
         '日期键是 YYYY-MM-DD', HB.todayKey(Date.parse('2026-03-05T00:00:00')));
 }
 
+/* ---------- 12. 本机排行榜 ----------
+   用户：「排行榜不应该是通关的吗」「排行榜你先做本地」。
+   街机式 TOP 10：9 条影子记录 + 你。这一节钉"榜是活的"：
+   成绩变好名次必须变，而且榜上永远只有 10 个人。 */
+{
+    const HB = require(path.join(BUILD, 'HomeBiz.js'));
+    const mk12 = (cleared, runs, bestArr) => Object.assign({}, DEFAULT_SAVE, {
+        cleared: cleared, runs: runs,
+        best: bestArr || new Array(LEVEL_COUNT).fill(''),
+    });
+
+    const b0 = HB.rankBoard(mk12(0, 0));
+    ok(b0.length === HB.RANK_SIZE, `榜上恒为 ${HB.RANK_SIZE} 条`, 'got ' + b0.length);
+    ok(b0.filter((r) => r.me).length === 1, '自己只出现一次');
+    ok(b0[b0.length - 1].me, '★ 新手（0 屏）排最后 —— 永远有 9 个够得着的目标在前面');
+
+    const b1 = HB.rankBoard(mk12(30, 20));
+    ok(b1[0].me, '★ 全通（30 屏）排第 1');
+    ok(HB.myRank(mk12(30, 20)) === 1, 'myRank 和第 1 行一致');
+
+    /* 同屏数比星数 */
+    const allS = new Array(LEVEL_COUNT).fill('S');
+    const rank1 = HB.myRank(mk12(27, 30, allS));
+    const rank2 = HB.myRank(mk12(27, 30, new Array(LEVEL_COUNT).fill('B')));
+    ok(rank1 <= rank2, '★ 同屏数时星多的人排前面', rank1 + ' vs ' + rank2);
+
+    /* 同屏同星比趟数 */
+    const few = HB.myRank(mk12(27, 10, allS));
+    const many = HB.myRank(mk12(27, 99, allS));
+    ok(few <= many, '★ 同屏同星时趟数少的排前面', few + ' vs ' + many);
+
+    /* 排序函数本身：三档都要生效 */
+    ok(HB.rankCmp({ name: 'a', cleared: 10, stars: 0, runs: 0 },
+        { name: 'b', cleared: 9, stars: 99, runs: 0 }) < 0, '先比通关数');
+    ok(HB.rankCmp({ name: 'a', cleared: 9, stars: 20, runs: 0 },
+        { name: 'b', cleared: 9, stars: 10, runs: 0 }) < 0, '再比星数');
+    ok(HB.rankCmp({ name: 'a', cleared: 9, stars: 10, runs: 5 },
+        { name: 'b', cleared: 9, stars: 10, runs: 6 }) < 0, '最后比趟数');
+
+    /* 脏档不崩 */
+    ok(HB.rankBoard(Object.assign({}, DEFAULT_SAVE, { cleared: NaN, runs: NaN })).length === HB.RANK_SIZE,
+        '★ cleared/runs 是 NaN 也不崩');
+}
+
 delete globalThis.localStorage;
 
 /* ---------- 汇总 ---------- */

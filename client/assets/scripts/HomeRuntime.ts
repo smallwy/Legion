@@ -63,8 +63,9 @@ import {
     toggleMute, toggleCrisp, heartText, heartsOf, canDispatch, yieldText,
     TRIP_GOALS, TRIP_PICK, tripGoal, rollTripGoals, judgeTripGoals, tripReward,
     STORY, storyNow, storyDone, settleStory, rewardText, sumReward,
-    dailyRows, claimDaily, rollDailyIfNeeded,
-    starsOf, STAR_MAX,
+    dailyRows, claimDaily, rollDailyIfNeeded, dailyDoneCount,
+    DAILY_N, DAILY_CHESTS, claimChest,
+    starsOf, STAR_MAX, rankBoard, myRank, rankFloor, RANK_SIZE,
 } from './config/HomeBiz';
 
 /* ==========================================================================
@@ -2461,13 +2462,9 @@ class HomeController {
                  · HUD 每颗进度点下面那条 11×3 色条（S/A/B 一眼看出）
                  · 「挑一屏」面板里每格的字母评级
                两处都比一块报表直观，所以不再另起一个页面。 */
-            this.makeHot(hud, 'HudProgress-hot', 560, HOT_MIN, () => {
-                const n = starsOf(this.save);
-                const done = this.save.cleared;
-                this.toast(done >= STAGE_COUNT
-                    ? `走到头了 · 星 ${n} / ${STAR_MAX} · 挑一屏把没拿 S 的补上`
-                    : `第 ${done + 1} 屏 · 星 ${n} / ${STAR_MAX}`);
-            }, 0.985);
+            /* 点进度点 → 排行榜。语义正好对上：那排点回答"我走到哪"，
+               排行榜回答"我比别人走到哪"。 */
+            this.makeHot(hud, 'HudProgress-hot', 560, HOT_MIN, () => this.openRank(), 0.985);
         }
     }
 
@@ -4057,67 +4054,118 @@ class HomeController {
     private drawerTap: ((e: EventTouch) => void) | null = null;
 
     /**
-     * 为什么任务不是弹窗，以及**为什么在左边**。
+     * 排行榜（本机）。
      *
-     * 任务是"随时瞟一眼"的东西，不是"进入一个地方"，所以不压暗、不挡操作。
-     * 位置这条放错过一次（放右边），必须写清楚：
+     * 用户原话：「排行榜不应该是通关的吗」「排行榜你先做本地 客户端做」。
      *
-     *   主界面右侧 300 宽 = 派遣告示牌 + 粉垫上六只宠物的右半 + 右下角「出门」。
-     *   **那是全屏最活跃的一块**，抽屉一出来就全盖住 ——
-     *   玩家想"一边看任务一边看宠物"恰恰做不到。
-     *   左侧盖住的是 Logo、路标牌、木桌边缘，开抽屉时本来就不需要看；
-     *   而且任务入口（路标牌上的胶囊）就在左边，从入口位置展开也更顺。
+     * 上一版做成了"我的数据看板"（总星 / 分布 / 三项纪录），**没有对照组** ——
+     * 排行榜的最小定义是"我和别人比"。这一版是街机厅 TOP 10：
+     * 9 条影子记录 + 你，成绩插入后重排。
+     *
+     * **数据形状和真榜一致**（`{name, cleared, stars, runs}`），
+     * 将来接服务端只换 `rankBoard()` 一个函数，面板不用改。
+     */
+    private openRank() {
+        const s = this.save;
+        const board = rankBoard(s);
+        const mine = myRank(s);
+        const floor = rankFloor();
+        this.openSheet(
+            '排行榜',
+            /* 榜单永远 10 条（9 条影子 + 你），所以 `mine` 恒为 1..10。
+               新手一进来就是第 10 名 —— 这不是 bug，是设计：
+               **永远有 9 个够得着的目标在前面**，比"你还没上榜"有方向感。 */
+            `本机通关榜 · 你排第 ${mine} / ${RANK_SIZE}`,
+            (card) => {
+                const W0 = 560;
+                /* 表头 y=156 不是 190：openSheet 的副标题在 CH/2-88 = 172，
+                   190 会和它叠上（截图 `_t-rank` 第一版「通关」压在"你排第 7"上）。 */
+                /* 表头 */
+                mkLabel(card, 'h0', '#', 11, INK_SOFT, 40, 16).node.setPosition(-250, 156, 0);
+                const h1 = mkLabel(card, 'h1', '名字', 11, INK_SOFT, 120, 16);
+                h1.node.setPosition(-160, 156, 0);
+                h1.horizontalAlign = Label.HorizontalAlign.LEFT;
+                mkLabel(card, 'h2', '通关', 11, INK_SOFT, 70, 16).node.setPosition(30, 156, 0);
+                mkLabel(card, 'h3', '星', 11, INK_SOFT, 60, 16).node.setPosition(120, 156, 0);
+                mkLabel(card, 'h4', '趟', 11, INK_SOFT, 60, 16).node.setPosition(200, 156, 0);
+
+                board.forEach((r, i) => {
+                    const y = 126 - i * 34;
+                    const row = new Node('r-' + i);
+                    row.parent = card;
+                    row.addComponent(UITransform).setContentSize(W0, 30);
+                    row.setPosition(0, y, 0);
+                    const rg = row.addComponent(Graphics);
+                    /* 自己那一行高亮 —— 一屏 10 条同色的表，玩家第一件事是找自己 */
+                    if (r.me) {
+                        rg.fillColor = new Color(255, 226, 150, 255);
+                        rg.roundRect(-W0 / 2, -15, W0, 30, 9);
+                        rg.fill();
+                    } else if (i % 2 === 1) {
+                        rg.fillColor = new Color(240, 234, 222, 255);
+                        rg.roundRect(-W0 / 2, -15, W0, 30, 9);
+                        rg.fill();
+                    }
+                    const col = r.me ? new Color(120, 76, 20, 255) : INK;
+                    const soft = r.me ? new Color(140, 96, 40, 255) : INK_SOFT;
+                    /* 前三名给个色：金 / 银 / 铜。不是装饰，是让"前三"变成一个可数的目标 */
+                    const medal = ['#E8951A', '#9AA5AD', '#B5793F'][i];
+                    mkLabel(row, 'n', String(i + 1), 13,
+                        medal ? new Color(
+                            parseInt(medal.slice(1, 3), 16),
+                            parseInt(medal.slice(3, 5), 16),
+                            parseInt(medal.slice(5, 7), 16), 255) : soft,
+                        40, 20).node.setPosition(-250, 0, 0);
+                    const nm = mkLabel(row, 'm', r.name, 14, col, 120, 20);
+                    nm.node.setPosition(-160, 0, 0);
+                    nm.horizontalAlign = Label.HorizontalAlign.LEFT;
+                    mkLabel(row, 'c', String(r.cleared), 13, col, 70, 20).node.setPosition(30, 0, 0);
+                    mkLabel(row, 's', String(r.stars), 13, col, 60, 20).node.setPosition(120, 0, 0);
+                    mkLabel(row, 'u', String(r.runs), 13, soft, 60, 20).node.setPosition(200, 0, 0);
+                });
+
+                mkLabel(card, 'foot', '先比通关屏数，再比星数，最后比谁用的趟数少',
+                    10, INK_SOFT, 520, 16).node.setPosition(0, -200, 0);
+            },
+            /* 560 而不是 520：表头 y=156 和副标题（CH/2-88）之间
+               只差 6px，520 时会重叠 2px（截图 `_t-rank`/`_t-rank2`）。 */
+            640, 560,
+        );
+    }
+
+    /**
+     * 任务面板 —— **居中大面板，不是侧边抽屉**（2026-10-25 第四次调整）。
+     *
+     * 用户原话：「每日 3 条肯定少了啊 而且你的任务界面搞的也不好
+     *            你参考下其他 Q 版游戏怎么设计的」
+     *
+     * 参考的是常规 Q 版/休闲手游的任务界面三件套（原神 / 蛋仔 / 摩尔庄园都是这个形状）：
+     *   ① 顶部一条**活跃度进度条** + 阶梯宝箱（完成 N 条开一个）
+     *   ② 主线一条大卡，带"第几条 / 共几条"
+     *   ③ 每日 5 行，每行 = 图标 + 名字 + **进度条** + 奖励 + 领取按钮
+     *
+     * 为什么必须从抽屉换成居中面板：
+     *   抽屉只有 300 宽，一行塞不下"名字 + 进度条 + 奖励 + 按钮"四样，
+     *   只能把进度压成一个 "1/3" 的文字 —— 而**进度条才是这类界面的主角**，
+     *   它让玩家一眼看出"还差多少"，文字要读。
      */
     private openTasks() {
-        if (this.drawerBusy) return;
-        if (this.drawer) { this.closeDrawer(); return; }
-        this.closeSheet();
+        /* 跨天重抽放在这里：玩家可能开着游戏过零点。
+           `commit` 会跑 `bindSave`，主线也一起结算掉。 */
+        const d = rollDailyIfNeeded(this.save);
+        if (d.changed) this.commit(d.next);
 
-        const DW = HomeController.DRAWER_W;
-        /* 下限 150（不是 240）：内容只有两条 + 折叠行时高度约 194，
-           撑到 240 会在纸底留 40px 空气 —— 那点空气就是"占位太多"的由来之一。 */
-        const DH = clamp(this.taskLayout().height, 150, H - 100);
-
-        const OPEN_X = -(W / 2) + DW / 2;
-        const SHUT_X = -(W / 2) - DW / 2;
-        /* 垂直位置：**居中略偏上 20**，不再按公式反推。
-           原来的 `DH/2-268` 在大内容时抬得对、小内容时把抽屉推到屏幕下半截。
-           实际上内容最高（六条全展开 370）时底边也只到 -165，
-           离资源条（y -290）还有 125px —— 根本不需要让，直接定值最省事。 */
-        const DY = 20;
-
-        const root = new Node('__Drawer');
-        root.parent = this.canvas;
-        root.addComponent(UITransform).setContentSize(W, H);
-        root.setSiblingIndex(-1);
-        this.drawer = root;
-        const op = root.addComponent(UIOpacity);
-        op.opacity = 0;
-        this.drawerOp = op;
-
-        const panel = new Node('panel');
-        panel.parent = root;
-        panel.addComponent(UITransform).setContentSize(DW, DH);
-        panel.setPosition(SHUT_X, DY, 0);
-        /* 抽屉内部吃掉触摸：不然点行 / 点按钮都会冒到 canvas，
-           被下面那个"点场景关闭"的监听接住 —— 点「领取」变成"关抽屉" */
-        panel.on(Node.EventType.TOUCH_END, (e: EventTouch) => { e.propagationStopped = true; });
-        this.paintDrawerBg(panel.addComponent(Graphics), DW, DH);
-
-        this.paintTaskBody(panel, DH);
-        this.stageIn(panel);
-
-        /* 点抽屉以外任何地方都关。靠 canvas 冒泡实现 —— **不加全屏拦截层**：
-           拦截层会把整个场景的点击都吃掉（宠物摸不到、徽标点不到），
-           那就等于一个"不压暗的弹窗"，目的白费了。 */
-        this.drawerTap = () => this.closeDrawer();
-        this.canvas.on(Node.EventType.TOUCH_END, this.drawerTap);
-
-        /* 纸**不淡入**：它是从屏幕左缘滑出来的，淡入会读成"凭空浮现"。
-           只有内容层做延迟淡入（见 stageIn）。 */
-        op.opacity = 255;
-        tween(panel).to(0.26, { position: new Vec3(OPEN_X, DY, 0) }, { easing: 'cubicOut' }).start();
+        const done = dailyDoneCount(this.save);
+        this.openSheet(
+            '任务',
+            `${this.save.dailyAt || '今天'} · 每日完成 ${done} / ${DAILY_N} · 主线 ${storyDone(this.save)} / ${STORY.length}`,
+            (card) => this.paintTaskBoard(card),
+            /* 600 高而不是 560：5 行每日 + 主线 + 活跃度刚好占满，
+               560 时第 5 行会和 openSheet 自己的「点空白处关闭」叠上（截图 `_t-task5`）。 */
+            640, 600,
+        );
     }
+
 
     /**
      * 纸的底色：投影 + 双层边。
@@ -4206,142 +4254,193 @@ class HomeController {
     }
 
     /**
-     * 画抽屉内容 —— **主线 + 每日**。
+     * 任务面板内容 —— 参考常规 Q 版游戏的三段式。
      *
-     * 用户原话：「你的任务系统做的稀烂 常规游戏不是引导玩家去玩游戏的一种刺激吗
-     *            1:主线任务 每日任务 等等 你越做越差」
+     * ```
+     *  ┌──────────────────────────────────────────┐
+     *  │ 活跃度  3 / 5   [▓▓▓▓▓▓░░░]   🎁3   🎁5 │
+     *  ├──────────────────────────────────────────┤
+     *  │ 主线  6 / 10                              │
+     *  │ ┌────────────────────────────────────┐   │
+     *  │ │ 拿到第一个 S            碎片 2      │   │
+     *  │ │ 一屏里「用时」和「用球」都达标就是 S │   │
+     *  │ └────────────────────────────────────┘   │
+     *  ├──────────────────────────────────────────┤
+     *  │ 每日                                      │
+     *  │ ① 出门 2 趟   ▓▓▓▓▓▓▓ 2/2   果20  [领取] │
+     *  │ ② 推进 2 屏   ▓▓▓░░░░ 1/2   果25  [进行] │
+     *  │ …                                         │
+     *  └──────────────────────────────────────────┘
+     * ```
      *
-     * 三个版本对照（这已经是我第三次改这个系统，前两次都错在"把任务当清单"）：
-     *   v1  6 条一次性清单，target 全 1，领完永久消失 → 零决策
-     *   v2  每趟抽 2 条随机约束 → 有决策，但**没有进步感、不指路**
-     *   v3  本版：主线串行（永远只有一条在手）+ 每日 3 条
-     *
-     * 主线放在最上面、字号最大：玩家打开任务面板的唯一目的是
-     * **"下一步该干什么"**，不是"还有几件事能领"。
+     * **进度条是主角，文字是辅助**。上一版只写 "1 / 3"，玩家得读数字才知道差多少；
+     * 一根条扫一眼就够 —— 这是这类界面唯一真正的信息设计。
      */
-    private paintTaskBody(panel: Node, DH: number) {
-        const old = panel.getChildByName('body');
-        if (old) { old.removeFromParent(); old.destroy(); }
-
-        const DW = HomeController.DRAWER_W;
-        const W0 = DW - 28;                    // 272
-        const top = DH / 2;
+    private paintTaskBoard(card: Node) {
+        const W0 = 560;
         const s = this.save;
+        const done = dailyDoneCount(s);
+        const g = new Node('deco');
+        g.parent = card;
+        g.addComponent(UITransform).setContentSize(W0, 560);
+        const gg = g.addComponent(Graphics);
 
-        const body = new Node('body');
-        body.parent = panel;
-        body.addComponent(UITransform).setContentSize(DW, DH);
+        /* ================= ① 活跃度 ================= */
+        /* 176 不是 208：openSheet 的标题在 CH/2-48、副标题在 CH/2-88，
+           CH=560 时分别距顶 48 / 88。内容从 208（距顶 72）起会压住副标题 ——
+           截图 `_t-task3` 第一版就是这样，「任务」大字被活跃度那行穿过。 */
+        const AY = 156;
+        mkLeftLabel(card, 'at', '活跃度', 14, INK, -W0 / 2, AY, 80, 20);
+        mkLeftLabel(card, 'an', `${done} / ${DAILY_N}`, 14,
+            new Color(232, 149, 26, 255), -W0 / 2 + 62, AY, 60, 20);
 
-        /* ================= ① 主线 ================= */
-        mkLeftLabel(body, 'sttl', '主线', 15, INK, -W0 / 2, top - 28, W0, 20);
-        mkRightLabel(body, 'snum', `${storyDone(s)} / ${STORY.length}`, 11, INK_SOFT,
-            W0 / 2, top - 28, 70, 16);
-
-        const cur = storyNow(s);
-        let y = top - 66;
-        if (cur) {
-            const card = new Node('story');
-            card.parent = body;
-            card.addComponent(UITransform).setContentSize(W0, 84);
-            card.setPosition(0, y - 42, 0);
-            const cg = card.addComponent(Graphics);
-            cg.fillColor = new Color(246, 232, 206, 255);
-            cg.roundRect(-W0 / 2, -42, W0, 84, 14);
-            cg.fill();
-            cg.lineWidth = 2;
-            cg.strokeColor = new Color(214, 176, 140, 255);
-            cg.roundRect(-W0 / 2, -42, W0, 84, 14);
-            cg.stroke();
-
-            mkLeftLabel(card, 'n', cur.name, 16, INK, -W0 / 2 + 12, 26, W0 - 24, 22);
-            mkLeftLabel(card, 'd', cur.desc, 11, INK_SOFT, -W0 / 2 + 12, 4, W0 - 24, 16);
-            mkLeftLabel(card, 'r', '奖励 ' + rewardText(cur.reward), 11,
-                new Color(122, 146, 88, 255), -W0 / 2 + 12, -22, W0 - 24, 16);
-            y -= 96;
-        } else {
-            mkLeftLabel(body, 'sall', '主线全部做完了。剩下的 S 靠你自己刷。',
-                12, INK_SOFT, -W0 / 2, y, W0, 18);
-            y -= 34;
+        /* 进度条：底 + 填充。宽度 240，从 -W0/2+118 起 */
+        const BX = -W0 / 2 + 118, BW = 240, BH = 12, BY = AY + 8;
+        gg.fillColor = new Color(226, 214, 198, 255);
+        gg.roundRect(BX, BY - BH / 2, BW, BH, 6);
+        gg.fill();
+        if (done > 0) {
+            gg.fillColor = new Color(232, 149, 26, 255);
+            gg.roundRect(BX, BY - BH / 2, Math.max(6, BW * Math.min(1, done / DAILY_N)), BH, 6);
+            gg.fill();
         }
 
-        /* ================= ② 每日 ================= */
-        y -= 8;
-        mkLeftLabel(body, 'dtl', '每日', 15, INK, -W0 / 2, y, W0, 20);
-        mkRightLabel(body, 'dnum', s.dailyAt || '今天', 10, INK_SOFT, W0 / 2, y, 80, 16);
-        y -= 26;
+        /* 宝箱：两个台阶。能开时金底，开过时灰，没到数量时暗 */
+        DAILY_CHESTS.forEach((c, i) => {
+            const cx = W0 / 2 - 96 + i * 96;
+            const got = (Array.isArray(s.dailyChests) ? s.dailyChests : []).indexOf(c.need) >= 0;
+            const can = !got && done >= c.need;
+            const bc = got ? new Color(206, 198, 186, 255)
+                : can ? new Color(255, 206, 92, 255)
+                    : new Color(228, 218, 202, 255);
+            this.mkPill(card, `chest-${c.need}`,
+                got ? `已开 ${c.need}` : `宝箱 ${c.need}`, 82, 30, cx, AY, can, () => {
+                    const r = claimChest(this.save, c.need);
+                    this.toast(r.say);
+                    if (!r.ok) return;
+                    this.commit(r.next);
+                    this.openTasks();
+                });
+            /* mkPill 不接收自定义底色，用一条细标记补上"能不能开"的差别 */
+            const dot = new Node('cd');
+            dot.parent = card;
+            dot.addComponent(UITransform).setContentSize(6, 6);
+            dot.setPosition(cx - 44, AY, 0);
+            const dg = dot.addComponent(Graphics);
+            dg.fillColor = bc;
+            dg.circle(0, 0, 3);
+            dg.fill();
+        });
+
+        /* 分隔线 */
+        gg.fillColor = new Color(214, 176, 140, 110);
+        gg.rect(-W0 / 2, 134, W0, 2);
+        gg.fill();
+
+        /* ================= ② 主线 ================= */
+        const cur = storyNow(s);
+        mkLeftLabel(card, 'st', '主线', 14, INK, -W0 / 2, 114, 80, 20);
+        mkRightLabel(card, 'sn', `${storyDone(s)} / ${STORY.length}`, 12, INK_SOFT,
+            W0 / 2, 114, 80, 18);
+
+        if (cur) {
+            const sc = new Node('story');
+            sc.parent = card;
+            sc.addComponent(UITransform).setContentSize(W0, 76);
+            sc.setPosition(0, 62, 0);
+            const sg = sc.addComponent(Graphics);
+            sg.fillColor = new Color(246, 232, 206, 255);
+            sg.roundRect(-W0 / 2, -38, W0, 76, 14);
+            sg.fill();
+            sg.lineWidth = 2;
+            sg.strokeColor = new Color(214, 176, 140, 255);
+            sg.roundRect(-W0 / 2, -38, W0, 76, 14);
+            sg.stroke();
+
+            mkLeftLabel(sc, 'n', cur.name, 16, INK, -W0 / 2 + 14, 22, 300, 22);
+            mkLeftLabel(sc, 'd', cur.desc, 11, INK_SOFT, -W0 / 2 + 14, -2, 380, 16);
+            mkRightLabel(sc, 'r', rewardText(cur.reward), 12,
+                new Color(122, 146, 88, 255), W0 / 2 - 14, 22, 160, 18);
+            mkRightLabel(sc, 'tag', '做完自动发', 10, INK_SOFT, W0 / 2 - 14, -2, 160, 14);
+        } else {
+            mkLeftLabel(card, 'sall', '主线全部做完了 · 剩下的 S 靠你自己刷',
+                12, INK_SOFT, -W0 / 2, 62, W0, 18);
+        }
+
+        gg.fillColor = new Color(214, 176, 140, 110);
+        gg.rect(-W0 / 2, 16, W0, 2);
+        gg.fill();
+
+        /* ================= ③ 每日 5 行 ================= */
+        mkLeftLabel(card, 'dt', '每日', 14, INK, -W0 / 2, -2, 80, 20);
+        /* 日期已经在副标题里了，这里不再重复 —— 同一块面板上同一个数字出现两次，
+           玩家会以为其中一个是对的、另一个是坏的。 */
 
         const rows = dailyRows(s);
-        if (!rows.length) {
-            mkLeftLabel(body, 'dnone', '今天还没抽，重开一次会抽 3 条。',
-                11, INK_SOFT, -W0 / 2, y, W0, 16);
-            y -= 24;
-        }
-        for (const r of rows) {
-            const row = new Node('d-' + r.def.id);
-            row.parent = body;
-            row.addComponent(UITransform).setContentSize(W0, 44);
-            row.setPosition(0, y - 22, 0);
-            const rg = row.addComponent(Graphics);
-            rg.fillColor = r.claimed ? new Color(228, 222, 210, 255)
-                : r.done ? new Color(232, 242, 216, 255)
-                    : new Color(240, 234, 220, 255);
-            rg.roundRect(-W0 / 2, -22, W0, 44, 11);
+        rows.forEach((r, i) => {
+            const y = -36 - i * 50;
+            const rowH = 44;
+            const rn = new Node('d-' + r.def.id);
+            rn.parent = card;
+            rn.addComponent(UITransform).setContentSize(W0, rowH);
+            rn.setPosition(0, y, 0);
+            const rg = rn.addComponent(Graphics);
+            /* 三档底色：已领灰 / 完成绿 / 未完成米 */
+            rg.fillColor = r.claimed ? new Color(226, 220, 208, 255)
+                : r.done ? new Color(234, 244, 218, 255)
+                    : new Color(243, 237, 224, 255);
+            rg.roundRect(-W0 / 2, -rowH / 2, W0, rowH, 11);
             rg.fill();
 
-            mkLeftLabel(row, 'n', r.def.name, 13, r.claimed ? INK_SOFT : INK,
-                -W0 / 2 + 10, 8, 120, 18);
-            /* 进度用 "3 / 2" 这种超一格的写法会读成"超额了"，
-               所以 done 之后直接写"完成"。 */
-            mkLeftLabel(row, 'p', r.done ? '完成' : `${r.cur} / ${r.def.target}`,
-                10, r.done ? new Color(90, 140, 66, 255) : INK_SOFT,
-                -W0 / 2 + 10, -12, 120, 14);
+            /* 序号圆：没有图标可用，序号比"首字"干净（首字会出现两个"出"） */
+            rg.fillColor = r.done ? new Color(150, 190, 110, 255) : new Color(212, 200, 184, 255);
+            rg.circle(-W0 / 2 + 26, 0, 13);
+            rg.fill();
+            mkLabel(rn, 'idx', String(i + 1), 12, WHITE, 26, 26).node.setPosition(-W0 / 2 + 26, 0, 0);
 
-            const label = r.claimed ? '已领' : r.done ? '领取' : '进行中';
-            const bw = 64, bh = 30;
-            const can = r.done && !r.claimed;
-            this.mkPill(row, 'act', label, bw, bh, W0 / 2 - 10 - bw / 2, 0, can, () => {
-                const res = claimDaily(this.save, r.def.id);
-                this.toast(res.say);
-                if (!res.ok) return;
-                this.commit(res.next);
-                this.repaintDrawer();
-                this.refreshTaskBtn();
-            });
-            y -= 50;
-        }
+            mkLeftLabel(rn, 'n', r.def.name, 13, r.claimed ? INK_SOFT : INK,
+                -W0 / 2 + 50, 8, 130, 18);
 
-        /* ================= ③ 一句规则 ================= */
-        y -= 4;
-        mkLeftLabel(body, 'rule', '主线做完自动接下一条；每日按本地日期换。', 10, INK_SOFT,
-            -W0 / 2, y, W0, 16);
+            /* 进度条 130×8 */
+            const pbx = -W0 / 2 + 50, pby = -10, pbw = 130, pbh = 8;
+            const frac = Math.min(1, r.cur / Math.max(1, r.def.target));
+            rg.fillColor = new Color(212, 202, 188, 255);
+            rg.roundRect(pbx, pby - pbh / 2, pbw, pbh, 4);
+            rg.fill();
+            if (frac > 0) {
+                rg.fillColor = r.claimed ? new Color(178, 172, 160, 255)
+                    : r.done ? new Color(120, 176, 88, 255) : new Color(232, 178, 74, 255);
+                rg.roundRect(pbx, pby - pbh / 2, Math.max(4, pbw * frac), pbh, 4);
+                rg.fill();
+            }
+            mkRightLabel(rn, 'p', `${r.cur}/${r.def.target}`, 10, INK_SOFT,
+                pbx + pbw, pby + 10, 60, 14);
 
-        const op = body.addComponent(UIOpacity);
-        op.opacity = 0;
-        tween(op).delay(0.14).to(0.22, { opacity: 255 }).start();
+            mkRightLabel(rn, 'r', rewardText(r.def.reward), 11,
+                new Color(122, 146, 88, 255), 96, 0, 110, 16);
+
+            const bw = 68, bh = 30;
+            this.mkPill(rn, 'act', r.claimed ? '已领' : r.done ? '领取' : '进行中',
+                bw, bh, W0 / 2 - 12 - bw / 2, 0, r.done && !r.claimed, () => {
+                    const res = claimDaily(this.save, r.def.id);
+                    this.toast(res.say);
+                    if (!res.ok) return;
+                    this.commit(res.next);
+                    this.openTasks();
+                });
+        });
+
+        /* 底部不写规则：`openSheet` 自己有一行「点空白处关闭」在 -CH/2+26，
+           再放一行会直接叠上去（截图 `_t-task4` 就是两行糊在一起）。
+           规则已经写进副标题了。 */
     }
 
 
-    /**
-     * 原地重画抽屉。**顶边钉住**：高度变了只改底边，否则纸会"往上长"，
-     * 玩家读作整张纸跳了一下。
-     *
-     * 现在内容高度是固定的（`taskLayout` 写死），所以实际上不会变高变矮；
-     * 这个函数留着是因为 `commit` 之后要重画（换人 / 买了东西都可能改状态）。
-     */
-    private repaintDrawer() {
-        const p = this.drawer?.getChildByName('panel');
-        if (!p) return;
-        const ut = p.getComponent(UITransform);
-        const g = p.getComponent(Graphics);
-        const DW = HomeController.DRAWER_W;
-        const oldH = ut ? ut.contentSize.height : H - 100;
-        const newH = clamp(this.taskLayout().height, 150, H - 100);
-        const topEdge = p.position.y + oldH / 2;
-        if (ut) ut.setContentSize(DW, newH);
-        if (g) this.paintDrawerBg(g, DW, newH);
-        p.setPosition(p.position.x, topEdge - newH / 2, 0);
-        this.paintTaskBody(p, newH);
-    }
+
+    /* `repaintDrawer` 已删除（2026-10-25）：任务面板从抽屉换成居中面板之后
+       它没有调用方了，而且它内部引用的 `paintTaskBody` 也一起被替换掉了。
+       抽屉那套（`closeDrawer` / `drawerTap`）还留着 —— `openSheet` 打开时会调，
+       玩家可能从抽屉里点开工坊/派遣。 */
 
 
     /**

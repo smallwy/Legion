@@ -288,6 +288,7 @@ function clone(s: SaveState): SaveState {
         tripGoals: Array.isArray(s.tripGoals) ? s.tripGoals.slice() : [],
         dailyPick: Array.isArray(s.dailyPick) ? s.dailyPick.slice() : [],
         dailyClaimed: Array.isArray(s.dailyClaimed) ? s.dailyClaimed.slice() : [],
+        dailyChests: Array.isArray(s.dailyChests) ? s.dailyChests.slice() : [],
         dailyBase: { ...(s.dailyBase || {}) },
     };
 }
@@ -946,9 +947,13 @@ export const DAILY_POOL: ReadonlyArray<DailyDef> = [
     { id: 'd_pat', name: '摸 10 次', target: 10, key: 'pats', reward: { apples: 15 } },
     { id: 'd_big', name: '再走 4 屏', target: 4, key: 'cleared', reward: { shards: 1 } },
     { id: 'd_work', name: '出 4 趟', target: 4, key: 'runs', reward: { shards: 1 } },
+    { id: 'd_one', name: '出门 1 趟', target: 1, key: 'runs', reward: { apples: 10 } },
+    { id: 'd_touch', name: '摸 5 次', target: 5, key: 'pats', reward: { apples: 8 } },
+    { id: 'd_more', name: '再走 1 屏', target: 1, key: 'cleared', reward: { apples: 12 } },
+    { id: 'd_cook', name: '做 1 份', target: 1, key: 'crafts', reward: { apples: 6 } },
 ];
 
-export const DAILY_N = 3;
+export const DAILY_N = 5;
 
 /** 本地日期键。跨时区不管 —— 单机游戏的"今天"就是玩家机器的今天 */
 export function todayKey(now: number = Date.now()): string {
@@ -1055,6 +1060,60 @@ export function claimDaily(prev: SaveState, id: string): ActResult {
     return { ok: true, next, say: `${row.def.name} · 领到 ${rewardText(row.def.reward)}` };
 }
 
+/* ---------------------------------------------------------------------------
+   活跃度宝箱
+   ---------------------------------------------------------------------------
+   常规 Q 版/休闲手游的任务界面都有这一条：**完成 N 条每日 → 领一个宝箱。**
+
+   它不是"又一个奖励"，而是**给"多做几件"一个总目标** ——
+   5 条任务各自 10~25 果，玩家做完两条就没动力了；
+   放一个"做完 3 条给 30 果 + 做完 5 条给碎片"的阶梯，
+   整个面板才从"一张清单"变成一个"可以刷满的进度条"。
+   --------------------------------------------------------------------------- */
+
+export interface DailyChest {
+    /** 完成几条每日任务可以开 */
+    need: number;
+    reward: Reward;
+}
+
+export const DAILY_CHESTS: ReadonlyArray<DailyChest> = [
+    { need: 3, reward: { apples: 30 } },
+    { need: 5, reward: { shards: 1, logs: 4 } },
+];
+
+/** 今天完成了几条（已领 + 未领都算） */
+export function dailyDoneCount(s: SaveState): number {
+    return dailyRows(s).filter((r) => r.done).length;
+}
+
+/** 开一个活跃度宝箱 */
+export function claimChest(prev: SaveState, need: number): ActResult {
+    const def = DAILY_CHESTS.find((c) => c.need === need);
+    if (!def) return { ok: false, say: '没有这个宝箱' };
+    const got = Array.isArray(prev.dailyChests) ? prev.dailyChests : [];
+    if (got.indexOf(need) >= 0) return { ok: false, say: '这个宝箱今天开过了' };
+    const n = dailyDoneCount(prev);
+    if (n < need) return { ok: false, say: `还差 ${need - n} 条每日` };
+    const next = clone(prev);
+    next.apples += def.reward.apples || 0;
+    next.logs += def.reward.logs || 0;
+    next.coins += def.reward.coins || 0;
+    next.shards = (next.shards || 0) + (def.reward.shards || 0);
+    next.dailyChests = got.slice();
+    next.dailyChests.push(need);
+    return { ok: true, next, say: `活跃度 ${need} · 领到 ${rewardText(def.reward)}` };
+}
+
+/** 有哪个宝箱现在能开（给红点用） */
+export function chestReady(s: SaveState): number {
+    const got = Array.isArray(s.dailyChests) ? s.dailyChests : [];
+    const n = dailyDoneCount(s);
+    let cnt = 0;
+    for (const c of DAILY_CHESTS) if (n >= c.need && got.indexOf(c.need) < 0) cnt++;
+    return cnt;
+}
+
 /**
  * 跨天重置。**在 `commit` / 每次打开任务面板前调一次**。
  *
@@ -1070,6 +1129,96 @@ export function rollDailyIfNeeded(prev: SaveState, now: number = Date.now()): { 
     next.dailyAt = key;
     next.dailyPick = rollDaily(key);
     next.dailyClaimed = [];
+    next.dailyChests = [];
     next.dailyBase = snapshotBase(prev);
     return { next, changed: true };
+}
+
+/* ============================================================================
+   ★ 本机排行榜（2026-10-25）
+   ----------------------------------------------------------------------------
+   用户原话：「排行榜不应该是通关的吗」「排行榜你先做本地 客户端做」
+
+   上一版做错的地方：我给它统计了"总星数 / 分布 / 三项纪录"，**但那没有对照组**
+   —— 排行榜的最小定义是"我和别人比"。只有我一个人，那叫报表。
+
+   这一版按**街机厅 TOP 10** 做（Flappy Bird / 几何冲刺都是这个形状）：
+     · 榜上永远有 10 个位置；
+     · 其中 9 条是游戏自带的**影子记录**（不伪装成实时玩家，就叫本机记录）；
+     · 玩家每次回主界面交一次卷，成绩插入后重排，挤出第 10 名。
+
+   **不伪装真人**：名字都是世界观内的（苔苔 / 木木 / 阿泥），
+   不写"某某玩家刚刚通关"这种假实时文案 —— 玩家一旦发现是编的，信任归零。
+
+   排序键：`cleared` ↓ → `stars` ↓ → `runs` ↑
+     先比走到哪，再比打得好，最后比谁省趟数。
+     只比时间不行：单机没有权威计时，"卡在第 3 屏但很快"会排在"通关但慢"前面。
+
+   ⚠ 真·全网榜需要服务端（见 docs/Legion-任务第三版与留存结构_20261025.md）。
+     这份本地榜的**数据形状和真榜完全一致**，将来换数据源只改 `rankBoard` 一个函数。
+   ============================================================================ */
+
+export interface RankRow {
+    name: string;
+    cleared: number;
+    stars: number;
+    /** 用了几趟出门。少的人排前面（同等进度下更"一步到位"） */
+    runs: number;
+    /** 是不是玩家自己那一行。面板高亮用 */
+    me?: boolean;
+}
+
+export const RANK_SIZE = 10;
+
+/**
+ * 9 条影子记录。**从弱到强**排，最弱那条是 6 屏 ——
+ * 这样玩家第一次交卷（哪怕只过了 1 屏）也能上榜，正反馈来得早。
+ */
+const RANK_SEED: ReadonlyArray<RankRow> = [
+    { name: '苔苔', cleared: 27, stars: 81, runs: 32 },
+    { name: '木木', cleared: 27, stars: 74, runs: 41 },
+    { name: '阿泥', cleared: 24, stars: 62, runs: 38 },
+    { name: '灰尾', cleared: 21, stars: 55, runs: 44 },
+    { name: '蒲公英', cleared: 18, stars: 44, runs: 30 },
+    { name: '石头', cleared: 15, stars: 36, runs: 33 },
+    { name: '小雾', cleared: 12, stars: 27, runs: 26 },
+    { name: '阿蒲', cleared: 9, stars: 19, runs: 21 },
+    { name: '泥团', cleared: 6, stars: 11, runs: 16 },
+];
+
+/** 比较两个成绩：负数 = a 更好 */
+export function rankCmp(a: RankRow, b: RankRow): number {
+    if (a.cleared !== b.cleared) return b.cleared - a.cleared;
+    if (a.stars !== b.stars) return b.stars - a.stars;
+    return a.runs - b.runs;
+}
+
+/**
+ * 完整榜单（10 条，含玩家自己）。
+ *
+ * **只读存档，不写**：玩家的成绩就是存档里的 `cleared / stars / runs`，
+ * 没有单独存一份"我的排名"—— 存了就会和存档漂移（MEMORY 教训 2）。
+ */
+export function rankBoard(s: SaveState): RankRow[] {
+    const me: RankRow = {
+        name: '你',
+        cleared: Math.max(0, Math.floor(s.cleared || 0)),
+        stars: starsOf(s),
+        runs: Math.max(0, Math.floor(s.runs || 0)),
+        me: true,
+    };
+    return RANK_SEED.concat([me]).sort(rankCmp).slice(0, RANK_SIZE);
+}
+
+/** 玩家排第几（1 起）。没上榜返回 0 */
+export function myRank(s: SaveState): number {
+    const b = rankBoard(s);
+    for (let i = 0; i < b.length; i++) if (b[i].me) return i + 1;
+    return 0;
+}
+
+/** 榜尾（第 10 名）的成绩。面板上写"想上榜至少 X 屏"用 */
+export function rankFloor(): RankRow {
+    const sorted = RANK_SEED.slice().sort(rankCmp);
+    return sorted[sorted.length - 1];
 }

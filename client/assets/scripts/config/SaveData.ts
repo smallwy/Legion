@@ -176,6 +176,8 @@ export interface SaveState {
     dailyPick: string[];
     /** 今天已经领过的 id */
     dailyClaimed: string[];
+    /** 今天已经开过的活跃度宝箱（存 `need` 值：3 / 5） */
+    dailyChests: number[];
     /**
      * 抽签那一刻的计数快照。
      *
@@ -246,6 +248,7 @@ export const DEFAULT_SAVE: SaveState = {
     dailyAt: '',
     dailyPick: [],
     dailyClaimed: [],
+    dailyChests: [],
     dailyBase: {},
     perks: [],
     lastReward: '',
@@ -403,10 +406,13 @@ export function loadSave(): SaveState {
         storyIdx: Math.floor(clampNum(o.storyIdx, 0, 0, 99)),
         dailyAt: typeof o.dailyAt === 'string' ? o.dailyAt : '',
         dailyPick: Array.isArray(o.dailyPick)
-            ? o.dailyPick.filter((id) => typeof id === 'string').slice(0, 3)
+            ? o.dailyPick.filter((id) => typeof id === 'string').slice(0, 5)
             : [],
         dailyClaimed: Array.isArray(o.dailyClaimed)
-            ? o.dailyClaimed.filter((id) => typeof id === 'string').slice(0, 3)
+            ? o.dailyClaimed.filter((id) => typeof id === 'string').slice(0, 5)
+            : [],
+        dailyChests: Array.isArray(o.dailyChests)
+            ? o.dailyChests.filter((n) => typeof n === 'number').slice(0, 4)
             : [],
         dailyBase: (o.dailyBase && typeof o.dailyBase === 'object') ? o.dailyBase as Record<string, number> : {},
         /* 旧存档没有这个字段（本批才加）。缺了就 0，**不能继承 DEFAULT_SAVE.shards** ——

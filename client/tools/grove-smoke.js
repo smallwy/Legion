@@ -2192,19 +2192,37 @@ console.log("\n=== 27. 出征页进门语义 / 全通存档语义（挑一屏 20
   ok(out === 0, "玩法小卡全部在画布内", "越界 " + out);
   ok(overlap === 0, "小卡之间不重叠", "重叠 " + overlap);
 
-  /* ② 预览区不与网格重叠（左上网格 + 右侧预览是这一版的形状），
-     且预览区自己也在画布内 —— 它比网格宽，最容易从右边掉出去。 */
+  /* ② 横排 + 悬停放大（2026-10-25 第六次：预览卡删除，卡横排、悬停放大）。
+     钉三件事：同一水平线、按玩法数算出的宽度正好铺满边距、放大后不出画布。
+     最后一条是这一版最容易破的 —— 中心放大会往左右各外扩 w*0.1，
+     2 张卡时左缘只剩 19px。 */
   {
-    const v = P.GATE.pv;
-    let bad = 0;
-    for (const a of cells) {
-      const ox = Math.min(a.x + a.w, v.x + v.w) - Math.max(a.x, v.x);
-      const oy = Math.min(a.y + a.h, v.y + v.h) - Math.max(a.y, v.y);
-      if (ox > 0 && oy > 0) bad++;
+    let sameY = 0;
+    for (const a of cells) if (a.y !== cells[0].y) sameY++;
+    ok(sameY === 0, "★ 所有玩法卡在同一水平线上（横排）", "不同 y 的 " + sameY);
+    eq(cells[0].x, P.GATE.marginX, "★ 首卡贴左边距");
+    const last = cells[cells.length - 1];
+    eq(960 - (last.x + last.w), P.GATE.marginX, "★ 末卡贴右边距（宽度公式铺满 840）");
+
+    let zout = 0;
+    for (let i = 0; i < cells.length; i++) {
+      const z = P.gateZoomRect(i);
+      if (z.x < 0 || z.y < 0 || z.x + z.w > 960 || z.y + z.h > 600) zout++;
     }
-    ok(bad === 0, "预览区不与入口网格重叠", "重叠 " + bad);
-    ok(v.x >= 0 && v.y >= 0 && v.x + v.w <= 960 && v.y + v.h <= 600,
-       "预览区在画布内", v.w + "×" + v.h + " @ " + v.x + "," + v.y);
+    ok(zout === 0, "★ 悬停放大后仍在画布内（中心放大最容易从左缘掉出去）", "越界 " + zout);
+
+    /* 中心必须不变：改了中心，鼠标会在放大那一瞬间掉出卡外 → 复原 → 再放大，
+       闪成一片。这条断言守的就是"不抖"。 */
+    for (let i = 0; i < cells.length; i++) {
+      const c = cells[i], z = P.gateZoomRect(i);
+      eq(Math.round(z.x + z.w / 2), Math.round(c.x + c.w / 2), `槽 ${i} 放大中心不变`);
+      ok(z.w > c.w, `槽 ${i} 放大真的变大`, c.w + " → " + z.w);
+    }
+
+    /* 放大后的矩形要和**命中矩形**区分开：命中永远用常态矩形，
+       否则放大后盖住的邻居会点不到。 */
+    eq(P.gateHit(cells[1].x + 4, cells[1].y + cells[1].h / 2), 1,
+       "★ 命中用常态矩形（放大不抢邻居的点击）");
   }
 
   /* ③ 命中测试和格子几何是同一份 —— 抓小卡中心必须命中自己。 */
@@ -4174,28 +4192,34 @@ console.log("\n=== 40. 出征页交互：点门直达当前进度 / 没开的门
      "★ 提示**不走 S.say**：那句是玩家头顶的气泡，出征页没有玩家对象，写了永远看不见");
   P.openGates();
 
-  /* ---- C. 预览区可点 = 点小卡同一个动作 ---- */
+  /* ---- C. 预览卡已删（2026-10-25 第六次）----
+     用户原话：「鼠标放在上面原图就放大就可以了啊」。整页现在只有卡可点，
+     所以必须反过来钉一条：**卡以外的空地真的不接点击** —— 删掉预览卡却留下
+     一块隐形热区，玩家会以为画面里还有别的入口。 */
   P.openGates();
   P.S.gateTip = { txt: "", life: 0 };
   P.S.progress = 2;
-  const v40 = P.GATE.pv;
-  P.gateTap(v40.x + v40.w / 2, v40.y + v40.artH / 2);
-  eq(P.S.phase, "play", "★ 点右侧大立绘也能进（图看着能点就必须能点）");
-  eq(P.S.stage, 2, "★ 预览图进的是同一条路（gateCur = 0）");
+  eq(P.gateHit(480, 552), -1, "★ 底部操作提示带不接点击（预览卡删了，不留隐形热区）");
+  ok(/function gateTap\(mx, my\) \{[\s\S]{0,120}if \(i >= 0\) enterGate\(i\);/.test(src40),
+     "★ gateTap 只剩「点卡进」一条分支（没有预览卡分支要判）");
+  const pvGone = !/GATE\.pv/.test(src40) && !/GATE\.cols/.test(src40);
+  ok(pvGone, "★ 预览卡的版式常量已彻底删除（留一半会让 gateRect 算出两套坐标）");
 
-  /* ---- D. 预览卡接管三星条件 ---- */
+  /* ---- D. 卡内第三行接管三星条件（预览卡删了，这条信息不能跟着没）----
+     出征页是出门前**唯一**能读到"这一屏三颗星怎么拿"的地方（挑一屏
+     2026-10-26 删了，桌面 hover 行 / 触屏条件卡两套一起没了）。 */
   P.openGates();
   P.S.progress = 7;
-  ok(/const row = STAR_OF_STAGE\[cur\] \|\| \[\];/.test(src40),
-     "★ 预览卡读当前屏的靶表（挑一屏删了，出门前只有这里能读到条件）");
-  /* 2026-10-26 第五次：三星条件从"挤一行截断"改成"竖排三条"
-     （卡高 318→420，信息区 100→204），断言随之改成竖排行版。 */
-  ok(/starPath\(g, v\.x \+ 30, ry - 4, 6\.5\)/.test(src40),
-     "★ 预览卡画三颗星（回答拿没拿到）");
-  ok(/STAR_CN\[row\[kk\]\]/.test(src40),
-     "★ 预览卡画条件名字（回答怎么拿）");
-  ok(/chapterOfStage\(cur\)/.test(src40),
-     "★ 预览卡报产地名（我在枯木坡比我在第 15 屏更像人话）");
+  ok(/function gateDetailLine\(p\)[\s\S]{0,700}STAR_OF_STAGE\[cur\]/.test(src40),
+     "★ 卡内第三行读当前屏的靶表（这是出门前唯一能读到条件的地方）");
+  ok(/STAR_CN\[k\]/.test(src40),
+     "★ 卡内第三行画条件名字（回答怎么拿）");
+  ok(/bits\[i\] === 1 \? /.test(src40),
+     "★ 已拿到的靶标出来（只报条件不报拿没拿到，等于半条信息）");
+  ok(/chapterOfStage\(cur\)\.name/.test(src40),
+     "★ 副行报产地名（我在枯木坡比我在第 15 屏更像人话）");
+  ok(/GATE\.h >= GATE\.detailMinH/.test(src40),
+     "★ 第三行只在卡够高时画（h<150 时渐变遮不住，白字压在亮图上读不出来）");
 
   /* ---- E. 抬头统计与总数全部消失 ---- */
   ok(!/挑一条路走/.test(src40),
@@ -4241,8 +4265,8 @@ console.log("\n=== 40. 出征页交互：点门直达当前进度 / 没开的门
      "★ 触屏只在 portals 阶段接管 —— 其他阶段无条件 preventDefault 会让手机整体点不动");
   ok(/addEventListener\("touchstart"[\s\S]{0,900}passive: false/.test(src40),
      "触屏监听带 passive:false（否则 preventDefault 无效，点一次等于点两次）");
-  ok(/function gateTap\(mx, my\) \{[\s\S]{0,400}enterGate\(clamp\(S\.gateCur/.test(src40),
-     "gateTap 是小卡与大图的单一出口（两个入口各写一份必然漂移）");
+  ok(/function gateTap\(mx, my\) \{[\s\S]{0,140}if \(i >= 0\) enterGate\(i\);/.test(src40),
+     "★ 点卡进关只有 gateTap 一个出口（预览卡删了，不再有第二个入口要同步）");
   ok(/get slots\(\) \{ return GATES\.length; \}/.test(src40),
      "槽位 = 玩法数（空槽已删；加玩法只往 GATES 里加，网格自动多排一行）");
 }
@@ -4373,7 +4397,7 @@ console.log("\n=== 41. 出征页：两扇门 / 点开着的门进玩法 / 没开
   ok(/S\.phase === "portals" && S\.gateTip\.life > 0\) S\.gateTip\.life -= dt/.test(src41),
      "提示条自己衰减（挂在 S.say 上会永不消失：那段走钟只在 play 里跑）");
 
-  /* ---- E2. 左上角网格 + 预留空槽 + 右侧预览（用户第三轮要求） ---- */
+  /* ---- E2. 横排卡片：宽度按玩法数算、垂直居中、悬停放大 ---- */
   {
     for (const g of G41) {
       ok(!!g.art, `${g.id} 有背景立绘的 ART key`);
@@ -4385,47 +4409,50 @@ console.log("\n=== 41. 出征页：两扇门 / 点开着的门进玩法 / 没开
       ok(gb41b.indexOf("'" + g.art + "'") >= 0,
          `★ ${g.art} 在 ART_MANIFEST 里（不进清单 = 真机永远看不到立绘）`);
     }
-    /* 网格：**1 列竖排**（2026-10-26 第五次：预览卡上移齐顶后变 420 高，
-       横排两张 118 的小卡只占 250，左下半空重心全压右上 —— 改竖排 358×201
-       两张，底 472 与预览卡齐平，左右两列等高）。槽位 = 玩法数不变。 */
-    eq(P.GATE.cols, 1, "1 列竖排（与预览卡等高，不留半屏空白）");
+    /* 2026-10-25 第六次：**横排 + 悬停放大**（用户：「鼠标放在上面原图就
+       放大就可以了啊」）。宽度由玩法数算出、不是常量 —— 加一个玩法只往
+       GATES 加一项，版式自己重排，这也是"能不能撑到第 4、5 个玩法"的根据。 */
     eq(P.GATE.slots, G41.length, "槽位 = 玩法数（没有「新的路还在修」空槽）",
        `slots ${P.GATE.slots} vs 玩法 ${G41.length}`);
+    eq(P.GATE.w,
+       Math.floor((960 - P.GATE.marginX * 2 - (G41.length - 1) * P.GATE.gap) / G41.length),
+       "★ 卡宽由玩法数算出（加玩法自动重排，不必改常量）");
+    /* 高 = 16:9，但夹在 120..420。上限防 1 个玩法时 473 顶穿底部提示条；
+       下限防 5 个玩法时 86 高、扣掉文字块后立绘只剩 30px。 */
+    eq(P.GATE.h, Math.min(420, Math.max(120, Math.round(P.GATE.w * 9 / 16))),
+       "★ 卡高 = 16:9 夹在 120..420（上下限都是撞过的坑）");
+    /* 加玩法不该把任何一张卡挤到读不出来：立绘区至少留 44px */
+    for (const n of [2, 3, 4, 5, 6]) {
+      const w = Math.floor((960 - P.GATE.marginX * 2 - (n - 1) * P.GATE.gap) / n);
+      const h = Math.min(420, Math.max(120, Math.round(w * 9 / 16)));
+      const y = 52 + Math.round((420 - h) / 2);
+      ok(h >= 120 && y + h <= 472, `${n} 个玩法时卡高仍 >=120 且不撞 472`, `${w}×${h} y=${y}`);
+    }
+    /* 垂直居中：上下留白必须对称，差 1px 是 round 造成的，允许 */
+    const padTop = P.GATE.y - P.GATE.top;
+    const padBot = P.GATE.bottom - (P.GATE.y + P.GATE.h);
+    ok(Math.abs(padTop - padBot) <= 1, "★ 卡在可用区内垂直居中（上下留白对称）",
+       `上 ${padTop} 下 ${padBot}`);
+    eq(P.GATE.bottom, 472, "可用区底仍是 472（下面还有提示条与操作提示）");
+    /* 所有卡都在画布内、左右分离（横排不重叠） */
     const rs = [];
     for (let i = 0; i < P.GATE.slots; i++) rs.push(P.gateRect(i));
     for (let i = 0; i < rs.length; i++) {
       ok(rs[i].x >= 0 && rs[i].x + rs[i].w <= CW && rs[i].y + rs[i].h <= CH,
          `槽 ${i} 在画布里`);
       for (let j = i + 1; j < rs.length; j++) {
-        ok(rs[i].x + rs[i].w <= rs[j].x || rs[j].x + rs[j].w <= rs[i].x ||
-           rs[i].y + rs[i].h <= rs[j].y || rs[j].y + rs[j].h <= rs[i].y,
-           `槽 ${i} 与槽 ${j} 不重叠`);
+        ok(rs[i].x + rs[i].w <= rs[j].x || rs[j].x + rs[j].w <= rs[i].x,
+           `槽 ${i} 与槽 ${j} 左右分离（横排不重叠）`);
       }
     }
-    /* 左上角：网格必须压在标题下面、画面左半边 */
-    ok(rs[0].x < CW / 2 && rs[0].y < CH / 2, "网格从左上角开始",
-       `${rs[0].x},${rs[0].y}`);
-    /* 右侧预览区不与网格重叠、在画布里（pv.h = artH + 信息区） */
-    const pv = P.GATE.pv;
-    ok(pv.x >= rs[1].x + rs[1].w, "预览区在网格右侧", `pv.x ${pv.x}`);
-    ok(pv.x + pv.w <= CW && pv.y + pv.h <= CH, "预览区在画布里",
-       `${pv.x},${pv.y} ${pv.w}×${pv.h}`);
-    /* 2026-10-26 第五次（用户：「直接移动上方…注意布局不能太突兀」）：
-       预览卡顶必须与小卡顶齐平，否则右侧那张比左边矮一大截，看着是两块
-       不相干的东西。之前卡在 176 是因为月亮光晕压到 168 —— 出征页现在
-       不画月亮，这个等式才成立，谁把月亮加回来都会先撞这条断言。 */
-    eq(pv.y, P.GATE.y, "★ 预览卡与小卡齐顶（不齐顶就是两块不相干的东西）");
-    /* 底不撞底部操作提示（提示文字中心 H-42 = 558，留 ≥ 40 呼吸） */
-    ok(pv.y + pv.h <= CH - 42 - 40, "预览卡底与操作提示留呼吸",
-       `底 ${pv.y + pv.h}`);
-    /* 右侧大图可点：点它 = 进当前选中的玩法（挑一屏删了，这是"图看着能点就必须能点"） */
-    P.openGates();
-    P.S.gateCur = 0;
-    P.S.progress = 0;
-    P.gateTap(pv.x + pv.w / 2, pv.y + 40);
-    eq(P.S.phase, "play", "★ 点右侧大立绘 = 直接进当前这条路的玩法（图看着能点就必须能点）");
-    eq(P.S.stage, 0, "★ 进的是当前进度那一屏");
+    /* 悬停放大：焦点卡要**最后画**。一遍画完再补焦点，会被后画的邻居切掉一条边。 */
+    ok(/for \(let pass = 0; pass < 2; pass\+\+\)/.test(src41) &&
+       /if \(\(pass === 0\) === on\) continue;/.test(src41),
+       "★ 分两遍画：先所有非焦点、再焦点（放大的那张压在邻居上）");
+    ok(/on \? gateZoomRect\(i\) : gateRect\(i\)/.test(src41),
+       "★ 焦点用放大矩形、其余用常态矩形（同一处坐标，不各算一套）");
   }
+
 
   /* ---- F. 入口与退路（键盘/启动没法派发事件，走源码断言） ---- */
   ok(/else if \(FROM_HOME\) \{ S\.progress = st >= 0 \? st : LEVELS\.length; openGates\(\); \}/.test(src41),

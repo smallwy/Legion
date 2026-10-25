@@ -12840,17 +12840,50 @@ const GATE = {
      比原来更突兀。竖排两张 (52..253 / 271..472) 底正好 472 与预览卡齐平，
      左右两列等高，才是"两块拼一起"而不是"一大一小"。
      358×201 仍是 16:9（≈1.781），cover 不裁。 */
-  w: 358, h: 201, gapX: 14, gapY: 18,
-  x: 88, y: 52, cols: 1,
+  /* 2026-10-25 第六次调整：**删掉右侧预览卡，玩法卡横排 + 悬停放大**
+     （用户：「鼠标放在上面原图就放大就可以了啊」）。
+
+     为什么删得掉：预览卡存在的唯一理由是"这条路长什么样"，可卡本身就是
+     立绘 —— 用 40%~87% 的画面去重复卡里已经有的信息，是纯损耗。删掉之后
+     卡从 358 宽涨到 410，立绘可用面积接近翻倍，"放大"这件事卡自己就能做。
+
+     为什么不能再竖排：左列可用高度只有 420（y 52..472），358×201 竖排的
+     第 3 张从 490 落到 691 —— 直接出屏。纵向列表天生不可扩展，横向条
+     天生可扩展，这是排列方向的问题，不是"缩多少"的问题。
+
+     公式：w = (840 - (n-1)*20) / n，h = round(w*9/16)，y 垂直居中。
+     840 = 960 - 左右各 60；gap 20 必须大于卡内边距 16，否则两张卡会被
+     读成"一整块被竖线切开"而不是"两扇独立的门"；16:9 是立绘素材比例，
+     改比例就得重画立绘，本轮不做。
+     2 张 410×231 / 3 张 266×150 / 4 张 195×110 / 5 张 152×86。 */
+  marginX: 60, gap: 20, top: 52, bottom: 472,
+  /* 悬停放大 1.2：**中心不变**，左右各外扩 w*0.1。
+     n=2 时左卡中心 265、放大后半宽 246 → 左缘 19，仍在屏内；n≥3 卡更窄，
+     更安全。命中判定用**常态矩形**：常态区是放大区的子集且同心，
+     鼠标放上去不会"放大→掉出→复原→再放大"地抖。 */
+  scale: 1.2,
+  /* 卡内第三行（星靶条件 / 深巢规则）只在卡够高时画：它要 22px，加上
+     名字 20 + 进度 18 + 上下留白 14 = 74，而底部渐变只有 h*0.48 ——
+     h < 150 时装不下，硬画就是把字压在亮图上。 */
+  detailMinH: 170,
   get slots() { return GATES.length; },
-  /* 预览卡：**与小卡齐顶**（2026-10-26 第五次，用户红框圈这张卡：
-     「直接移动上方 把上面的内容去掉 点击之后的显示 注意布局不能太突兀」）。
-     之前 y 卡在 176 是因为右上月亮光晕压到 168 —— 现在出征页不画月亮
-     （drawNightSky 第四参 false），卡顶得以对齐小卡的 52。
-     h = artH 216 + 信息区 204：名字 22 + 进度行 12.5 + 进度条 7 +
-     分隔线 + 三条条件各一行（竖排，不再挤一行截断）+ 底留 24。
-     底 52+420 = 472，与底部操作提示（中心 558）留 86 呼吸。 */
-  pv: { x: 536, y: 52, w: 384, artH: 216, h: 420 },
+  /* 用 floor 不用 round：3 个玩法时 round 会算出 267，3*267+40 = 841，
+     右缘 901 比边距多 1px（半像素错位就是这么来的）。floor 最多让右缘
+     早 2px 收住，看不出来。 */
+  get w() {
+    const n = Math.max(1, this.slots);
+    return Math.floor((W - this.marginX * 2 - (n - 1) * this.gap) / n);
+  },
+  /* 16:9 反推，但**不低于 120**：5 个玩法时纯 16:9 只有 86 高，扣掉
+     文字块 56 + 过渡 16，立绘只剩 30px —— 那张图等于没画。120 是
+     "名字 16px + 副行 11.5px 站得住、立绘还剩 48px" 的下限，
+     代价是 cover 会裁左右（本来就在裁，看不出来）。 */
+  get h() {
+    /* 上限 420 = 可用区高。只有 1 个玩法时 840 宽按 16:9 是 473，
+       会顶穿 472 撞到底部提示条。 */
+    return Math.min(420, Math.max(120, Math.round(this.w * 9 / 16)));
+  },
+  get y() { return Math.round(this.top + (this.bottom - this.top - this.h) / 2); },
 };
 const GATES = [
   {
@@ -12874,26 +12907,28 @@ const GATES = [
   },
 ];
 
-/** 出征页的点击出口：小卡和右侧大图是同一个动作。
- *  点大图没反应会让玩家以为那张图是装饰，而它其实是"这条路长什么样"的
- *  唯一放大窗口 —— 图看着能点就必须能点。 */
+/** 出征页的点击出口。预览卡已删（2026-10-25 第六次），点卡就是进 ——
+ *  以前还要判一次"是不是点在大立绘上"，现在整页只有卡可点，少一条分支。 */
 function gateTap(mx, my) {
   const i = gateHit(mx, my);
-  if (i >= 0) { enterGate(i); return; }
-  const v = GATE.pv;
-  if (mx >= v.x && mx <= v.x + v.w && my >= v.y && my <= v.y + v.h) {
-    enterGate(clamp(S.gateCur, 0, GATES.length - 1));
-  }
+  if (i >= 0) enterGate(i);
 }
 
-/** 第 i 个槽的矩形（含**空槽**）。和命中判定共用 —— 两处各算一套坐标，改布局必然错开 */
+/** 第 i 个槽的矩形（**常态**，不含悬停放大）。绘制与命中共用这一处坐标 ——
+ *  两处各算一套，改布局必然错开。 */
 function gateRect(i) {
-  const col = i % GATE.cols, row = Math.floor(i / GATE.cols);
   return {
-    x: GATE.x + col * (GATE.w + GATE.gapX),
-    y: GATE.y + row * (GATE.h + GATE.gapY),
-    w: GATE.w, h: GATE.h,
+    x: GATE.marginX + i * (GATE.w + GATE.gap),
+    y: GATE.y, w: GATE.w, h: GATE.h,
   };
+}
+
+/** 悬停放大后的矩形。**中心不变** —— 改中心的话鼠标会在放大那一瞬间
+ *  "跳"到卡外，于是立刻复原，闪成一片。 */
+function gateZoomRect(i) {
+  const r = gateRect(i), s = GATE.scale;
+  const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+  return { x: cx - r.w * s / 2, y: cy - r.h * s / 2, w: r.w * s, h: r.h * s };
 }
 
 /** 命中：**含空槽**。空槽也要有反馈 —— 点了没动静是最差的交互，
@@ -13384,211 +13419,132 @@ function drawGateArt(g, p, x, y, w, h) {
 
 /** 出征页每扇门的副行。一个函数管两扇门 —— 写在绘制里就会变成
  *  "古道报第 N 屏、深巢也报第 N 屏"这种两条轴混用一个数字的错。 */
+/** 一行"这张卡现在是什么状态"。
+ *  主线报「第 N 屏 · 产地」—— 产地名帮玩家建立方位（"我在枯木坡"比
+ *  "我在第 15 屏"更像人话），且不报总数（不暴露最大关卡）。
+ *  深巢报「最深 N 层」—— 它的"我在哪"是深度，不是屏序。
+ *  一个函数管两扇门：散在绘制里就会变成"深巢也报第 N 屏"这种两轴混用。 */
 function gateSubLine(p) {
   if (p.id === "nest") {
     const d = readNestDepth();
     return d > 0 ? "最深 " + d + " 层" : "没下潜过";
   }
-  return S.progress > 0 ? "第 " + (clamp(S.progress, 0, LEVELS.length - 1) + 1) + " 屏" : "还没出发";
+  if (!(S.progress > 0)) return "还没出发";
+  const cur = clamp(S.progress, 0, LEVELS.length - 1);
+  return "第 " + (cur + 1) + " 屏 · " + chapterOfStage(cur).name;
+}
+
+/** 卡内第三行。主线 = 三颗星的**条件原文**，深巢 = 两条规则。
+ *  挑一屏（2026-10-26 整页删除）之后，出征页是出门前**唯一**能读到
+ *  "这一屏三颗星怎么拿"的地方 —— 删预览卡不能把这条信息一起删掉，
+ *  所以随卡一起搬进来，而不是跟着预览卡一起消失。 */
+function gateDetailLine(p) {
+  if (!p.open) return "";
+  if (p.id === "nest") return "每层都不一样 · 打不过只丢这一层";
+  const cur = clamp(S.progress, 0, LEVELS.length - 1);
+  const row = STAR_OF_STAGE[cur] || [];
+  if (!row.length) return "";
+  const bits = (S.starBits && S.starBits[cur]) || [];
+  return row.map(function (k, i) {
+    return (bits[i] === 1 ? "\u2713" : "\u25cb") + (STAR_CN[k] || k);
+  }).join("  ");
+}
+
+/** 画一张玩法卡。focused = 悬停/选中（已放大），withDetail = 卡高够不够放第三行。
+ *  抽成函数是因为现在要画两遍（先画非焦点、再画焦点），两处各写一份必然漂移。 */
+function drawGateCard(g, p, r, focused, withDetail, FONT) {
+  drawGateArt(g, p, r.x, r.y, r.w, r.h);
+
+  /* 字号跟卡宽分两档：195 宽的卡用 20px 名字（4 字 80px，内宽 155 其实放得下），
+     但配 13.5 的副行会挤成一片；降到 16/11.5 之后三行的呼吸才一致。 */
+  const small = r.w < 240;
+  /* 第三档：120 高的卡（4 个以上玩法）文字块必须再压一档，否则
+     15+14+11 的行高会把立绘挤到不足 40px。 */
+  const tiny = r.h < 135;
+  const nameSize = tiny ? 15 : (small ? 16 : 20);
+  const subSize = tiny ? 11 : (small ? 11.5 : 13.5);
+  const detSize = 11.5;
+  const padX = small ? 14 : 20;
+
+  /* 文字块**从底往上排**，再按排出来的实际高度反推压暗带到哪儿为止。
+     之前的写法是"先画固定 96 高的渐变，再把字放在 h-58 / h-34 / h-14"——
+     第一版就这么栽的：h-58 落在渐变 alpha 只有 0.5 的地方，第三行直接压在
+     苔原那张的亮草地和小熊身上，"—不碰火坑"根本读不出来。
+     自下而上排 + 实心带，任何背景都是 0.88，不靠蒙。 */
+  let by = r.y + r.h - 14;                                  // 最后一行基线
+  const detY = withDetail ? by : 0;
+  if (withDetail) by -= Math.round(detSize + 13);           // 第三行 → 副行
+  const subY = by;
+  const nameY = by - Math.round(nameSize * 0.95);
+  const bandTop = nameY - Math.round(nameSize * 0.92) - 12;
+
+  /* 上过渡 16px + 实心带：直上直下的一道分界看着像贴上去的字幕条，
+     16px 足够把这条界线化掉，又不会让亮图重新透出来。 */
+  const bg = "rgba(10,20,18,.88)";
+  const fade = g.createLinearGradient(0, bandTop - 16, 0, bandTop);
+  fade.addColorStop(0, "rgba(10,20,18,0)");
+  fade.addColorStop(1, bg);
+  g.fillStyle = fade;
+  g.fillRect(r.x, bandTop - 16, r.w, 16);
+  g.fillStyle = bg;
+  g.fillRect(r.x, bandTop, r.w, r.y + r.h - bandTop);
+
+  g.textAlign = "left";
+
+  if (withDetail) {
+    const det = gateDetailLine(p);
+    if (det) {
+      g.fillStyle = p.open ? "rgba(196,216,196,.78)" : "rgba(240,200,120,.78)";
+      g.font = detSize + "px " + FONT;
+      g.fillText(fitText(g, det, r.w - padX * 2), r.x + padX, detY);
+    }
+  }
+
+  g.fillStyle = "#F2F7EE";
+  g.font = "bold " + nameSize + "px " + FONT;
+  g.fillText(fitText(g, p.name, r.w - padX * 2), r.x + padX, nameY);
+
+  g.fillStyle = p.open ? "rgba(200,222,200,.82)" : "rgba(240,200,120,.88)";
+  g.font = "bold " + subSize + "px " + FONT;
+  g.fillText(p.open ? gateSubLine(p) : "即将开放", r.x + padX, subY);
+
+  // 描边最后画：压在图上，放大那张一眼看得出来
+  g.strokeStyle = focused ? "#F0A81E" : "rgba(160,200,180,.30)";
+  g.lineWidth = focused ? 2.4 : 1.4;
+  rr(g, r.x, r.y, r.w, r.h, 12);
+  g.stroke();
 }
 
 function drawGates(g) {
   const FONT = "'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
   const HZ = 470;
-  /* 第四参 false = 不画月亮：月亮+光晕占 y 20–168，右侧预览卡要跟左上小卡
-     齐顶（y 52）就必须让开它。选人页仍画（那边没人挡）。 */
+  /* 第四参 false = 不画月亮。月亮 + 光晕占 y 20–168，之前卡要跟它抢顶边
+     才只能卡在 176；现在卡是垂直居中的，"让开月亮"这个理由已经不成立，
+     但出征页保留不画 —— 没有月亮的夜空更接近"出发前一晚"，选人页仍画。 */
   drawNightSky(g, S.t, HZ, false);
   g.fillStyle = "#0C1F1A";
   g.fillRect(0, HZ, W, H - HZ);
 
   /* 「出征」大标题已删（2026-10-26 第四次，用户：「出征去掉啊」）。
-     原标题占 (88,56) 30px，下面缩着两张 208 宽的玩法卡 —— 标题只是给
-     这一页起名，底部操作提示已经做了这件事。删掉后左上角归玩法网格。 */
+     标题只是给这一页起名，而这件事底部操作提示已经做了。 */
 
   const focus = clamp(S.hoverGate >= 0 ? S.hoverGate : S.gateCur, 0, GATES.length - 1);
-  /* 当前屏索引 = 出征页唯一要回答的"我在哪"。
-     progress 上界是 LEVELS.length（闭区间，全通），clamp 回最后一屏。 */
-  const cur = clamp(S.progress, 0, LEVELS.length - 1);
+  const withDetail = GATE.h >= GATE.detailMinH;
 
-  /* ---------- 左上角：玩法入口网格 ----------
-   * 槽位 = 玩法数（空槽已删，2026-10-26）。加玩法只往 GATES 里加一项，
-   * gateRect 按 cols 自动往下排一行，版式一个字不用改。 */
-  for (let i = 0; i < GATE.slots; i++) {
-    const r = gateRect(i);
-    const p = GATES[i];
-
-    drawGateArt(g, p, r.x, r.y, r.w, r.h);
-
-    /* 底部压暗：名字直接压在立绘上。第一版只压 58px、终点 .92，
-       苔原那张的草地太亮，白字"苔原古道"读起来是糊的 —— 加深到 70px
-       并在 55% 处就压到 .72，让字有一层真正的中灰底而不是"亮图上一层薄雾"。
-       2026-10-26 第五次：卡放大到 358×201，压暗区按比例跟到 96。 */
-    const fade = g.createLinearGradient(0, r.y + r.h - 96, 0, r.y + r.h);
-    fade.addColorStop(0, "rgba(10,20,18,0)");
-    fade.addColorStop(0.55, "rgba(10,20,18,.72)");
-    fade.addColorStop(1, "rgba(10,20,18,.97)");
-    g.fillStyle = fade;
-    g.fillRect(r.x, r.y + r.h - 96, r.w, 96);
-
-    g.textAlign = "left";
-    g.fillStyle = "#F2F7EE";
-    g.font = "bold 20px " + FONT;
-    g.fillText(fitText(g, p.name, r.w - 40), r.x + 20, r.y + r.h - 42);
-
-    /* 副行只报**当前进度**，不报总数：「/ 27」就是用户不想暴露的最大关卡 */
-    g.fillStyle = p.open ? "rgba(200,222,200,.80)" : "rgba(240,200,120,.86)";
-    g.font = "bold 13.5px " + FONT;
-    /* 副行只报**当前进度**，不报总数：「/ 27」就是用户不想暴露的最大关卡。
-       深巢 2026-10-26 开放后不能再用主线那句 —— 它的"我在哪"是**最深下到
-       第几层**，报主线屏号等于把两条轴混成一个数字。 */
-    g.fillText(p.open ? gateSubLine(p) : "即将开放", r.x + 20, r.y + r.h - 20);
-
-    // 描边最后画：压在图上，选中那格一眼看得出来
-    g.strokeStyle = i === focus ? "#F0A81E" : "rgba(160,200,180,.30)";
-    g.lineWidth = i === focus ? 2.4 : 1.4;
-    rr(g, r.x, r.y, r.w, r.h, 12);
-    g.stroke();
-  }
-
-  /* ---------- 右侧：当前选中这条路的立绘预览 ----------
-   * 小卡只放得下名字，"这条路长什么样"必须有地方放大 ——
-   * 否则立绘等于只画了一半（用户要求的就是立绘）。
-   * 预览卡本身可点：点大图进和点小卡进是同一个动作。 */
-  {
-    const v = GATE.pv, p = GATES[focus];
-    if (p) {
-      g.fillStyle = "rgba(18,34,32,.74)";
-      rr(g, v.x, v.y, v.w, v.h, 18);
-      g.fill();
-
-      g.save();
-      g.beginPath();
-      /* 只圆上面两个角：下面接着卡身，圆下角会露出一道缝 */
-      const k = 16;
-      g.moveTo(v.x + k, v.y);
-      g.lineTo(v.x + v.w - k, v.y);
-      g.quadraticCurveTo(v.x + v.w, v.y, v.x + v.w, v.y + k);
-      g.lineTo(v.x + v.w, v.y + v.artH);
-      g.lineTo(v.x, v.y + v.artH);
-      g.lineTo(v.x, v.y + k);
-      g.quadraticCurveTo(v.x, v.y, v.x + k, v.y);
-      g.closePath();
-      g.clip();
-      drawGateArt(g, p, v.x, v.y, v.w, v.artH);
-      g.restore();
-
-      // 立绘底压一条暗边，让名字压得住
-      const vf = g.createLinearGradient(0, v.y + v.artH - 40, 0, v.y + v.artH);
-      vf.addColorStop(0, "rgba(18,34,32,0)");
-      vf.addColorStop(1, "rgba(18,34,32,.94)");
-      g.fillStyle = vf;
-      g.fillRect(v.x, v.y + v.artH - 40, v.w, 40);
-
-      const ty = v.y + v.artH;
-      g.textAlign = "left";
-      g.fillStyle = "#F2F7EE";
-      g.font = "bold 22px " + FONT;
-      g.fillText(p.name, v.x + 22, ty + 34);
-
-      if (p.open && p.id === "nest") {
-        /* 深巢预览卡（2026-10-26 开放）：**不挂主线的屏序 / 进度条 / 三星**。
-           那三样都是 27 屏的东西，深巢一层一生成，既没有"第几屏"也没有靶。
-           信息区 204 拿来讲"这玩法怎么玩" —— 玩家第一次进深巢之前，
-           最该知道的三件事就是下面这三条。 */
-        const d = readNestDepth();
-        g.fillStyle = "rgba(200,222,200,.72)";
-        g.font = "12.5px " + FONT;
-        g.fillText(d > 0 ? "最深 第 " + d + " 层" : "还没下潜过", v.x + 22, ty + 60);
-
-        g.fillStyle = "rgba(160,200,180,.22)";
-        g.fillRect(v.x + 22, ty + 96, v.w - 44, 1);
-        g.fillStyle = "rgba(200,222,200,.52)";
-        g.font = "bold 11.5px " + FONT;
-        g.fillText("往下是这样的", v.x + 22, ty + 120);
-
-        const rules = ["地形每层都不一样", "打不过只丢这一层", "下到哪层就记在哪层"];
-        g.font = "12.5px " + FONT;
-        for (let kk = 0; kk < rules.length; kk++) {
-          const ry = ty + 144 + kk * 24;
-          g.fillStyle = "#7FC24A";
-          g.fillText("·", v.x + 24, ry);
-          g.fillStyle = "rgba(200,222,200,.72)";
-          g.fillText(rules[kk], v.x + 38, ry);
-        }
-      } else if (p.open) {
-        /* 当前进度行：第几屏 + 产地名。产地名帮玩家建立方位
-           （"我在枯木坡"比"我在第 15 屏"更像人话），且不暴露总屏数。 */
-        const CH = chapterOfStage(cur);
-        g.fillStyle = "rgba(200,222,200,.72)";
-        g.font = "12.5px " + FONT;
-        g.fillText("第 " + (cur + 1) + " 屏 · " + CH.name, v.x + 22, ty + 60);
-
-        /* 进度条只画比例、不写数字 —— 写数字就等于回答"一共多少屏"，
-           而总数正是用户不想暴露的东西。 */
-        const bw = v.w - 44, bx2 = v.x + 22, by2 = ty + 72;
-        g.fillStyle = "rgba(160,200,180,.20)";
-        rr(g, bx2, by2, bw, 7, 4);
-        g.fill();
-        g.fillStyle = "#7FC24A";
-        rr(g, bx2, by2, Math.max(4, bw * S.progress / LEVELS.length), 7, 4);
-        g.fill();
-
-        /* ---- 三颗星 + 条件原文（**竖排三条**）----
-         * 挑一屏删了，出征页是**出门前**唯一能读到"这一屏三颗星怎么拿"的
-         * 地方（桌面原来靠 hover 行、触屏原来靠条件卡，两套一起没了）。
-         * 2026-10-26 第五次：卡高从 318 涨到 420，信息区从 100 涨到 204，
-         * 三条条件不必再挤一行截断（旧版靠 `break` 丢第三条），改竖排
-         * 各占一行 —— 信息区变大正是为了这件事，不是留白。
-         * 行距 24：12.5px 字中心距 ≥ 0.65*(12.5+12.5)+4 = 20.25。 */
-        g.fillStyle = "rgba(160,200,180,.22)";
-        g.fillRect(v.x + 22, ty + 96, v.w - 44, 1);
-        g.fillStyle = "rgba(200,222,200,.52)";
-        g.font = "bold 11.5px " + FONT;
-        g.fillText("这一屏的三颗星", v.x + 22, ty + 120);
-
-        const row = STAR_OF_STAGE[cur] || [];
-        const bits = (S.starBits && S.starBits[cur]) || [];
-        g.font = "12.5px " + FONT;
-        for (let kk = 0; kk < row.length; kk++) {
-          const ry = ty + 144 + kk * 24;
-          starPath(g, v.x + 30, ry - 4, 6.5);
-          if (bits[kk] === 1) { g.fillStyle = "#F0A81E"; g.fill(); }
-          else {
-            g.strokeStyle = "rgba(200,222,200,.40)";
-            g.lineWidth = 1.4;
-            g.stroke();
-          }
-          g.fillStyle = bits[kk] === 1 ? "#7FC24A" : "rgba(200,222,200,.58)";
-          g.fillText((bits[kk] === 1 ? "✓ " : "— ") + (STAR_CN[row[kk]] || row[kk]),
-                     v.x + 46, ry);
-        }
-      } else {
-        /* 没开放的门也要把"后面是什么"说清楚，否则这张卡只剩一个
-           "即将开放"的标签，玩家不会期待它 */
-        g.fillStyle = "rgba(240,200,90,.16)";
-        rr(g, v.x + 22, ty + 46, 92, 24, 12);
-        g.fill();
-        g.textAlign = "center";
-        g.fillStyle = "#F0C060";
-        g.font = "bold 12px " + FONT;
-        g.fillText("即将开放", v.x + 68, ty + 58);
-        g.textAlign = "left";
-        g.fillStyle = "rgba(200,222,200,.46)";
-        g.font = "12px " + FONT;
-        g.fillText(fitText(g, p.sub || "", v.w - 44), v.x + 122, ty + 58);
-      }
-
-      g.strokeStyle = "rgba(160,200,180,.22)";
-      g.lineWidth = 1.4;
-      rr(g, v.x, v.y, v.w, v.h, 18);
-      g.stroke();
+  /* 画两遍：先所有非焦点，再焦点。悬停放大会盖住邻居，绘制顺序决定谁在上 ——
+     一遍画完再补焦点，会让焦点那张被后画的邻居切掉一条边。 */
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 0; i < GATE.slots; i++) {
+      const on = i === focus;
+      if ((pass === 0) === on) continue;
+      const p = GATES[i];
+      if (!p) continue;
+      drawGateCard(g, p, on ? gateZoomRect(i) : gateRect(i), on, withDetail, FONT);
     }
   }
 
-  /* 提示条（点没开放的门时）。2026-10-26 第五次：左列改成竖排大卡后
-     (303,196) 被第二张卡（271..472）占掉，挪回**底部操作提示正上方**中央
-     (480,496) —— 这是 toast 的常规位置，两列都已结束（底 472），谁也不挨。
-     放画面中间会被预览卡的信息区压住。 */
+  /* 提示条（点没开放的门时）。位置在**底部操作提示正上方**中央 ——
+     卡的底最多到 400（悬停放大后的 2 张卡），496 谁也不挨。 */
   if (S.gateTip.life > 0) {
     const a = clamp(S.gateTip.life / 0.4, 0, 1) * clamp((2.4 - S.gateTip.life) / 0.14, 0, 1);
     g.globalAlpha = a;
@@ -13607,7 +13563,7 @@ function drawGates(g) {
   g.textAlign = "center";
   g.fillStyle = "rgba(200,222,200,.46)";
   g.font = "11.5px " + FONT;
-  g.fillText("点一张卡进去   ·   方向键挑   ·   Enter 进   ·   ESC 回主界面", W / 2, H - 42);
+  g.fillText("鼠标放上去看这张卡   ·   点一张进去   ·   方向键挑   ·   Enter 进", W / 2, H - 42);
 }
 
 /* ============================================================================
@@ -15792,7 +15748,7 @@ export const GROVE: any = {
   stageUnlockReward, chapterOfStage, syncHomeMirror, adoptHomeMirror, UNLOCK_AT, HERO_CN,
   /* 出征页：drawGates 给截图器，gateHit/gateTap/enterGate/openGates
      给冒烟验"点开着的门进当前进度那一屏、点没开的门不静默吞" */
-  drawGates, gateHit, gateRect, gateTap, enterGate, openGates, GATES,
+  drawGates, gateHit, gateRect, gateZoomRect, gateTap, enterGate, openGates, GATES,
   /* GATE 是网格/预览的布局常量：冒烟要用它验"槽位 = 玩法数（无空槽）"和
      "预览区不与网格重叠"，写死数字的断言迟早和界面漂移。 */
   GATE,

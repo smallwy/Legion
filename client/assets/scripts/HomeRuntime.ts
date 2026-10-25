@@ -52,7 +52,7 @@ import {
 import { EDITOR } from 'cc/env';
 import { MAX_SQUAD, PETS, petByNode, petGap, petById, squadSize, unlockedPets } from './config/Roster';
 import type { PetDef } from './config/Roster';
-import { STAGE_COUNT, stageLabel } from './config/Stages';
+import { STAGE_COUNT, stageLabel, stageSpotLabel } from './config/Stages';
 import { loadSave, saveSave, loadBattleStats } from './config/SaveData';
 import type { SaveState } from './config/SaveData';
 import { SATIETY } from './config/BattleConfig';
@@ -65,7 +65,7 @@ import {
     STORY, storyNow, storyDone, settleStory, rewardText, sumReward,
     dailyRows, claimDaily, rollDailyIfNeeded, dailyDoneCount,
     DAILY_N, DAILY_CHESTS, claimChest,
-    starsOf, STAR_MAX, rankBoard, myRank, rankFloor, RANK_SIZE,
+    starsOf, STAR_MAX, rankBoard, myRank, RANK_SIZE, RankRow,
 } from './config/HomeBiz';
 
 /* ==========================================================================
@@ -625,11 +625,6 @@ class HomeController {
     private toastT = 0;
     private toastState: 'in' | 'hold' | 'out' | 'off' = 'off';
 
-    /* 出发卡 */
-    private depart: Node | null = null;
-    private departOp: UIOpacity | null = null;
-    private departScrim: Graphics | null = null;
-
     /* 图鉴面板（右侧竖栏的「图鉴」入口打开） */
     private codex: Node | null = null;
     private codexOp: UIOpacity | null = null;
@@ -748,7 +743,7 @@ class HomeController {
     /** 面板里要用到的全部图标。命名与 `resources/ui/icons/<key>.png` 一致 */
     private static readonly ICON_KEYS = [
         'apple', 'log', 'coin', 'hammer', 'pot', 'paw', 'paw-red', 'flag', 'mail',
-        'gear', 'stew', 'basket', 'ration',
+        'gear', 'stew', 'basket', 'ration', 'trophy',
     ];
 
     /**
@@ -1279,9 +1274,11 @@ class HomeController {
         this.toneBadges();
         /* 工坊 → 锅（pot）。图是异步来的，这里先试一次，没图就保留原来的锤子。 */
         this.swapBadgeIcon('Badge-工作台', 'pot');
-        /* 排行榜 → 旗子（flag）。同一套降级逻辑：没图就留场景里那张，
-           不能画个空方块等它。 */
-        this.swapBadgeIcon('Badge-灶台', 'flag');
+        /* 排行榜 → 奖杯（trophy，2026-10-26 新出图）。
+           原来是旗子。用户：「排行榜这个要出新的概念图UI 现在太low了 而且
+           ICON 也是不太合适」。旗子读起来是"地点/标记"，奖杯才读起来是"比"。
+           同一套降级逻辑：没图就留场景里那张，不能画个空方块等它。 */
+        this.swapBadgeIcon('Badge-灶台', 'trophy');
     }
 
     /** 给某颗徽标的 `ico` 子节点换图。抽出来是因为现在有两颗要换 */
@@ -1414,10 +1411,13 @@ class HomeController {
         const prog = this.canvas.getChildByName('HUD')?.getChildByName('HudProgress');
         if (prog) {
             const txt = prog.getChildByName('txt-prog')?.getComponent(Label);
-            /* 关卡进度：**报总数不报产地**。
-             * 原来是「苔原 x / 8」—— 8 是写死的，27 屏下第 9 屏就撞上界。
-             * 现在报「x / 27 关」，产地由下面那排点分组表达，
-             * 不必再挤进这个 66px 宽的 Label（它旁边紧挨着「苔 原」两个字）。
+            /* 关卡进度：**只报"我现在在哪"，不报"一共有多少"**。
+             * 2026-10-26 用户：「我不想暴露最大关卡 只显示当前进度即可」。
+             * 历史包袱两轮：第一轮「苔原 x / 8」把 8 写死（27 屏下第 9 屏撞上界），
+             * 第二轮改成「x / 27 关」修了上界，却把 27 这个总数印在了脸上 ——
+             * 玩家第一眼就知道"这游戏有 27 关那么长"。
+             * 现在报「第 N 屏」（本章内第几屏，1..9 的小数字），
+             * 产地由 txt-stage + 下面那排进度点表达。
              *
              * ⚠ 容器宽只有 35（场景里按「1 / 8 关」一位数写的）。两位数就会溢出：
              * 文字审计报 `txt-prog [NONE] 文字 40px > 容器 35px 「11 / 27 关」`，
@@ -1427,7 +1427,7 @@ class HomeController {
                 txt.overflow = Label.Overflow.SHRINK;
                 const ut = txt.node.getComponent(UITransform);
                 if (ut && ut.contentSize.width < 46) ut.setContentSize(46, ut.contentSize.height);
-                txt.string = `${s.cleared} / ${STAGE_COUNT} 关`;
+                txt.string = stageSpotLabel(s.cleared);
             }
             /* 关卡格：已通关的点亮。`pip-on` / `pip` 是两张不同的贴图，
                换图要换 spriteFrame + 尺寸，这里只做透明度降权 —— 
@@ -2463,7 +2463,12 @@ class HomeController {
             this.press(go, 0.965);
             go.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
                 e.propagationStopped = true;
-                this.openDepart();
+                /* 2026-10-26 用户：「出门之后这个界面不需要」——
+                 * 原来这里弹一张 560×344 的出发确认卡（这趟带谁 / 饱食 /
+                 * 火力 / 下一只），点卡上「出发」才 launchBattle。
+                 * 确认卡删掉后点出征卡直接进战斗：饱食在底栏就看得见，
+                 * 「带谁」看出征卡上那张脸，没有信息只在这张卡上。 */
+                this.launchBattle();
             });
 
             /* 箭头左右摆：主行动需要一个持续的视觉邀请 */
@@ -2647,9 +2652,6 @@ class HomeController {
         this.toastBox = null;
         this.toastOp = null;
         this.toastLbl = null;
-        this.depart = null;
-        this.departOp = null;
-        this.departScrim = null;
         this.sheet = null;
         this.dispatchDot = null;
         this.dispatchLive = null;
@@ -2786,139 +2788,6 @@ class HomeController {
     }
 
     /* ----------------------------------------------------------------------
-     * 出发确认卡
-     *
-     * 「出门」→ 确认卡 → 「出发」→ `loadScene('Battle')`，是真跳转。
-     * 中间这一层不是为了好看：它同时承担"这一局打的是什么"的告知
-     * （第几关、几个人、什么饱食度、下一只什么时候回家），
-     * 以及防止误触直接进入一局 90 秒的战斗。
-     * -------------------------------------------------------------------- */
-
-    private ensureDepart() {
-        if (this.depart) return;
-
-        const root = new Node('__Depart');
-        root.parent = this.canvas;
-        root.addComponent(UITransform).setContentSize(W, H);
-        root.setSiblingIndex(-1);
-        root.active = false;
-
-        /* 全屏压暗：点击蒙层关闭 */
-        const scrim = new Node('scrim');
-        scrim.parent = root;
-        scrim.addComponent(UITransform).setContentSize(W, H);
-        const sg = scrim.addComponent(Graphics);
-        sg.fillColor = SCRIM;
-        sg.rect(-W / 2, -H / 2, W, H);
-        sg.fill();
-
-        /* 卡片 */
-        const card = new Node('card');
-        card.parent = root;
-        card.addComponent(UITransform).setContentSize(560, 344);
-
-        paintCard(card.addComponent(Graphics), 560, 344);
-
-        /* ---- 卡片文案全部从存档现算 ----
-           原来这三行是写死的「苔原 1 / 8」「饱食 12/20」「战力 ×1.21」：
-           前两个和存档不对应，第三个（×1.21）根本没有任何系统产出过这个数。
-           一张写着假数据的确认卡，比没有确认卡更伤信任。 */
-        const s = this.save;
-        const squad = squadSize(s.cleared);
-        const names = unlockedPets(s.cleared).slice(0, MAX_SQUAD).map((p) => p.name);
-        const carry = petById(s.active) ?? PETS[0];
-        const mul = s.satiety >= SATIETY.fullLine
-            ? SATIETY.mulFull
-            : s.satiety >= SATIETY.hungryLine
-                ? SATIETY.mulHungry
-                : SATIETY.mulStarving;
-        const nextPet = PETS.find((p) => p.at > s.cleared);
-
-        /* 出发卡的标题 **报章节，不报「第 10 / 27 关」**。
-         * 27 是内部数字：玩家在枯木坡第 1 屏，告诉他"第 10 关"只会让他
-         * 觉得前面还有 26 个一样的东西 —— 这正是"关卡搞得那么长"的观感来源。
-         * 章的边界由文案给出，产地名比总数更能建立"我走到哪了"。 */
-        const nextIdx = Math.min(STAGE_COUNT - 1, s.cleared);
-        mkLabel(card, 'title', stageLabel(nextIdx), 40, INK, 500, 56)
-            .node.setPosition(0, 108, 0);
-        /* 副标题从"能量够不够"换成**这一关你打过多好**。
-           出门前是最适合告诉玩家"S 线在哪"的位置：他还没进去，
-           正好带着一个目标进去。没有战绩就说实话（还没打过）。 */
-        const stageIdx = Math.min(STAGE_COUNT - 1, s.cleared);
-        const bestHere = s.best[stageIdx] || '';
-        mkLabel(card, 'sub',
-            bestHere
-                ? `第 ${stageIdx + 1} 关 · 最好成绩 ${bestHere} · 再打一次看能不能刷到 S`
-                : `第 ${stageIdx + 1} 关 · 还没打过 · 回来按这一趟的收成给奖励`,
-            16, INK_SOFT, 520, 36)
-            .node.setPosition(0, 66, 0);
-
-        /* 分隔线 */
-        const ln = new Node('line');
-        ln.parent = card;
-        ln.addComponent(UITransform).setContentSize(480, 2);
-        ln.setPosition(0, 40, 0);
-        const lg = ln.addComponent(Graphics);
-        lg.fillColor = new Color(226, 196, 170, 255);
-        lg.rect(-240, -1, 480, 2);
-        lg.fill();
-
-        /* 第一行报**这趟带谁**，不是"队伍几只"。
-           一宠出征，场上只有一个单位 —— 写"3 只"会让人以为三个人上场。 */
-        mkLabel(card, 'row1', `这趟带   ${this.carrierText()}`, 20, INK, 500, 32)
-            .node.setPosition(0, 8, 0);
-        mkLabel(card, 'row2',
-            `饱食   ${Math.round(s.satiety)}/${SATIETY.max} · 火力 ×${mul.toFixed(2)}` +
-            (mul > 1 ? '（半饿最强）' : mul < 1 ? '（全饿最弱）' : ''),
-            20, INK, 500, 32).node.setPosition(0, -26, 0);
-        mkLabel(card, 'row3',
-            nextPet
-                ? `下一只   ${nextPet.name} 还需通过 ${petGap(s.cleared, nextPet.id)} 关`
-                : '下一只   全员到齐',
-            18, INK_SOFT, 500, 28).node.setPosition(0, -58, 0);
-
-        /* 「出发」按钮 */
-        const btn = new Node('go');
-        btn.parent = card;
-        btn.addComponent(UITransform).setContentSize(200, 60);
-        btn.setPosition(0, -110, 0);
-        const bg = btn.addComponent(Graphics);
-        bg.fillColor = BTN_FILL;
-        bg.roundRect(-100, -30, 200, 60, 30);
-        bg.fill();
-        bg.lineWidth = 3;
-        bg.strokeColor = BTN_DEEP;
-        bg.roundRect(-100, -30, 200, 60, 30);
-        bg.stroke();
-        /* 文案固定成「出 发」。
-         * 上一版这里是 `enough ? '出  发' : '能量不足'` —— 删能量系统时
-         * enough 这个变量一起被删了，但这一行漏改，于是运行时 ReferenceError，
-         * 整张出发卡渲染失败（点"出门"什么都不会弹出来）。
-         * 教训：删一个机制时，**它的"文案"和它的"数值"要一起找一遍**，
-         * 字符串里的分支最容易漏，因为 tsc 只有在真的扫到这个文件时才报。 */
-        mkLabel(btn, 'txt', '出  发', 24, new Color(96, 58, 28, 255), 180, 40);
-
-        this.press(btn, 0.95);
-        btn.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
-            e.propagationStopped = true;
-            this.launchBattle();
-        });
-
-        /* 关闭（点击蒙层空白处） */
-        scrim.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
-            e.propagationStopped = true;
-            this.closeDepart();
-        });
-
-        mkLabel(root, 'hint', '点击空白处返回家园', 17, new Color(255, 238, 220, 190), 400, 28).node.setPosition(0, -268, 0);
-
-        this.depart = root;
-        this.departOp = root.addComponent(UIOpacity);
-        this.departOp.opacity = 0;
-        this.departScrim = sg;
-    }
-
-    /* ----------------------------------------------------------------------
      * 家园业务：写存档、刷数字、打开面板
      * -------------------------------------------------------------------- */
 
@@ -2929,12 +2798,6 @@ class HomeController {
         this.bindSave();
         this.syncLawn();
         if (!next.dispatch || next.dispatch.since !== since) this.dispatchPing = false;
-        /* 出发卡是打开时现算的。喂完饭再出门，卡上必须是新的饱食度。 */
-        if (this.depart && !this.depart.active) {
-            this.depart.destroy();
-            this.depart = null;
-            this.departOp = null;
-        }
     }
 
     /** 派出的那只暂时离开草地，收回来再出现 */
@@ -4008,33 +3871,6 @@ class HomeController {
         });
     }
 
-    private openDepart() {
-        this.closeSheet();
-        if (this.depart) {
-            this.depart.destroy();
-            this.depart = null;
-            this.departOp = null;
-        }
-        this.ensureDepart();
-        /* 同 openCodex：局部量打断 TS 的属性收窄，避免 never 报错 */
-        const dp = this.depart as Node | null, dpOp = this.departOp;
-        if (!dp || !dpOp) return;
-        dp.active = true;
-        dpOp.opacity = 0;
-        tween(dpOp).to(0.22, { opacity: 255 }).start();
-    }
-
-    /** @param after 淡出播完后再执行（切场景要等动画收尾，否则是"闪一下"） */
-    private closeDepart(after?: () => void) {
-        if (!this.depart || !this.departOp) { if (after) after(); return; }
-        const d = this.depart;
-        const op = this.departOp;
-        tween(op)
-            .to(0.18, { opacity: 0 })
-            .call(() => { d.active = false; if (after) after(); })
-            .start();
-    }
-
     private placeTaskBtn() {
         const badges = this.canvas.getChildByName('Badges');
         if (!badges || badges.getChildByName('TaskBtn')) return;
@@ -4328,68 +4164,141 @@ class HomeController {
         const s = this.save;
         const board = rankBoard(s);
         const mine = myRank(s);
-        const floor = rankFloor();
         this.openSheet(
             '排行榜',
-            /* 榜单永远 10 条（9 条影子 + 你），所以 `mine` 恒为 1..10。
-               新手一进来就是第 10 名 —— 这不是 bug，是设计：
-               **永远有 9 个够得着的目标在前面**，比"你还没上榜"有方向感。 */
+            /* 副标题只报"你排第几"。**不报一共多少关** —— 2026-10-26 用户：
+               「我不想暴露最大关卡 只显示当前进度即可」。
+               10 是**榜的规模**（9 条影子 + 你），不是关卡总数，可以报。 */
             `本机通关榜 · 你排第 ${mine} / ${RANK_SIZE}`,
-            (card) => {
-                const W0 = 560;
-                /* 表头 y=156 不是 190：openSheet 的副标题在 CH/2-88 = 172，
-                   190 会和它叠上（截图 `_t-rank` 第一版「通关」压在"你排第 7"上）。 */
-                /* 表头 */
-                mkLabel(card, 'h0', '#', 11, INK_SOFT, 40, 16).node.setPosition(-250, 156, 0);
-                const h1 = mkLabel(card, 'h1', '名字', 11, INK_SOFT, 120, 16);
-                h1.node.setPosition(-160, 156, 0);
-                h1.horizontalAlign = Label.HorizontalAlign.LEFT;
-                mkLabel(card, 'h2', '通关', 11, INK_SOFT, 70, 16).node.setPosition(30, 156, 0);
-                mkLabel(card, 'h3', '星', 11, INK_SOFT, 60, 16).node.setPosition(120, 156, 0);
-                mkLabel(card, 'h4', '趟', 11, INK_SOFT, 60, 16).node.setPosition(200, 156, 0);
-
-                board.forEach((r, i) => {
-                    const y = 126 - i * 34;
-                    const row = new Node('r-' + i);
-                    row.parent = card;
-                    row.addComponent(UITransform).setContentSize(W0, 30);
-                    row.setPosition(0, y, 0);
-                    const rg = row.addComponent(Graphics);
-                    /* 自己那一行高亮 —— 一屏 10 条同色的表，玩家第一件事是找自己 */
-                    if (r.me) {
-                        rg.fillColor = new Color(255, 226, 150, 255);
-                        rg.roundRect(-W0 / 2, -15, W0, 30, 9);
-                        rg.fill();
-                    } else if (i % 2 === 1) {
-                        rg.fillColor = new Color(240, 234, 222, 255);
-                        rg.roundRect(-W0 / 2, -15, W0, 30, 9);
-                        rg.fill();
-                    }
-                    const col = r.me ? new Color(120, 76, 20, 255) : INK;
-                    const soft = r.me ? new Color(140, 96, 40, 255) : INK_SOFT;
-                    /* 前三名给个色：金 / 银 / 铜。不是装饰，是让"前三"变成一个可数的目标 */
-                    const medal = ['#E8951A', '#9AA5AD', '#B5793F'][i];
-                    mkLabel(row, 'n', String(i + 1), 13,
-                        medal ? new Color(
-                            parseInt(medal.slice(1, 3), 16),
-                            parseInt(medal.slice(3, 5), 16),
-                            parseInt(medal.slice(5, 7), 16), 255) : soft,
-                        40, 20).node.setPosition(-250, 0, 0);
-                    const nm = mkLabel(row, 'm', r.name, 14, col, 120, 20);
-                    nm.node.setPosition(-160, 0, 0);
-                    nm.horizontalAlign = Label.HorizontalAlign.LEFT;
-                    mkLabel(row, 'c', String(r.cleared), 13, col, 70, 20).node.setPosition(30, 0, 0);
-                    mkLabel(row, 's', String(r.stars), 13, col, 60, 20).node.setPosition(120, 0, 0);
-                    mkLabel(row, 'u', String(r.runs), 13, soft, 60, 20).node.setPosition(200, 0, 0);
-                });
-
-                mkLabel(card, 'foot', '先比通关屏数，再比星数，最后比谁用的趟数少',
-                    10, INK_SOFT, 520, 16).node.setPosition(0, -200, 0);
-            },
-            /* 560 而不是 520：表头 y=156 和副标题（CH/2-88）之间
-               只差 6px，520 时会重叠 2px（截图 `_t-rank`/`_t-rank2`）。 */
-            640, 560,
+            (card) => this.paintRankBoard(card, board),
+            /* 640×640：前三领奖台（最高 112）+ 表头 + 7 行列表 + 脚注。
+               560 高时脚注会压上最后一行（截图 _t-rank3 量过）。 */
+            640, 640,
         );
+    }
+
+    /**
+     * 排行榜面板：**前三上领奖台，四到十名走列表**。
+     *
+     * 用户原话（2026-10-26）：「排行榜这个要出新的概念图UI 现在太low了
+     * 而且 ICON 也是不太合适」。ICON 已换成奖杯（trophy.png），这一版换形状。
+     *
+     * 旧版是 10 行同色表格 —— "low"不在配色，在**形状**：一张表没有任何
+     * "比较"的视觉隐喻，第 1 名和第 9 名长得一模一样。领奖台是玩家唯一
+     * 从小就懂的"排名"图形：高矮错落的台座 + 奖牌色，一眼读出谁在前面。
+     *
+     * 三条硬规则：
+     *   ① 我的名次**必须亮** —— 一屏 10 条同色的表，玩家第一件事是找自己；
+     *   ② 台阶只分高矮，名次数字在牌内左上角，不另起一行重复；
+     *   ③ 4-10 名用紧凑列表而不是七个更小的台座 —— 再往下没有"台"可站，
+     *      硬造七个台阶只是把表竖起来。
+     */
+    private paintRankBoard(card: Node, board: RankRow[]) {
+        /* 奖牌三色。金 / 银 / 铜是跨文化的名次语言，
+           比"第一名用橙色"少一层学习成本。 */
+        const MEDAL = [
+            new Color(232, 185, 60, 255),
+            new Color(185, 194, 202, 255),
+            new Color(201, 138, 75, 255),
+        ];
+        const MEDAL_DEEP = new Color(96, 58, 28, 255);
+        const CREAM = new Color(255, 248, 232, 255);
+        /* 台座规格：三张牌**底部对齐、高度错落**（112/98/88）——
+           高矮本身就是名次，不需要画梯子。
+           88 是下限：牌内三行（名次 34 + 名字 24 + 趟数 18）加上行间距
+           至少要 74，再矮名字就会压到名次上（截图 _t-rank-new audit
+           第一版 78 高时 pod-2/no × pod-2/nm 纵向重叠 10px）。 */
+        const POD = [
+            { x: 0, w: 200, h: 112 },
+            { x: -155, w: 180, h: 98 },
+            { x: 155, w: 180, h: 88 },
+        ];
+        const BOTTOM = 10;
+
+        for (let i = 0; i < 3; i++) {
+            const r = board[i];
+            if (!r) break;
+            const pod = POD[i];
+            const cy = BOTTOM + pod.h / 2;
+
+            const node = new Node('pod-' + i);
+            node.parent = card;
+            node.addComponent(UITransform).setContentSize(pod.w, pod.h);
+            node.setPosition(pod.x, cy, 0);
+            const g = node.addComponent(Graphics);
+            g.fillColor = MEDAL[i];
+            g.roundRect(-pod.w / 2, -pod.h / 2, pod.w, pod.h, 14);
+            g.fill();
+            /* 我的台座描奶白：奖牌色上描金看不见，描奶白才跳得出。
+               副标题已经报了"你排第 N"，这里只负责让玩家一眼找到自己。 */
+            if (r.me) {
+                g.lineWidth = 3;
+                g.strokeColor = CREAM;
+                g.roundRect(-pod.w / 2, -pod.h / 2, pod.w, pod.h, 14);
+                g.stroke();
+            }
+
+            /* 名次大数字（左上）+ 两个关键数（右上）—— 牌面只放四样：
+               第几名、叫什么、通了几屏、拿了几颗星。趟数在列表里有。
+               三行的纵向位置按"最短的牌也塞得下"定（见 POD 注释）：
+               no/ks 贴顶、名字居中偏上、趟数贴底，行距 ≥ 4px。 */
+            mkLabel(node, 'no', String(i + 1), 28, MEDAL_DEEP, 56, 34)
+                .node.setPosition(-pod.w / 2 + 32, pod.h / 2 - 16, 0);
+            mkLabel(node, 'ks', `${r.cleared} 屏 · ${r.stars} 星`, 11, MEDAL_DEEP, 96, 18)
+                .node.setPosition(pod.w / 2 - 52, pod.h / 2 - 16, 0);
+
+            const nm = mkLabel(node, 'nm', r.name, 16, MEDAL_DEEP, pod.w - 24, 24);
+            nm.node.setPosition(0, -6, 0);
+            nm.overflow = Label.Overflow.SHRINK;
+            /* run 行**不写"这是你"**：我的那一行 name 本身就是「你」
+               （rankBoard 给的），再写一遍是同一句话说两遍。
+               "我是哪一行"由奶白描边 + 副标题的"你排第 N"回答。 */
+            mkLabel(node, 'run', `用了 ${r.runs} 趟`,
+                11, MEDAL_DEEP, pod.w - 24, 18).node.setPosition(0, -32, 0);
+        }
+
+        /* ---- 4-10 名：紧凑列表 ---- */
+        const HX = { no: -250, name: -160, clr: 30, st: 120, run: 200 };
+        mkLabel(card, 'h-no', '#', 11, INK_SOFT, 40, 16).node.setPosition(HX.no, -38, 0);
+        const hn = mkLabel(card, 'h-nm', '名字', 11, INK_SOFT, 120, 16);
+        hn.node.setPosition(HX.name, -38, 0);
+        hn.horizontalAlign = Label.HorizontalAlign.LEFT;
+        mkLabel(card, 'h-clr', '通关', 11, INK_SOFT, 70, 16).node.setPosition(HX.clr, -38, 0);
+        mkLabel(card, 'h-st', '星', 11, INK_SOFT, 60, 16).node.setPosition(HX.st, -38, 0);
+        mkLabel(card, 'h-run', '趟', 11, INK_SOFT, 60, 16).node.setPosition(HX.run, -38, 0);
+
+        for (let i = 3; i < board.length; i++) {
+            const r = board[i];
+            if (!r) break;
+            const y = -62 - (i - 3) * 27;
+            const row = new Node('r-' + i);
+            row.parent = card;
+            row.addComponent(UITransform).setContentSize(600, 26);
+            row.setPosition(0, y, 0);
+            const rg = row.addComponent(Graphics);
+            /* 自己那一行高亮 —— 一屏 10 条同色的表，玩家第一件事是找自己 */
+            if (r.me) {
+                rg.fillColor = new Color(255, 226, 150, 255);
+                rg.roundRect(-300, -13, 600, 26, 8);
+                rg.fill();
+            } else if (i % 2 === 1) {
+                rg.fillColor = new Color(246, 238, 226, 255);
+                rg.roundRect(-300, -13, 600, 26, 8);
+                rg.fill();
+            }
+            const col = r.me ? new Color(120, 76, 20, 255) : INK;
+            const soft = r.me ? new Color(140, 96, 40, 255) : INK_SOFT;
+            mkLabel(row, 'n', String(i + 1), 13, soft, 40, 20).node.setPosition(HX.no, 0, 0);
+            const nm = mkLabel(row, 'm', r.name, 14, col, 120, 20);
+            nm.node.setPosition(HX.name, 0, 0);
+            nm.horizontalAlign = Label.HorizontalAlign.LEFT;
+            mkLabel(row, 'c', String(r.cleared), 13, col, 70, 20).node.setPosition(HX.clr, 0, 0);
+            mkLabel(row, 's', String(r.stars), 13, col, 60, 20).node.setPosition(HX.st, 0, 0);
+            mkLabel(row, 'u', String(r.runs), 13, soft, 60, 20).node.setPosition(HX.run, 0, 0);
+        }
+
+        mkLabel(card, 'foot', '先比通关屏数，再比星数，最后比谁用的趟数少',
+            10, INK_SOFT, 520, 16).node.setPosition(0, -252, 0);
     }
 
     /**
@@ -4770,7 +4679,7 @@ class HomeController {
         this.save = { ...this.save, tripGoals: goals };
         saveSave(this.save);
 
-        this.closeDepart(() => {
+        {
             /* 为什么不用 director.loadScene('Battle')：
                本工程 settings 里没有 scenes 注册表（program.json / builder.json
                都只有版本号），Cocos 预览只把"当前场景 Home"打进包，
@@ -4797,7 +4706,7 @@ class HomeController {
                     }
                 });
             });
-        });
+        }
     }
 }
 

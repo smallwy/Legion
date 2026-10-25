@@ -206,8 +206,8 @@ for (let i = 0; i < G.GROVE.LEVELS.length; i++) {
     } catch (e) {
         err = e;
     }
-    ok(!err && G.GROVE.S.phase === 'pick',
-       '★ 出征页点第一道门 → 挑一屏（玩法的入口真的接上了）',
+    ok(!err && G.GROVE.S.phase === 'play',
+       '★ 出征页点第一道门 → 直接开打当前进度那一屏（挑一屏 2026-10-26 删除）',
        'phase=' + G.GROVE.S.phase);
 }
 
@@ -221,7 +221,7 @@ ok(exited === 'done', 'goHome 会通知退出钩子', 'kind=' + exited);
 const S = G.GROVE.S;
 ok(S && typeof S === 'object', 'S（全局状态）存在');
 ok(S.phase === 'select' || S.phase === 'play' || S.phase === 'clear' || S.phase === 'fail'
-   || S.phase === 'portals' || S.phase === 'pick',
+   || S.phase === 'portals',
    'S.phase 是已知状态', 'phase=' + (S && S.phase));
 
 console.log('');

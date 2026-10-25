@@ -75,6 +75,19 @@ export function stageLabel(index: number): string {
     return `${c.name} · ${stageInChapter(index)} / ${c.count}`;
 }
 
+/**
+ * 主界面 HUD 的紧凑方位：「第 3 屏」。
+ *
+ * **不报任何总数**（2026-10-26 用户：「我不想暴露最大关卡 只显示当前进度即可」）——
+ * `chapterProgressLabel` 的「枯木坡 3 / 9」带着本章屏数，`x / 27 关`带着总关数，
+ * 两种写法都在回答"一共有多少"，而玩家要的只是"我现在在哪"。
+ * 产地第二段由场景美术和下面那排进度点表达，这个 46px 的格子只放得下三个字。
+ */
+export function stageSpotLabel(cleared: number): string {
+    const i = Math.max(0, Math.min(STAGE_COUNT - 1, Math.floor(cleared)));
+    return `第 ${stageInChapter(i)} 屏`;
+}
+
 /** 主界面「苔原 x / 9」那种不带点的紧凑写法。 */
 export function chapterProgressLabel(cleared: number): string {
     const i = Math.max(0, Math.min(STAGE_COUNT - 1, Math.floor(cleared)));

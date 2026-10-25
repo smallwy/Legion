@@ -2725,8 +2725,6 @@ const S = {
    * 把 progress 拍回 0，于是 27 屏打完存档变成"第 1 关"，重进游戏从第一屏
    * 开始，玩家看到的就是"我通关了，怎么又重新开始了"。 */
   progress: 0,
-  // 挑一屏（phase === "pick"）时的键盘光标：0..LEVELS.length-1
-  pickCur: 0,
   playT: 0,             // 这一关的战斗用时。和 S.t 分开：S.t 是动画钟，结算后还要走
   clearT: 0,            // 结算面板已经停了多久（到点自动进下一关）
   /* 结算面板出现后过了几秒。**和 clearT 分开**：clearT 会被"鼠标停在按钮上"
@@ -2823,21 +2821,11 @@ const S = {
   starGain: { shards: 0, logs: 0 },
   starShards: 0,
   starLogs: 0,
-  /* 挑一屏地图用的完成位视图（27×3 的 0/1，loadStarBits 现读现填）。
+  /* 出征页预览卡用的完成位视图（27×3 的 0/1，loadStarBits 现读现填）。
      **不是真值**：真值在 localStorage 的 pawpack.save.star，这里只是
-     openPick 时拍的一张快照 —— 每帧 loadStarBits 会让 JSON.parse
-     跑 60 次/秒，而这张图在 pick 阶段是只读的。 */
+     openGates 时拍的一张快照 —— 每帧 loadStarBits 会让 JSON.parse
+     跑 60 次/秒，而这张图在出征页是只读的。 */
   starBits: null,
-  /* 触屏条件卡：pick 阶段点格子先弹这张，卡上再点「打这一屏」才进关。
-     `-1` = 没弹。
-     **为什么改成点两次。** 三颗靶的条件原文原来只挂在两处：鼠标悬停、
-     方向键光标。手机两样都没有 —— 触屏玩家只能盯着格子底部三个空心星
-     瞎猜，进了关才发现"这一屏要一球不打火坑"。鼠标悬停那条路保留
-     （底部条件行照样跟着指针走，桌面老玩家一个动作不多），点击语义统一
-     成"先看卡、再开打"：同一个位置点一下是看、点两下是开打，那才是最
-     难预期的设计，宁多一次点击。 */
-  pickAsk: -1,
-  hoverAsk: "",         // 条件卡上指针指着谁："" / "go" / "close"
   /* 出征界面（phase === "portals"）：键盘光标停在第几扇门 / 鼠标指着第几扇 */
   gateCur: 0,
   hoverGate: -1,
@@ -2859,7 +2847,6 @@ const S = {
   keys: {},
   press: {},            // 本帧新按下的键（边沿），tick 末尾清空
   hover: -1,
-  hoverStage: -1,
   hoverBtn: -1,         // 结算面板：0 继续 / 1 收工 / -1 没指
   /* 测试跳关（F2）的三个格子状态：光标格 / 鼠标悬停格 / 从哪个阶段进来的。
      jumpPrev 是"关掉面板要回到哪"—— 不记的话从 play 打开就得回 select，
@@ -2953,23 +2940,9 @@ function onKeyDown(ev) {
     ev.preventDefault();
     return;
   }
-  /* 条件卡开着时：ESC 只关卡，不一口气退回门口。
-     玩家点开卡片往往是因为"这颗星怎么拿"，ESC 的意图是「再看看别的格子」，
-     不是「离开挑一屏」。 */
-  if (S.phase === "pick" && S.pickAsk >= 0 && ev.code === "Escape") {
-    S.pickAsk = -1;
-    S.hoverAsk = "";
-    ev.preventDefault();
-    return;
-  }
   if (ev.code === "Escape" && S.phase !== "select") {
-    /* 挑一屏的 ESC **一律**退到出征页：他刚从那道门进来，"想换一道门"
-       不该等于"重新点一次出征"。
-       **不判 FROM_HOME** —— Cocos 里没有 URL，FROM_HOME 恒为 false，
-       带上这个条件会让真机上按 ESC 直接踢回主界面（原型里却退回门页），
-       同一个键两个行为。 */
-    if (S.phase === "pick") { openGates(); return; }
-    /* 从家园进来的，ESC 就是"收工回家" —— 主界面已经取代了门口选人这一站。 */
+    /* 从家园进来的，ESC 就是"收工回家" —— 主界面已经取代了门口选人这一站。
+     * （挑一屏的"ESC 一律退回出征页"规则随该页 2026-10-26 删除一起取消。） */
     if (groveExit("esc")) return;
     S.phase = "select";
     S.p = null;
@@ -2981,8 +2954,6 @@ function onKeyDown(ev) {
 
   // 选人：先走 1.6 秒的出门演出，再开打。（演出内容 = 其余五只的反应）
   if (S.phase === "select") {
-    // L = 挑一屏。**放在选人层**，因为"这趟打哪一屏"和"带谁出门"是同一个决定。
-    if (ev.code === "KeyL") { openPick(); return; }
     const n = ["Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6"].indexOf(ev.code);
     if (n >= 0 && n < HEROES.length) { pickHero(n); return; }
     // Enter / Space = 带"上一次用的那只"出门，不再按默认来。
@@ -3011,35 +2982,8 @@ function onKeyDown(ev) {
     return;
   }
 
-  /* 挑一屏：3 行 × 9 列的方向键导航。`ev.repeat` 必须挡掉 ——
-   * 按住方向键一秒会连发 30 次，光标直接从第 5 屏飞到第 27 屏。 */
-  if (S.phase === "pick") {
-    const n = LEVELS.length, cols = PICK.cols;
-    let c = S.pickCur;
-    if (ev.code === "ArrowLeft")       c -= 1;
-    else if (ev.code === "ArrowRight") c += 1;
-    else if (ev.code === "ArrowUp")    c -= cols;
-    else if (ev.code === "ArrowDown")  c += cols;
-    else if (ev.code === "Enter" || ev.code === "Space") {
-      /* 卡片开着时 Enter = 确认这张卡。不然玩家刚点开第 5 屏的条件、
-         手还在键盘上，一按回车开的却是光标那一屏 —— 又不是他刚点的那屏。 */
-      pickStage(S.pickAsk >= 0 ? S.pickAsk : S.pickCur);
-      ev.preventDefault();
-      return;
-    } else if (ev.code === "KeyE") { goHome(false); return; }
-    else if (ev.code === "KeyL") {
-      S.phase = "select"; S.p = null; S.hoverStage = -1; return;
-    } else return;
-    if (!ev.repeat) {
-      // 上下越界不绕圈 —— 绕圈会让人以为"按到底又从头上开始了"
-      S.pickCur = clamp(c, 0, n - 1);
-      S.hoverStage = -1;
-      // 动光标 = 想看别的屏，条件卡自动收起（否则卡片挡住刚移到的那一格）
-      S.pickAsk = -1;
-    }
-    ev.preventDefault();
-    return;
-  }
+  /* 挑一屏（phase === "pick"）2026-10-26 整页删除：出门链路简化成
+     出征页 → 当前进度那一屏，不再有 27 格选择层，方向键导航随之取消。 */
 
   // 结算：回车 / 空格 继续。通关就下一关，失败就重打本关 —— 不回列表。
   // E = 收工回家，把这一趟攒的收成 × 倍率落袋。
@@ -3367,7 +3311,6 @@ function setupLevel() {
 function resetRun() {
   S.phase = "select";
   S.p = null;
-  S.hoverStage = -1;
   loadLevel(0);
   setupLevel();
 }
@@ -3442,18 +3385,15 @@ function beginRun(i) {
 /**
  * 推关：通关就往下走，失败就重打本关。
  * **正常运行时不回关卡列表** —— 一回到列表，"推关"的感觉就断了，
- * 人会开始挑着打。想换关只有一条路：ESC 回选人，再从存档进度继续。
+ * 人会开始挑着打。
  *
- * 唯一的例外是**最后一屏之后**。原来那里直接 `goHome(true)`，
- * 于是"打穿第 27 屏"这件事的全部反馈是一句结算 + 被扔回第一屏；
- * 玩家手里还攥着倍率，屏幕上却已经没有下一步了。
- * 现在换成打开选关：27 格全亮，每格带评级，想刷 S 就去刷，
- * 想收工就按 E —— **"没得玩了"这句话不该由游戏来说**。
- */
+ * 唯一的例外是**最后一屏之后**：原来那里是 openPick()（27 格全亮刷 S），
+ * 挑一屏 2026-10-26 删除后换成回出征页 —— 那里有当前进度、三颗星条件，
+ * 想刷 S 从那儿再进同一屏，想收工按 E。**"没得玩了"这句话不该由游戏来说。 */
 function nextLevel() {
   if (S.phase === "fail") { beginRun(S.stage); return; }
   if (S.stage + 1 < LEVELS.length) { beginRun(S.stage + 1); return; }
-  openPick();
+  openGates();
 }
 
 /* ---------- 饱食 ----------
@@ -3633,20 +3573,6 @@ function loadProgress() {
     const v = parseInt(localStorage.getItem("pawpack.progress"), 10);
     if (v >= 0 && v <= LEVELS.length) S.progress = v;
   } catch (e) {}
-}
-
-/** 全部走完了吗。**两个来源取并集**：进度到顶，或者 27 格评级都有。
- *  只看 progress 会被老存档坑（那时的存档没有"全通"这个概念，值恒小于 27）；
- *  只看 best 会被"手改了 progress 但没打全"的存档坑。取并集最稳。 */
-function allDone() {
-  if (S.progress >= LEVELS.length) return true;
-  for (let i = 0; i < LEVELS.length; i++) if (!S.best[i]) return false;
-  return true;
-}
-
-/** 现在能挑到第几屏（含）。= 第一个没通的关；全通则全是最后一屏。 */
-function maxOpen() {
-  return clamp(S.progress, 0, LEVELS.length - 1);
 }
 
 /* ---------------------------------------------------------------------------
@@ -11404,8 +11330,10 @@ function drawTrail(g) {
   g.font = "bold 13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
   g.lineWidth = 3.4;
   g.strokeStyle = "rgba(6,20,14,.55)";
-  const label = CH.name + " · " + (S.stage - CH.from + 1) + " / " + CH.count +
-                "   " + curStage().name;
+  /* 「产地 · 第 N 屏 + 关卡名」。**不写「N / 本章屏数」**（2026-10-26
+     用户：「我不想暴露最大关卡 只显示当前进度即可」）—— 本章一共几屏
+     是内部数字，报进度不报总数。 */
+  const label = CH.name + " · 第 " + (S.stage - CH.from + 1) + " 屏   " + curStage().name;
 
   /* 波次：一关 2~3 波，最后一波是 BOSS。没有这一行，玩家不知道"还剩多久"。
    *
@@ -12339,46 +12267,53 @@ function drawBubble(g, x, y, text, alpha) {
    27 屏是一条线，深巢是另一条线，两条线在代码里都存在，但界面上只露一条，
    于是"还有别的玩法"这件事只能靠公告说出来。
 
-   这里把它们摆成并排两扇门，每扇门一张小概念图：横着推球（苔原古道）
-   还是竖着往下钻（深巢），不用读文字就分得清。
-   从家园进来必走这一页（`?stage=` 调试口除外）—— 多两次点击，
-   换的是"我要去哪儿"这个决定重新回到玩家手上。
+   形状（2026-10-26 第三轮定稿）：
+     · 左上角入口网格（小卡 = 立绘 + 名字 + 当前进度一行）
+     · 右侧大立绘预览卡（这条路长什么样 + 当前这一屏的三颗星条件）
+     · **没有挑一屏**：点门直接进当前进度那一屏（用户：「这个界面也不需要吧
+       显示当前进度就可以了」）
+     · **不暴露总数**：没有「/27」「/81」，只有「第 N 屏」（用户：「我不想暴露
+       最大关卡 只显示当前进度即可」）
+   从家园进来必走这一页（`?stage=` 调试口除外）。
    ========================================================================== */
 const GATE = {
   /* 2026-10-25 第二次打回：「不要全屏 玩法在左上角排列就要可以 给其他玩法预留空间
      每个玩法需要背景立绘啊」。
      所以门从"居中的大卡"降级成**左上角的入口网格**：
-       小卡 208×118（16:9），2 列 4 槽 —— 已开 2 个，空槽画虚框「筹备中」，
-       以后加玩法只往槽里填，版式不动。
+       小卡 208×118（16:9），2 列 —— 已开的填前面，加玩法自动往下排一行。
      右侧 360 宽留给「当前选中这条路的立绘预览」：小卡只够放名字，
      "这条路长什么样"必须有地方放大，否则立绘等于没画。
      216→208 是 16:9 反推的（208/118 = 1.763，立绘画的 768×432 = 1.778，
-     cover 裁掉不到 1%，看不出）。 */
+     cover 裁掉不到 1%，看不出）。
+     2026-10-26 第三次调整：**空槽删除**（用户否掉画装饰虚框占位那套）。
+     预留空间不再靠画装饰框，靠的是版式本身 —— 网格按 GATES.length 排，
+     多一个玩法就多一行，右侧预览永远是"当前选中的那张"。 */
   w: 208, h: 118, gapX: 14, gapY: 14,
-  x: 88, y: 168, cols: 2, slots: 4,
-  /* 预览卡：y 取 176 不取 168 —— 右上月亮光晕下沿约 168，压上去会被曝光吃掉 */
-  pv: { x: 560, y: 176, w: 360, artH: 203 },
+  x: 88, y: 168, cols: 2,
+  get slots() { return GATES.length; },
+  /* 预览卡：y 取 176 不取 168 —— 右上月亮光晕下沿约 168，压上去会被曝光吃掉。
+     h = artH + 100：名字 24 + 当前进度行 22 + 进度条 12 + 三星条件行 22 + 余量 20。 */
+  pv: { x: 560, y: 176, w: 360, artH: 203, h: 303 },
 };
 const GATES = [
   {
     id: "trail",
     name: "苔原古道",
-    sub: "27 屏 · 一屏一屏推过去",
-    /* 背景立绘：768×432（16:9，2 倍图），资源在 grove/gate/trail.png。
-       加载失败时 drawGates 回退到简笔 drawTrailArt —— 回退必须看得见，
-       不能静默变成一块空白（这个项目栽过"静默降级"）。 */
+    /* sub 已删（2026-10-26）：旧值「27 屏 · 一屏一屏推过去」暴露屏数总数，
+       用户明确「不想暴露最大关卡」。古道是开放玩法，"我在哪"由小卡副行
+       「第 N 屏」和预览卡的当前进度行回答，不需要第二条描述。 */
     art: "gate-trail",
     open: true,
   },
   {
     id: "nest",
     name: "深巢无尽",
+    /* 没开放的门才需要一句话：回答"门后面是什么"，否则这张卡只剩一个
+       "即将开放"的标签，玩家不会期待它。这句话不许带总数。 */
     sub: "越往下越深 · 每层地形都不一样",
     art: "gate-nest",
     open: false,
   },
-  /* desc 字段已删（2026-10-25 门卡缩型）：小卡只放得下名字 + 一行 sub，
-     "门里是什么"由 sub 一句话承担。以后加门照这个字段集来。 */
 ];
 
 /** 出征页的点击出口：小卡和右侧大图是同一个动作。
@@ -12388,7 +12323,7 @@ function gateTap(mx, my) {
   const i = gateHit(mx, my);
   if (i >= 0) { enterGate(i); return; }
   const v = GATE.pv;
-  if (mx >= v.x && mx <= v.x + v.w && my >= v.y && my <= v.y + v.artH + 84) {
+  if (mx >= v.x && mx <= v.x + v.w && my >= v.y && my <= v.y + v.h) {
     enterGate(clamp(S.gateCur, 0, GATES.length - 1));
   }
 }
@@ -12416,75 +12351,29 @@ function gateHit(mx, my) {
 function openGates() {
   S.phase = "portals";
   S.p = null;
-  /* 不重置 gateCur：从挑一屏退回来还应该停在刚才那扇门上。
+  /* 不重置 gateCur：从战斗退回来还应该停在刚才那扇门上。
      只 clamp —— 门数变了（以后加门）也不至于指到空位。 */
   S.gateCur = clamp(S.gateCur || 0, 0, GATES.length - 1);
   S.hoverGate = -1;
-  S.pickAsk = -1;
-  S.hoverAsk = "";
+  /* 星靶完成位快照。预览卡要画"当前这一屏还有哪颗靶没拿到"，
+     所以必须在这里读一次最新的（打完一屏回来这张图就是旧的）。 */
   S.starBits = loadStarBits();
 }
 
-/** 选一扇门。开着的进对应玩法，关着/空槽的**必须说一句话**（不静默吞点击）。 */
+/** 选一扇门。开着的**直接进当前进度那一屏** —— 挑一屏已删
+ * （2026-10-26 用户：「这个界面也不需要吧 显示当前进度就可以了」）。
+ * beginRun 内部有 clamp，全通时 progress = LEVELS.length 会落回最后一屏，
+ * 重打最后一屏，不会越界。关着的门必须说一句话（不静默吞点击）。 */
 function enterGate(i) {
   const p = GATES[i];
-  if (!p) {
-    /* 空槽（槽号 >= GATES.length）。画面上是「筹备中」的虚框，
-       点了也要有回音 —— 静默吞点击是这个项目反复栽的坑。 */
-    S.gateTip = { txt: "这条路还在筹备 · 先把现有的走透", life: 2.4 };
-    return;
-  }
+  if (!p) return;
   if (!p.open) {
-    S.gateTip = { txt: p.name + " 还没通，先把古道走完", life: 2.4 };
+    S.gateTip = { txt: p.name + " 还没挖通，先把古道走完", life: 2.4 };
     return;
   }
   if (p.id === "trail") {
-    S.progress = Math.max(S.progress, 0);
-    openPick();
+    beginRun(clamp(S.progress, 0, LEVELS.length - 1));
   }
-}
-
-const PICK = {
-  x: 40, y: 102, w: 880, h: 392,
-  cols: 9,
-  cw: 82, ch: 74, gap: 6, rowGap: 14,
-  labelW: 46, labelGap: 10,
-};
-
-/* ---------- 触屏条件卡 ----------
- * 尺寸 560×248 居中。**为什么居中不贴在格子旁边**：第 1 格和第 9 格都
- * 顶在卡片边缘，贴边弹必然有一半出屏；居中是不会错的摆法。
- * 高度是量出来的：标题 34 + 副行 26 + 分隔 24 + 三行靶 3×28 + 按钮区 66
- * + 上下内边距，再往下压就会贴到按钮底。
- */
-const ASK = { w: 560, h: 248 };
-
-function askRect() {
-  /* 中心往上提 14px：卡片底下的按钮区要离屏幕底部远一点，
-     不然拇指按「打这一屏」时手掌边缘会先碰到屏幕下沿 */
-  return { x: (W - ASK.w) / 2, y: (H - ASK.h) / 2 - 14, w: ASK.w, h: ASK.h };
-}
-
-/** 卡上的三个可点区。`card` 用来吃掉卡片内部的点击（别透到下面的格子上） */
-function askBtns() {
-  const r = askRect();
-  const bh = 40, by = r.y + 210;
-  return {
-    /* 左右对称：次按钮 128..248、主按钮 264..432（相对卡片左沿），
-       两侧各留 128，中间空 16 —— 改任何一个宽度都会破这个对称 */
-    close: { x: r.x + 128, y: by - bh / 2, w: 120, h: bh },
-    go:    { x: r.x + 264, y: by - bh / 2, w: 168, h: bh },
-    card:  { x: r.x, y: r.y, w: r.w, h: r.h },
-  };
-}
-
-function askHit(mx, my) {
-  const p = { x: mx, y: my };
-  const B = askBtns();
-  if (inRect(p, B.go)) return "go";
-  if (inRect(p, B.close)) return "close";
-  if (inRect(p, B.card)) return "card";
-  return "";
 }
 
 /** 五角星。`on` = 已拿到（实心金），否则空心灰描边 */
@@ -12538,34 +12427,12 @@ function chapterOfStage(idx) {
   };
 }
 
-/** 格子几何。**绘制和点击判定共用这一份** —— 分开算必错开，改布局时必踩。 */
-function pickCell(i) {
-  const col = i % PICK.cols;
-  const row = (i - col) / PICK.cols;
-  const gridW = PICK.cols * PICK.cw + (PICK.cols - 1) * PICK.gap;
-  const blockW = PICK.labelW + PICK.labelGap + gridW;
-  const gx = PICK.x + (PICK.w - blockW) / 2 + PICK.labelW + PICK.labelGap;
-  const gy = PICK.y + 60;
-  return {
-    x: gx + col * (PICK.cw + PICK.gap),
-    y: gy + row * (PICK.ch + PICK.rowGap),
-    w: PICK.cw, h: PICK.ch,
-  };
-}
-function pickHit(mx, my) {
-  for (let i = 0; i < LEVELS.length; i++) {
-    const c = pickCell(i);
-    if (mx >= c.x && mx <= c.x + c.w && my >= c.y && my <= c.y + c.h) return i;
-  }
-  return -1;
-}
-
 /* ============================================================================
    测试跳关（F2）
    ----------------------------------------------------------------------------
-   测试期要能"想打哪屏就打哪屏"。游戏里原本唯一能选关的地方是「挑一屏」，
-   但它被 maxOpen() 锁着 —— 只能跳到已经打通的屏。想验第 23 屏的芦苇荡，
-   得先把前 22 屏打一遍，那不叫测试。
+   测试期要能"想打哪屏就打哪屏"。挑一屏 2026-10-26 整页删除后，正向流程
+   只剩"当前进度那一屏"，而机器人要能直接落到第 23 屏的芦苇荡 ——
+   这个面板就是干这个的，**不是玩法功能**。
 
    三件事：
      ① F2 打开/关闭本面板（play / clear / fail / pick / select 都能开）
@@ -12727,50 +12594,6 @@ function drawJump(g) {
   g.font = "bold 12px " + FONT;
   g.fillText("点格子或按回车开打   ·   [ / ]  上一屏 / 下一屏   ·   F2 或 ESC 关掉",
              W / 2, JUMP.y + JUMP.h + 22);
-}
-
-function openPick() {
-  S.phase = "pick";
-  S.p = null;
-  S.door.pick = -1;
-  S.door.leaveT = 0;
-  S.hoverBtn = -1;
-  S.hoverStage = -1;
-  S.pickAsk = -1;
-  S.hoverAsk = "";
-  S.pickCur = clamp(S.stage, 0, LEVELS.length - 1);
-  /* 星靶完成位快照。挑一屏是**出门前**唯一能看见"这一屏还有哪颗靶没拿到"
-     的地方，所以必须在这里读一次最新的（打完一屏回来这张图就是旧的）。 */
-  S.starBits = loadStarBits();
-}
-
-/** 从挑一屏进关。选的这一屏如果比存档落后，progress 不会退 —— 只进不退。 */
-function pickStage(i) {
-  if (i < 0 || i > maxOpen()) return;
-  S.pickAsk = -1;          // 进关前把卡片收掉，回来时不该还挂着上一屏的卡
-  S.hoverAsk = "";
-  S.progress = Math.max(S.progress, i);
-  saveProgress();
-  beginRun(i);
-}
-
-/**
- * 挑一屏的一次"点"。**鼠标 mousedown 与触屏 tap 共用这一个出口** ——
- * 两个入口各写一份的话，改点击语义时必然只改一半（而"点一下是看条件
- * 还是开打"正是这一版改的东西）。
- */
-function pickTap(mx, my) {
-  if (S.pickAsk >= 0) {
-    const h = askHit(mx, my);
-    if (h === "go") pickStage(S.pickAsk);
-    else if (h === "close" || h === "") S.pickAsk = -1;
-    /* h === "card"：点在卡面空白处什么都不做 —— 卡片吃掉点击，
-       别让它透到下面的格子上去偷偷换屏 */
-    if (h !== "card") S.hoverAsk = "";
-    return;
-  }
-  const i = pickHit(mx, my);
-  if (i >= 0 && i <= maxOpen()) S.pickAsk = i;
 }
 
 const RANK_COLOR = { S: "#E8951A", A: "#4F9B24", B: "#3F82A2" };
@@ -12948,60 +12771,26 @@ function drawGates(g) {
   g.fillStyle = "#0C1F1A";
   g.fillRect(0, HZ, W, H - HZ);
 
+  /* 抬头只剩标题。2026-10-26 用户：「这些也是没用的描述吧 并且我不想暴露
+     最大关卡 只显示当前进度即可」—— 副标题、「摘星星 3 / 81」、「已通 6 / 27 屏」
+     整行删除。"我在哪"由小卡副行 + 预览卡的当前进度行回答，不靠抬头总账。 */
   g.textBaseline = "middle";
   g.textAlign = "left";
   g.fillStyle = "#E6F2E4";
   g.font = "bold 30px " + FONT;
   g.fillText("出征", 88, 56);
-  g.fillStyle = "rgba(200,222,200,.60)";
-  g.font = "13.5px " + FONT;
-  g.fillText("挑一条路走 · 路上的打法不一样", 88, 90);
-
-  /* 这趟的手牌（通到哪 / 摘了多少星）挂在标题下面**左侧**，不放右上角：
-     右上角是月亮（816,94 半径 74 的光晕）—— 数字放那儿会被曝光吃掉，
-     第一版就是这样，"摘星星 32 / 81" 前半截全是白的，读不出来。 */
-  let done = 0;
-  for (let i = 0; i < LEVELS.length; i++) if (S.best[i]) done++;
-  {
-    let gotStar = 0;
-    if (S.starBits) {
-      for (let i = 0; i < S.starBits.length; i++)
-        for (const b of (S.starBits[i] || [])) if (b === 1) gotStar++;
-    }
-    /* 「摘星星」（2026-10-25 用户定名）：「星靶」不符合 Q 版气质。
-       内部 id / 配靶表仍叫 Star*，只有玩家看得见的字改成摘星星。 */
-    g.font = "bold 13px " + FONT;
-    g.fillStyle = "#F0C060";
-    g.fillText("摘星星 " + gotStar + " / " + STAR_OF_STAGE.length * 3, 88, 120);
-    g.fillStyle = "rgba(200,222,200,.62)";
-    g.font = "13px " + FONT;
-    g.fillText("·  已通 " + done + " / " + LEVELS.length + " 屏", 196, 120);
-  }
 
   const focus = clamp(S.hoverGate >= 0 ? S.hoverGate : S.gateCur, 0, GATES.length - 1);
+  /* 当前屏索引 = 出征页唯一要回答的"我在哪"。
+     progress 上界是 LEVELS.length（闭区间，全通），clamp 回最后一屏。 */
+  const cur = clamp(S.progress, 0, LEVELS.length - 1);
 
   /* ---------- 左上角：玩法入口网格 ----------
-   * 4 个槽，已做的填前面，剩下的画成虚线「新的路还在修」。
-   * 空槽不是装饰：它明确回答"以后加玩法往哪儿放"，也让玩家知道
-   * 这游戏还有东西没挖出来（比留一片纯空好看，也不用改版式）。 */
+   * 槽位 = 玩法数（空槽已删，2026-10-26）。加玩法只往 GATES 里加一项，
+   * gateRect 按 cols 自动往下排一行，版式一个字不用改。 */
   for (let i = 0; i < GATE.slots; i++) {
     const r = gateRect(i);
     const p = GATES[i];
-
-    if (!p) {
-      g.save();
-      g.setLineDash([7, 6]);
-      g.strokeStyle = "rgba(160,200,180,.24)";
-      g.lineWidth = 1.6;
-      rr(g, r.x, r.y, r.w, r.h, 12);
-      g.stroke();
-      g.restore();
-      g.textAlign = "center";
-      g.fillStyle = "rgba(200,222,200,.32)";
-      g.font = "12.5px " + FONT;
-      g.fillText("新的路还在修", r.x + r.w / 2, r.y + r.h / 2);
-      continue;
-    }
 
     drawGateArt(g, p, r.x, r.y, r.w, r.h);
 
@@ -13020,10 +12809,11 @@ function drawGates(g) {
     g.font = "bold 15.5px " + FONT;
     g.fillText(fitText(g, p.name, r.w - 28), r.x + 14, r.y + r.h - 30);
 
+    /* 副行只报**当前进度**，不报总数：「/ 27」就是用户不想暴露的最大关卡 */
     g.fillStyle = p.open ? "rgba(200,222,200,.80)" : "rgba(240,200,120,.86)";
     g.font = "bold 11.5px " + FONT;
     g.fillText(p.open
-      ? (done > 0 ? "推到第 " + Math.min(done + 1, LEVELS.length) + " / " + LEVELS.length + " 屏" : "还没出发")
+      ? (S.progress > 0 ? "第 " + (cur + 1) + " 屏" : "还没出发")
       : "即将开放", r.x + 14, r.y + r.h - 12);
 
     // 描边最后画：压在图上，选中那格一眼看得出来
@@ -13040,9 +12830,8 @@ function drawGates(g) {
   {
     const v = GATE.pv, p = GATES[focus];
     if (p) {
-      const vh = v.artH + 84;
       g.fillStyle = "rgba(18,34,32,.74)";
-      rr(g, v.x, v.y, v.w, vh, 18);
+      rr(g, v.x, v.y, v.w, v.h, 18);
       g.fill();
 
       g.save();
@@ -13072,51 +12861,79 @@ function drawGates(g) {
       g.textAlign = "left";
       g.fillStyle = "#F2F7EE";
       g.font = "bold 21px " + FONT;
-      g.fillText(p.name, v.x + 22, ty + 22);
-
-      g.fillStyle = "rgba(200,222,200,.66)";
-      g.font = "12px " + FONT;
-      g.fillText(fitText(g, p.sub, v.w - 44), v.x + 22, ty + 42);
+      g.fillText(p.name, v.x + 22, ty + 24);
 
       if (p.open) {
-        /* 条与文字都往上收 4px：第一版文字基线 ty+76、卡底 ty+84，
-           实测只剩 3px 余量，进度条看着像贴在卡沿上。 */
-        const bw = v.w - 44, bx2 = v.x + 22, by2 = ty + 51;
+        /* 当前进度行：第几屏 + 产地名。产地名帮玩家建立方位
+           （"我在枯木坡"比"我在第 15 屏"更像人话），且不暴露总屏数。 */
+        const CH = chapterOfStage(cur);
+        g.fillStyle = "rgba(200,222,200,.72)";
+        g.font = "12.5px " + FONT;
+        g.fillText("第 " + (cur + 1) + " 屏 · " + CH.name, v.x + 22, ty + 46);
+
+        /* 进度条只画比例、不写数字 —— 写数字就等于回答"一共多少屏"，
+           而总数正是用户不想暴露的东西。 */
+        const bw = v.w - 44, bx2 = v.x + 22, by2 = ty + 58;
         g.fillStyle = "rgba(160,200,180,.20)";
         rr(g, bx2, by2, bw, 7, 4);
         g.fill();
         g.fillStyle = "#7FC24A";
-        rr(g, bx2, by2, Math.max(4, bw * done / LEVELS.length), 7, 4);
+        rr(g, bx2, by2, Math.max(4, bw * S.progress / LEVELS.length), 7, 4);
         g.fill();
-        g.fillStyle = "rgba(200,222,200,.80)";
-        g.font = "bold 11.5px " + FONT;
-        g.fillText(done > 0
-          ? "推到第 " + Math.min(done + 1, LEVELS.length) + " / " + LEVELS.length + " 屏"
-          : "还没出发 · 第 1 / " + LEVELS.length + " 屏", bx2, ty + 72);
+
+        /* ---- 三颗星 + 条件原文 ----
+         * 挑一屏删了，出征页是**出门前**唯一能读到"这一屏三颗星怎么拿"的
+         * 地方（桌面原来靠 hover 行、触屏原来靠条件卡，两套一起没了）。
+         * 左边三颗星回答"拿没拿到"，右边原文回答"怎么拿"。 */
+        const row = STAR_OF_STAGE[cur] || [];
+        const bits = (S.starBits && S.starBits[cur]) || [];
+        for (let kk = 0; kk < row.length; kk++) {
+          const sx = v.x + 32 + kk * 20, sy = ty + 80;
+          starPath(g, sx, sy, 7.5);
+          if (bits[kk] === 1) { g.fillStyle = "#F0A81E"; g.fill(); }
+          else {
+            g.strokeStyle = "rgba(200,222,200,.45)";
+            g.lineWidth = 1.4;
+            g.stroke();
+          }
+        }
+        let px = v.x + 22 + 66;
+        g.font = "12px " + FONT;
+        g.textAlign = "left";
+        for (let kk = 0; kk < row.length; kk++) {
+          const t = (bits[kk] === 1 ? "✓ " : "— ") + (STAR_CN[row[kk]] || row[kk]);
+          /* 超出预览卡右界就停：三条原文并排塞不下，截断比压到卡外好看。
+             （fitText 是单色的，做不到"逐段上色 + 截断"，这里手动截。） */
+          if (px + g.measureText(t).width > v.x + v.w - 18) break;
+          g.fillStyle = bits[kk] === 1 ? "#7FC24A" : "rgba(200,222,200,.62)";
+          g.fillText(t, px, ty + 80);
+          px += g.measureText(t).width + 14;
+        }
       } else {
-        /* 没开放的玩法也要把"后面是什么"说清楚，否则这张卡只剩一个
+        /* 没开放的门也要把"后面是什么"说清楚，否则这张卡只剩一个
            "即将开放"的标签，玩家不会期待它 */
         g.fillStyle = "rgba(240,200,90,.16)";
-        rr(g, v.x + 22, ty + 50, 92, 24, 12);
+        rr(g, v.x + 22, ty + 46, 92, 24, 12);
         g.fill();
         g.textAlign = "center";
         g.fillStyle = "#F0C060";
         g.font = "bold 12px " + FONT;
-        g.fillText("即将开放", v.x + 68, ty + 62);
+        g.fillText("即将开放", v.x + 68, ty + 58);
         g.textAlign = "left";
         g.fillStyle = "rgba(200,222,200,.46)";
-        g.fillText("正在挖", v.x + 122, ty + 62);
+        g.font = "12px " + FONT;
+        g.fillText(fitText(g, p.sub || "", v.w - 44), v.x + 122, ty + 58);
       }
 
       g.strokeStyle = "rgba(160,200,180,.22)";
       g.lineWidth = 1.4;
-      rr(g, v.x, v.y, v.w, vh, 18);
+      rr(g, v.x, v.y, v.w, v.h, 18);
       g.stroke();
     }
   }
 
-  /* 提示条（点没开放的门 / 空槽时）。网格底 418、底部提示 558，中间放一条；
-     放画面上方会被标题抢走注意力，放最底会和操作提示叠。 */
+  /* 提示条（点没开放的门时）。一行网格时网格底 286、预览卡底 479，
+     放 496 谁也不挨；放画面上方会被标题抢走注意力，放最底会和操作提示叠。 */
   if (S.gateTip.life > 0) {
     const a = clamp(S.gateTip.life / 0.4, 0, 1) * clamp((2.4 - S.gateTip.life) / 0.14, 0, 1);
     g.globalAlpha = a;
@@ -13138,335 +12955,23 @@ function drawGates(g) {
   g.fillText("点一张卡进去   ·   方向键挑   ·   Enter 进   ·   ESC 回主界面", W / 2, H - 42);
 }
 
-function drawPick(g) {
-  const cx = W / 2;
-
-  // 门口那套夜景压暗：不压的话，27 个奶油格子会浮在一片草绿上
-  g.fillStyle = "rgba(0,0,0,.52)";
-  g.fillRect(0, 0, W, H);
-  g.fillStyle = "rgba(20,36,52,.40)";
-  g.fillRect(0, 0, W, H);
-
-  creamCard(g, PICK.x, PICK.y, PICK.w, PICK.h, 24);
-
-  const FONT = "'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  const K = hudSkin();
-
-  // ---- 抬头：标题 + 战绩汇总 ----
-  g.textBaseline = "middle";
-  g.textAlign = "left";
-  g.fillStyle = K.ink;
-  g.font = "bold 21px " + FONT;
-  g.fillText(allDone() ? "都走完了，想再走哪一屏？" : "挑一屏重打", PICK.x + 28, PICK.y + 32);
-
-  {
-    const cnt = { S: 0, A: 0, B: 0 };
-    let done = 0;
-    for (let i = 0; i < LEVELS.length; i++) {
-      const r = S.best[i];
-      if (r) { cnt[r] = (cnt[r] || 0) + 1; done++; }
-    }
-    g.textAlign = "right";
-    g.font = "12.5px " + FONT;
-    const seg = [["S", cnt.S], ["A", cnt.A], ["B", cnt.B]];
-    let tx = PICK.x + PICK.w - 28;
-    // 从右往左摆：B A S 倒着排，最后读出来还是 S A B 的顺序
-    for (let k = seg.length - 1; k >= 0; k--) {
-      const t = seg[k][1] + " " + seg[k][0];
-      g.fillStyle = RANK_COLOR[seg[k][0]];
-      g.font = "bold 13px " + FONT;
-      g.fillText(t, tx, PICK.y + 32);
-      tx -= g.measureText(t).width + 12;
-    }
-    g.fillStyle = K.ink3;
-    g.font = "12.5px " + FONT;
-    const doneTxt = "已通 " + done + " / " + LEVELS.length;
-    g.fillText(doneTxt, tx, PICK.y + 32);
-    /* 星靶总账挂在「已通」左边：抬头这一行本来就是「打得怎么样」的总账，
-       三星是同一笔账的另一栏，不该另起一行去抢地盘。
-       为什么挑一屏要有这个数：三星是**这一批 27 屏的**收集进度，
-       它唯一的家就是这张地图 —— 放图鉴里那是把「这一关怎么打得更好」
-       和「这是什么」混成一类（2026-10-26 用户点出来的）。 */
-    let gotStar = 0;
-    if (S.starBits) for (let i = 0; i < S.starBits.length; i++)
-      for (const b of (S.starBits[i] || [])) if (b === 1) gotStar++;
-    tx -= g.measureText(doneTxt).width + 14;
-    g.fillStyle = "#C97A10";
-    g.font = "bold 12.5px " + FONT;
-    g.fillText("摘星星 " + gotStar + " / " + STAR_OF_STAGE.length * 3, tx, PICK.y + 32);
-  }
-
-  g.strokeStyle = "rgba(120,92,64,.24)";
-  g.lineWidth = 1;
-  g.beginPath();
-  g.moveTo(PICK.x + 28, PICK.y + 48);
-  g.lineTo(PICK.x + PICK.w - 28, PICK.y + 48);
-  g.stroke();
-
-  // ---- 27 个格子 ----
-  const cur = S.hoverStage >= 0 ? S.hoverStage : S.pickCur;
-  const open = maxOpen();
-  for (let i = 0; i < LEVELS.length; i++) {
-    const L = LEVELS[i];
-    const c = pickCell(i);
-    const locked = i > open;
-    const cleared = !!S.best[i];
-    const isCur = i === cur && !locked;
-    const hot = i === S.hoverStage && !locked;
-
-    // 底板
-    g.fillStyle = locked ? "rgba(96,74,52,.10)"
-                : cleared ? "#FFFBF0"
-                : "#FFF3D6";
-    rr(g, c.x, c.y, c.w, c.h, 10);
-    g.fill();
-
-    // 描边：选中 → 金粗线 + 光晕；通了 → 淡棕；锁着 → 几乎透明
-    if (isCur) {
-      g.save();
-      g.shadowColor = "rgba(240,168,30,.75)";
-      g.shadowBlur = 12;
-      g.strokeStyle = "#F0A81E";
-      g.lineWidth = 2.8;
-      rr(g, c.x, c.y, c.w, c.h, 10);
-      g.stroke();
-      g.restore();
-    } else {
-      g.strokeStyle = locked ? "rgba(120,92,64,.14)"
-                    : cleared ? "rgba(120,92,64,.42)"
-                    : "rgba(240,168,30,.55)";
-      g.lineWidth = hot ? 2.2 : 1.5;
-      rr(g, c.x, c.y, c.w, c.h, 10);
-      g.stroke();
-    }
-
-    const ink = locked ? "rgba(74,53,36,.30)" : "#4A3524";
-    const ink2 = locked ? "rgba(74,53,36,.22)" : "rgba(74,53,36,.62)";
-
-    // 左上：第几屏
-    g.textAlign = "left";
-    g.font = "10px " + FONT;
-    g.fillStyle = ink2;
-    g.fillText("第 " + (i + 1), c.x + 8, c.y + 15);
-
-    // 右上：评级 / 新 / 锁
-    g.textAlign = "right";
-    if (locked) {
-      g.font = "11px " + FONT;
-      g.fillStyle = "rgba(74,53,36,.28)";
-      g.fillText("锁", c.x + c.w - 8, c.y + 16);
-    } else if (cleared) {
-      g.font = "bold 18px " + FONT;
-      g.fillStyle = RANK_COLOR[S.best[i]] || "#4A3524";
-      g.fillText(S.best[i], c.x + c.w - 9, c.y + 16);
-    } else {
-      // 还没通的那一屏：给一个金色「新」，和周围一片灰区别开
-      const pulse = 0.62 + 0.38 * Math.abs(Math.sin(S.t * 2.2));
-      g.globalAlpha = pulse;
-      g.font = "bold 11px " + FONT;
-      g.fillStyle = "#C97A10";
-      g.fillText("新", c.x + c.w - 9, c.y + 16);
-      g.globalAlpha = 1;
-    }
-
-    // 关卡名
-    g.textAlign = "center";
-    g.fillStyle = ink;
-    g.font = (cleared || !locked ? "bold 14px " : "13px ") + FONT;
-    g.fillText(fitText(g, L.name, c.w - 12), c.x + c.w / 2, c.y + 34);
-
-    // 底部：目标词。它才是"这一屏打法不一样"的唯一线索 ——
-    // 27 屏里有 6 种目标，光看名字全是地形名，读不出来差别。
-    const gd = GOALS[L.goal];
-    g.font = "10px " + FONT;
-    g.fillStyle = locked ? "rgba(74,53,36,.20)" : "rgba(120,92,64,.72)";
-    g.fillText(gd ? gd.name : "", c.x + c.w / 2, c.y + 50);
-
-    /* ---- 三颗靶（2026-10-26 从图鉴搬到这里）----
-     * 为什么必须挂在格子上：三星回答的是「这一屏我打得够不够好」，
-     * 和评级是同一句话的两种说法。品类共识是**挂在关卡节点上**，
-     * 收进图鉴等于让玩家为了看进度多穿一门。
-     * 实心金 = 拿到，空心灰 = 没有；锁着的格子整行压暗 ——
-     * 但轮廓仍然画：全隐藏的话，解锁前根本不知道这一屏有靶。 */
-    const row = STAR_OF_STAGE[i] || [];
-    const bits = (S.starBits && S.starBits[i]) || [];
-    for (let k = 0; k < row.length; k++) {
-      const sx = c.x + c.w / 2 + (k - 1) * 11;
-      const sy = c.y + 65.5;
-      if (bits[k] === 1) {
-        g.fillStyle = locked ? "rgba(240,168,30,.30)" : "#F0A81E";
-        starPath(g, sx, sy, 4.2);
-        g.fill();
-      } else {
-        g.strokeStyle = locked ? "rgba(120,92,64,.16)" : "rgba(120,92,64,.45)";
-        g.lineWidth = 1.2;
-        starPath(g, sx, sy, 4.2);
-        g.stroke();
-      }
-    }
-  }
-
-  // ---- 产地标签：画在每行左侧，和那一行的格子垂直居中 ----
-  for (let r = 0; r < FACTIONS.length; r++) {
-    const c = pickCell(r * PICK.cols);
-    const f = FACTIONS[r];
-    const fy = c.y + c.h / 2;
-    // 竖排两~三字：竖排比横排窄，46 宽的标签列才放得下「枯木坡」
-    g.textAlign = "center";
-    g.font = "bold 12px " + FONT;
-    const chars = f.name.split("");
-    const lh = 14;
-    const y0 = fy - (chars.length - 1) * lh / 2;
-    for (let k = 0; k < chars.length; k++) {
-      // 第一个字染金，后两个字退灰 —— 一整列同色会读成四条独立的竖线
-      g.fillStyle = k === 0 ? "#8A5716" : "rgba(120,92,64,.68)";
-      g.fillText(chars[k], PICK.x + 22 + PICK.labelW / 2, y0 + k * lh);
-    }
-  }
-
-  // ---- 底部：当前指向的是哪一屏，以及操作 ----
-  const cy = PICK.y + PICK.h - 26;
-  if (cur >= 0 && cur < LEVELS.length) {
-    const L = LEVELS[cur];
-    const gd = GOALS[L.goal];
-    const canGo = cur <= open;
-    g.textAlign = "center";
-    g.font = "bold 12.5px " + FONT;
-    g.fillStyle = canGo ? "rgba(74,53,36,.82)" : "rgba(74,53,36,.40)";
-    g.fillText("第 " + (cur + 1) + " 屏 " + L.name + " · " + (gd ? (gd.title || gd.name) : "") +
-               (canGo ? "" : "　（还没走到）"), cx, cy - 16);
-  }
-
-  /* ---- 三颗靶的原文（hover / 键盘光标指向的那一屏）----
-   * 格子里那三颗星只回答「拿没拿到」，不回答「怎么拿」。
-   * 条件原文必须**在点开打之前**能读到，所以挂在条形读条上：
-   * 鼠标悬停或方向键移过去就换，不占格子、也不改点击语义
-   * （点格子照样直接开打 —— 机器人基线一个字节没动）。 */
-  if (cur >= 0 && cur < LEVELS.length) {
-    const row = STAR_OF_STAGE[cur] || [];
-    const bits = (S.starBits && S.starBits[cur]) || [];
-    const canGo = cur <= open;
-    const parts = [];
-    for (let k = 0; k < row.length; k++) {
-      parts.push({ t: (bits[k] === 1 ? "✓ " : "— ") + STAR_CN[row[k]], got: bits[k] === 1 });
-    }
-    // 逐段上色：一个 fillText 只有一个颜色，而三颗靶的状态必须分开读
-    let total = 0;
-    for (const p of parts) total += g.measureText(p.t).width + 18;
-    let px = cx - total / 2 + 9;
-    g.font = "12px " + FONT;
-    g.textAlign = "left";
-    for (const p of parts) {
-      g.fillStyle = !canGo ? "rgba(74,53,36,.28)"
-                  : p.got ? "#4F9B24" : "rgba(120,92,64,.72)";
-      g.fillText(p.t, px, cy - 38);
-      px += g.measureText(p.t).width + 18;
-    }
-  }
-
-  g.textAlign = "center";
-  g.font = "11.5px " + FONT;
-  g.fillStyle = "rgba(74,53,36,.50)";
-  /* 文案跟着点击语义走：桌面点格子现在也是"先看条件卡"。键盘 Enter 没变
-     （方向键已经把条件行读到光标那一屏了，再弹一次卡是多一步），
-     所以这里分开写「点击看条件 / Enter 直开」。 */
-  g.fillText("点一屏看条件   ·   方向键挑   ·   Enter 直开   ·   ESC 返回   ·   E 收工", cx, cy + 6);
-}
-
-/* ---------- 触屏条件卡（画在 drawPick 之上，整屏压暗） ----------
- *
- * 桌面用鼠标悬停就能在底部条件行读到三颗靶，手机没有悬停 ——
- * 这张卡是触屏玩家在**进关之前**唯一能读到条件的地方。
- */
-function drawAsk(g) {
-  const i = S.pickAsk;
-  if (i < 0 || i >= LEVELS.length) return;
-  const FONT = "'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
-  const K = hudSkin();
-  const r = askRect();
-  const L = LEVELS[i];
-  const gd = GOALS[L.goal];
-  const row = STAR_OF_STAGE[i] || [];
-  const bits = (S.starBits && S.starBits[i]) || [];
-  let got = 0;
-  for (let k = 0; k < row.length; k++) if (bits[k] === 1) got++;
-
-  g.fillStyle = "rgba(16,28,40,.46)";
-  g.fillRect(0, 0, W, H);
-  creamCard(g, r.x, r.y, r.w, r.h, 22);
-
-  g.textBaseline = "middle";
-  g.textAlign = "left";
-
-  g.fillStyle = K.ink;
-  g.font = "bold 19px " + FONT;
-  g.fillText("第 " + (i + 1) + " 屏 · " + L.name, r.x + 28, r.y + 34);
-
-  /* 右上三颗大星：和格子里那三颗小的同一套口径（金 = 拿到）。
-     卡片上放大一倍 —— 进关前最后一眼要回答的就是"还差几颗"。 */
-  for (let k = 0; k < 3; k++) {
-    drawStar(g, r.x + r.w - 32 - (2 - k) * 28, r.y + 33, 10, bits[k] === 1);
-  }
-
-  g.fillStyle = "rgba(74,53,36,.62)";
-  g.font = "12.5px " + FONT;
-  const sub = "目标：" + (gd ? (gd.title || gd.name) : "—")
-    + "　·　" + (got >= row.length
-      ? "三颗集满，奖励已领"
-      : "还差 " + (row.length - got) + " 颗 · 集满 碎片 +" + STAR_FULL_SHARDS
-        + " 材料 +" + STAR_FULL_LOGS);
-  g.fillText(sub, r.x + 28, r.y + 60);
-
-  g.strokeStyle = "rgba(120,92,64,.22)";
-  g.lineWidth = 1;
-  g.beginPath();
-  g.moveTo(r.x + 28, r.y + 84);
-  g.lineTo(r.x + r.w - 28, r.y + 84);
-  g.stroke();
-
-  /* 三行靶：状态符 + 名字 + 口径原文。
-     desc 用 11.5px 而不是正文 12.5 —— 最长的一条 32 字，12.5 会顶到卡片
-     右边沿；11.5 在 412px 里放得下 35 字，且仍比格子里的 10px 目标词大。 */
-  for (let k = 0; k < row.length; k++) {
-    const id = row[k];
-    const met = bits[k] === 1;
-    const y = r.y + 112 + k * 28;
-    g.textAlign = "left";
-    g.font = "bold 13px " + FONT;
-    g.fillStyle = met ? "#4F9B24" : "rgba(150,144,136,.95)";
-    g.fillText(met ? "✓" : "—", r.x + 28, y);
-    g.fillStyle = met ? "#3F7D24" : K.ink;
-    g.fillText(STAR_CN[id] || id, r.x + 52, y);
-    g.fillStyle = "rgba(74,53,36,.60)";
-    g.font = "11.5px " + FONT;
-    g.fillText(fitText(g, STAR_DESC[id] || "", r.w - 152), r.x + 124, y);
-  }
-
-  const B = askBtns();
-  const bh = B.go.h;
-  g.textAlign = "center";
-
-  const cHot = S.hoverAsk === "close";
-  g.fillStyle = cHot ? "#F6E6CC" : "#FFF8E8";
-  rr(g, B.close.x, B.close.y, B.close.w, bh, 20);
-  g.fill();
-  g.strokeStyle = "rgba(120,92,64,.40)";
-  g.lineWidth = 1.6;
-  rr(g, B.close.x, B.close.y, B.close.w, bh, 20);
-  g.stroke();
-  g.fillStyle = "rgba(74,53,36,.78)";
-  g.font = "bold 15px " + FONT;
-  g.fillText("再看看", B.close.x + B.close.w / 2, B.close.y + bh / 2);
-
-  const gHot = S.hoverAsk === "go";
-  g.fillStyle = gHot ? "#F0A81E" : "#E8961A";
-  rr(g, B.go.x, B.go.y, B.go.w, bh, 20);
-  g.fill();
-  g.fillStyle = "#FFFDF6";
-  g.font = "bold 16px " + FONT;
-  g.fillText(got >= row.length ? "再打一遍" : "打这一屏",
-             B.go.x + B.go.w / 2, B.go.y + bh / 2);
-}
+/* ============================================================================
+   挑一屏（phase === "pick"）—— 2026-10-26 整页删除
+   ----------------------------------------------------------------------------
+   用户原话：「这个界面也不需要吧 显示当前进度就可以了」。
+   27 格选择页是"重打旧屏"的入口，但出门链路被简化成
+   **家 → 出征页 → 当前进度那一屏**之后，这一页的正向入口只剩
+   "通关后想刷 S"一条 —— 而刷 S 的理由（三星条件原文）已经搬到
+   出征页右侧预览卡。整页删除，不留死代码：
+     · PICK / ASK 常量、pickCell / pickHit / pickTap / pickStage / openPick
+     · drawPick / drawAsk、askRect / askBtns / askHit
+     · allDone / maxOpen（唯一用户就是这一页）
+     · S.pickCur / pickAsk / hoverAsk / hoverStage 字段
+     · 键盘 L 键、pick 方向键段、mousedown / touchstart / mousemove 的 pick 分支
+     · smoke §27 / §40 两组断言、shot3 的 pick / ask 场景
+   测试跳关（F2 / JUMP 面板）保留 —— 它不是玩法功能，是测试工具，
+   而且它自己的注释里就写着"正式版要删就删 keydown 那三段 + 这个块"。
+   ========================================================================== */
 
 function drawSelect(g) {
   const d = S.door;
@@ -13734,9 +13239,10 @@ function drawSelect(g) {
   g.font = "13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
   /* 三分支，别写成 `progress > 0 ? ... : ...`。
    * progress 的上界是 LEVELS.length（闭区间），全通时 `progress + 1` 会印出
-   * "走到第 28 关" —— 27 屏的游戏说第 28 关，玩家第一反应是"还有第 28 关？"。 */
-  g.fillText(allDone()
-    ? ("27 屏都走完了 · 一只出门，五只看家")
+   * "走到第 28 关" —— 所以全通单独一个分支，且**不报总屏数**
+   * （2026-10-26 用户：「我不想暴露最大关卡 只显示当前进度即可」）。 */
+  g.fillText(S.progress >= LEVELS.length
+    ? ("古道走透了 · 一只出门，五只看家")
     : S.progress > 0
       ? ("走到第 " + (S.progress + 1) + " 关 · 一只出门，五只看家")
       : "六只都在等 · 一只出门，五只看家", W / 2, 84);
@@ -13823,11 +13329,10 @@ function tick(dt) {
         S.heroIdx = S.door.pick;
         S.door.pick = -1;
         S.door.leaveT = 0;
-        /* 全通了就没有"下一个没通的关"可推 —— 这时先把人送到挑一屏，
-         * 而不是 `beginRun(clamp(27, 0, 26))` 悄悄塞进最后一屏。
-         * 那种"按了 1 号键却掉进第 27 屏"的行为，玩家只会读成 bug。 */
-        if (allDone()) openPick();
-        else beginRun(S.progress);
+        /* 全通了也是 beginRun(S.progress)：beginRun 内部 clamp 到最后一屏，
+         * 重打最后一屏。挑一屏删掉后没有"27 格全亮让你挑"这个出口了
+         * （2026-10-26 用户：「这个界面也不需要吧」）。 */
+        beginRun(S.progress);
       }
     }
   }
@@ -14815,8 +14320,10 @@ function render() {
       g.font = "12px " + FONT;
       g.textAlign = "left";
       {
+        /* 角标只报「产地 第 N 屏」，不报「N / 本章屏数」——
+           2026-10-26 用户：「我不想暴露最大关卡 只显示当前进度即可」。 */
         const ch = chapterOfStage(S.stage);
-        g.fillText(ch.name + " " + (S.stage - ch.from + 1) + " / " + ch.count,
+        g.fillText(ch.name + " · 第 " + (S.stage - ch.from + 1) + " 屏",
                    cardX + 30, cardY + 24);
       }
       if (S.trip.stages > 1) {
@@ -15210,14 +14717,9 @@ function render() {
        还没到"带谁出门"那一步。叠在门口会让人以为已经出门了。 */
     drawGates(g);
   } else {
-    /* 门口场景 → 挑一屏是**叠在它上面**的，不是另起一屏。
-     * 换背景会让人以为"我离开了门口"，而实际上选完一屏就是从这扇门走出去。 */
+    /* 其余阶段（select / play / clear / fail / jump）全部叠在门口场景上。
+     * 挑一屏 2026-10-26 删除：它原本是叠在这里的第二层。 */
     drawSelect(g);
-    if (S.phase === "pick") {
-      drawPick(g);
-      /* 条件卡画在格子图**之后**：它要盖住格子，而不是被格子盖住 */
-      if (S.pickAsk >= 0) drawAsk(g);
-    }
   }
 
   /* 后期合成：泛光 / 分离色调 / 颗粒 / 暗角。
@@ -15269,21 +14771,10 @@ function toLocal(ev) {
 }
 
 function onCanvasMove(loc: any): void {
-  // 测试跳关面板是模态的：它在的时候别让下面的 select / pick / 结算按钮跟着亮
+  // 测试跳关面板是模态的：它在的时候别让下面的 select / 结算按钮跟着亮
   if (S.phase === "jump") { S.jumpHover = jumpHit(loc.x, loc.y); return; }
   if (S.phase === "select") S.hover = hitSelect(loc.x, loc.y);
   if (S.phase === "portals") S.hoverGate = gateHit(loc.x, loc.y);
-  if (S.phase === "pick") {
-    /* 卡片开着时鼠标不再摸格子：`hoverStage` 冻住，改去摸卡上的按钮。
-       两条 hover 走同一个字段的话，指针滑过卡片边缘时底部条件行会乱跳。 */
-    if (S.pickAsk >= 0) {
-      S.hoverAsk = askHit(loc.x, loc.y);
-      S.hoverBtn = -1;
-      return;
-    }
-    S.hoverStage = pickHit(loc.x, loc.y);
-    S.hoverAsk = "";
-  }
   // 结算面板：指着按钮时不推进倒计时 —— 他正在读，别替他做决定
   if (S.phase === "clear" || S.phase === "fail") {
     const B = settleBtns();
@@ -15306,14 +14797,6 @@ function onCanvasDown(loc: any): void {
     gateTap(loc.x, loc.y);
     return;
   }
-  /* 挑一屏：锁着的格子**点不动**，但点上去不弹提示 —— 格子上已经写着
-     "锁"了，再弹一句"这一屏还没走到"是把同一件事说两遍。
-     解锁的格子点一下**只弹条件卡**（触屏唯一能读到靶条件的地方），
-     卡上再点「打这一屏」才进关。逻辑在 pickTap 里，触屏共用。 */
-  if (S.phase === "pick") {
-    pickTap(loc.x, loc.y);
-    return;
-  }
   // 结算界面：只有真的点在按钮上才算数。
   // 上一版是"命中 home 就收工，否则一律 nextLevel" —— 点在卡片外的草地上
   // 也会直接进下一关，玩家会以为"这面板自己跳走了"。
@@ -15324,17 +14807,18 @@ function onCanvasDown(loc: any): void {
   }
 }
 
-/* 触屏：接管**出征页与挑一屏**。
+/* 触屏：接管**出征页**。
  *
  * 为什么必须显式接：这一页的交互全靠 mousedown / mousemove，手机上
  * tap 是靠浏览器合成一对 mousedown + mouseup 才生效的（有延迟，而且
- * hover 那条路根本不存在 —— 所以底部条件行在手机上从来没显示过）。
- * 出征页是主界面的下一站，条件卡是给触屏做的，要是连"点一下"都走
- * 合成事件，等于给触屏修了一半。
+ * hover 那条路根本不存在 —— 出征页的 hover 高亮在手机上从来没显示过）。
+ * 出征页是主界面的下一站，连"点一下"都走合成事件等于给触屏修了一半。
  *
- * 为什么只在这两个阶段 preventDefault：一旦无条件挡掉默认行为，
+ * 为什么只在这个阶段 preventDefault：一旦无条件挡掉默认行为，
  * 其他阶段（选人 / 打斗 / 结算）就连合成的 mousedown 都收不到，
- * 整个游戏在手机上会彻底点不动 —— 本轮不扩大范围，只修坏掉的那两段。
+ * 整个游戏在手机上会彻底点不动 —— 本轮不扩大范围，只修坏掉的那一段。
+ * （挑一屏与其触屏条件卡 2026-10-26 删除，三星条件原文搬进了预览卡，
+ *   触屏在预览卡上直接能读到，不再需要"点一下弹卡"这套中间层。）
  */
 /* 触屏监听（cv.addEventListener("touchstart")）在这里被抽掉：
    画布进了 Cocos 是离屏的、不接 DOM 事件，触点在 GroveBattle 里
@@ -15585,19 +15069,13 @@ export const GROVE: any = {
   /* 解锁节奏与分章几何：冒烟要能直接问"第 20 屏属于哪个产地""这屏送谁"。
      问不出来的话，只能靠截图目测，而截图看不出边界到底在 9 还是 10。 */
   stageUnlockReward, chapterOfStage, syncHomeMirror, adoptHomeMirror, UNLOCK_AT, HERO_CN,
-  // 挑一屏：几何/命中/进出口全部导出，冒烟才能验"27 格都点得到、
-  // 锁着的点不动、全通后进得去"
-  openPick, pickStage, pickCell, pickHit, drawPick, allDone, maxOpen,
-  /* 触屏条件卡：drawAsk 给截图器，askHit/pickTap 给冒烟验"点一次只弹卡、
-     点卡上按钮才进关"这条语义（进关会改 S.phase，断言要能看到） */
-  drawAsk, askHit, askRect, askBtns, pickTap,
-  /* 出征页：drawGates 给截图器，gateHit/enterGate/openGates
-     给冒烟验"点开着的门进玩法、点没开的门不静默吞" */
+  /* 出征页：drawGates 给截图器，gateHit/gateTap/enterGate/openGates
+     给冒烟验"点开着的门进当前进度那一屏、点没开的门不静默吞" */
   drawGates, gateHit, gateRect, gateTap, enterGate, openGates, GATES,
-  /* GATE 是网格/预览的布局常量：冒烟要用它验"槽位比玩法多（预留）"和
+  /* GATE 是网格/预览的布局常量：冒烟要用它验"槽位 = 玩法数（无空槽）"和
      "预览区不与网格重叠"，写死数字的断言迟早和界面漂移。 */
   GATE,
-  PICK, FACTIONS, RANK_COLOR,
+  FACTIONS,
   /* 测试跳关（F2）。导出是为了**能自动验证**："27 格都点得到、
      点第 N 格真的进第 N 屏、跳关不写存档"这三条只能靠代码问，截图看不出来。
      顺手也给截图脚本用：grove-shot3 可以直接 jumpTo(22) 拍芦苇荡。 */

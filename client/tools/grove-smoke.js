@@ -1096,17 +1096,19 @@ console.log("\n=== 16. 推关流程 ===");
   eq(S.stage, 3, "失败重打本关，不往前推");
   eq(S.phase, "play", "重打直接进战斗");
 
-  /* 最后一关通关 → 挑一屏，不是回门口。
+  /* 最后一关通关 → 回出征页，不是回门口、不是回第 1 关。
    *
    * 原来是 `goHome(true)`，那条路会把 progress 拍回 0：27 屏打完，存档变
    * "第 1 关"，重进游戏从第一屏开始 —— 玩家看到的就是"通关了怎么又重来"。
-   * 现在的出口是挑一屏：27 格全亮，想刷评级就刷，想收工按 E。
+   * 后来换成 openPick（27 格全亮刷 S），挑一屏 2026-10-26 删除后
+   * 出口改成 openGates：那里有当前进度和三颗星条件，想刷 S 从那儿再进
+   * 同一屏，想收工按 E。
    * 断言改成验这个**新契约**，而不是把旧行为固化下来。 */
   P._start(0, P.LEVELS.length - 1);
   S.phase = "clear";
   P.nextLevel();
-  eq(S.phase, "pick", "最后一关通关后进挑一屏（不是回选人、不是回第 1 关）");
-  eq(S.stage, P.LEVELS.length - 1, "挑一屏时 stage 还停在最后一屏，不会被改成 0");
+  eq(S.phase, "portals", "最后一屏通关后回出征页（不是回选人、不是回第 1 关）");
+  eq(S.stage, P.LEVELS.length - 1, "回出征页时 stage 还停在最后一屏，不会被改成 0");
 }
 
 /* ---------- 17. 八关布局：每关都得是"另一个地方" ---------- */
@@ -2163,69 +2165,75 @@ console.log("\n=== 26. 地面层两端开口 / 上层反弹 ===");
     "depth=" + S.snowDepth + " prints=" + S.footprints.length);
 }
 
-console.log("\n=== 27. 挑一屏 / 全通存档语义 ===");
+console.log("\n=== 27. 出征页进门语义 / 全通存档语义（挑一屏 2026-10-26 删除）===");
 {
   const sb = boot();
   const P = sb.GROVE, S = P.S;
   const N = P.LEVELS.length;
 
-  /* ① 27 格必须全部排得进面板、互不重叠、都在画布内。
-     这是"3 产地 × 9 屏"这个版式的硬约束：格子多一格或宽一格，
-     第 27 关就会压到面板外面，而截图里只是"右边缺一块"，看不出来。 */
+  /* ① 入口网格几何：槽位 = 玩法数（空槽「新的路还在修」已删），
+     全部在画布内、互不重叠。加玩法只往 GATES 里加一项，这条断言不用改。 */
   const cells = [];
-  for (let i = 0; i < N; i++) cells.push(P.pickCell(i));
-  ok(cells.length === N, "每屏都有格子", "n=" + cells.length);
+  for (let i = 0; i < P.GATE.slots; i++) cells.push(P.gateRect(i));
+  ok(cells.length === P.GATES.length, "槽位 = 玩法数（没有空槽占位）",
+     "slots=" + cells.length + " gates=" + P.GATES.length);
 
   let out = 0, overlap = 0;
-  for (let i = 0; i < N; i++) {
+  for (let i = 0; i < cells.length; i++) {
     const a = cells[i];
     if (a.x < 0 || a.y < 0 || a.x + a.w > 960 || a.y + a.h > 600) out++;
-    for (let j = i + 1; j < N; j++) {
+    for (let j = i + 1; j < cells.length; j++) {
       const b = cells[j];
       const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
       const oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
       if (ox > 0 && oy > 0) overlap++;
     }
   }
-  ok(out === 0, "27 个格子全部在画布内", "越界 " + out);
-  ok(overlap === 0, "格子之间不重叠", "重叠 " + overlap);
+  ok(out === 0, "玩法小卡全部在画布内", "越界 " + out);
+  ok(overlap === 0, "小卡之间不重叠", "重叠 " + overlap);
 
-  /* ② 面板本身也得在画布内 —— 格子在内但面板出界，边框会被切掉一条。 */
-  ok(P.PICK.x >= 0 && P.PICK.y >= 0 &&
-     P.PICK.x + P.PICK.w <= 960 && P.PICK.y + P.PICK.h <= 600,
-     "面板在画布内",
-     P.PICK.w + "×" + P.PICK.h + " @ " + P.PICK.x + "," + P.PICK.y);
-
-  /* ③ 命中测试和格子几何是同一份 —— 抓格子中心必须命中自己。 */
-  let hitBad = 0;
-  for (let i = 0; i < N; i++) {
-    const c = cells[i];
-    if (P.pickHit(c.x + c.w / 2, c.y + c.h / 2) !== i) hitBad++;
+  /* ② 预览区不与网格重叠（左上网格 + 右侧预览是这一版的形状），
+     且预览区自己也在画布内 —— 它比网格宽，最容易从右边掉出去。 */
+  {
+    const v = P.GATE.pv;
+    let bad = 0;
+    for (const a of cells) {
+      const ox = Math.min(a.x + a.w, v.x + v.w) - Math.max(a.x, v.x);
+      const oy = Math.min(a.y + a.h, v.y + v.h) - Math.max(a.y, v.y);
+      if (ox > 0 && oy > 0) bad++;
+    }
+    ok(bad === 0, "预览区不与入口网格重叠", "重叠 " + bad);
+    ok(v.x >= 0 && v.y >= 0 && v.x + v.w <= 960 && v.y + v.h <= 600,
+       "预览区在画布内", v.w + "×" + v.h + " @ " + v.x + "," + v.y);
   }
-  ok(hitBad === 0, "每个格子中心点命中自己（绘制与判定同源）", "错 " + hitBad);
 
-  /* ④ 锁：progress = 3 时，第 4 屏之后（索引 >3）都点不动。
-     注意上界是**闭区间** —— progress=0 时第 1 屏可玩，这是"一关没打"的常态。 */
+  /* ③ 命中测试和格子几何是同一份 —— 抓小卡中心必须命中自己。 */
+  let hitBad = 0;
+  for (let i = 0; i < cells.length; i++) {
+    const c = cells[i];
+    if (P.gateHit(c.x + c.w / 2, c.y + c.h / 2) !== i) hitBad++;
+  }
+  ok(hitBad === 0, "每个小卡中心点命中自己（绘制与判定同源）", "错 " + hitBad);
+
+  /* ④ 点开着的门 → 直接进**当前进度那一屏**（挑一屏已删，没有中间选择页）。 */
   S.progress = 3;
-  ok(P.maxOpen() === 3, "maxOpen 跟着 progress 走", "maxOpen=" + P.maxOpen());
-  P.openPick();
-  eq(S.phase, "pick", "openPick 进挑一屏");
-  const before = S.stage;
-  P.pickStage(9);
-  eq(S.stage, before, "锁着的屏点了没反应（stage 不动）");
-  P.pickStage(2);
-  eq(S.stage, 2, "已通的屏点得进去");
-  eq(S.phase, "play", "选完就开打");
+  P.openGates();
+  eq(S.phase, "portals", "openGates 进出征页");
+  P.enterGate(0);
+  eq(S.phase, "play", "点苔原古道直接开打（不经过挑一屏）");
+  eq(S.stage, 3, "进的是当前进度那一屏（progress = 3 → stage 3）");
 
-  /* ⑤ 选老关不许把进度退回去 —— "只进不退"是这套存档的唯一规则。 */
+  /* ⑤ "只进不退"还在：progress 高的存档进门还是打当前那一屏。 */
   S.progress = 12;
-  P.pickStage(1);
-  ok(S.progress === 12, "回头打第 2 屏，progress 停在 12 不退", String(S.progress));
+  P.openGates();
+  P.enterGate(0);
+  eq(S.stage, 12, "progress = 12 → 进第 13 屏");
 
-  /* ⑥ 全通判定：progress 顶到 length 就是全通，且 maxOpen 不会越界到 27。 */
+  /* ⑥ 全通时 clamp 回最后一屏，不越界（progress 上界是闭区间 N）。 */
   S.progress = N;
-  ok(P.allDone(), "progress === LEVELS.length 就是全通");
-  ok(P.maxOpen() === N - 1, "全通时 maxOpen 收到最后一屏", String(P.maxOpen()));
+  P.openGates();
+  P.enterGate(0);
+  eq(S.stage, N - 1, "全通时进最后一屏（不越界）", "stage=" + S.stage);
 
   /* ⑦ 全通后 `goHome(true)` 不许把进度清零 —— 这是那句
      "通关了怎么又重新开始了"的原始病根。 */
@@ -2233,19 +2241,12 @@ console.log("\n=== 27. 挑一屏 / 全通存档语义 ===");
   P.goHome(true);
   ok(S.progress >= N, "全通后收工不把进度拍回 0", String(S.progress));
 
-  /* ⑧ 评级数组也是全通的一个来源：progress 落后但 27 格评级都在，也算全通。 */
-  S.progress = 0;
-  const keep = S.best.slice();
-  for (let i = 0; i < N; i++) S.best[i] = "B";
-  ok(P.allDone(), "27 格评级全在 = 全通（不只看 progress）");
-  for (let i = 0; i < N; i++) S.best[i] = keep[i];
-  ok(!P.allDone(), "清掉评级就退回未全通");
-
-  /* ⑨ 结算卡的「继续」在最后一屏要去挑一屏，不是去收工。 */
+  /* ⑧ 结算卡的「继续」在最后一屏回出征页，不是去收工、不是回第 1 屏。
+     （原来是 openPick，挑一屏删了换成 openGates。） */
   P._start(0, N - 1);
   S.phase = "clear";
   P.nextLevel();
-  eq(S.phase, "pick", "最后一屏通关 → 挑一屏");
+  eq(S.phase, "portals", "最后一屏通关 → 回出征页");
   P.resetRun();
 }
 
@@ -4126,102 +4127,85 @@ console.log("\n=== 39. 星靶：81 个靶的配靶规则 / 判定 / 落盘 / 真
      "★ 收工重置整趟星靶累计");
 }
 
-console.log("\n=== 40. 触屏条件卡：点一下只弹卡，卡上再点才进关 ===");
+console.log("\n=== 40. 出征页交互：点门直达当前进度 / 没开的门不静默吞 / 预览卡接管靶条件 ===");
 {
-  /* 病根不是「少了个面板」，是**手机上根本读不到靶条件** —— 条件原文原来
-     只挂在鼠标悬停和方向键光标上，手机两样都没有，玩家只能盯着格子底部
-     三个空心星瞎猜。所以这一节验的不是"卡画出来了"，而是行为语义：
+  /* 2026-10-26 第三轮：挑一屏与触屏条件卡整页删除，出门链路简化成
+     **家 → 出征页 → 当前进度那一屏**。这一节验新链路的行为语义：
 
-       A. 点解锁格 → 只弹卡（phase 不变、stage 不变）；
-       B. 锁着的格点不动（不能靠点卡绕过进度）；
-       C. 卡面吃掉点击，三个可点区的命中；
-       D. 点「打这一屏」才真的进关，并且开的是卡上那屏；
-       E. 卡片整个在画布里；
+       A. 点开着的门 → 直接进当前进度那一屏（phase = play、stage = progress）；
+       B. 没开的门点了有提示、不静默吞、也不进关；
+       C. 预览区可点 = 和点小卡同一个动作（gateTap 单一出口）；
+       D. 预览卡接管三星条件（挑一屏删了，这是出门前唯一能读到的地方）；
+       E. 抬头统计与「/ 总数」全部消失（用户：没用的描述 + 不暴露最大关卡）；
        F. STAR_DESC 与 StarTargets.ts 逐字一致（两份数据必须由门禁焊住）。
 
-     键盘那两条（Enter 认卡 / 方向键自动关卡）在这里没法派发事件 ——
-     grove-env 的 window.addEventListener 是 noop，键盘处理也没导出成函数。
-     所以走源码断言，和 §39-G 同一个手法，别当行为测试看。 */
+     键盘那两条（左右键挑门 / Enter 进）走源码断言 —— grove-env 的
+     window.addEventListener 是 noop，键盘处理也没导出成函数。 */
   const sb40 = boot(), P = sb40.GROVE;
   const src40 = fs.readFileSync(HTML, "utf8");
-  /* grove-env 的 mkCanvas 是 960×600，页面里 W/H 也是这个数（顶层 const
-     不挂全局，所以只能从这里取） */
-  const CW = 960, CH = 600;
 
-  function freshPick() {
-    P.S.progress = P.LEVELS.length;
-    for (let i = 0; i < P.LEVELS.length; i++) P.S.best[i] = "S";
-    P.S.stage = 0;
-    P.S.pickAsk = -1;
-    P.openPick();
-  }
-  function cellMid(i) {
-    const c = P.pickCell(i);
-    return { x: c.x + c.w / 2, y: c.y + c.h / 2 };
-  }
+  /* ---- A. 点开着的门直接进当前进度那一屏 ---- */
+  P.S.progress = 5;
+  P.openGates();
+  eq(P.S.phase, "portals", "openGates 进出征页");
+  const g0 = P.gateRect(0);
+  P.gateTap(g0.x + g0.w / 2, g0.y + g0.h / 2);
+  eq(P.S.phase, "play", "★ 点苔原古道直接开打（没有挑一屏中间层）");
+  eq(P.S.stage, 5, "★ 进的是当前进度那一屏（progress = 5 → stage 5）");
 
-  /* ---- A. 点解锁格只弹卡 ---- */
-  freshPick();
-  const m4 = cellMid(4);
-  P.pickTap(m4.x, m4.y);
-  eq(P.S.pickAsk, 4, "★ 点第 5 格 → 只是弹卡（pickAsk = 4）");
-  eq(P.S.phase, "pick", "★ 点一下不会直接开打（phase 还是 pick）");
-  eq(P.S.stage, 0, "★ stage 没变（没偷偷进关）");
+  /* ---- B. 没开的门：有提示、不静默、不进关 ---- */
+  P.openGates();
+  P.S.progress = 5;
+  P.S.gateTip = { txt: "", life: 0 };
+  const g1 = P.gateRect(1);
+  P.gateTap(g1.x + g1.w / 2, g1.y + g1.h / 2);
+  eq(P.S.phase, "portals", "★ 点没开的门不进关");
+  ok(P.S.gateTip.life > 0 && P.S.gateTip.txt.length > 0,
+     "★ 点没开的门说一句话（不静默吞点击）", P.S.gateTip.txt);
+  ok(/深巢无尽/.test(P.S.gateTip.txt), "提示里带门名（玩家要知道点在哪个门上）");
+  ok(!P.S.say.txt || P.S.say.txt.indexOf("还没挖通") < 0,
+     "★ 提示**不走 S.say**：那句是玩家头顶的气泡，出征页没有玩家对象，写了永远看不见");
 
-  /* ---- B. 锁着的格点不动 ---- */
-  freshPick();
-  P.S.progress = 3;
-  P.openPick();
-  const m20 = cellMid(20);
-  P.pickTap(m20.x, m20.y);
-  eq(P.S.pickAsk, -1, "锁着的格点不出卡");
-  eq(P.S.phase, "pick", "锁着的格也进不去关");
+  /* ---- C. 预览区可点 = 点小卡同一个动作 ---- */
+  P.openGates();
+  P.S.gateTip = { txt: "", life: 0 };
+  P.S.progress = 2;
+  const v40 = P.GATE.pv;
+  P.gateTap(v40.x + v40.w / 2, v40.y + v40.artH / 2);
+  eq(P.S.phase, "play", "★ 点右侧大立绘也能进（图看着能点就必须能点）");
+  eq(P.S.stage, 2, "★ 预览图进的是同一条路（gateCur = 0）");
 
-  /* ---- C. 卡面吃点击 + 三个可点区 ---- */
-  freshPick();
-  P.pickTap(m4.x, m4.y);
-  const r40 = P.askRect();
-  eq(P.askHit(r40.x + 10, r40.y + 8), "card",
-     "点卡面空白 → 认成 card（不是 go）");
-  P.pickTap(r40.x + 10, r40.y + 8);
-  eq(P.S.pickAsk, 4, "★ 点卡面空白不关卡（卡片吃掉点击）");
-  eq(P.S.phase, "pick", "点卡面空白也不会开打");
-  eq(P.askHit(4, 4), "", "卡片外的点不归卡片管（透回格子）");
+  /* ---- D. 预览卡接管三星条件 ---- */
+  P.openGates();
+  P.S.progress = 7;
+  ok(/const row = STAR_OF_STAGE\[cur\] \|\| \[\];/.test(src40),
+     "★ 预览卡读当前屏的靶表（挑一屏删了，出门前只有这里能读到条件）");
+  ok(/starPath\(g, sx, sy, 7\.5\)/.test(src40),
+     "★ 预览卡画三颗星（回答拿没拿到）");
+  ok(/STAR_CN\[row\[kk\]\]/.test(src40),
+     "★ 预览卡画条件名字（回答怎么拿）");
+  ok(/chapterOfStage\(cur\)/.test(src40),
+     "★ 预览卡报产地名（我在枯木坡比我在第 15 屏更像人话）");
 
-  const B40 = P.askBtns();
-  eq(P.askHit(B40.go.x + B40.go.w / 2, B40.go.y + B40.go.h / 2), "go", "主按钮命中 go");
-  eq(P.askHit(B40.close.x + B40.close.w / 2, B40.close.y + B40.close.h / 2), "close",
-     "次按钮命中 close");
+  /* ---- E. 抬头统计与总数全部消失 ---- */
+  ok(!/挑一条路走/.test(src40),
+     "★ 副标题已删（用户：这些也是没用的描述吧）");
+  ok(!/摘星星 " \+ gotStar/.test(src40) && !/已通 " \+ done/.test(src40),
+     "★ 抬头统计行已删（用户：没用的描述）");
+  ok(!/新的路还在修/.test(src40) && !/这条路还在筹备/.test(src40),
+     "★ 空槽文案已删（用户：没必要这么写吧）");
+  ok(!/" \+ LEVELS\.length/.test(src40) && !/STAR_OF_STAGE\.length \* 3/.test(src40),
+     "★ 出征页没有任何「/ 总数」（不暴露最大关卡，只显示当前进度）");
+  ok(!/推到第 " \+ Math\.min/.test(src40),
+     "★ 旧文案「推到第 N / 27 屏」已删（同一个位置改报「第 N 屏」）");
 
-  /* ---- D. 「再看看」关卡 / 「打这一屏」进关 ---- */
-  P.pickTap(B40.close.x + 5, B40.close.y + 5);
-  eq(P.S.pickAsk, -1, "★ 点「再看看」关卡");
-  eq(P.S.phase, "pick", "点「再看看」不进关");
-
-  freshPick();
-  P.pickTap(m4.x, m4.y);
-  const B40b = P.askBtns();
-  P.pickTap(B40b.go.x + B40b.go.w / 2, B40b.go.y + B40b.go.h / 2);
-  eq(P.S.phase, "play", "★ 卡上点「打这一屏」才真的进关");
-  eq(P.S.stage, 4, "★ 进的是卡上那一屏（不是光标那屏）");
-  eq(P.S.pickAsk, -1, "进关前把卡收掉（回来时不该还挂着）");
-
-  /* ---- E. 卡片不越界 ---- */
-  ok(r40.x >= 0 && r40.y >= 0 && r40.x + r40.w <= CW && r40.y + r40.h <= CH,
-     "★ 卡片整个在画布里",
-     `${r40.x},${r40.y} ${r40.w}×${r40.h}`);
-  ok(B40.go.x + B40.go.w <= r40.x + r40.w && B40.close.x >= r40.x,
-     "两个按钮都在卡内（左右不溢出）");
-  ok(B40.go.y >= r40.y && B40.go.y + B40.go.h <= r40.y + r40.h,
-     "按钮在卡内（上下不溢出）");
-
-  /* ---- F. STAR_DESC 与 TS 逐字一致 ---- */
+  /* ---- F. STAR_DESC 与 StarTargets.ts 逐字一致 ---- */
   {
     const ts40 = fs.readFileSync(
       path.join(__dirname, "..", "assets", "scripts", "config", "StarTargets.ts"), "utf8");
     const descHtml = {};
     const mh = src40.match(/const STAR_DESC = \{([\s\S]*?)\n\};/);
-    ok(!!mh, "grove.html 有 STAR_DESC（触屏卡的口径原文）");
+    ok(!!mh, "grove.html 有 STAR_DESC（靶的口径原文）");
     if (mh) {
       const re = /(\w+):\s*"([^"]+)"/g;
       let g2;
@@ -4239,20 +4223,19 @@ console.log("\n=== 40. 触屏条件卡：点一下只弹卡，卡上再点才进
   }
 
   /* ---- G. 键盘/触屏源码断言（理由见本节开头） ---- */
-  ok(/pickStage\(S\.pickAsk >= 0 \? S\.pickAsk : S\.pickCur\)/.test(src40),
-     "★ Enter 认卡：开着卡时开的是卡上那屏，不是光标那屏");
-  ok(/S\.pickAsk >= 0 && ev\.code === "Escape"/.test(src40),
-     "★ ESC 先关卡（不是一口气退回门口）");
-  ok(/S\.hoverStage = -1;\s*\n\s*\/\/ 动光标[\s\S]{0,80}S\.pickAsk = -1;/.test(src40),
-     "★ 方向键移动时自动关卡（否则卡片挡住刚移到的那格）");
-  ok(/addEventListener\("touchstart"[\s\S]{0,120}S\.phase !== "pick"/.test(src40),
-     "★ 触屏只在 pick 阶段接管 —— 其他阶段无条件 preventDefault 会让手机整体点不动");
+  ok(/ev\.code === "ArrowLeft" \|\| ev\.code === "ArrowUp"\) c -= 1;/.test(src40),
+     "出征页左右键挑门（上下键也当左右用，手机外接键盘不至于按了没反应）");
+  ok(/enterGate\(S\.gateCur\);/.test(src40),
+     "出征页 Enter 进当前光标那扇门");
+  ok(/addEventListener\("touchstart"[\s\S]{0,60}S\.phase !== "portals"/.test(src40),
+     "★ 触屏只在 portals 阶段接管 —— 其他阶段无条件 preventDefault 会让手机整体点不动");
   ok(/addEventListener\("touchstart"[\s\S]{0,900}passive: false/.test(src40),
      "触屏监听带 passive:false（否则 preventDefault 无效，点一次等于点两次）");
-  ok(/openPick\(\)[\s\S]{0,400}S\.pickAsk = -1;/.test(src40),
-     "openPick 重置条件卡（重进挑一屏不该还挂着上一屏的卡）");
+  ok(/function gateTap\(mx, my\) \{[\s\S]{0,400}enterGate\(clamp\(S\.gateCur/.test(src40),
+     "gateTap 是小卡与大图的单一出口（两个入口各写一份必然漂移）");
+  ok(/get slots\(\) \{ return GATES\.length; \}/.test(src40),
+     "槽位 = 玩法数（空槽已删；加玩法只往 GATES 里加，网格自动多排一行）");
 }
-
 console.log("\n=== 41. 出征页：两扇门 / 点开着的门进玩法 / 没开的门不静默吞 ===");
 {
   /* 用户原话：「出门之后 应该有一个出征界面 融合这些玩法的 每个玩法一个小的概念图」
@@ -4276,9 +4259,11 @@ console.log("\n=== 41. 出征页：两扇门 / 点开着的门进玩法 / 没开
   {
     const ids = G41.map((g) => g.id);
     eq(new Set(ids).size, ids.length, "门的 id 不重复");
+    /* sub 只给**没开的门**用（回答"门后面是什么"）。开的门不写：
+       2026-10-26 用户否掉一切"没用的描述"，且 sub 里不许带屏数总数。 */
     for (const g of G41) {
-      ok(!!g.name && !!g.sub,
-         `${g.id} 两件都有：名字 / 一行说明（desc 已随门卡缩型删除）`);
+      ok(!!g.name, `${g.id} 有名字`);
+      if (!g.open) ok(!!g.sub, `${g.id} 没开放 → 必须有一句"门里是什么"`);
     }
     eq(G41.filter((g) => g.open).length >= 1, true, "至少一扇门是开着的");
   }
@@ -4308,13 +4293,15 @@ console.log("\n=== 41. 出征页：两扇门 / 点开着的门进玩法 / 没开
 
   /* ---- D. 语义 ---- */
   {
-    /* 开着的门：进挑一屏 */
+    /* 开着的门：**直接进当前进度那一屏**（挑一屏 2026-10-26 删除，
+       用户：「这个界面也不需要吧 显示当前进度就可以了」） */
     P.S.progress = 5;
     P.S.stage = 0;
     P.openGates();
     eq(P.S.phase, "portals", "openGates 进的是出征页");
     P.enterGate(0);
-    eq(P.S.phase, "pick", "★ 点开着的门 → 进挑一屏（玩法入口真的接上了）");
+    eq(P.S.phase, "play", "★ 点开着的门 → 直接开打当前进度那一屏（没有中间选择页）");
+    eq(P.S.stage, 5, "★ 进的就是当前进度（progress = 5 → stage 5）");
 
     /* 没开的门：不许静默吞点击 —— 点了要有一句话 */
     const closedIdx = G41.findIndex((g) => !g.open);
@@ -4373,9 +4360,10 @@ console.log("\n=== 41. 出征页：两扇门 / 点开着的门进玩法 / 没开
       ok(gb41b.indexOf("'" + g.art + "'") >= 0,
          `★ ${g.art} 在 ART_MANIFEST 里（不进清单 = 真机永远看不到立绘）`);
     }
-    /* 网格：2 列、槽位 > 玩法数（预留），空槽不与真实卡重叠 */
+    /* 网格：2 列、**槽位 = 玩法数**（空槽 2026-10-26 删除，用户「没必要这么写吧」；
+       给后续玩法留的位置由版式本身承担 —— 加一个玩法 gridRect 自动多排一行） */
     eq(P.GATE.cols, 2, "2 列网格");
-    ok(P.GATE.slots > G41.length, "槽位比玩法多（给后面加玩法预留位置）",
+    eq(P.GATE.slots, G41.length, "槽位 = 玩法数（没有「新的路还在修」空槽）",
        `slots ${P.GATE.slots} vs 玩法 ${G41.length}`);
     const rs = [];
     for (let i = 0; i < P.GATE.slots; i++) rs.push(P.gateRect(i));
@@ -4391,35 +4379,25 @@ console.log("\n=== 41. 出征页：两扇门 / 点开着的门进玩法 / 没开
     /* 左上角：网格必须压在标题下面、画面左半边 */
     ok(rs[0].x < CW / 2 && rs[0].y < CH / 2, "网格从左上角开始",
        `${rs[0].x},${rs[0].y}`);
-    /* 右侧预览区不与网格重叠、在画布里 */
+    /* 右侧预览区不与网格重叠、在画布里（pv.h = artH + 100 是整张卡高） */
     const pv = P.GATE.pv;
     ok(pv.x >= rs[1].x + rs[1].w, "预览区在网格右侧", `pv.x ${pv.x}`);
-    ok(pv.x + pv.w <= CW && pv.y + pv.artH + 84 <= CH, "预览区在画布里");
-    /* 空槽点了要有回音 */
-    const emptyIdx = G41.length;
-    eq(P.gateHit(P.gateRect(emptyIdx).x + 10, P.gateRect(emptyIdx).y + 10), emptyIdx,
-       "★ 空槽命中（不是 point 不到的死区）");
-    P.openGates();
-    P.S.gateTip = { txt: "", life: 0 };
-    P.enterGate(emptyIdx);
-    eq(P.S.phase, "portals", "点空槽不放人进去");
-    ok(P.S.gateTip.txt && P.S.gateTip.life > 0, "★ 点空槽有话说（不静默吞点击）",
-       P.S.gateTip.txt);
-    /* 右侧大图可点：点它 = 进当前选中的玩法 */
+    ok(pv.x + pv.w <= CW && pv.y + pv.h <= CH, "预览区在画布里",
+       `${pv.x},${pv.y} ${pv.w}×${pv.h}`);
+    /* 右侧大图可点：点它 = 进当前选中的玩法（挑一屏删了，这是"图看着能点就必须能点"） */
     P.openGates();
     P.S.gateCur = 0;
     P.S.progress = 0;
     P.gateTap(pv.x + pv.w / 2, pv.y + 40);
-    eq(P.S.phase, "pick", "★ 点右侧大立绘 = 进当前这条路的玩法（图看着能点就必须能点）");
+    eq(P.S.phase, "play", "★ 点右侧大立绘 = 直接进当前这条路的玩法（图看着能点就必须能点）");
+    eq(P.S.stage, 0, "★ 进的是当前进度那一屏");
   }
 
   /* ---- F. 入口与退路（键盘/启动没法派发事件，走源码断言） ---- */
   ok(/else if \(FROM_HOME\) \{ S\.progress = st >= 0 \? st : LEVELS\.length; openGates\(\); \}/.test(src41),
      "★ 从家园进来先到出征页（不再一键掉进第 N 屏）");
-  ok(/if \(S\.phase === "pick"\) \{ openGates\(\); return; \}/.test(src41),
-     "★ 挑一屏按 ESC 一律回出征页（想换门 ≠ 重新点一次出征）");
-  ok(!/FROM_HOME && S\.phase === "pick"/.test(src41),
-     "★ ESC 回门页**不判 FROM_HOME**（Cocos 里它恒为 false，否则同一次按键原型一个行为、真机另一个）");
+  ok(/if \(FROM_HOME\) \{ location\.href = "game\.html"; return; \}/.test(src41),
+     "★ 出征页 ESC 从家园进来的直接收工回家（挑一屏没了，没有中间层要退）");
 
   /* ---- G. Cocos 侧入口真的接上了 ----
      这一组读的是 GroveRuntime.ts / GroveBattle.ts，不是原型 ——
@@ -4435,8 +4413,6 @@ console.log("\n=== 41. 出征页：两扇门 / 点开着的门进玩法 / 没开
        抽取时插入的说明注释里也写着 cv.addEventListener("touchstart")。 */
     ok(!/\ncv\.addEventListener\("touchstart"/.test(rt41),
        "★ 触屏监听没漏进运行时顶层（cv 那时是 null，会让整个模块加载失败）");
-    ok(/if \(S\.phase === "pick"\) \{ openGates\(\); return; \}/.test(rt41),
-       "运行时里的 ESC 与原型一致（抽取没把这一段改歪）");
     const gb41 = fs.readFileSync(
       path.join(__dirname, "..", "assets", "scripts", "grove", "GroveBattle.ts"), "utf8");
     ok(/groveBoot\(heroIndexOf\(save\.active\), undefined, true\)/.test(gb41),
@@ -4445,7 +4421,7 @@ console.log("\n=== 41. 出征页：两扇门 / 点开着的门进玩法 / 没开
   ok(/if \(S\.phase === "portals"\) \{[\s\S]{0,400}enterGate\(S\.gateCur\)/.test(src41),
      "出征页 Enter 进当前门");
   ok(/S\.gateCur = clamp\(S\.gateCur \|\| 0, 0, GATES\.length - 1\);/.test(src41),
-     "从挑一屏退回来还停在刚才那扇门（不是每次都回到第一扇）");
+     "从战斗退回来还停在刚才那扇门（不是每次都回到第一扇）");
 }
 
 console.log("\n" + "=".repeat(56));

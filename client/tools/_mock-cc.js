@@ -158,8 +158,26 @@ Node.EventType = {
 
 class Scene extends Node {}
 
-class UITransform {
+/* ==========================================================================
+   组件基类：`isValid`
+   --------------------------------------------------------------------------
+   真引擎里**每个 Component 都有 `isValid`**，业务代码大量用它做守卫
+   （HomeRuntime.ts 里 24 处，`if (x && x.isValid)`）。
+   桩里原来只有 Node 有 —— 于是这些守卫在离线渲染里**全部静默为假**：
+   tick 里的实时刷新一行不跑，画面停在初始状态，而断言和截图都"正常"。
+   这就是「测试测了空集」：不是没测，是测的那条路从来没被走进来。
+
+   桩里的语义取"只要没被 destroy 就有效"。Node.destroy() 只摘父不断子组件，
+   所以这里不做联动 —— 桩要的是"别把有效代码静默跳过"，不是完整生命周期。
+   ========================================================================== */
+class Comp {
+    get isValid() { return !this._destroyed; }
+    destroy() { this._destroyed = true; }
+}
+
+class UITransform extends Comp {
     constructor() {
+        super();
         this.contentSize = { width: 0, height: 0 };
         this._anchorPoint = { x: 0.5, y: 0.5 };
     }
@@ -186,10 +204,11 @@ class UITransform {
     convertToNodeSpaceAR(v) { return new Vec3(v.x, v.y, v.z || 0); }
 }
 
-class UIOpacity { constructor() { this.opacity = 255; } }
+class UIOpacity extends Comp { constructor() { super(); this.opacity = 255; } }
 
-class Label {
+class Label extends Comp {
     constructor() {
+        super();
         this.string = '';
         this.fontSize = 20;
         this.lineHeight = 26;
@@ -203,8 +222,8 @@ Label.HorizontalAlign = { LEFT: 0, CENTER: 1, RIGHT: 2 };
 Label.VerticalAlign = { TOP: 0, CENTER: 1, BOTTOM: 2 };
 Label.Overflow = { NONE: 0, CLAMP: 1, SHRINK: 2, RESIZE_HEIGHT: 3 };
 
-class Sprite {
-    constructor() { this.color = new Color(); this.spriteFrame = null; this.sizeMode = 0; this.type = 0; }
+class Sprite extends Comp {
+    constructor() { super(); this.color = new Color(); this.spriteFrame = null; this.sizeMode = 0; this.type = 0; }
 }
 /* 枚举要补齐：HomeRuntime 里 `sp.sizeMode = Sprite.SizeMode.CUSTOM` 是常见写法，
    桩里没有 SizeMode 就会在**运行时**抛 undefined.CUSTOM，
@@ -212,8 +231,9 @@ class Sprite {
 Sprite.SizeMode = { CUSTOM: 0, TRIMMED: 1, RAW: 2 };
 Sprite.Type = { SIMPLE: 0, SLICED: 1, TILED: 2, FILLED: 3 };
 
-class Graphics {
+class Graphics extends Comp {
     constructor() {
+        super();
         this.fillColor = new Color();
         this.strokeColor = new Color();
         this.lineWidth = 1;

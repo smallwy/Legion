@@ -296,8 +296,11 @@ function audit() {
         return false;
     };
     /* 背景 / 雾层 / 宠物这三层本来就在所有 UI 底下，和谁"相交"都正常。
-       放进报告只会把真正的重叠淹掉。 */
-    const BACKDROP = /^(BG|FogTop|FogBot|Pets|Camera|Canvas|Scene|Home)$/;
+       放进报告只会把真正的重叠淹掉。
+       `__birds` / `__smoke` 是氛围层（满屏飘），`__Toast` 是浮在最上面的提示条 ——
+       它们和 UI 相交是设计如此。但**面板内部的 `scrim` 不排除**：
+       它是整屏压暗，任何内容都在它上面，排除它会连真重叠一起藏掉。 */
+    const BACKDROP = /^(BG|FogTop|FogBot|Pets|Camera|Canvas|Scene|Home|__birds|__smoke|__Toast)$/;
     let hits = 0;
     for (let i = 0; i < rects.length; i++) {
         for (let j = i + 1; j < rects.length; j++) {

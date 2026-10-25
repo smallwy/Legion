@@ -322,7 +322,7 @@ const BADGE_INFO: Record<string, string> = {
     '工作台': '家 · 喂饭与制作都在这里',
     // 图鉴已经是真面板了（openCodex），这里留着只为兜底 —— 它不会再被读到
     '图鉴': '图鉴 · 查看已收服的宠物',
-    '灶台': '灶台 · 已并入「工坊」',
+    '灶台': '排行榜 · 本机通关榜',
     '派遣': '派遣 · 让宠物出门带资源回来（待实装）',
     '去苔原': '苔原 · 下一关的入口（已由底部「出门」承担）',
 };
@@ -666,6 +666,31 @@ class HomeController {
     /** 任务徽标的脉冲幅度（0 = 不脉冲）。有可领时才动 */
     private taskPulse = 0;
     private taskBtn: Node | null = null;
+
+    /**
+     * 派遣板上那颗「有东西可收」的红点。
+     *
+     * 用户原话：「派遣这个功能 不知道咋玩 应该有挂机属性啊」——
+     * 挂机属性的第一块不是倒计时，是**回来之后看得见**。
+     * 院子里没有任何提示时，"60 秒一趟"对玩家等于不存在：
+     * 他不会记得回来点，派出去的那只就永远在路上。
+     */
+    private dispatchDot: Node | null = null;
+
+    /**
+     * 派遣面板里**每帧都要变**的那几样：进度条 / 「第 N/10 趟 · X 秒」/ 收成明细。
+     *
+     * 没有这个的话，"60 秒一趟"只是一句写在副标题里的说明文字 ——
+     * 打开面板盯一小时，画面一个像素都不会变，玩家无法确认"是不是真的在攒"。
+     * 关面板（`closeSheet`）必须置空，否则 tick 会去摸已销毁的节点。
+     */
+    private dispatchLive: {
+        petId: string;
+        bar: Graphics | null;
+        head: Label | null;
+        meta: Label | null;
+        act: Label | null;
+    } | null = null;
 
     /**
      * 存档快照。战斗结算写战利品，这里写喂饭 / 制作 / 派遣 / 亲密度。
@@ -1161,8 +1186,13 @@ class HomeController {
 
         /* 「工坊」沿用工作台那块牌子的位置（木桌旁）。
            为什么不搬到灶台那边：木桌更靠画面中部，是玩家视线落点；
-           灶台在左侧偏下、离宠物群太近，牌子和宠物会挤。 */
-        const keep = new Set(['图鉴', '工作台', '派遣']);
+           灶台在左侧偏下、离宠物群太近，牌子和宠物会挤。
+           ★ 2026-10-25：「灶台」复活成**排行榜**（用户：「排行榜不应该是单独的
+           ICON 吗 现在谁知道排行榜在哪」）。它原本被这张表排除、`active=false`
+           藏掉了 —— 所以必须加回 keep，否则 bindBadges 里 `if (!n.active) continue`
+           会跳过它，改多少映射都点不到。位置 (-35,53) 在主界面上方正中，
+           比藏在 HUD 进度点里显眼得多。 */
+        const keep = new Set(['图鉴', '工作台', '派遣', '灶台']);
         for (const n of badges.children.slice()) {
             if (n.name.indexOf('-hot') >= 0) continue;
             const key = n.name.startsWith('Badge-') ? n.name.slice(6)
@@ -1186,6 +1216,22 @@ class HomeController {
             cut.setContentSize(40, cut.contentSize.height);
             cap.setPosition(bd.position.x + (bt.contentSize.width - 40) / 2, cap.position.y, 0);
             this.fitCapText(cap, 40);
+        }
+
+        /* 「排行榜」沿用灶台那块牌子。
+           底板收到 40 宽、位置按徽标实际宽度重摆 —— 和图鉴 / 派遣 / 工坊同一套
+           数字，一排看过去才是齐的。⚠ 不重摆位置的话，36 宽的旧底板配 40 的新字，
+           牌子会偏右 2px，四块牌子肉眼可辨地不齐。 */
+        const rcap = badges.getChildByName('Cap-灶台');
+        const rbd = badges.getChildByName('Badge-灶台');
+        const rbt = rbd?.getComponent(UITransform);
+        const rcut = rcap?.getComponent(UITransform);
+        if (rcap && rcut && rbd && rbt) {
+            const lbl = rcap.getChildByName('txt')?.getComponent(Label);
+            if (lbl) lbl.string = '排行榜';
+            rcut.setContentSize(40, rcut.contentSize.height);
+            rcap.setPosition(rbd.position.x + (rbt.contentSize.width - 40) / 2, rcap.position.y, 0);
+            this.fitCapText(rcap, 40);
         }
 
         /* 图标换成锅（pot）。图是异步来的，这里先试一次，
@@ -1228,10 +1274,19 @@ class HomeController {
      */
     private paintHomeBadge() {
         this.toneBadges();
-        const sf = this.icons['pot'];
+        /* 工坊 → 锅（pot）。图是异步来的，这里先试一次，没图就保留原来的锤子。 */
+        this.swapBadgeIcon('Badge-工作台', 'pot');
+        /* 排行榜 → 旗子（flag）。同一套降级逻辑：没图就留场景里那张，
+           不能画个空方块等它。 */
+        this.swapBadgeIcon('Badge-灶台', 'flag');
+    }
+
+    /** 给某颗徽标的 `ico` 子节点换图。抽出来是因为现在有两颗要换 */
+    private swapBadgeIcon(badge: string, key: string) {
+        const sf = this.icons[key];
         if (!sf) return;
         const ico = this.canvas.getChildByName('Badges')
-            ?.getChildByName('Badge-工作台')?.getChildByName('ico');
+            ?.getChildByName(badge)?.getChildByName('ico');
         const sp = ico?.getComponent(Sprite);
         if (!sp || sp.spriteFrame === sf) return;
         sp.sizeMode = Sprite.SizeMode.CUSTOM;
@@ -2338,6 +2393,15 @@ class HomeController {
             const open = key === '图鉴' ? () => this.openCodex()
                 : key === '工作台' ? () => this.openHome()
                 : key === '派遣' ? () => this.openDispatch()
+                /* ★ 2026-10-25：「灶台」这颗徽标复活成**排行榜**。
+                   用户原话：「排行榜不应该是单独的 ICON 吗 现在谁知道排行榜在哪」。
+                   上一版把榜藏在 HUD 那排进度点里，确实没人找得到。
+                   灶台本身是死节点（喂饭并入工坊后零引用），位置 (-35,53) 在
+                   主界面上方正中，比进度点显眼得多 —— 复用而不是 new 节点，
+                   因为沙箱没有编辑器 GUI，改不了场景。
+                   ⚠ 连带三处必须一起改，只改这里会得到「点了没反应」：
+                   `BADGE_INFO` 文案 / `layoutRail` 里 Cap 文字 / ico 图标。 */
+                : key === '灶台' ? () => this.openRank()
                 : null;
             if (open) {
                 this.makeHot(n, `${n.name}-hot`, HOT_MIN, HOT_MIN, open, 0.90);
@@ -2584,6 +2648,8 @@ class HomeController {
         this.departOp = null;
         this.departScrim = null;
         this.sheet = null;
+        this.dispatchDot = null;
+        this.dispatchLive = null;
         /* 抽屉的「点场景关闭」是挂在 canvas 上的**外部监听**，节点销毁不会带走它。
            不清的话切场景后旧监听还活着，下一次点草地会在已销毁的控制器上跑 closeDrawer。 */
         if (this.drawerTap && this.canvas && this.canvas.isValid) {
@@ -2611,6 +2677,7 @@ class HomeController {
         dt = Math.min(dt, 0.05);
         this.t += dt;
         this.pingDispatch();
+        this.tickDispatchLive();
 
         if (this.later.length) {
             const jobs = this.later.splice(0);
@@ -2884,16 +2951,97 @@ class HomeController {
         game.frameRate = this.save.settings.crisp ? 60 : 30;
     }
 
+    /**
+     * 派遣的「挂机感」由 tick 里这两件事撑起来：
+     *   ① 院子里的红点 —— **不在主界面喊，玩家永远想不起去收**。
+     *      挂机游戏的收益必须"可见地等在门口"，而不是藏在三级面板里；
+     *   ② 面板里的倒计时（见 `tickDispatchLive`）—— 打开后数字真的在走。
+     *
+     * 顺带修一处文案：原来喊的是「带东西回来了」，可那只明明还在外面，
+     * 玩家会去院子里找一只并不存在的宠物。改成「攒了 N 趟东西」。
+     */
     private pingDispatch() {
         const job = this.save.dispatch;
-        if (!job || this.dispatchPing || this.sheet) return;
-        if (peekDispatch(this.save, Date.now()).hauls < 1) return;
+        if (!job) {
+            this.setDispatchDot(false);
+            return;
+        }
+        const peek = peekDispatch(this.save, Date.now());
+        this.setDispatchDot(peek.hauls > 0);
+        if (this.dispatchPing || this.sheet) return;
+        if (peek.hauls < 1) return;
         this.dispatchPing = true;
         const name = PETS.find((p) => p.id === job.id);
-        this.toast(`${name ? name.name : '它'} 带东西回来了 · 去派遣板收下`);
+        this.toast(`${name ? name.name : '它'} 攒了 ${peek.hauls} 趟东西 · 去派遣板收下`);
+    }
+
+    private setDispatchDot(on: boolean) {
+        const d = this.dispatchDot;
+        if (d && d.isValid && d.active !== on) d.active = on;
+    }
+
+    /**
+     * 派遣面板的实时刷新：进度条 + 「第 N/10 趟 · X 秒」+ 收成明细。
+     *
+     * 只在面板开着且派的是同一只时跑。`hauls` 从 0 跳到 1 的那一刻
+     * **整块面板重画一次** —— 因为「收回」按钮要从不可点变成可点，
+     * 那是挂点击的，改文字改不动。
+     */
+    private tickDispatchLive() {
+        const ui = this.dispatchLive;
+        if (!ui) return;
+        if (!this.sheet) { this.dispatchLive = null; return; }
+        const job = this.save.dispatch;
+        if (!job || job.id !== ui.petId) { this.dispatchLive = null; return; }
+
+        const peek = peekDispatch(this.save, Date.now());
+        if (ui.bar && ui.bar.isValid) {
+            const g = ui.bar;
+            g.clear();
+            /* 一趟的进度：0 → 60s 走满一格，满 10 趟之后停在满格 */
+            const cyc = peek.hauls >= DISPATCH_CAP
+                ? 1
+                : Math.max(0, Math.min(1, 1 - peek.left / DISPATCH_SEC));
+            const BW = 480;
+            g.fillColor = new Color(232, 220, 198, 255);
+            g.roundRect(-BW / 2, -4.5, BW, 9, 4.5);
+            g.fill();
+            if (cyc > 0.001) {
+                g.fillColor = new Color(232, 149, 26, 255);
+                g.roundRect(-BW / 2, -4.5, Math.max(9, BW * cyc), 9, 4.5);
+                g.fill();
+                /* 亮面：纯色条在暖底上发"闷"，加一条 45% 高的浅色才读作进度 */
+                g.fillColor = new Color(255, 226, 168, 190);
+                g.roundRect(-BW / 2, 0.5, Math.max(9, BW * cyc), 3.5, 1.75);
+                g.fill();
+            }
+        }
+        if (ui.head && ui.head.isValid) {
+            ui.head.string = peek.hauls >= DISPATCH_CAP
+                ? `第 ${DISPATCH_CAP} / ${DISPATCH_CAP} 趟 · 攒满了，收回`
+                : `第 ${peek.hauls} / ${DISPATCH_CAP} 趟 · ${peek.left} 秒后下一趟`;
+        }
+        if (ui.meta && ui.meta.isValid) {
+            ui.meta.string = peek.hauls > 0
+                ? `${peek.hauls} 趟 · ${[
+                    peek.shards ? `图纸碎片 ${peek.shards}` : '',
+                    peek.ration ? `干粮 ${peek.ration}` : '',
+                    peek.apples ? `果子 ${peek.apples}` : '',
+                    peek.logs ? `材料 ${peek.logs}` : '',
+                    peek.coins ? `吧唧 ${peek.coins}` : '',
+                ].filter(Boolean).join(' · ')}`
+                : `${peek.left} 秒后才有第一趟`;
+        }
+        if (ui.act && ui.act.isValid) {
+            ui.act.string = peek.hauls > 0 ? '收回' : '等着';
+        }
     }
 
     private closeSheet() {
+        /* 派遣面板的实时倒计时跟着面板一起死。不清的话 tick 会每帧去摸
+           已 destroy 的 Label —— 而且 `dispatchLive.petId` 还指向上一只，
+           下次开面板会先闪一秒旧数字。 */
+        this.dispatchLive = null;
         if (!this.sheet) return;
         const n = this.sheet;
         this.sheet = null;
@@ -2990,7 +3138,7 @@ class HomeController {
         parent: Node, name: string, title: string, meta: string, action: string,
         x: number, y: number, onClick: () => void, enabled = true, h = 62,
         headShort = '',
-    ) {
+    ): Node {
         const w = 560;
         const row = new Node(name);
         row.parent = parent;
@@ -3042,12 +3190,16 @@ class HomeController {
         mkLabel(row, 'act', action, 16, new Color(96, 58, 28, 255), aw - 8, 24)
             .node.setPosition(ax, 0, 0);
 
-        if (!enabled) return;
+        /* 返回行节点：调用方可能要拿它的子 Label 做实时刷新
+           （派遣面板的倒计时就是这么接的）。灰行也返回 ——
+           调用方不该因为"这一行点不了"就找不到它。 */
+        if (!enabled) return row;
         this.press(row, 0.98);
         row.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
             e.propagationStopped = true;
             onClick();
         });
+        return row;
     }
 
     private queue(fn: () => void) {
@@ -3175,12 +3327,20 @@ class HomeController {
                     { k: 'craft', t: '制作' },
                     { k: 'perk', t: '改造' },
                 ];
-                /* 三栏的 x 从「-27 + i*142」改成「-70 + i*140」：
-                   原来的间距是照两栏排的，塞进第三颗会顶到面板右沿
-                   （pill 宽 128，中心 +64 = 右边界）。 */
+                /* ★ 三个 tab 的位置是**按内容区反推的**，不是按 tab 自己排的
+                   （用户 2026-10-25 截图 3：「工坊的 UI 也没对齐啊」）。
+                   右栏 item card 中心 110、宽 400 → 占 -90..290。
+                   上一版 tab 中心 -70/70/210、宽 128 → 占 -134..274：
+                     · 右边界差 16px（274 vs 290）
+                     · 组中心 70 vs 内容中心 110，**整体偏左 40px**
+                   两者叠加就是「tab 和下面的卡片对不齐」。
+                   现在 124 宽 + 8 间距：三颗总宽 388，中心对齐 110
+                     → tab0 中心 -22，tab1 102，tab2 226，右边界 288 ≈ 290。
+                   124 是能用的最小宽度（「改造」两字 15px=30px，容器 112 仍有大量余量），
+                   再窄字就会开始挤。 */
                 TABS.forEach((tab, i) => {
                     const on = this.homeTab === tab.k;
-                    this.mkPill(card, `tab-${tab.k}`, tab.t, 128, 40, -70 + i * 140, 112, true, () => {
+                    this.mkPill(card, `tab-${tab.k}`, tab.t, 124, 40, -22 + i * 132, 112, true, () => {
                         this.homeTab = tab.k;
                         this.openHome();
                     }, on);
@@ -3438,17 +3598,30 @@ class HomeController {
 
 
     /**
-     * 派遣面板。
+     * 派遣面板（2026-10-25 重做：补上「挂机属性」）。
      *
-     * **改造前它只有一个「派出」按钮和一句 toast** —— 面板上既没有产出预期、
-     * 也没有"已经攒了几趟"、更没有"这些产出拿去干嘛"。玩家的原话是
-     * 「派遣也是很简单，不知道有啥用」。三件事一起补：
+     * 用户原话：「派遣这个功能 不知道咋玩 应该有挂机属性啊
+     *            派出去多久 获得奖励 不应该这样吗」
      *
-     *   ① **产出预期写在每一行上**（`yieldText`，和结算读同一张表）；
-     *   ② **攒了几趟 / 还差多少秒**写出来 —— 60 秒一趟、最多 10 趟，
-     *      所以"先去打一局再回来收"是一个算得出来的决定；
-     *   ③ **把用途接上**：产出里有**干粮**，而干粮是灶台直接吃的东西。
-     *      饱食度每关 −16、饿了火力降 —— 派遣第一次接进了战力那条链。
+     * 改造前那一版已经把"攒了几趟 / 还差几秒 / 产出明细"写进了行里，
+     * 但**它是静态的**：打开面板盯一分钟，画面一个像素都不变。
+     * 玩家无法确认"是不是真的在攒"，于是"60 秒一趟"退化成一句说明文字。
+     *
+     * 这一版补三样，把派遣从"一个按钮"变成"一个看得见在走的挂机点"：
+     *
+     *   ① **顶部状态卡**：头像 + 「第 N/10 趟 · X 秒后下一趟」+ **进度条**
+     *      （一趟 60s 走满一格）。每帧刷新（`tickDispatchLive`）。
+     *   ② **院子里那颗红点**：攒满 ≥1 趟就亮（`pingDispatch`）。
+     *      **不在主界面喊，玩家永远想不起去收** —— 挂机收益必须可见地等在门口。
+     *   ③ **离线也在攒**：`dispatch.since` 是墙上时钟，关掉游戏再开，
+     *      流失的真实时间照算（封顶 10 趟）。副标题必须把这句写出来，
+     *      否则玩家根本不知道可以关掉游戏去睡觉。
+     *
+     * 同时修一个自查出来的硬伤：**第 5 只宠物的行和底部「点空白处关闭」
+     *   重叠 376×21px**（`--audit` 报的 `sugar-stand × tip`）。
+     *   根因是面板写死 460 高，而宠物数从 1 到 6 都会开这个面板。
+     *   修法不是把 tip 挪开（那是把症状挪到第 6 只身上），而是
+     *   **面板高度跟着条数算**：`ch = (job?277:223) + (n-1)*pitch`。
      *
      * 这里不出"多宠并行"：存档里 `dispatch` 是单只（`{id, since}`），
      * 改成数组要迁移存档，而"一次一只"本身也是这套养成的节奏
@@ -3457,90 +3630,165 @@ class HomeController {
     private openDispatch() {
         const s = this.save;
         const job = s.dispatch;
-        const peek = peekDispatch(s, Date.now());
 
-        const bits: string[] = [];
-        bits.push(`碎片 ${s.shards || 0}`);
-        if (job) {
-            const who = petById(job.id);
-            const n = who ? who.name : '它';
-            bits.push(peek.hauls >= DISPATCH_CAP
-                ? `${n} 攒满 ${DISPATCH_CAP} 趟了，先收回`
-                : peek.hauls > 0
-                    ? `${n} 攒了 ${peek.hauls} 趟 · 还能再攒 ${DISPATCH_CAP - peek.hauls} 趟`
-                    : `${n} 还要 ${peek.left} 秒才攒满第一趟`);
-        } else {
-            bits.push('留在家里的能出门采集 · 干粮能直接喂肚子');
-        }
-        bits.push(`一趟 ${DISPATCH_SEC} 秒 · 最多攒 ${DISPATCH_CAP} 趟`);
+        const owned = unlockedPets(s.cleared);
+        /* 出门在外的排最前 —— 玩家点进这个面板十次有九次是来收东西的。 */
+        const list = owned.slice().sort((a, b) => {
+            const ra = job && job.id === a.id ? 0 : a.id === s.active ? 2 : 1;
+            const rb = job && job.id === b.id ? 0 : b.id === s.active ? 2 : 1;
+            return ra - rb;
+        });
 
-        this.openSheet('派遣', bits.join('　·　'), (card) => {            const owned = unlockedPets(s.cleared);
-            /* 出门在外的排最前 —— 玩家点进这个面板十次有九次是来收东西的。 */
-            const list = owned.slice().sort((a, b) => {
-                const ra = job && job.id === a.id ? 0 : a.id === s.active ? 2 : 1;
-                const rb = job && job.id === b.id ? 0 : b.id === s.active ? 2 : 1;
-                return ra - rb;
-            });
+        /* 面板高度跟着条数走（见上面 ③ 的算式依据）。
+           5 只以上收紧行距：640 宽的面板在 720 高的屏上，再宽就顶到边了。
+           ⚠ 行距下限 = 行高 + 2（56 + 2 = 58）。写成 54 时相邻两行
+           真的互叠 2px（`--audit` 报 `nian-gao-dog × tuan-zi-ham 526×2`）。 */
+        const n = Math.max(1, list.length);
+        const pitch = n >= 5 ? 58 : 60;
+        const ch = Math.max(340, Math.round((job ? 277 : 223) + (n - 1) * pitch));
 
-            list.forEach((p, i) => {
-                const isAway = !!job && job.id === p.id;
-                const isOut = p.id === s.active;
+        this.openSheet(
+            '派遣',
+            /* 副标题只放**规则**，不放状态 —— 状态在顶部状态卡里，而且是活的。
+               原来这里拼了半行"攒了 3 趟 · 还能再攒 7 趟"，和状态卡重复，
+               而且它是死的，两处数字会对不上。 */
+            `一趟 ${DISPATCH_SEC} 秒 · 最多攒 ${DISPATCH_CAP} 趟 · 关掉游戏也在攒`,
+            (card) => {
+                const top = ch / 2 - 114;
 
-                let meta: string;
-                let action: string;
-                let ok = false;
-                let onClick = () => {};
+                /* ---------------- 顶部状态卡（只有派出着才画） ---------------- */
+                if (job) {
+                    const who = petById(job.id);
+                    const sc = new Node('away');
+                    sc.parent = card;
+                    const sut = sc.addComponent(UITransform);
+                    sut.setContentSize(560, 46);
+                    sut.setAnchorPoint(0.5, 0.5);
+                    sc.setPosition(0, top - 23, 0);
+                    const sg = sc.addComponent(Graphics);
+                    /* 底色比行更暖：这是"这一趟正在进行中"的那一块，
+                       要和下面那些"待命"的行分开。 */
+                    sg.fillColor = new Color(252, 240, 214, 255);
+                    sg.roundRect(-280, -23, 560, 46, 14);
+                    sg.fill();
+                    sg.lineWidth = 2;
+                    sg.strokeColor = new Color(214, 138, 60, 255);
+                    sg.roundRect(-280, -23, 560, 46, 14);
+                    sg.stroke();
 
-                if (isAway) {
-                    const ready = peek.hauls > 0;
-                    /* 收成明细和"还差几秒"分两段写：玩家要的是"现在能不能点"，
-                       而不是一个混合了两种状态的句子。 */
-                    meta = ready
-                        ? `${peek.hauls} 趟 · ${[
-                            peek.ration ? `干粮 ${peek.ration}` : '',
-                            peek.apples ? `果子 ${peek.apples}` : '',
-                            peek.logs ? `材料 ${peek.logs}` : '',
-                            peek.coins ? `吧唧 ${peek.coins}` : '',
-                            /* 碎片排在最前面 —— 它是这里唯一"战斗拿不到"的东西，
-                               其他三样写成数字也没人在意（打一局就有更多）。 */
-                            peek.shards ? `图纸碎片 ${peek.shards}` : '',
-                        ].filter(Boolean).join(' · ')}`
-                        : `${peek.left} 秒后来收`;
-                    action = ready ? '收回' : '等着';
-                    ok = ready;
-                    onClick = () => this.act(
-                        collectDispatch(this.save, Date.now()),
-                        () => this.openDispatch(),
-                    );
-                } else if (isOut) {
-                    meta = `跟你出门 · ${yieldText(p.id)}`;
-                    action = '出战';
-                } else if (job) {
-                    meta = '一次只能派一只，先收回外面的';
-                    action = '不能派';
-                } else {
-                    /* 派出前就要说清"这一趟能捡到碎片" —— 那是玩家派它的**理由**。
-                       `yieldText` 里没有碎片（它按趟算产出，碎片是满 10 趟才结）
-                       所以单独补一句，写成"满一趟 N 碎片"而不是"每趟 0.2 个"。 */
-                    meta = `${yieldText(p.id)} · 满一趟 碎片 ${DISPATCH_SHARD}`;
-                    action = '派出';
-                    ok = canDispatch(s, p.id);
-                    onClick = () => this.act(
-                        startDispatch(this.save, p.id, Date.now()),
-                        () => this.openDispatch(),
-                    );
+                    const hsf = who ? this.heads[who.short] : undefined;
+                    if (hsf) {
+                        const hn = new Node('head');
+                        hn.parent = sc;
+                        hn.addComponent(UITransform).setContentSize(34, 34);
+                        hn.setPosition(-252, 0, 0);
+                        const hs = hn.addComponent(Sprite);
+                        hs.sizeMode = Sprite.SizeMode.CUSTOM;
+                        hs.spriteFrame = hsf;
+                    } else {
+                        mkLabel(sc, 'head', who ? who.name.slice(0, 1) : '?', 18,
+                            new Color(120, 76, 20, 255), 34, 34).node.setPosition(-252, 0, 0);
+                    }
+                    /* 左对齐：容器左缘就是 x（`mkLeftLabel` 会把节点摆到 x+w/2）。
+                       直接 `mkLabel` + `horizontalAlign=LEFT` 的话容器还是以节点为中心，
+                       矩形会往左探出半个容器宽 —— 和左边那枚头像的矩形叠上，
+                       `--audit` 报的 `head × nm` 就是这么来的（视觉没叠，矩形叠了）。 */
+                    const nm = mkLeftLabel(sc, 'nm', who ? who.name : '它', 19,
+                        new Color(112, 66, 22, 255), -228, 11, 180, 24);
+                    /* 「第 N/10 趟 · X 秒后下一趟」—— 右缘钉在 272（卡片右内沿）。
+                       满趟时换成"攒满了，收回"，因为那时"下一趟"永远不会来。 */
+                    const hd = mkRightLabel(sc, 'hd', '', 14, new Color(150, 92, 30, 255), 272, 11, 250, 22);
+
+                    const bar = new Node('bar');
+                    bar.parent = sc;
+                    bar.addComponent(UITransform).setContentSize(480, 9);
+                    bar.setPosition(11, -11, 0);
+                    const bg = bar.addComponent(Graphics);
+                    /* 空槽：画在这里，刷新时只重画填充部分会连槽一起没 */
+                    bg.fillColor = new Color(232, 220, 198, 255);
+                    bg.roundRect(-240, -4.5, 480, 9, 4.5);
+                    bg.fill();
+
+                    this.dispatchLive = {
+                        petId: job.id,
+                        bar: bg,
+                        head: hd,
+                        meta: null,
+                        act: null,
+                    };
                 }
 
-                /* 起点 74：副标题那行写满了（「猪满 10 趟了，先收回 · 一趟 60 秒…」），
-                   132 和 96 两个版本都会让第一张卡压上去（截图 `_t-ui-dispatch2/3`）。 */
-                this.mkRow(card, p.id, p.name, meta, action, 0, 52 - i * 62, onClick, ok, 58, p.short);
-            });
+                /* ---------------- 待命列表 ---------------- */
+                const firstTop = top - (job ? 54 : 0) - 8;
+                list.forEach((p, i) => {
+                    const isAway = !!job && job.id === p.id;
+                    const isOut = p.id === s.active;
 
-            if (!owned.length) {
-                mkLabel(card, 'none', '家里还没有伙伴', 18, INK_SOFT, 400, 32)
-                    .node.setPosition(0, 20, 0);
-            }
-        }, 640, 460);
+                    let meta: string;
+                    let action: string;
+                    let ok = false;
+                    let onClick = () => {};
+
+                    if (isAway) {
+                        const peek = peekDispatch(s, Date.now());
+                        const ready = peek.hauls > 0;
+                        /* 收成明细和"还差几秒"分两段写：玩家要的是"现在能不能点"，
+                           而不是一个混合了两种状态的句子。 */
+                        meta = ready
+                            ? `${peek.hauls} 趟 · ${[
+                                peek.shards ? `图纸碎片 ${peek.shards}` : '',
+                                peek.ration ? `干粮 ${peek.ration}` : '',
+                                peek.apples ? `果子 ${peek.apples}` : '',
+                                peek.logs ? `材料 ${peek.logs}` : '',
+                                peek.coins ? `吧唧 ${peek.coins}` : '',
+                            ].filter(Boolean).join(' · ')}`
+                            : `${peek.left} 秒后才有第一趟`;
+                        action = ready ? '收回' : '等着';
+                        /* 未满一趟也**挂点击**：点了要告诉他还要几秒，
+                           静默一行比灰掉一行更让人以为界面坏了。 */
+                        ok = true;
+                        onClick = () => this.act(
+                            collectDispatch(this.save, Date.now()),
+                            () => this.openDispatch(),
+                        );
+                    } else if (isOut) {
+                        meta = `跟你出门 · ${yieldText(p.id)}`;
+                        action = '出战';
+                    } else if (job) {
+                        meta = '一次只能派一只，先收回外面的';
+                        action = '不能派';
+                    } else {
+                        /* 派出前就要说清"这一趟能捡到碎片" —— 那是玩家派它的**理由**。
+                           `yieldText` 里没有碎片（它按趟算产出，碎片是满 10 趟才结）
+                           所以单独补一句，写成"满一趟 N 碎片"而不是"每趟 0.2 个"。 */
+                        meta = `${yieldText(p.id)} · 满一趟 碎片 ${DISPATCH_SHARD}`;
+                        action = '派出';
+                        ok = canDispatch(s, p.id);
+                        onClick = () => this.act(
+                            startDispatch(this.save, p.id, Date.now()),
+                            () => this.openDispatch(),
+                        );
+                    }
+
+                    const row = this.mkRow(
+                        card, p.id, p.name, meta, action,
+                        0, firstTop - 28 - i * pitch, onClick, ok, 56, p.short,
+                    );
+                    /* 外出那一行的三个字段交给 tick 实时改写（进度条在状态卡上，
+                       这里改的是文字）—— 少了这一行，状态卡和行会对不上。 */
+                    if (isAway && this.dispatchLive) {
+                        this.dispatchLive.meta = row.getChildByName('meta')?.getComponent(Label) ?? null;
+                        this.dispatchLive.act = row.getChildByName('act')?.getComponent(Label) ?? null;
+                    }
+                });
+
+                if (!owned.length) {
+                    mkLabel(card, 'none', '家里还没有伙伴', 18, INK_SOFT, 400, 32)
+                        .node.setPosition(0, 20, 0);
+                }
+            },
+            640, ch,
+        );
     }
 
     private openSettings() {
@@ -4006,6 +4254,33 @@ class HomeController {
 
         /* 压在所有徽标下面：卡片是底板，徽标和文字要浮在它上面 */
         card.setSiblingIndex(0);
+
+        /* 「有东西可收」红点：右上角，压在图钉旁边。
+           只有攒满至少一趟才亮（`pingDispatch` 每帧判）——
+           常亮红点是噪音，玩家三分钟后就当它不存在了。 */
+        if (!badges.getChildByName('Dot-派遣')) {
+            const dot = new Node('Dot-派遣');
+            dot.parent = card;
+            const dut = dot.addComponent(UITransform);
+            dut.setContentSize(18, 18);
+            dut.setAnchorPoint(0.5, 0.5);
+            dot.setPosition(CW / 2 - 4, CH / 2 - 4, 0);
+            const dg = dot.addComponent(Graphics);
+            /* 外圈白环：红点压在暖米纸上，没有描边会"陷"进去 */
+            dg.fillColor = new Color(255, 250, 240, 235);
+            dg.circle(0, 0, 8.5);
+            dg.fill();
+            dg.fillColor = new Color(214, 74, 54, 255);
+            dg.circle(0, 0, 6.5);
+            dg.fill();
+            dg.fillColor = new Color(255, 176, 158, 255);
+            dg.circle(-1.8, 1.8, 2.0);
+            dg.fill();
+            dot.active = false;
+            this.dispatchDot = dot;
+        } else {
+            this.dispatchDot = badges.getChildByName('Dot-派遣');
+        }
     }
 
     private refreshTaskBtn() {
@@ -4305,16 +4580,23 @@ class HomeController {
             gg.fill();
         }
 
-        /* 宝箱：两个台阶。能开时金底，开过时灰，没到数量时暗 */
+        /* 宝箱：两个台阶。能开时金底，开过时灰，没到数量时暗。
+           ★ 位置和宽度是**算出来的，不是凑的**（用户 2026-10-25 截图红框：
+             「宝箱 5」整颗超出面板右沿）：
+             面板半宽 320。上一版 `cx = W0/2-96+i*96` + 宽 82 → 第二个中心 280、
+             右边界 321，**越界 1px**。现在宽 72、`cx = W0/2-92+i*88` → 第二个中心 276、
+             右边界 312，离面板边 8px。
+             72 宽不是随手缩的：「宝箱 5」四个字符 13px ≈ 46px，容器 72-12=60 仍有余量，
+             缩到 60 以下就开始挤压字距。 */
         DAILY_CHESTS.forEach((c, i) => {
-            const cx = W0 / 2 - 96 + i * 96;
+            const cx = W0 / 2 - 92 + i * 88;
             const got = (Array.isArray(s.dailyChests) ? s.dailyChests : []).indexOf(c.need) >= 0;
             const can = !got && done >= c.need;
             const bc = got ? new Color(206, 198, 186, 255)
                 : can ? new Color(255, 206, 92, 255)
                     : new Color(228, 218, 202, 255);
             this.mkPill(card, `chest-${c.need}`,
-                got ? `已开 ${c.need}` : `宝箱 ${c.need}`, 82, 30, cx, AY, can, () => {
+                got ? `已开 ${c.need}` : `宝箱 ${c.need}`, 72, 30, cx, AY, can, () => {
                     const r = claimChest(this.save, c.need);
                     this.toast(r.say);
                     if (!r.ok) return;

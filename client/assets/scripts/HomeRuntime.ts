@@ -4180,18 +4180,25 @@ class HomeController {
     /**
      * 排行榜面板：**前三上领奖台，四到十名走列表**。
      *
-     * 用户原话（2026-10-26）：「排行榜这个要出新的概念图UI 现在太low了
-     * 而且 ICON 也是不太合适」。ICON 已换成奖杯（trophy.png），这一版换形状。
+     * 用户原话（2026-10-26 第一次）：「排行榜这个要出新的概念图UI 现在太low了
+     * 而且 ICON 也是不太合适」。ICON 已换成奖杯（trophy.png）。
+     * 用户原话（2026-10-26 第四次）：「排行榜是不是有重叠问题 而且UI布局还是比较LOW」。
      *
      * 旧版是 10 行同色表格 —— "low"不在配色，在**形状**：一张表没有任何
      * "比较"的视觉隐喻，第 1 名和第 9 名长得一模一样。领奖台是玩家唯一
      * 从小就懂的"排名"图形：高矮错落的台座 + 奖牌色，一眼读出谁在前面。
      *
-     * 三条硬规则：
+     * 四条硬规则：
      *   ① 我的名次**必须亮** —— 一屏 10 条同色的表，玩家第一件事是找自己；
-     *   ② 台阶只分高矮，名次数字在牌内左上角，不另起一行重复；
+     *   ② 台阶只分高矮，名次由**骑顶奖牌圆**表达，不在牌内另起一行；
      *   ③ 4-10 名用紧凑列表而不是七个更小的台座 —— 再往下没有"台"可站，
-     *      硬造七个台阶只是把表竖起来。
+     *      硬造七个台阶只是把表竖起来；
+     *   ④ **三张牌等宽，中心距必须大于牌宽** —— 2026-10-26 第四次的病根：
+     *      旧 POD 中牌宽 200、左右牌中心 ±155（宽 180），水平相交 35px，
+     *      左牌压在中的左缘上。这个重叠 **audit 抓不到**：_home-rt-shot 的
+     *      --audit/--text 只查**同父**标签的矩形相交，pod-0 与 pod-1 的
+     *      Label 分属两个父节点，Graphics 底板更不是 Label —— 工具盲区，
+     *      只能靠几何本身不可能相交（等宽 168 + 中心距 184 = 间隙 16）。
      */
     private paintRankBoard(card: Node, board: RankRow[]) {
         /* 奖牌三色。金 / 银 / 铜是跨文化的名次语言，
@@ -4203,17 +4210,35 @@ class HomeController {
         ];
         const MEDAL_DEEP = new Color(96, 58, 28, 255);
         const CREAM = new Color(255, 248, 232, 255);
-        /* 台座规格：三张牌**底部对齐、高度错落**（112/98/88）——
-           高矮本身就是名次，不需要画梯子。
-           88 是下限：牌内三行（名次 34 + 名字 24 + 趟数 18）加上行间距
-           至少要 74，再矮名字就会压到名次上（截图 _t-rank-new audit
-           第一版 78 高时 pod-2/no × pod-2/nm 纵向重叠 10px）。 */
+        /* 台座规格：三张牌**等宽 168、底部对齐、高度错落**（112/96/88）——
+           高矮本身就是名次，不需要画梯子。中心距 184 > 宽 168，间隙 16，
+           几何上不可能相交（见 ④）。
+           88 是下限：牌内圆 r16 骑顶 + 名字 15 + 数据 10 两行，
+           行位统一 -6 / -28，最短牌的数据行距底 44-28-5 = 11px。 */
         const POD = [
-            { x: 0, w: 200, h: 112 },
-            { x: -155, w: 180, h: 98 },
-            { x: 155, w: 180, h: 88 },
+            { x: 0, w: 168, h: 112 },
+            { x: -184, w: 168, h: 96 },
+            { x: 184, w: 168, h: 88 },
         ];
         const BOTTOM = 10;
+
+        /* ---- 台口线（先建，后被 pod 盖）----
+         * 三张牌共用的"台"的地平线：深色横条从牌底穿出（牌底 y=10，
+         * 线占 y 3..10），两侧各露出 32px。画在独立子节点 deck 上、
+         * 建在三个 pod 之前 —— 子的渲染按创建顺序，deck 先画，
+         * pod 后画盖住中间一段，露两头正是"牌插在台口上"。
+         * **不往 card 上 addComponent(Graphics)**：openSheet 已经给 card
+         * 挂了一个画底板，同节点双 Graphics 的真机行为没验证过。 */
+        {
+            const deck = new Node('deck');
+            deck.parent = card;
+            deck.addComponent(UITransform).setContentSize(600, 7);
+            deck.setPosition(0, 6.5, 0);
+            const tg = deck.addComponent(Graphics);
+            tg.fillColor = new Color(96, 58, 28, 64);
+            tg.roundRect(-300, -3.5, 600, 7, 3);
+            tg.fill();
+        }
 
         for (let i = 0; i < 3; i++) {
             const r = board[i];
@@ -4226,35 +4251,60 @@ class HomeController {
             node.addComponent(UITransform).setContentSize(pod.w, pod.h);
             node.setPosition(pod.x, cy, 0);
             const g = node.addComponent(Graphics);
+            /* 投影：牌底下沉 3px 的深色偏移。纯色块读起来是"贴在面板上的
+               贴纸"，加一层投影才是"搁在台口上的牌子"（Graphics 没有渐变，
+               一层 40 alpha 的偏移矩形就是投影的全部）。 */
+            g.fillColor = new Color(40, 26, 14, 40);
+            g.roundRect(-pod.w / 2, -pod.h / 2 - 3, pod.w, pod.h, 14);
+            g.fill();
             g.fillColor = MEDAL[i];
             g.roundRect(-pod.w / 2, -pod.h / 2, pod.w, pod.h, 14);
             g.fill();
-            /* 我的台座描奶白：奖牌色上描金看不见，描奶白才跳得出。
+            /* 我的台座描**深棕**：2026-10-26 第四次截图推翻旧假设 ——
+               旧注释写"奖牌色上描金看不见，描奶白才跳得出"，但金牌
+               (232,185,60) 上描奶白 (255,248,232) 两个都是亮色，对比度
+               只有 1.1:1，等于没描。深棕 (96,58,28) 对金/银/铜三底
+               对比度都在 4:1 以上，且和牌内文字同色 —— 描边即"框住自己"。
                副标题已经报了"你排第 N"，这里只负责让玩家一眼找到自己。 */
             if (r.me) {
                 g.lineWidth = 3;
-                g.strokeColor = CREAM;
+                g.strokeColor = MEDAL_DEEP;
                 g.roundRect(-pod.w / 2, -pod.h / 2, pod.w, pod.h, 14);
                 g.stroke();
             }
 
-            /* 名次大数字（左上）+ 两个关键数（右上）—— 牌面只放四样：
-               第几名、叫什么、通了几屏、拿了几颗星。趟数在列表里有。
-               三行的纵向位置按"最短的牌也塞得下"定（见 POD 注释）：
-               no/ks 贴顶、名字居中偏上、趟数贴底，行距 ≥ 4px。 */
-            mkLabel(node, 'no', String(i + 1), 28, MEDAL_DEEP, 56, 34)
-                .node.setPosition(-pod.w / 2 + 32, pod.h / 2 - 16, 0);
-            mkLabel(node, 'ks', `${r.cleared} 屏 · ${r.stars} 星`, 11, MEDAL_DEEP, 96, 18)
-                .node.setPosition(pod.w / 2 - 52, pod.h / 2 - 16, 0);
+            /* ---- 骑顶奖牌圆 ----
+             * 圆心高出牌顶 2px（本地 y = pod.h/2 + 2）："牌子上顶着一枚奖牌"
+             * 是领奖台唯一不可替代的视觉隐喻。旧版把名次数字塞在牌内左上角，
+             * 三张牌三个位置，读起来是"贴纸上印了字"而不是"颁了奖"。 */
+            const R = 16, ccy = pod.h / 2 + 2;
+            g.fillColor = MEDAL_DEEP;
+            /* 用 circle 不用 arc：Cocos Graphics.circle(cx,cy,r) 与
+               _mock-cc 的桩同名同参，arc 的五参签名桩里没有（跑栈报过
+               TypeError: g.arc is not a function —— 渲染回放支持 arc，
+               但桩的 API 面没有它）。 */
+            g.circle(0, ccy, R);
+            g.fill();
+            g.lineWidth = 2;
+            g.strokeColor = CREAM;
+            g.circle(0, ccy, R);
+            g.stroke();
+            mkLabel(node, 'no', String(i + 1), 20, CREAM, 32, 24)
+                .node.setPosition(0, ccy, 0);
 
-            const nm = mkLabel(node, 'nm', r.name, 16, MEDAL_DEEP, pod.w - 24, 24);
+            /* 名字 + 数据两行。行位对三张牌**统一**（-6 / -28）：高矮差
+               purely 由牌高体现；行位跟着牌高浮动，三张牌的字会各跳各的。
+               容器高 20 / 14 而不是 22 / 16 —— audit 的「同父标签净间隙」
+               量的是**容器矩形**：22/16 时间隙只有 3px，压不到 4px 硬线；
+               20/14 时间隙 5px。文字中心距仍是 22 ≥ 0.65*(15+10)+4 = 20.25。 */
+            const nm = mkLabel(node, 'nm', r.name, 15, MEDAL_DEEP, pod.w - 24, 20);
             nm.node.setPosition(0, -6, 0);
             nm.overflow = Label.Overflow.SHRINK;
-            /* run 行**不写"这是你"**：我的那一行 name 本身就是「你」
-               （rankBoard 给的），再写一遍是同一句话说两遍。
-               "我是哪一行"由奶白描边 + 副标题的"你排第 N"回答。 */
-            mkLabel(node, 'run', `用了 ${r.runs} 趟`,
-                11, MEDAL_DEEP, pod.w - 24, 18).node.setPosition(0, -32, 0);
+            /* 「用了 N 趟」行**已删**（2026-10-26 第四次）：趟数是排行榜的
+               第三比较键，只有争榜首时才有信息量，牌面放它是噪音；
+               4-10 名列表里有这一列，要看能看见。 */
+            mkLabel(node, 'ks', `${r.cleared} 屏 · ${r.stars} 星`,
+                10, new Color(96, 58, 28, 205), pod.w - 24, 14).node.setPosition(0, -28, 0);
         }
 
         /* ---- 4-10 名：紧凑列表 ---- */

@@ -146,7 +146,18 @@ if (!args.length) { console.log("给个 tag，例如 s1 / clear:3"); process.exi
           }
           S.starBits = seed;
         }
-        if (parts[0] !== undefined && parts[0] !== "") S.gateCur = Number(parts[0]);
+        if (parts[0] !== undefined && parts[0] !== "") {
+          /* NaN 静默错：`portals:rich`（rich 放第一段）时 Number("rich") = NaN，
+             clamp(NaN) 还是 NaN，GATES[NaN] = undefined → 预览卡整块被跳过。
+             小卡和底部提示照画，截图"看起来只是少了预览卡" —— 最难查的那类。
+             这里不 Finite 就抛，别让它静默。正确写法：portals:0:rich。 */
+          const g0 = Number(parts[0]);
+          if (!Number.isFinite(g0)) {
+            throw new Error(`portals 场景第一段只能是门序号（数字），收到 "${parts[0]}"；` +
+              `带存档的场景串写作 portals:0:rich（序号占第一段）`);
+          }
+          S.gateCur = g0;
+        }
         /* `portals:1:tip` = 点一下那扇没开的门，验提示条真的画出来 */
         if (parts[1] === "tip") G.enterGate(1);
       }, s === undefined ? "" : s);

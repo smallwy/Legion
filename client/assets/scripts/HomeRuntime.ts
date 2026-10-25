@@ -3392,7 +3392,7 @@ class HomeController {
                     const ok = owned && !on && !out;
                     this.mkRow(
                         card, 'r-' + p.id, p.name, meta, action,
-                        0, 145 - i * 62,
+                        0, 104 - i * 58,
                         () => {
                             const r = setActive(this.save, p.id);
                             this.toast(r.say);
@@ -3506,29 +3506,36 @@ class HomeController {
                     );
                 }
 
-                this.mkRow(card, p.id, p.name, meta, action, 0, 132 - i * 64, onClick, ok, 58, p.short);
+                /* 起点 74：副标题那行写满了（「猪满 10 趟了，先收回 · 一趟 60 秒…」），
+                   132 和 96 两个版本都会让第一张卡压上去（截图 `_t-ui-dispatch2/3`）。 */
+                this.mkRow(card, p.id, p.name, meta, action, 0, 52 - i * 62, onClick, ok, 58, p.short);
             });
 
             if (!owned.length) {
                 mkLabel(card, 'none', '家里还没有伙伴', 18, INK_SOFT, 400, 32)
                     .node.setPosition(0, 20, 0);
             }
-        }, 640, 560);
+        }, 640, 460);
     }
 
     private openSettings() {
         const s = this.save.settings;
+        /* 640×300 而不是默认的 640×520。
+           用户原话「界面 UI 也对不起 你检查下你做的系统」——
+           这块面板原来只有两行开关，却开了 520 高的框，七成是空白。
+           **面板尺寸要跟着内容走**，不是所有面板都长一样大。 */
         this.openSheet(
             '设置',
-            '画质会立刻改帧率。音效开关先记住，这一版还没有声音。',
+            '画质会立刻改帧率；音效开关会记住，但这一版还没有声音。',
             (card) => {
-                this.mkRow(card, 'crisp', '画质', s.crisp ? '清晰 · 60 帧' : '流畅 · 30 帧', s.crisp ? '清晰' : '流畅', 0, 40, () => {
+                this.mkRow(card, 'crisp', '画质', s.crisp ? '清晰 · 60 帧' : '流畅 · 30 帧', s.crisp ? '清晰' : '流畅', 0, 22, () => {
                     this.act(toggleCrisp(this.save), () => this.openSettings());
                 });
-                this.mkRow(card, 'mute', '音效', '这一版还没有声音，开关会记住', s.mute ? '关' : '开', 0, -40, () => {
+                this.mkRow(card, 'mute', '音效', '这一版还没有声音，开关会记住', s.mute ? '关' : '开', 0, -46, () => {
                     this.act(toggleMute(this.save), () => this.openSettings());
                 });
             },
+            640, 300,
         );
     }
 
@@ -3605,7 +3612,7 @@ class HomeController {
         sg.fill();
         scrim.on(Node.EventType.TOUCH_END, () => this.closeCodex());
 
-        const CW = 700, CH = 470;
+        const CW = 700, CH = 510;
         const card = new Node('card');
         card.parent = root;
         card.addComponent(UITransform).setContentSize(CW, CH);
@@ -3661,7 +3668,7 @@ class HomeController {
         /* 3 列 × 2 行。列宽 200、行高 160 —— 六个格子占满 600×320，
            四周留 50 的内边距，卡片边框不会被格子压到。 */
         const COL_X = [-200, 0, 200];
-        const ROW_Y = [40, -140];
+        const ROW_Y = [46, -134];
 
         PETS.forEach((p, i) => {
             const cx0 = COL_X[i % 3];

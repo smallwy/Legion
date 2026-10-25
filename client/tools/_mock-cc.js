@@ -109,6 +109,16 @@ class Node {
         this._parent = null;
     }
 
+    /* 真实引擎 3.8 有 `removeAllChildren()`。缺它不会报"找不到"，
+       而是 `removeAllChildren is not a function`（图鉴页签重画用到了）。
+       语义与引擎一致：全部摘父 + 标记销毁。 */
+    removeAllChildren() {
+        for (const c of this.children.slice()) {
+            c.removeFromParent();
+            c.destroy();
+        }
+    }
+
     /* 真实引擎的 `setParent(n)` = 从旧父摘下 + 挂到新父。
        `node.parent = n` 也能用，但两处语义不完全一样（引擎里 setParent 还会
        保留/重置本地变换、处理激活状态），代码里既然写的是 setParent，

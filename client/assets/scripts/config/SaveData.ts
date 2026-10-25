@@ -18,6 +18,7 @@
 
 import { PETS } from './Roster';
 import { STAGE_COUNT } from './Stages';
+import { starBitsOf } from './StarTargets';
 
 /* ==========================================================================
  * 1. 存储后端
@@ -200,6 +201,17 @@ export interface SaveState {
      * id 必须和 `grove.html` 的 `PERK_IDS` 逐字相等，冒烟有断言。
      */
     perks: string[];
+    /**
+     * 星靶完成位：27 屏 × 3 靶的 0/1。**只增不减**（和 `best` 同一个口径）。
+     *
+     * 为什么是二维不是 81 长度的一维：一维的话「哪一屏满没满」要除混取整，
+     * 读代码的人得心算，除错一位就是「第 3 屏满了看成第 4 屏」。
+     *
+     * **真值在战斗侧**（`grove.html` 的 `recordStar` 写 `pawpack.save.star`，
+     * 并镜像到这里的 `star`）。主界面只读不写 —— 同一件事存两份必然漂移
+     * （MEMORY 教训 2）。这里的 `loadSave` 只负责把形状整成 27×3。
+     */
+    star: number[][];
     /** 回到家园时要报的一句。报完就清空 */
     lastReward: string;
 }
@@ -251,6 +263,7 @@ export const DEFAULT_SAVE: SaveState = {
     dailyChests: [],
     dailyBase: {},
     perks: [],
+    star: starBitsOf(null),
     lastReward: '',
 };
 
@@ -262,6 +275,9 @@ function freshSave(): SaveState {
         bag: { ...DEFAULT_SAVE.bag },
         settings: { ...DEFAULT_SAVE.settings },
         best: DEFAULT_SAVE.best.slice(),
+        /* star 是二维数组，必须深拷贝 —— 浅拷贝会让两个存档共享同一批行，
+           一边并档另一边跟着变（这个项目最贵的教训之一）。 */
+        star: starBitsOf(null),
         dispatch: null,
         claimed: [],
         perks: DEFAULT_SAVE.perks.slice(),
@@ -418,6 +434,9 @@ export function loadSave(): SaveState {
         /* 旧存档没有这个字段（本批才加）。缺了就 0，**不能继承 DEFAULT_SAVE.shards** ——
            以后如果改了初始赠送，老玩家不该凭空多出来一份。 */
         shards: Math.floor(clampNum(o.shards, 0, 0, 999_999)),
+        /* 星靶完成位。坏档（不是 27×3、格里不是 0/1）整成全 0 而不是丢弃整个存档 ——
+           丢档比丢几个靶痛得多。形状校验全在 `starBitsOf` 里，一处。 */
+        star: starBitsOf(o.star),
         lastReward: typeof o.lastReward === 'string' ? o.lastReward.slice(0, 80) : '',
     };
 }

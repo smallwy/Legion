@@ -597,6 +597,13 @@ export class GroveBattle extends Component {
            只有在整趟结束时才成立。 */
         const met = judgeTripGoals(loadSave().tripGoals || [], s.stat || {});
         const goal = tripReward(met);
+        /* ★ 星靶结算（2026-10-25）。
+           完成位已经在战斗侧写好了（`recordStar` 每屏落盘 + 镜像），
+           这里只要把这一趟**新达成**攒下的货币带回家。
+           为什么不在这里判靶：判定要读当屏的 `S.stat` 快照，而收工时
+           那个快照早被后面的屏覆盖了 —— 边打边判、按屏累计是唯一解。 */
+        const starShards = Math.max(0, Math.round((s as unknown as { starShards?: number }).starShards || 0));
+        const starLogs = Math.max(0, Math.round((s as unknown as { starLogs?: number }).starLogs || 0));
         const payout = payoutFromRun({
             kind,
             lastLoot: home.lastLoot || 0,
@@ -609,11 +616,20 @@ export class GroveBattle extends Component {
             /* 目标奖励。和果子/材料走同一个出口 —— 自己写一份存档的话，这一趟的账当场分叉。 */
             goalShards: goal.shards,
             goalLogs: goal.logs,
+            /* 星靶奖励。同上，同一个出口。 */
+            starShards,
+            starLogs,
         });
         const next = applyRunReward(loadSave(), payout);
         /* 目标一次性：结算完清空，下一趟重新抽。
            不清的话，"上一趟的目标"一直挂着，玩家会以为下一趟还是这两条。 */
         if (met.length) next.lastReward = (next.lastReward || '') + ` · 目标 ${met.length} 条达成`;
+        /* 星靶同理点一句：不点的话，碎片涨了玩家不知道是哪来的 ——
+           「机制做了 ≠ 玩家看得见」在这个项目栽过五次。 */
+        if (starShards > 0 || starLogs > 0) {
+            next.lastReward = (next.lastReward || '') +
+                ` · 星靶 碎片 +${starShards} · 材料 +${starLogs}`;
+        }
         next.tripGoals = [];
         saveSave(next);
     }

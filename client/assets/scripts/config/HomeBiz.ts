@@ -517,6 +517,20 @@ export function payoutFromRun(input: {
     goalShards?: number;
     /** 本趟目标达成的材料。和 goalShards 一起并进 `logs` */
     goalLogs?: number;
+    /**
+     * 星靶（每屏 3 个挑战条件）这一趟新达成的碎片。
+     *
+     * 为什么和 `goalShards` 分成两个字段而不是合并：本趟目标是**随机抽的**，
+     * 星靶是**每屏固定的**，两边奖励节奏完全不同（一个每趟 0~4，一个按屏算）。
+     * 合并成一个数之后，"这一趟到底怎么构成的"就没法回答了 ——
+     * 而 `lastReward` 那句话要能回答它。
+     *
+     * 仍然走同一个出口（这里的 `shards`）：星靶奖励如果自己写一份存档，
+     * 就会和果子的账分叉（MEMORY 教训 2）。
+     */
+    starShards?: number;
+    /** 星靶这一趟新达成的材料。和 starShards 一起并进 `logs` */
+    starLogs?: number;
 }): RunPayout {
     const banked = input.kind === 'esc'
         ? Math.round((input.tripLoot || 0) + (input.food || 0))
@@ -526,9 +540,11 @@ export function payoutFromRun(input: {
         apples: Math.max(1, banked),
         logs: Math.max(0, stages)
             + Math.max(0, Math.round(input.rankLogs || 0))
-            + Math.max(0, Math.round(input.goalLogs || 0)),
+            + Math.max(0, Math.round(input.goalLogs || 0))
+            + Math.max(0, Math.round(input.starLogs || 0)),
         coins: stages >= 2 ? 1 : 0,
-        shards: Math.max(0, Math.round(input.goalShards || 0)),
+        shards: Math.max(0, Math.round(input.goalShards || 0))
+            + Math.max(0, Math.round(input.starShards || 0)),
     };
 }
 

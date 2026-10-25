@@ -2752,7 +2752,10 @@ const S = {
   killed: 0,            // 已消灭
   total: 0,
   // 球的归宿统计。用来回答"为什么打不完"：是造不出来，还是推不到位
-  stat: { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0, toured: 0 },
+  // shroom / rampIn 是 2026-10-25 为星靶加的：弹菇触发次数、坡面入营球数。
+  // **只是计数器，不改球的运动** —— 所以 updateBalls / predictBall 一行没动
+  // （MEMORY：只有新空间件才需要两处同源，工作量按 ×2 计）。
+  stat: { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0, toured: 0, shroom: 0, rampIn: 0 },
 
   // 关卡可破坏件（每局重建，不能直接改 PLATS 常量）
   stumps: [],
@@ -2788,6 +2791,22 @@ const S = {
    *   stages 这一趟推过了几关（重打同一关不算）
    */
   trip: { loot: 0, multi: 1, stages: 0, rankLogs: 0 },
+  /* ---------- 星靶（2026-10-25） ----------
+   * 每屏 3 个挑战条件（配置见文件末尾 STAR_OF_STAGE，与 StarTargets.ts 同源）。
+   * 三个字段各管一件事，不能合并：
+   *   starMet    本屏**达成了哪几个**（结算卡画 ✓/✗ 用，judgeStar 现算）
+   *   starFresh  本屏**新**达成了哪几个（存档里原本没有的，卡片上标「新」）
+   *   starShards / starLogs 这一趟攒下的星靶奖励。
+   *      **和 rankLogs 一个口径**：只在收工时由 GroveBattle 读走并进
+   *      payoutFromRun，战斗侧自己不写货币 —— 同一趟的账只有一个出口。
+   * 集满判定在 recordStar 里做（读存档完成位，只增不减）。 */
+  starMet: [],
+  starFresh: [],
+  /** 本屏当次的星靶奖励（结算卡回信用）。和 starShards/starLogs 分开：
+      后者是**整趟累计**给收工结算用的，写在这一屏卡上会张冠李戴。 */
+  starGain: { shards: 0, logs: 0 },
+  starShards: 0,
+  starLogs: 0,
   // 饱食度 0..100。出门满，**每过一关掉 20**：过 1 屏满饱、2-3 屏半饿、4 屏全饿。
   // 三档**全部**接进战斗：推球力 1.00 / 0.95 / 0.86（见 bellyPower），
   // 外加冲刺分档（满饱冲得更远、半饿原样、全饿冲不动）。
@@ -3263,7 +3282,7 @@ function setupLevel() {
   S.failWhy = "";
   // 台词每关重置：first / big 是"这一关的第一次"，跨关累计就永远不说了
   S.say.txt = ""; S.say.t = 0; S.say.life = 0; S.say.fired = {};
-  S.stat = { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0, chests: 0, toured: 0 };
+  S.stat = { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0, chests: 0, toured: 0, shroom: 0, rampIn: 0 };
   S.t = 0;
   S.shake = 0;
   S.flash = 0;
@@ -3297,6 +3316,12 @@ function beginRun(i) {
   /* 上一关到家那几只不许跟到下一关的结算卡上 —— 结算卡的横幅是
      "刚刚发生的事"，留着上一关的名字就会变成"这一关也在解锁谁"。 */
   S.unlocked = [];
+  /* 星靶是**每屏一份**的状态：不清的话，第 6 屏的卡上会画着第 5 屏
+     达成的靶（judgeStar 会在第 6 屏结束时覆盖它，但从第 5 屏通关
+     到第 6 屏结束之前，任何读到它的代码看到的都是旧屏的数据）。 */
+  S.starMet = [];
+  S.starFresh = [];
+  S.starGain = { shards: 0, logs: 0 };
   S.progress = Math.max(S.progress, S.stage);
   const SI = curStage();
   loadLevel(S.stage);
@@ -3505,6 +3530,11 @@ function goHome(allClear) {
   S.home.runs++;
   S.belly = 100;                         // 回家吃饭
   S.trip = { loot: 0, multi: 1, stages: 0 };
+  /* 星靶累计跟着一趟走：收工 = 这一趟的账结清。不重置的话，
+     下一趟的结算卡会把上一趟攒的碎片也算进去。 */
+  S.starShards = 0;
+  S.starLogs = 0;
+  S.starGain = { shards: 0, logs: 0 };
   S.phase = "select";
   S.p = null;
   S.door.pick = -1;
@@ -3642,6 +3672,198 @@ function readTripGoals() {
   } catch (e) {
     return [];
   }
+}
+
+/* ---------------------------------------------------------------------------
+   星靶（2026-10-25）—— 每屏 3 个挑战条件
+   ---------------------------------------------------------------------------
+   病根（用户原话）：「整个游戏只有 27 关 怎么保证长线的？」
+   审计结论：7 种目标 27 次使用全是计数型/禁止型，没一种要求「球必须走某条路」
+   → 机关全退化成虫好看的解法。星靶把「空间型条件」变成可收集的东西。
+
+   三份数据在这里，**与 `config/StarTargets.ts` 逐字同源**（冒烟 §39 断言）：
+     STAR_CN        id → 卡片短名（≤4 字，pill 只有 156px）
+     STAR_OF_STAGE  27 屏 × 3 靶。配靶规则见 StarTargets.ts 顶部注释
+     STAR_JUDGE     每个靶的判定。**只用 S.stat 已有字段**（外加 shroom/rampIn
+                    两个计数器），所以不碰物理、不碰 predictBall。
+
+   完成位存两份 key 是**故意的**，和 cleared 完全同一个 Pattern：
+     pawpack.save     （战斗侧）star 是 27×3 的 0/1
+     pawpack.save.v1  （主界面）同步镜像，图鉴读它
+   recordStar 是唯一写入点，写完自己镜像（MEMORY 教训 2：让写入点自带镜像）。
+   --------------------------------------------------------------------------- */
+
+/** id → 卡片短名。与 TRIP_CN 共用的 5 个 id 名字必须逐字一致 */
+const STAR_CN = {
+  nofire: "不碰火坑",
+  nolost: "一只不丢",
+  nohit: "一毛不拔",
+  noshell: "壳不破",
+  nodrown: "不沉底",
+  bigchain: "大打卷",
+  shroom3: "三弹菇",
+  ramp: "坡道入营",
+};
+
+const STAR_OF_STAGE = [
+  ["nofire", "bigchain", "ramp"],
+  ["nolost", "nodrown", "ramp"],
+  ["nofire", "bigchain", "ramp"],
+  ["nolost", "nofire", "ramp"],
+  ["nofire", "bigchain", "shroom3"],
+  ["nolost", "nodrown", "noshell"],
+  ["nofire", "nodrown", "nohit"],
+  ["nolost", "bigchain", "noshell"],
+  ["nofire", "nolost", "bigchain"],
+  ["nofire", "bigchain", "ramp"],
+  ["nolost", "nofire", "noshell"],
+  ["nolost", "nodrown", "noshell"],
+  ["nofire", "nodrown", "bigchain"],
+  ["nofire", "nolost", "bigchain"],
+  ["nofire", "bigchain", "shroom3"],
+  ["nolost", "nodrown", "nohit"],
+  ["nolost", "bigchain", "noshell"],
+  ["nofire", "bigchain", "nolost"],
+  ["nofire", "nodrown", "noshell"],
+  ["nolost", "nodrown", "nohit"],
+  ["nofire", "nodrown", "nohit"],
+  ["nolost", "nodrown", "ramp"],
+  ["nofire", "nodrown", "bigchain"],
+  ["nolost", "bigchain", "nohit"],
+  ["nofire", "bigchain", "nohit"],
+  ["nolost", "nodrown", "noshell"],
+  ["nofire", "nodrown", "bigchain"],
+];
+
+/* 判定。`made > 0` 这条守卫和本趟目标同一条理由：
+   一球不打就躺赢「不碰火坑 / 一次不挨」，靶就成了躺出来的。
+   bigchain / shroom3 / ramp 是"做到过"型，不需要守卫。 */
+const STAR_JUDGE = {
+  nofire: (s) => s.made > 0 && s.burned === 0,
+  nolost: (s) => s.made > 0 && (s.lost || 0) === 0,
+  nohit: (s) => s.made > 0 && s.hits === 0,
+  noshell: (s) => s.made > 0 && s.burst === 0,
+  nodrown: (s) => s.made > 0 && s.drowned === 0,
+  bigchain: (s) => s.maxHolds >= 3,
+  shroom3: (s) => (s.shroom || 0) >= 3,
+  ramp: (s) => (s.rampIn || 0) >= 1,
+};
+
+/** 这一屏达成了哪几个靶。纯函数，结算卡和落盘共用（一份数据两处读）。 */
+function judgeStar(idx, stat) {
+  const row = STAR_OF_STAGE[idx];
+  if (!row) return [];
+  const out = [];
+  for (const id of row) {
+    const fn = STAR_JUDGE[id];
+    if (fn && fn(stat || {})) out.push(id);
+  }
+  return out;
+}
+
+/** 一屏集满的额外奖励。数字与 StarTargets.ts 的 STAR_FULL_* 一致（冒烟断言） */
+const STAR_FULL_SHARDS = 2;
+const STAR_FULL_LOGS = 1;
+const STAR_CHAPTER_SHARDS = 4;
+const STAR_CHAPTER_LOGS = 3;
+
+/** 把存档里的 star 字段整成 27×3 的 0/1（坏档不崩） */
+function loadStarBits() {
+  let o = {};
+  try { o = JSON.parse(localStorage.getItem(HOME_SAVE_KEY) || "{}") || {}; } catch (e) { o = {}; }
+  const bits = [];
+  for (let i = 0; i < STAR_OF_STAGE.length; i++) {
+    const row = [];
+    const src = Array.isArray(o.star) ? o.star[i] : undefined;
+    for (let k = 0; k < STAR_OF_STAGE[i].length; k++) {
+      row.push(Array.isArray(src) && src[k] === 1 ? 1 : 0);
+    }
+    bits.push(row);
+  }
+  return bits;
+}
+
+/**
+ * 星靶记账：达成位并档 + 镜像 + 累计这一趟的奖励。
+ *
+ * **只增不减**：存档里是 1 的格永远不会变回 0（和评级同一个口径）。
+ * 返回这一屏**新**达成的 id —— 重复打同一屏第二次调用返回空数组，
+ * 所以材料/碎片不会因为刷屏而翻倍。
+ *
+ * 集满一屏 / 一章的额外奖励也在这里发（按并档后的状态判定，
+ * 所以「第 3 个靶是分三次补上的」照样算集满）。
+ */
+function recordStar(idx, metIds) {
+  /* 每次判定都先把当次账清零：早退（没新鲜的）也要清。
+     不清的话，重打一屏拿到 0 个新靶时，starGain 还留着上一屏的数 ——
+     虽然卡片只在 starFresh 非空时才画回执，但这个字段的含义是
+     "本次判定的奖励"，留着旧值就是给下一个读它的人埋雷。 */
+  S.starGain = { shards: 0, logs: 0 };
+  if (!(idx >= 0 && idx < STAR_OF_STAGE.length)) return [];
+  const row = STAR_OF_STAGE[idx];
+  const before = loadStarBits();
+  const bits = before.map((r) => r.slice());
+  const fresh = [];
+  for (const id of metIds || []) {
+    const k = row.indexOf(id);
+    if (k < 0 || bits[idx][k]) continue;
+    bits[idx][k] = 1;
+    fresh.push(id);
+  }
+  if (!fresh.length) return [];
+  /* ---- 写盘：先写战斗侧，再镜像主界面（顺序反了会留下分叉） ---- */
+  try {
+    const s = readHomeSave();
+    s.star = bits;
+    s.v = 1;
+    localStorage.setItem(HOME_SAVE_KEY, JSON.stringify(s));
+    let home = {};
+    try { home = JSON.parse(localStorage.getItem(HOME_MIRROR_KEY) || "{}") || {}; } catch (e) { home = {}; }
+    /* 镜像按格取并集，不是整表覆盖 —— 主界面那份可能更全
+       （在只玩过 Cocos 侧的机器上，反过来也可能）。 */
+    const mirror = [];
+    for (let i = 0; i < bits.length; i++) {
+      const m = Array.isArray(home.star) ? home.star[i] : undefined;
+      const r = [];
+      for (let k = 0; k < bits[i].length; k++) {
+        r.push(bits[i][k] === 1 || (Array.isArray(m) && m[k] === 1) ? 1 : 0);
+      }
+      mirror.push(r);
+    }
+    home.star = mirror;
+    home.v = 1;
+    localStorage.setItem(HOME_MIRROR_KEY, JSON.stringify(home));
+  } catch (e) {}
+  /* ---- 奖励：只给新达成的 ----
+     gain 记**本屏当次**（结算卡回信用），shards/logs 记**整趟累计**
+     （收工结算用）。两个数不能混 —— 混了就会出现"第 3 屏的卡上写着
+     第 1 屏以来一共拿了 6 碎片"，玩家以为这一屏给了 6。 */
+  const gain = { shards: 0, logs: 0 };
+  for (const id of fresh) { gain.logs += 1; S.starLogs += 1; }
+  if (bits[idx].every((b) => b === 1) && !before[idx].every((b) => b === 1)) {
+    gain.shards += STAR_FULL_SHARDS;
+    gain.logs += STAR_FULL_LOGS;
+    S.starShards += STAR_FULL_SHARDS;
+    S.starLogs += STAR_FULL_LOGS;
+  }
+  /* 章集满从完成位派生，不另存一份。三章各 9 屏。 */
+  for (let ch = 0; ch < 3; ch++) {
+    const from = ch * 9;
+    if (idx < from || idx >= from + 9) continue;
+    let wasFull = true, nowFull = true;
+    for (let i = from; i < from + 9; i++) {
+      if (!before[i].every((b) => b === 1)) wasFull = false;
+      if (!bits[i].every((b) => b === 1)) nowFull = false;
+    }
+    if (nowFull && !wasFull) {
+      gain.shards += STAR_CHAPTER_SHARDS;
+      gain.logs += STAR_CHAPTER_LOGS;
+      S.starShards += STAR_CHAPTER_SHARDS;
+      S.starLogs += STAR_CHAPTER_LOGS;
+    }
+  }
+  S.starGain = gain;
+  return fresh;
 }
 
 /** 清屏时调。只快不慢、只高不低 —— 和评级"只升不降"是同一条原则。 */
@@ -4938,6 +5160,10 @@ function updateBalls(dt) {
       b.vy = 0;
       b.onGround = true;
       b.vx -= GRAV * rp.slope * 0.45 * dt;
+      /* 星靶「坡道入营」的标记：这颗球踩过坡。**标记而不是计数** ——
+         判的是"有没有一颗球从坡上滚进营"，一颗球踩二十次坡也只算一次机会，
+         所以计数点在落袋处（见营地那段），这里只负责记住。 */
+      b.ramped = true;
     }
 
     // ---- 弹簧菇
@@ -4980,6 +5206,9 @@ function updateBalls(dt) {
         if (Math.abs(b.vx) < 120) b.vx = (b.vx < 0 ? -1 : 1) * 120;
         b.onGround = false;
         b.bounceCd = 0.7;
+        /* 星靶「三弹菇」的计数。**放在弹成功之后** —— 衰减到弹不动
+           （pow < 300 被 continue 掉）的那次不算，否则贴地滚过去也算触发。 */
+        S.stat.shroom = (S.stat.shroom || 0) + 1;
         addText(bo.x, bo.y - 74, "弹!", "#C9F27A", 18);
         for (let i = 0; i < 8; i++) addFrag(bo.x, bo.y - 6, 6, "#8ED36A");
         S.shake = Math.max(S.shake, 4);
@@ -5455,6 +5684,8 @@ function ballTerrain(b, fallVy) {  // 火坑：烧掉，收成翻倍，但球没
   if (b.y >= GROUND_Y - 6 && b.x > CAMP.x && b.x < CAMP.x + CAMP.w) {
     b.dead = true;
     S.stat.banked++;
+    /* 星靶「坡道入营」：这颗球踩过坡面才进的营。推上去的不算。 */
+    if (b.ramped) S.stat.rampIn = (S.stat.rampIn || 0) + 1;
     // 落袋关考的是"只数"，不是"球数"：一球装三只走营地算三只
     S.stat.bankHolds += b.holds;
     /* 赛道关：只有**走完全程**的球才算数。
@@ -12885,6 +13116,12 @@ function tick(dt) {
     if (allSpawned && S.foes.length === 0 && S.balls.length === 0 && S.phase === "play") {
       if (checkGoal()) {
         S.phase = "clear";
+        /* ---- 星靶：算 + 落盘 + 记下新的（结算卡画三颗靶用） ----
+           放在 phase 赋值后面、奖励前面：judgeStar 读的是 S.stat，
+           而 clear 分支下面才开始改 S.food / S.belly，顺序反了不会错，
+           但放这儿读代码的人一眼能看出"判定发生在改动发生之前"。 */
+        S.starMet = judgeStar(S.stage, S.stat);
+        S.starFresh = recordStar(S.stage, S.starMet);
         /* 清场奖励 3 → 3+25（`bounty`）。
            3 这个数太小了：一屏收成实测 31~64，3 分等于 5%，
            玩家根本感觉不到"把场上清干净"有额外好处。 */
@@ -12953,6 +13190,10 @@ function tick(dt) {
       } else {
         S.phase = "fail";
         S.failWhy = goalFailWhy();
+        /* 失败也判星靶：「这趟没白打」要有证据。完不成不惩罚（红线 3），
+           但打出来的靶照样算 —— 和本趟目标同一个口径。 */
+        S.starMet = judgeStar(S.stage, S.stat);
+        S.starFresh = recordStar(S.stage, S.starMet);
       }
     }
 
@@ -12984,9 +13225,14 @@ function tick(dt) {
 }
 
 /* 结算卡片与两个按钮的几何。**绘制和点击判定共用这一份** ——
- * 门口那六只踩过一次"画一遍算一遍坐标、判定再算一遍"的坑，改布局必错开。 */
-const CARD_W = 570, CARD_H = 412, CARD_Y = 64;
-const BTN_Y = CARD_Y + 348, BTN_W = 196, BTN_H = 42, BTN_GAP = 26;
+ * 门口那六只踩过一次"画一遍算一遍坐标、判定再算一遍"的坑，改布局必错开。
+ *
+ * 2026-10-25：CARD_H 412 → 496、BTN_Y 348 → 424 —— 数据列和按钮之间
+ * 插进了「三颗星靶」行（+352，高 30）和一条奖励回执（+400）。
+ * 卡片长高但不改原有任何一行的坐标：评级、星星、它说、数据列全在原位，
+ * 只有按钮整组下移。这样截图对比时"老东西没动"是肉眼可验的。 */
+const CARD_W = 570, CARD_H = 496, CARD_Y = 64;
+const BTN_Y = CARD_Y + 424, BTN_W = 196, BTN_H = 42, BTN_GAP = 26;
 function settleBtns() {
   const cx = W / 2;
   return {
@@ -14029,6 +14275,76 @@ function render() {
         g.fillText("用时", colB, cardY + 326);
       }
 
+      /* ---- 三颗星靶 ----
+       * 「机制做了 ≠ 玩家看得见」在这个项目栽过五次。靶的判定、落盘、
+       * 奖励全在 recordStar 里跑完了，但结算卡上不画，玩家就以为
+       * 「那三个东西跟我没关系」。所以这一行不是装饰，是星靶的
+       * **唯一可见出口**（图鉴是回看，这里是当场）。
+       *
+       * 三态分色，不是两态：
+       *   金底 ✓ = 这一趟**新**打出来的（fresh）
+       *   绿底 ✓ = 早就有了（这趟又满足一次）
+       *   灰底 — = 没做到
+       * 只有两态（✓/✗）的话，"早就有了"和"刚拿到"长得一样，
+       * 而这两个对玩家的意义完全相反。 */
+      {
+        const srow = STAR_OF_STAGE[S.stage] || [];
+        if (srow.length) {
+          const PW = 156, PH = 30, PG = 11;
+          const py = cardY + 352;
+          const totalW = srow.length * PW + (srow.length - 1) * PG;
+          let px = cx - totalW / 2;
+          for (const id of srow) {
+            const nm = STAR_CN[id] || id;
+            const met = S.starMet.indexOf(id) >= 0;
+            const fresh = S.starFresh.indexOf(id) >= 0;
+            g.save();
+            g.translate(px + PW / 2, py + PH / 2);
+            // 底：投影 → 填充 → 描边。三态各自一套颜色，深浅都读得出来。
+            g.fillStyle = "rgba(56,32,8,.16)";
+            rr(g, -PW / 2, -PH / 2 + 3, PW, PH, PH / 2);
+            g.fill();
+            g.fillStyle = fresh ? "#FFD86B"
+                       : met ? (K.cream ? "#D9E9B4" : "rgba(150,196,116,.30)")
+                             : (K.cream ? "rgba(120,92,64,.10)" : "rgba(255,255,255,.08)");
+            rr(g, -PW / 2, -PH / 2, PW, PH, PH / 2);
+            g.fill();
+            g.strokeStyle = fresh ? "#8A5208"
+                       : met ? (K.cream ? "#5E7E33" : "rgba(178,222,140,.55)")
+                             : (K.cream ? "rgba(120,92,64,.34)" : "rgba(255,255,255,.20)");
+            g.lineWidth = fresh ? 2.2 : 1.6;
+            rr(g, -PW / 2, -PH / 2, PW, PH, PH / 2);
+            g.stroke();
+            // 标记：✓ / —。画在名字左边，不占名字的居中位。
+            g.textAlign = "center";
+            g.textBaseline = "middle";
+            g.font = "bold 14px " + FONT;
+            g.fillStyle = fresh ? "#5A3407"
+                       : met ? (K.cream ? "#3F6B2A" : "#BFE8A8")
+                             : (K.cream ? "rgba(74,53,36,.42)" : "rgba(255,255,255,.36)");
+            g.fillText(fresh || met ? "✓" : "—", -PW / 2 + 18, 1);
+            g.font = "bold 13px " + FONT;
+            g.fillText(nm, 10, 1);
+            g.restore();
+            px += PW + PG;
+          }
+          g.textBaseline = "alphabetic";
+
+          /* ---- 奖励回执 ----
+             只有**新**达成才出现。没拿到东西的时候写一行"碎片 +0"
+             是噪音；而拿到了不写，玩家收工时看到材料涨了却不知道是哪来的。
+             和评级那行「材料 +N」同一条原则。 */
+          if (S.starFresh.length) {
+            g.textAlign = "center";
+            g.fillStyle = K.cream ? "#3F6B2A" : "#BFE8A8";
+            g.font = "bold 13px " + FONT;
+            const gg = S.starGain || { shards: 0, logs: 0 };
+            g.fillText("星靶新达成 " + S.starFresh.length + " 个 · 碎片 +" +
+                       gg.shards + " · 材料 +" + gg.logs, cx, cardY + 400);
+          }
+        }
+      }
+
       /* ---- 两个按钮：继续（贪） / 收工（稳） ----
          默认高亮"继续"，因为默认应该是贪 —— 玩家没选的时候，让游戏推着他往前走。
          但两个都得看得见、都得好按，不然"贪"就不是选择，是唯一路径。
@@ -14436,6 +14752,11 @@ export const GROVE: any = {
   PERK_IDS, perkOn, loadPerks,
   _setPerks: (o) => { PERKS = Object.create(null); for (const k in o) if (o[k]) PERKS[k] = true; },
   recordClear, readHomeSave, FROM_HOME,
+  /* 星靶：判定 / 配靶表 / 落盘全导出。冒烟要能直接问
+     "第 5 屏挂的是哪三个靶""recordStar 是不是只增不减""集满给多少"——
+     这些问不出来的话，81 个靶只能靠截图目测，那不算检查。 */
+  judgeStar, recordStar, STAR_CN, STAR_OF_STAGE, STAR_JUDGE,
+  STAR_FULL_SHARDS, STAR_FULL_LOGS, STAR_CHAPTER_SHARDS, STAR_CHAPTER_LOGS,
   /* 解锁节奏与分章几何：冒烟要能直接问"第 20 屏属于哪个产地""这屏送谁"。
      问不出来的话，只能靠截图目测，而截图看不出边界到底在 9 还是 10。 */
   stageUnlockReward, chapterOfStage, syncHomeMirror, adoptHomeMirror, UNLOCK_AT, HERO_CN,

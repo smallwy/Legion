@@ -3947,6 +3947,185 @@ console.log("\n=== 38. 本趟目标：抽签 / 读取 / 真的画在 HUD 上 ===
      "两边条数相同（战斗侧不多不少）");
 }
 
+console.log("\n=== 39. 星靶：81 个靶的配靶规则 / 判定 / 落盘 / 真的画在卡上 ===");
+{
+  /* 用户原话：「整个游戏 只有 27 关 怎么保证长线的？」
+     审计：7 种目标 27 次使用全是计数型/禁止型 → 机关全退化成"更好看的解法"。
+     星靶 = 27 屏 × 3 个**空间型**挑战条件（81 个），纯数据不碰几何。
+
+     这一节钉七件事：
+       A. 配靶表形状（27×3、屏内不重复、id 都有名字）；
+       B. **配靶规则按地形走** —— 没弹菇的屏不许挂三弹菇、BOSS 屏不许挂
+          "一次不挨"、通关条件本身覆盖的靶不许再挂（否则靶被白送）；
+       C. 两边数据逐字一致（grove.html ↔ config/StarTargets.ts）；
+       D. 判定器行为（made=0 的守卫、每个条件真的会响）；
+       E. recordStar 只增不减 / 不重复奖励 / 集满与章集满奖励 / 镜像；
+       F. 埋点真的在物理路径上（弹菇计数 / 坡面标记 / 坡面入营计数）；
+       G. ★ 结算卡真的画了（不是只塞进 S）—— 这个项目栽过五次的地方。 */
+  const sb = boot(), P = sb.GROVE;
+  const store39 = Object.create(null);
+  sb.localStorage = {
+    getItem: (k) => (k in store39 ? store39[k] : null),
+    setItem: (k, v) => { store39[k] = String(v); },
+    removeItem: (k) => { delete store39[k]; },
+  };
+  const sos = P.STAR_OF_STAGE;
+  const L39 = P.LEVELS;
+  const src39 = fs.readFileSync(HTML, "utf8");
+
+  /* ---- A. 形状 ---- */
+  eq(sos.length, 27, "27 屏各有一行配靶");
+  let total39 = 0;
+  for (let i = 0; i < sos.length; i++) {
+    eq(sos[i].length, 3, `第 ${i + 1} 屏 3 个靶`);
+    eq(new Set(sos[i]).size, 3, `第 ${i + 1} 屏内不重复`);
+    total39 += sos[i].length;
+  }
+  eq(total39, 81, "一共 81 个靶");
+
+  /* ---- B. 配靶规则按地形 ---- */
+  /* 先钉一个反直觉的事实：**27 屏每一屏结尾都有 BOSS**（lv 1→5 递增）。
+     所以不存在"BOSS 屏"这个类，也没有"BOSS 屏不挂 nohit"的规则 ——
+     14/23 两屏的通关条件本身就是 hits=0，游戏自己证明了
+     lv5 面前一次不挨做得到。nohit 只在"它已经是通关条件"的屏缺席。 */
+  for (let i = 0; i < L39.length; i++) {
+    const st = L39[i], row = sos[i];
+    const has = (id) => row.indexOf(id) >= 0;
+    const lastWv = st.waves[st.waves.length - 1] || [];
+    ok(lastWv.some((s) => s.foe === "boss"),
+       `第 ${i + 1} 屏结尾有 BOSS（冒烟自己先确认这件事，规则才不会建在错觉上）`);
+    if (st.goal === "nohit") ok(!has("nohit"),
+      `★ 第 ${i + 1} 屏通关条件就是「一次不挨」，不挂 nohit（否则白送）`);
+    if (st.goal === "intact") ok(!has("noshell"),
+      `★ 第 ${i + 1} 屏通关条件就是「不崩」，不挂 noshell`);
+    if (st.goal === "chain" && (st.chain || 0) >= 3) ok(!has("bigchain"),
+      `★ 第 ${i + 1} 屏通关条件就是「一球卷 ${st.chain}」，不挂大打卷`);
+    if ((st.bouncers || []).length === 0) ok(!has("shroom3"),
+      `第 ${i + 1} 屏没有弹菇，不挂三弹菇`);
+    if ((st.ramps || []).length === 0) ok(!has("ramp"),
+      `第 ${i + 1} 屏没有坡，不挂坡道入营`);
+    const hasWater = (st.pits || []).some((p) => p.kind === "water");
+    if (!hasWater) ok(!has("nodrown"), `第 ${i + 1} 屏没有水塘，不挂不沉底`);
+  }
+  /* 有特征的屏必须真的挂上（不然规则变成"永远不挂"） */
+  ok(sos[4].indexOf("shroom3") >= 0 && sos[14].indexOf("shroom3") >= 0,
+     "★ 两个弹菇屏（5/15）都挂了三弹菇");
+  ok(sos[0].indexOf("ramp") >= 0 && sos[21].indexOf("ramp") >= 0,
+     "★ 坡屏挂上了坡道入营（1/22 在列）");
+
+  /* ---- C. 两边数据逐字一致 ---- */
+  const path39 = require("path");
+  const st39 = fs.readFileSync(
+    path39.join(__dirname, "..", "assets", "scripts", "config", "StarTargets.ts"), "utf8");
+  const t0 = st39.indexOf("export const STAR_TYPES");
+  const t1 = st39.indexOf("export const STAR_FULL_SHARDS");
+  ok(t0 > 0 && t1 > t0, "StarTargets.ts 的 STAR_TYPES 段能定位");
+  const defs39 = [...st39.slice(t0, t1).matchAll(/id: '(\w+)', name: '([^']+)'/g)]
+    .map((m) => [m[1], m[2]]);
+  eq(defs39.length, 8, "TS 侧有 8 种靶");
+  const cn39 = src39.indexOf("const STAR_CN = {");
+  const cn39end = src39.indexOf("};", cn39);
+  const cnSeg39 = src39.slice(cn39, cn39end);
+  for (const [id, name] of defs39) {
+    ok(cnSeg39.indexOf(id + ': "' + name + '"') >= 0,
+       `★ 「${name}」在战斗侧逐字一致（${id}）`);
+  }
+  eq((cnSeg39.match(/^\s+\w+: "/gm) || []).length, defs39.length,
+     "两边条数相同（战斗侧不多不少）");
+  /* 配靶表本身也要逐行一致 —— 只对名字不够，81 个格子错一个都算漂移 */
+  const s0 = st39.indexOf("export const STAR_OF_STAGE");
+  const s1 = st39.indexOf("export function starOfStage");
+  ok(s0 > 0 && s1 > s0, "StarTargets.ts 的 STAR_OF_STAGE 段能定位");
+  const tsRows = [...st39.slice(s0, s1).matchAll(/\['(\w+)', '(\w+)', '(\w+)'\]/g)]
+    .map((m) => [m[1], m[2], m[3]]);
+  eq(tsRows.length, 27, "TS 侧 27 行配靶");
+  let rowsSame = true;
+  for (let i = 0; i < 27; i++) {
+    if (!tsRows[i] || tsRows[i].join() !== sos[i].join()) rowsSame = false;
+  }
+  ok(rowsSame, "★ 81 个格子两边逐行一致（错一个都算漂移）");
+
+  /* ---- D. 判定器行为 ---- */
+  eq(P.judgeStar(0, { made: 0, burned: 0 }).length, 0,
+     "★ made=0 时守卫型靶全不响（躺着不能拿「不碰火坑」）");
+  ok(P.judgeStar(0, { made: 1, burned: 0 }).indexOf("nofire") >= 0,
+     "没烧过 → 不碰火坑响");
+  ok(P.judgeStar(0, { made: 1, burned: 1 }).indexOf("nofire") < 0,
+     "烧过一次 → 不碰火坑不响");
+  ok(P.judgeStar(0, { made: 1, maxHolds: 3 }).indexOf("bigchain") >= 0,
+     "一球卷 3 只 → 大打卷响");
+  ok(P.judgeStar(0, { made: 1, maxHolds: 2 }).indexOf("bigchain") < 0,
+     "只卷 2 只 → 大打卷不响");
+  ok(P.judgeStar(4, { made: 1, shroom: 3 }).indexOf("shroom3") >= 0,
+     "弹了 3 次 → 三弹菇响（第 5 屏）");
+  ok(P.judgeStar(4, { made: 1, shroom: 2 }).indexOf("shroom3") < 0,
+     "只弹 2 次 → 三弹菇不响");
+  ok(P.judgeStar(0, { made: 1, rampIn: 1 }).indexOf("ramp") >= 0,
+     "坡面进过营 → 坡道入营响（第 1 屏）");
+  ok(P.judgeStar(0, { made: 1, rampIn: 0 }).indexOf("ramp") < 0,
+     "没走坡 → 坡道入营不响");
+  eq(P.judgeStar(99, { made: 1 }).length, 0, "越界屏 → 空数组，不崩");
+  eq(P.judgeStar(0, null).length, 0, "stat 为 null → 空数组，不崩");
+
+  /* ---- E. recordStar ---- */
+  const K39 = "pawpack.save", M39 = "pawpack.save.v1";
+  let r = P.recordStar(0, ["nofire", "bigchain"]);
+  eq(r.join(), "nofire,bigchain", "两个新靶都记下");
+  eq(JSON.parse(store39[K39]).star[0].join(), "1,1,0", "战斗侧完成位写上");
+  eq(JSON.parse(store39[M39]).star[0].join(), "1,1,0", "★ 主界面镜像同步（写入点自带镜像）");
+  eq(P.recordStar(0, ["nofire"]).length, 0,
+     "★ 重打只给旧的 → 不新鲜、不重复奖励");
+  eq(JSON.parse(store39[K39]).star[0].join(), "1,1,0",
+     "★ 只增不减（少给一个不会把 1 抹回 0）");
+  eq(P.S.starGain.logs, 0, "重复打没有当次奖励");
+  r = P.recordStar(0, ["ramp"]);
+  eq(r.join(), "ramp", "补上第 3 个算新");
+  eq(P.S.starGain.shards, 2, "★ 集满一屏 → 碎片 +2");
+  eq(P.S.starGain.logs, 2, "集满一屏 → 材料 +2（靶 1 + 集满 1）");
+  eq(P.recordStar(0, ["nofire", "bigchain", "ramp"]).length, 0,
+     "★ 已集满再打 → 不再给（防刷）");
+  eq(P.recordStar(0, ["__evil"]).length, 0, "未知 id 被丢掉");
+  eq(P.recordStar(99, ["nofire"]).length, 0, "越界屏被丢掉");
+  /* 章集满：第 1 章 9 屏全满 → 一次大奖，且只发一次。
+     账：第 0 屏 2 材料 + 集满 2 碎片 1 材料；1~8 屏各 3 材料 + 集满各 2 碎片 1 材料；
+     章集满 +4 碎片 +3 材料 → 碎片 2+16+4=22、材料 4+32+3=39。 */
+  for (let i = 1; i < 9; i++) P.recordStar(i, sos[i]);
+  eq(P.S.starShards, 22, "★ 第 1 章集满 → 再 +4 碎片");
+  eq(P.S.starLogs, 39, "章集满 → 再 +3 材料");
+  const before39 = P.S.starShards;
+  for (let i = 0; i < 9; i++) P.recordStar(i, sos[i]);
+  eq(P.S.starShards, before39, "★ 章已集满再打 → 不再发（防刷）");
+
+  /* ---- F. 埋点真的在物理路径上 ---- */
+  ok(/S\.stat\.shroom = \(S\.stat\.shroom \|\| 0\) \+ 1;/.test(src39),
+     "★ 弹成功的那一刻真的 +1 shroom（衰减到弹不动的那次不算）");
+  ok(/b\.ramped = true;/.test(src39),
+     "★ 踩上坡面真的打标记（b.ramped）");
+  ok(/if \(b\.ramped\) S\.stat\.rampIn = \(S\.stat\.rampIn \|\| 0\) \+ 1;/.test(src39),
+     "★ 落袋时真的按 b.ramped 计 rampIn（推上去的不算）");
+  ok(/shroom: 0, rampIn: 0 \}/.test(src39), "两个新统计进了初始化（两处）");
+  ok((src39.match(/shroom: 0, rampIn: 0/g) || []).length >= 2,
+     "stat 声明与 setupLevel 重置都带了新字段");
+
+  /* ---- G. ★ 结算卡真的画了 ---- */
+  const card39 = src39.indexOf("/* ---- 三颗星靶 ----");
+  ok(card39 > 0, "结算卡里有「三颗星靶」段");
+  const cardSeg = src39.slice(card39, card39 + 4200);
+  ok(/S\.starMet\.indexOf\(id\)/.test(cardSeg), "★ 卡片读了 S.starMet（不是永远空）");
+  ok(/S\.starFresh\.indexOf\(id\)/.test(cardSeg), "★ 卡片读了 S.starFresh（新/旧两态分色）");
+  ok(/fillText\(fresh \|\| met \? "✓" : "—"/.test(cardSeg),
+     "★ 三颗靶真的被 fillText 画成 ✓ / —（不是只塞进 S）");
+  ok(/S\.starGain/.test(cardSeg), "★ 奖励回执读的是当次 gain（不是整趟累计）");
+  ok(/const CARD_W = 570, CARD_H = 496/.test(src39),
+     "卡片长高了（412 → 496）给星靶行让位");
+  ok(/const BTN_Y = CARD_Y \+ 424/.test(src39),
+     "★ 按钮跟着下移到 424（否则压住星靶行）");
+  ok(/beginRun[\s\S]*?S\.starMet = \[\];/.test(src39),
+     "★ beginRun 重置本屏星靶（不清会画上一屏的靶）");
+  ok(/S\.trip = \{ loot: 0[\s\S]{0,120}S\.starShards = 0/.test(src39),
+     "★ 收工重置整趟星靶累计");
+}
+
 console.log("\n" + "=".repeat(56));
 if (fail) {
   console.log("通过 " + pass + " · 失败 " + fail);

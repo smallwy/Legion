@@ -39,6 +39,19 @@ function boot() {
   const html = fs.readFileSync(HTML, "utf8");
   const code = html.match(/<script>([\s\S]*)<\/script>/)[1];
   const main = mkCanvas(960, 600);
+  /* 内存 localStorage 桩。**必须有**：grove.html 的存档链路
+     （pawpack.save / pawpack.save.v1 / pawpack.best / pawpack.stats）
+     全部走 localStorage，没有它时「读档」抛 ReferenceError、「写档」
+     被 try/catch 吞掉 —— 于是所有涉及存档的断言都会**假通过**
+     （函数返回空数组，看起来跟"没有新达成"一模一样）。
+     内存版而不是抛错：沙箱里要测的就是"写进去再读回来"这条链。 */
+  const mem = {};
+  const ls = {
+    getItem: (k) => (k in mem ? mem[k] : null),
+    setItem: (k, v) => { mem[k] = String(v); },
+    removeItem: (k) => { delete mem[k]; },
+    clear: () => { for (const k of Object.keys(mem)) delete mem[k]; },
+  };
   const sb = {
     console, Math, Date, JSON, String, Number, Array, Object, Boolean,
     isNaN, isFinite, Set, Map, Infinity, NaN, undefined,
@@ -49,6 +62,7 @@ function boot() {
     performance: { now: () => Date.now() },
     addEventListener: noop,
     innerWidth: 1280, innerHeight: 800,
+    localStorage: ls,
   };
   sb.window = sb;
   vm.createContext(sb);

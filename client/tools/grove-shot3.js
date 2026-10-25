@@ -65,6 +65,42 @@ if (!args.length) { console.log("给个 tag，例如 s1 / clear:3"); process.exi
         S.kills = 9; S.total = 9; S.maxBall = 3; S.time = 41.2;
         S.usedBall = 2; S.bag = 21;
       }, Number(s || 0));
+    } else if (kind === "star") {
+      /* `star:5` = 第 6 屏的结算卡，**三颗靶三态同屏**：
+           金底 ✓ = 这一趟新达成（fresh）
+           绿底 ✓ = 早就有了（这趟又满足一次）
+           灰底 — = 没做到
+         外加一条集满回执（碎片 +2 · 材料 +3）。
+         `star:5:lean` = 只达成 1 个且不是新的 → 应该**没有回执**，
+         卡片上只有一个绿 pill + 两个灰 pill。
+
+         为什么值得单独一个 kind：星靶的判定 / 落盘 / 奖励全在 recordStar 里，
+         但"玩家看得见"只发生在这一张卡上（MEMORY：机制做了 ≠ 玩家看得见，
+         这个项目在这上面栽过五次）。截图是唯一能验"画出来了"的手段。 */
+      await page.evaluate((arg) => {
+        const G = window.GROVE, S = G.S;
+        const parts = arg.split(":");
+        const st = Number(parts[0]);
+        const lean = parts[1] === "lean";
+        G._start(0, st);
+        S.phase = "clear";
+        S.kills = 9; S.total = 9; S.maxBall = 3; S.time = 41.2;
+        S.usedBall = 2; S.bag = 21;
+        const row = G.STAR_OF_STAGE[S.stage] || [];
+        if (lean) {
+          /* 只达成第一个、且存档里早有 → 绿 pill，无回执 */
+          S.starMet = row.slice(0, 1);
+          S.starFresh = [];
+          S.starGain = { shards: 0, logs: 0 };
+        } else {
+          /* 三个全达成，其中第 1、3 个是新的 → 金/金/绿 + 集满回执。
+             starGain 的账和 mergeStarBits 一致：2 个新靶各 1 材，
+             外加集满 2 碎片 + 1 材 = 3 材。 */
+          S.starMet = row.slice();
+          S.starFresh = [row[0], row[2]];
+          S.starGain = { shards: 2, logs: 3 };
+        }
+      }, a.slice(5));
     } else if (kind === "fail") {
       await page.evaluate(() => {
         const G = window.GROVE, S = G.S;

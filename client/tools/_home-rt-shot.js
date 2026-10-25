@@ -155,7 +155,7 @@ const OPT = { out: '_home-rt', t: 1200, touch: null, press: null };
 /* 带值参数的白名单。`--cleared 8`（空格写法）原来会被拆成「开关 --cleared=1」+
    「位置参数 8」，于是 OPT.out 变成 `8`、关卡还是 0 —— 截图文件名对、内容全错，
    属于**静默错**，比报错难查十倍。已知带值的键后面跟的不是 `--xxx` 就当值吃掉。 */
-const VALUED = new Set(['out', 'cleared', 'save', 't', 'touch', 'touch2', 'press']);
+const VALUED = new Set(['out', 'cleared', 'save', 't', 'touch', 'touch2', 'touch3', 'press']);
 const ARGV = process.argv.slice(2);
 for (let i = 0; i < ARGV.length; i++) {
     const a = ARGV[i];
@@ -232,6 +232,16 @@ if (OPT.touch) {
 if (OPT.touch2) {
     const hit = findNode(OPT.touch2);
     if (!hit) { console.error(`找不到节点 ${OPT.touch2}`); process.exit(1); }
+    hit.emitTouch('touch-start');
+    hit.emitTouch('touch-end');
+    for (let i = 0; i < 3; i++) { fakeNow += 16; director.emit('before-update'); }
+}
+
+/* `--touch3=X` 第三次点击。星靶页要用到：点徽标开图鉴 → 点 tab-star
+   切页 → 点某一屏格子看详情。少这一级就永远截不到选中态。 */
+if (OPT.touch3) {
+    const hit = findNode(OPT.touch3);
+    if (!hit) { console.error(`找不到节点 ${OPT.touch3}`); process.exit(1); }
     hit.emitTouch('touch-start');
     hit.emitTouch('touch-end');
     for (let i = 0; i < 3; i++) { fakeNow += 16; director.emit('before-update'); }

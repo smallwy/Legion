@@ -54,15 +54,16 @@ import { MAX_SQUAD, PETS, petByNode, petGap, petById, squadSize, unlockedPets } 
 import type { PetDef } from './config/Roster';
 import { CHAPTERS, STAGE_COUNT, chapterOf, stageLabel, stageInChapter } from './config/Stages';
 import type { TaskDef } from './config/HomeBiz';
-import { loadSave, saveSave } from './config/SaveData';
+import { loadSave, saveSave, loadBattleStats } from './config/SaveData';
 import type { SaveState } from './config/SaveData';
 import { SATIETY } from './config/BattleConfig';
 import {
-    MEALS, RECIPES, PERKS, PET_LINE, DISPATCH_SEC, DISPATCH_CAP,
+    MEALS, RECIPES, PERKS, PET_LINE, DISPATCH_SEC, DISPATCH_CAP, DISPATCH_SHARD,
     feed, craft, recordPat, setActive, startDispatch, collectDispatch, peekDispatch,
     buyPerk, perkOwned,
     toggleMute, toggleCrisp, heartText, heartsOf, canDispatch, yieldText,
     TASKS, taskPhase, claimTask, claimableCount,
+    starsOf, rankCount, perfectCount, starsTitle, STAR_MAX,
 } from './config/HomeBiz';
 
 /* ==========================================================================
@@ -76,6 +77,27 @@ const H = 720;
 const HOT_MIN = 88;
 
 const WHITE = new Color(255, 255, 255, 255);
+
+/**
+ * 评级色。**必须和 `grove.html` 的 `RANK_COLOR` 逐字相等**
+ * （S #E8951A / A #4F9B24 / B #3F82A2）。
+ *
+ * 理由和"金是满饱"同一条：同一个东西在两个界面里不能各用一套配色 ——
+ * 玩家在战斗结算卡上认识的橙色 S，到主界面战绩榜上必须还是同一个橙。
+ *
+ * `WASH` 是同一套色的浅版（格子底），`INK` 是深版（数字）。
+ */
+const RANK_INK: Record<string, Color> = {
+    S: new Color(232, 149, 26, 255),
+    A: new Color(79, 155, 36, 255),
+    B: new Color(63, 130, 162, 255),
+    N: new Color(176, 160, 144, 255),
+};
+const RANK_WASH: Record<string, Color> = {
+    S: new Color(232, 149, 26, 235),
+    A: new Color(79, 155, 36, 235),
+    B: new Color(63, 130, 162, 235),
+};
 
 /**
  * 卡片白 —— 这一档色值不是"我挑的白"，是**从现有 UI 贴图上采下来的**。
@@ -2422,17 +2444,14 @@ class HomeController {
 
         const hud = root.getChildByName('HudProgress');
         if (hud) {
-            this.press(hud, 0.985);
-            hud.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
-                e.propagationStopped = true;
-                const c = this.save.cleared;
-                /* 全通判定必须读 STAGE_COUNT。写死 8 的时候，玩家打到第 10 屏
-                 * 就会收到「苔原 8/8 · 全部通关」—— 一句假话，而且是他手感上
-                 * 明显不对的假话（第 11 屏还在前面等着）。 */
-                this.toast(c >= STAGE_COUNT
-                    ? `${STAGE_COUNT} 屏全部走完 · 挑一屏重打可以刷 S`
-                    : `${stageLabel(c)} · 打一场推进 1 屏，新伙伴会回家`);
-            });
+            /* 原来点这里只弹一句 toast（"苔原 3 / 9 · 打一场推进 1 屏"）——
+               而玩家真正想知道的是"我打得多好"，不是"推了几屏"（那个数字就在旁边）。
+               现在点开战绩面板。**没有新增入口节点**：这条路本来就有，
+               只是通向了一句废话。
+
+               只用 `makeHot` 绑一次，不再给 hud 自己绑 —— 两个热区叠在一起
+               会"点一下开两次面板"（第二个盖第一个，看起来像闪了一下没反应）。 */
+            this.makeHot(hud, 'HudProgress-hot', 560, HOT_MIN, () => this.openRecord(), 0.985);
         }
     }
 
@@ -3064,7 +3083,7 @@ class HomeController {
 
         this.openSheet(
             '工坊',
-            `果子 ${s.apples} · 材料 ${s.logs} · 吧唧 ${s.coins} · 干粮 ${s.bag.ration} · 收集篮 ${s.bag.basket}`,
+            `果子 ${s.apples} · 材料 ${s.logs} · 吧唧 ${s.coins} · 碎片 ${s.shards || 0} · 干粮 ${s.bag.ration}`,
             (card) => {
                 /* 装饰层单独一个节点：Cocos 一个节点只能挂一个 Graphics 组件，
                    后面还要画饱食条、卡片底、分割线，全挤在 card 上会互相覆盖 */
@@ -3177,17 +3196,22 @@ class HomeController {
                        一趟走满 5 屏才够买一个，一趟买不到第二个。 */
                     PERKS.forEach((pk, i) => {
                         const owned = perkOwned(s, pk.id);
-                        const lack = s.apples < pk.apples || s.logs < pk.logs;
-                        /* 代价一行**只写两个数**，不写单位汉字：
-                           `180 果 · 4 材` 9 字符，`果子 180 + 材料 4` 13 字符 ——
-                           后者会把右边那句效果压掉（出图上就是这么撞的）。
-                           货不够时改写成"还差 X"，比"180 · 4 我买不起"更好读。 */
+                        const myShards = s.shards || 0;
+                        const lack = s.apples < pk.apples || s.logs < pk.logs || myShards < pk.shards;
+                        /* 代价一行**只写数字，不写单位汉字**：
+                           `180 果 · 4 材 · 2 图` 比 `果子 180 + 材料 4 + 图纸 2` 短一半，
+                           而右边那句效果只有 120px 可用。
+                           货不够时改写成"还差 X"，并且**按最先缺的那样报** ——
+                           三种都不够时只说果子，玩家修好果子再来还是买不到，会骂人。
+                           所以顺序是：碎片 > 材料 > 果子（碎片最难拿，先说它最有信息量）。 */
                         const cost = owned ? '已装'
-                            : lack
-                                ? (s.apples < pk.apples
-                                    ? `还差 ${pk.apples - s.apples} 果`
-                                    : `还差 ${pk.logs - s.logs} 材`)
-                                : `${pk.apples} 果 · ${pk.logs} 材`;
+                            : myShards < pk.shards
+                                ? `还差 ${pk.shards - myShards} 碎片`
+                                : s.logs < pk.logs
+                                    ? `还差 ${pk.logs - s.logs} 材`
+                                    : s.apples < pk.apples
+                                        ? `还差 ${pk.apples - s.apples} 果`
+                                        : `${pk.apples} 果 · ${pk.logs} 材 · ${pk.shards} 图`;
                         /* 效果文案压到 10 个中文字以内（12px × 10 = 120px，
                            gainW 150 放得下）。完整说明在 PERKS.desc 里，
                            那一份给文档和后续详情页用。 */
@@ -3197,7 +3221,11 @@ class HomeController {
                             thrift: '掉饱 20→15',
                             bounty: '清场奖励 3→28',
                         };
-                        this.mkItemCard(card, pk.id, '', pk.name, cost, SHORT[pk.id] ?? pk.desc,
+                        /* 图标传 `mail`（图纸 / 信封）而不是 ''：
+                           传空串时 `mkItemCard` 会画一个灰圆占位 —— 四张卡左边
+                           四个一模一样的灰圆，读作"图没加载出来"，不是"这是改造件"。
+                           图纸碎片是本栏的代价，用同一张图建立"碎片 → 改造"的联想。 */
+                        this.mkItemCard(card, pk.id, 'mail', pk.name, cost, SHORT[pk.id] ?? pk.desc,
                             110, 48 - i * 78, !owned && !lack, owned ? '已装' : '装上', () => {
                                 this.act(buyPerk(this.save, pk.id), () => this.openHome());
                             }, true);
@@ -3310,13 +3338,33 @@ class HomeController {
         this.mkPill(card, 'act', action, bw, bh, W0 / 2 - 10 - bw / 2, 0, enabled, onClick);
     }
 
-    /** 从院子里那只宠物身上取立绘 —— 同步、零加载，且和玩家刚看到的是同一张图 */
+    /**
+     * 从院子里那只宠物身上取立绘 —— 同步、零加载，且和玩家刚看到的是同一张图。
+     *
+     * ★ 2026-10-25 修：**这里原来是"取不到图"的根因。**
+     *   `this.pets[].name` 存的是 `slot.name`，也就是**节点名**（砂糖 / 年糕 / 团子…），
+     *   而调用方传进来的是 `who.name`，也就是**显示名**（尖耳猫 / 短尾犬…）。
+     *   `p.name !== name` 永远成立 → 每一只都跳过 → 返回 null →
+     *   工坊左边永远画一个空圆圈（`else` 分支的占位圆）。
+     *   用户的原话是「现在 UI 上都没正确显示宠物 ICON，比如工坊的 icon」。
+     *
+     *   修法不是"再多写一份名字表"，而是**统一走 `petByNode`**：
+     *   节点名 → `PetDef` → 显示名，全项目只有这一处映射（和 `refreshSlots`
+     *   用的是同一个函数），改解锁节奏或改名都不会漏。
+     */
     private petFrame(name: string): SpriteFrame | null {
         for (const p of this.pets) {
-            if (p.name !== name || !p.node || !p.node.isValid) continue;
+            if (!p.node || !p.node.isValid) continue;
+            const def = petByNode(p.node.name);
+            const shown = def ? def.name : p.name;
+            if (shown !== name) continue;
             const sp = p.node.getComponent(Sprite);
             if (sp && sp.spriteFrame) return sp.spriteFrame;
         }
+        /* 院子里那只正在派遣 / 还没站起来时，退回 96 的头像 ——
+           宁可给一张小图，也不要给一个空圆（空圆读作"加载失败"）。 */
+        const d = PETS.find((x) => x.name === name);
+        if (d) return this.heads[d.short] ?? null;
         return null;
     }
 
@@ -3376,6 +3424,115 @@ class HomeController {
     }
 
     /**
+     * 战绩面板 —— **主界面回答"我打得多好"的唯一地方**。
+     *
+     * 病理：`S.best` 从有评级那天起就在落盘，但从来没有一个界面消费它。
+     * 27 屏打完，玩家手上只有「进度 27 / 27」，而所有人最终都是 27 ——
+     * 这个数字回答不了"我比谁强"。用户的原话是「是不是要搞个排行榜
+     * 来定义主界面的推关成就感」。
+     *
+     * **为什么先做本地榜而不是云端榜**：
+     *   · 客户端上报的分数永远不可信（改个内存就第一），真榜要么做好友榜
+     *     （靠社交压力），要么接受作弊；
+     *   · 而这游戏此刻连"可比的分数"都还没有 —— 评级零奖励、没有总分。
+     *     先有分，才有榜。所以顺序是：评级给奖励（已做）→ 总星数 → 本地榜。
+     *
+     * 面板四块：
+     *   ① 总星数（大号，27×3=81）+ 一句人话（`starsTitle`）
+     *   ② 四档分布 S/A/B/未通
+     *   ③ 三项纪录：全 S 屏数 / 最快一屏 / 最高连锁
+     *   ④ 27 屏明细 3×9，颜色 = 评级，一眼看出哪几屏在拖后腿
+     */
+    private openRecord() {
+        const s = this.save;
+        const stars = starsOf(s);
+        const rc = rankCount(s);
+        const stats = loadBattleStats();
+
+        /* 最快一屏 / 最高连锁都要带**屏号** —— 只说"38.2 秒"玩家没法去复现。
+           0 表示还没记过，找最小值时必须跳过，否则全是 0 分。 */
+        let fastI = -1, fastT = 0;
+        let chainI = -1, chainN = 0;
+        for (let i = 0; i < stats.t.length; i++) {
+            const t = stats.t[i];
+            if (t > 0 && (!fastT || t < fastT)) { fastT = t; fastI = i; }
+        }
+        for (let i = 0; i < stats.c.length; i++) {
+            const c = stats.c[i];
+            if (c > chainN) { chainN = c; chainI = i; }
+        }
+
+        this.openSheet(
+            '战绩',
+            `${starsTitle(stars)} · 每屏 S=3 / A=2 / B=1 · 满分 ${STAR_MAX}`,
+            (card) => {
+                /* ---- ① 大号总分 ---- */
+                /* 大数字是这块面板的**唯一主角** —— 玩家扫一眼就要拿到"我几分"。
+                   y=96 而不是 148：openSheet 的标题和副标题吃掉到 y≈120，
+                   上一版放 148 时「26」正好压在副标题上（截图 `_t-record`）。 */
+                mkLabel(card, 'big', String(stars), 56, new Color(232, 149, 26, 255), 200, 70)
+                    .node.setPosition(0, 96, 0);
+
+                /* ---- ② 四档分布 ---- */
+                const dist: Array<[string, number, Color]> = [
+                    ['S', rc.s, RANK_INK.S],
+                    ['A', rc.a, RANK_INK.A],
+                    ['B', rc.b, RANK_INK.B],
+                    ['未通', rc.none, RANK_INK.N],
+                ];
+                dist.forEach((d, i) => {
+                    const x = -216 + i * 144;
+                    mkLabel(card, `d${i}n`, String(d[1]), 26, d[2], 80, 34).node.setPosition(x, 18, 0);
+                    mkLabel(card, `d${i}t`, d[0], 12, INK_SOFT, 80, 16).node.setPosition(x, -6, 0);
+                });
+
+                /* ---- ③ 三项纪录 ---- */
+                const rec: Array<[string, string]> = [
+                    ['全 S', `${perfectCount(s)} 屏`],
+                    ['最快一屏', fastI >= 0 ? `${stageLabel(fastI)} · ${fastT.toFixed(1)} 秒` : '还没记录'],
+                    ['最高连锁', chainI >= 0 ? `${stageLabel(chainI)} · ${chainN} 只` : '还没记录'],
+                ];
+                rec.forEach((r, i) => {
+                    const x = -216 + i * 144;
+                    mkLabel(card, `r${i}t`, r[0], 12, INK_SOFT, 132, 16).node.setPosition(x, -42, 0);
+                    const rv = mkLabel(card, `r${i}v`, r[1], 14, INK, 132, 20);
+                    rv.node.setPosition(x, -64, 0);
+                    rv.overflow = Label.Overflow.SHRINK;
+                });
+
+                /* ---- ④ 27 屏明细 3×9 ----
+                   行 = 产地，列 = 产地内屏序。和「挑一屏」面板同一套读法，
+                   玩家不用再学一遍坐标系。 */
+                const CW = 64, CH = 30, GX = 6, GY = 6;
+                for (let i = 0; i < STAGE_COUNT; i++) {
+                    const row = Math.floor(i / 9);
+                    const col = i % 9;
+                    const x = -(9 * (CW + GX) - GX) / 2 + CW / 2 + col * (CW + GX);
+                    const y = -102 - row * (CH + GY);
+                    const rk = (s.best && s.best[i]) || '';
+                    const col2 = RANK_WASH[rk] ?? new Color(224, 214, 200, 255);
+                    const g = new Node(`cell-${i}`);
+                    g.parent = card;
+                    g.addComponent(UITransform).setContentSize(CW, CH);
+                    g.setPosition(x, y, 0);
+                    const gg = g.addComponent(Graphics);
+                    gg.fillColor = col2;
+                    gg.roundRect(-CW / 2, -CH / 2, CW, CH, 8);
+                    gg.fill();
+                    gg.lineWidth = 1.5;
+                    gg.strokeColor = new Color(255, 255, 255, 140);
+                    gg.roundRect(-CW / 2, -CH / 2, CW, CH, 8);
+                    gg.stroke();
+                    mkLabel(g, 'n', String(i + 1), 11,
+                        rk ? new Color(255, 255, 255, 235) : new Color(150, 136, 120, 255),
+                        CW, CH).node.setPosition(0, 0, 0);
+                }
+            },
+            700, 520,
+        );
+    }
+
+    /**
      * 派遣面板。
      *
      * **改造前它只有一个「派出」按钮和一句 toast** —— 面板上既没有产出预期、
@@ -3398,6 +3555,7 @@ class HomeController {
         const peek = peekDispatch(s, Date.now());
 
         const bits: string[] = [];
+        bits.push(`碎片 ${s.shards || 0}`);
         if (job) {
             const who = petById(job.id);
             const n = who ? who.name : '它';
@@ -3438,6 +3596,9 @@ class HomeController {
                             peek.apples ? `果子 ${peek.apples}` : '',
                             peek.logs ? `材料 ${peek.logs}` : '',
                             peek.coins ? `吧唧 ${peek.coins}` : '',
+                            /* 碎片排在最前面 —— 它是这里唯一"战斗拿不到"的东西，
+                               其他三样写成数字也没人在意（打一局就有更多）。 */
+                            peek.shards ? `图纸碎片 ${peek.shards}` : '',
                         ].filter(Boolean).join(' · ')}`
                         : `${peek.left} 秒后来收`;
                     action = ready ? '收回' : '等着';
@@ -3453,7 +3614,10 @@ class HomeController {
                     meta = '一次只能派一只，先收回外面的';
                     action = '不能派';
                 } else {
-                    meta = yieldText(p.id);
+                    /* 派出前就要说清"这一趟能捡到碎片" —— 那是玩家派它的**理由**。
+                       `yieldText` 里没有碎片（它按趟算产出，碎片是满 10 趟才结）
+                       所以单独补一句，写成"满一趟 N 碎片"而不是"每趟 0.2 个"。 */
+                    meta = `${yieldText(p.id)} · 满一趟 碎片 ${DISPATCH_SHARD}`;
                     action = '派出';
                     ok = canDispatch(s, p.id);
                     onClick = () => this.act(

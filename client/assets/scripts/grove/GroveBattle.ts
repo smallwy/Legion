@@ -598,6 +598,8 @@ export class GroveBattle extends Component {
             tripLoot: trip.loot || 0,
             tripStages: trip.stages || 0,
             food: s.food || 0,
+            /* 评级材料。**和果子走同一个出口** —— 中途退出也只按已攒下的算。 */
+            rankLogs: trip.rankLogs || 0,
         });
         saveSave(applyRunReward(loadSave(), payout));
     }

@@ -2787,7 +2787,7 @@ const S = {
    *         这是"贪"的收益，而代价是 belly —— 不用给失败惩罚（设计禁区）。
    *   stages 这一趟推过了几关（重打同一关不算）
    */
-  trip: { loot: 0, multi: 1, stages: 0 },
+  trip: { loot: 0, multi: 1, stages: 0, rankLogs: 0 },
   // 饱食度 0..100。出门满，**每过一关掉 20**：过 1 屏满饱、2-3 屏半饿、4 屏全饿。
   // 三档**全部**接进战斗：推球力 1.00 / 0.95 / 0.86（见 bellyPower），
   // 外加冲刺分档（满饱冲得更远、半饿原样、全饿冲不动）。
@@ -3554,6 +3554,30 @@ function maxOpen() {
    然后没有任何地方读过它 —— 重启归零。一个 30 分钟的游戏，
    "刷 S"是仅有的重玩动机，而这个动机原来连凭证都不留。
    --------------------------------------------------------------------------- */
+/**
+ * 评级奖励判定 —— **纯函数，因为冒烟要直接测它**。
+ *
+ * 塞在清屏流程里的话，测试只能靠机器人打到通关，而"这一趟正好拿了 S"
+ * 是不可控的（机器人有时候 3 星有时候 1 星）。抽出来之后
+ * "打平不给 / 降级不给 / 升级给"这三条边界都能逐条钉死。
+ *
+ * 规则：
+ *   · 首次达成 → 给
+ *   · 评级提升 → 给
+ *   · 打平     → **不给**（否则每次重打都白拿，第一屏能无限刷）
+ *   · 降级     → 不给，而且不覆盖旧纪录（只升不降）
+ *
+ * @param {string} prevBest 这一屏之前的最佳（""=没打过）
+ * @param {string} rk       这局拿到的评级
+ */
+function rankAward(prevBest, rk) {
+  const ORD = { B: 1, A: 2, S: 3 };
+  const LOGS = { S: 3, A: 2, B: 1 };
+  if (!rk || !LOGS[rk]) return { better: false, best: prevBest || "", gain: 0 };
+  const better = !prevBest || (ORD[rk] || 0) > (ORD[prevBest] || 0);
+  return { better: better, best: better ? rk : prevBest, gain: better ? LOGS[rk] : 0 };
+}
+
 function saveBest() {
   try { localStorage.setItem("pawpack.best", JSON.stringify(S.best)); } catch (e) {}
 }
@@ -3570,6 +3594,50 @@ function loadBest() {
       if (v === "S" || v === "A" || v === "B") S.best[i] = v;
     }
   } catch (e) {}
+}
+
+/* ---------------------------------------------------------------------------
+   战绩落盘：单屏最快用时 / 单屏最高连锁
+   ---------------------------------------------------------------------------
+   为什么必须单独存：`S.best` 只有评级（S/A/B），它能回答"打得多好"，
+   回答不了"多快""多猛"。而"最快用时"这种数据**只有战斗侧拿得到** ——
+   主界面没有 playT，永远算不出来。所以它必须在清屏那一刻写。
+
+   键名 `pawpack.stats`，和 `pawpack.best` 分开存：
+   后者是"每屏一格评级"（字符串数组，`loadBest` 里有白名单），
+   前者是"每屏两个数"。合并成一个对象会让那个白名单失效。
+
+   坏档一律当空处理：清一次纪录，好过崩一次。
+   --------------------------------------------------------------------------- */
+const STATS_KEY = "pawpack.stats";
+
+/** 清屏时调。只快不慢、只高不低 —— 和评级"只升不降"是同一条原则。 */
+function recordStats(idx) {
+  if (!(idx >= 0 && idx < LEVELS.length)) return;
+  try {
+    let o = {};
+    try { o = JSON.parse(localStorage.getItem(STATS_KEY) || "{}") || {}; } catch (e) { o = {}; }
+    const n = LEVELS.length;
+    const T = Array.isArray(o.t) ? o.t.slice() : [];
+    const C = Array.isArray(o.c) ? o.c.slice() : [];
+    while (T.length < n) T.push(0);
+    while (C.length < n) C.push(0);
+    const t = Math.round((S.playT || 0) * 10) / 10;
+    const c = (S.stat && S.stat.maxHolds) || 0;
+    /* 0 表示"还没记过"，所以判据是 `!T[idx] ||`，不能只写 `t < T[idx]`。 */
+    if (t > 0 && (!T[idx] || t < T[idx])) T[idx] = t;
+    if (c > C[idx]) C[idx] = c;
+    localStorage.setItem(STATS_KEY, JSON.stringify({ t: T, c: C }));
+  } catch (e) {}
+}
+
+function loadStats() {
+  try {
+    const o = JSON.parse(localStorage.getItem(STATS_KEY) || "{}") || {};
+    return { t: Array.isArray(o.t) ? o.t : [], c: Array.isArray(o.c) ? o.c : [] };
+  } catch (e) {
+    return { t: [], c: [] };
+  }
 }
 
 /* ============================================================================
@@ -12794,10 +12862,27 @@ function tick(dt) {
            否则玩家不敢重打（"万一打差了纪录没了"）。
            先存下"打之前"的最佳，结算面板拿它判断是不是新纪录。 */
         S.rankPrev = S.best[idx] || "";
-        if (!S.best[idx] || ORD2[rk] > ORD2[S.best[idx]]) {
-          S.best[idx] = rk;
+        const aw = rankAward(S.best[idx], rk);
+        if (aw.better) {
+          S.best[idx] = aw.best;
           saveBest();
         }
+        /* ★ 2026-10-25：**评级第一次真的给东西。**
+         *
+         * 审计原文：「评级 S/A/B 只落盘，不给任何东西 → 玩家没有理由为
+         * 『打得更好』付出，刷 S 是纯自嗨」。
+         *
+         * 给**材料**而不是果子：果子实测通胀 6.5×（单屏收 47.3、喂饭只花 7.3），
+         * 再加只会更废；材料是真稀缺 —— 改造件要 180 果 + 4 材，而一趟最多 5 材。
+         *
+         * **只在首次达成或刷新纪录时给**（判据在 `rankAward` 里，纯函数，
+         * 冒烟能直接测）。无条件给的话，重打第 1 屏能无限刷材料。
+         *
+         * 落点选 `S.trip.rankLogs` 而不是直接写存档：这一趟的账只有一个出口
+         * （`_bankRun` → `payoutFromRun`），和果子/材料现有口径完全一致。 */
+        S.rankGain = aw.gain;
+        if (aw.gain > 0) S.trip.rankLogs = (S.trip.rankLogs || 0) + aw.gain;
+        recordStats(idx);
         S.progress = Math.max(S.progress, S.stage + 1);
         /* ---- 走完全部 27 屏 ----
          *
@@ -13801,6 +13886,19 @@ function render() {
           g.fillText(tag, 0, 0);
           g.restore();
         }
+
+        /* ---- 评级奖励回执 ----
+         * 「机制做了 ≠ 玩家看得见」是这个项目反复栽的坑（机制没画 / HUD 没读 pr.text）。
+         * 材料已经在 `S.trip.rankLogs` 里累加了，但玩家在结算卡上不看见，
+         * 就等于没给 —— 所以这一行不是装饰，是这件事的**唯一可见出口**。
+         * 只在新纪录 / 首次记录时出现：没刷新纪录不给，也就不显示。 */
+        if (S.rankGain > 0) {
+          g.save();
+          g.font = "bold 13px " + FONT;
+          g.fillStyle = K.cream ? "#3F6B2A" : "#BFE8A8";
+          g.fillText("材料 +" + S.rankGain, cx, rankY + 46);
+          g.restore();
+        }
       } else {
         /* ---- 失败：没有评级可给，但也不能只写两字 ----
          * 「没做到」+ 一句为什么。评级是奖励不是羞辱，所以失败态
@@ -14355,6 +14453,10 @@ Object.defineProperty(GROVE, "SCAPE", { get: () => SCAPE });
    （2026-10-24 踩过一次：冒烟全绿、体检红，因为冒烟跑的是原始 html。） */
 Object.defineProperty(GROVE, "SCAPE_OF_THEME", { get: () => SCAPE_OF_THEME });
 Object.defineProperty(GROVE, "FG_SIDE", { get: () => FG_SIDE });
+Object.defineProperty(GROVE, "loadStats", { get: () => loadStats });
+Object.defineProperty(GROVE, "rankAward", { get: () => rankAward });
+Object.defineProperty(GROVE, "recordStats", { get: () => recordStats });
+Object.defineProperty(GROVE, "STATS_KEY", { get: () => STATS_KEY });
 Object.defineProperty(GROVE, "FG_TOP", { get: () => 504 });
 /* 场景族的绘制入口也要导出：冒烟要断言"三族真的各有自己的函数"，
    而不是"三个名字指向同一张画"。 */

@@ -9,6 +9,7 @@
  */
 
 import { PETS, unlockedPets } from './Roster';
+import { STAGE_COUNT } from './Stages';
 import type { SaveState } from './SaveData';
 
 /** 5 点一颗心，和主界面规格里「连摸 5 次亲密度 +1」一致 */
@@ -17,6 +18,15 @@ export const MAX_HEARTS = 5;
 /** 一趟采集要这么多秒。最多攒 10 趟，第十趟之后待着也不多给 */
 export const DISPATCH_SEC = 60;
 export const DISPATCH_CAP = 10;
+/**
+ * 满一趟派遣（攒满 `DISPATCH_CAP` 趟）给几个图纸碎片。
+ *
+ * **这是派遣唯一的独占产出**（2026-10-25）。在它之前，派遣的四样产出
+ * （果 / 材 / 币 / 干粮）战斗全给，而且快 7 倍（10 果/分 vs 72 果/分），
+ * 所以它永远只是"打不动游戏的时候才点"。
+ * 碎片只能派宠物去捡 —— 一件改造件要 2 个，就是"想装下一件，先去等一趟"。
+ */
+export const DISPATCH_SHARD = 2;
 
 /* ---- 能量门禁已移除（2026-10-22） ----
  *
@@ -111,6 +121,19 @@ export interface PerkDef {
     desc: string;
     apples: number;
     logs: number;
+    /**
+     * 图纸碎片 —— **只能派遣拿到**（2026-10-25）。
+     *
+     * 加这一项是为了给派遣一个真·独占产出。审计事实：派遣效率
+     * 10 果/分 vs 战斗 72 果/分 = **1/7**，而且果/材/币/干粮四样战斗全给更多，
+     * 所以它在玩家眼里永远是"打不动游戏的时候才点"。
+     * 碎片战斗打不出来 —— 想装下一件，只能派宠物去捡。
+     *
+     * 数值：2 个 / 件，而满一趟派遣（10 分钟）正好给 2 个。
+     * 不叠到 180 果 + 4 材那两条上：那两条管"一趟买不到第二个"和"走满才够"，
+     * 碎片管的是"你得等一次派遣"。三个约束各管一件事，互不冲突。
+     */
+    shards: number;
 }
 
 /**
@@ -123,17 +146,17 @@ export const PERKS: ReadonlyArray<PerkDef> = [
        火坑 = 每只 2，落袋 = 每只 1 + 球钱 1。装 1 只时两者都是 2 分，
        所以火坑在旧规则下**没有溢价**（这是读代码得出的，不是估的）。
        x3 之后装 1 只就有 3 分，火坑第一次成为一个"流派"。 */
-    { id: 'hotpit', name: '火坑炽热', desc: '火坑每只 2 分 → 3 分', apples: 180, logs: 4 },
+    { id: 'hotpit', name: '火坑炽热', desc: '火坑每只 2 分 → 3 分', apples: 180, logs: 4, shards: 2 },
     /* 资源型：直接解"球不够"。对额度关最有用，对无限球关完全无用 ——
        所以它不是"更强的选择"，是"特定屏更强的选择"。
        四件必须**不可比**，否则玩家永远只买一件。 */
-    { id: 'wideball', name: '加宽球路', desc: '每屏球额度 +1', apples: 180, logs: 4 },
+    { id: 'wideball', name: '加宽球路', desc: '每屏球额度 +1', apples: 180, logs: 4, shards: 2 },
     /* 续航型：一趟 5 屏 → 6 屏。不提升任何单屏能力，只延长"贪"的长度。
        它的价值随玩家水平上升 —— 打得越好越值，这是唯一的"成长型"改造件。 */
-    { id: 'thrift', name: '精打细算', desc: '每屏掉饱 20 → 15（一趟多走一屏）', apples: 180, logs: 4 },
+    { id: 'thrift', name: '精打细算', desc: '每屏掉饱 20 → 15（一趟多走一屏）', apples: 180, logs: 4, shards: 2 },
     /* 结算型：清场奖励 3 → 28。对"清场"目标直接有用，
        对"限球""连锁"这类本来就不清场的屏几乎无用。 */
-    { id: 'bounty', name: '悬赏清场', desc: '清场奖励 3 分 → 28 分', apples: 180, logs: 4 },
+    { id: 'bounty', name: '悬赏清场', desc: '清场奖励 3 分 → 28 分', apples: 180, logs: 4, shards: 2 },
 ];
 
 export function perkDef(id: string): PerkDef | null {
@@ -154,9 +177,13 @@ export function buyPerk(prev: SaveState, id: string): ActResult {
     if (prev.logs < def.logs) {
         return { ok: false, say: `材料不够 · 还差 ${def.logs - prev.logs}` };
     }
+    if ((prev.shards || 0) < def.shards) {
+        return { ok: false, say: `图纸碎片不够 · 还差 ${def.shards - (prev.shards || 0)} · 派宠物去采` };
+    }
     const next = clone(prev);
     next.apples -= def.apples;
     next.logs -= def.logs;
+    next.shards = (prev.shards || 0) - def.shards;
     next.perks = Array.isArray(prev.perks) ? prev.perks.slice() : [];
     next.perks.push(id);
     return { ok: true, next, say: `装上「${def.name}」· ${def.desc}` };
@@ -199,6 +226,8 @@ export function yieldText(id: string): string {
     if (y.apples) bits.push(`果子 ${y.apples}`);
     if (y.logs) bits.push(`材料 ${y.logs}`);
     if (y.coins) bits.push(`吧唧 ${y.coins}`);
+    /* 碎片按"满一趟给几个"写，不按"每趟"—— 它走的是除法，不是乘法。
+       写成"图纸碎片 0.2 / 趟"会让人以为有小数。 */
     return (bits.join(' · ') || '空手') + ' / 趟';
 }
 
@@ -215,6 +244,12 @@ export interface DispatchPreview {
     coins: number;
     /** 干粮。它是这条链真正值钱的东西（见 YIELD 上面那段） */
     ration: number;
+    /**
+     * 图纸碎片。**派遣独占产出** —— 面板上必须写出来，
+     * 否则玩家看不出"为什么这件事非得派人去，不能自己打"。
+     * 算法在 `peekDispatch` 里，`collectDispatch` 读同一个值（唯一真值）。
+     */
+    shards: number;
     /** 还差多少秒到 cap（玩家问"我还能不能先去打一局再来收"） */
     toFull: number;
 }
@@ -353,7 +388,7 @@ export function craft(prev: SaveState, recipeId: string): ActResult {
 }
 
 export function peekDispatch(prev: SaveState, now: number): DispatchPreview {
-    const empty = { hauls: 0, left: 0, apples: 0, logs: 0, coins: 0, ration: 0, toFull: 0 };
+    const empty = { hauls: 0, left: 0, apples: 0, logs: 0, coins: 0, ration: 0, shards: 0, toFull: 0 };
     const job = prev.dispatch;
     if (!job) return empty;
     const y = YIELD[job.id] || { apples: 6, logs: 2, coins: 0, ration: 1 };
@@ -372,6 +407,9 @@ export function peekDispatch(prev: SaveState, now: number): DispatchPreview {
         logs: scale(y.logs),
         coins: scale(y.coins),
         ration: scale(y.ration),
+        /* 碎片**不吃收集篮倍率**：篮子是"多装点东西"，不是"多找到一张图纸"。
+           而且吃了倍率就会出现 floor(2×1.5)=3，一件改造件一趟就够，独占价值当场消失。 */
+        shards: Math.floor((hauls * DISPATCH_SHARD) / DISPATCH_CAP),
         toFull,
     };
 }
@@ -402,6 +440,7 @@ export function collectDispatch(prev: SaveState, now: number): ActResult {
     next.logs += peek.logs;
     next.coins += peek.coins;
     next.bag.ration += peek.ration;
+    next.shards = (next.shards || 0) + peek.shards;
     const usedBasket = next.bag.basket > 0;
     if (usedBasket) next.bag.basket -= 1;
     next.dispatch = null;
@@ -411,6 +450,7 @@ export function collectDispatch(prev: SaveState, now: number): ActResult {
     if (peek.logs) bits.push(`材料 ${peek.logs}`);
     if (peek.coins) bits.push(`吧唧 ${peek.coins}`);
     if (peek.ration) bits.push(`干粮 ${peek.ration}`);
+    if (peek.shards) bits.push(`图纸碎片 ${peek.shards}`);
     const basket = usedBasket ? ' · 收集篮用掉了' : '';
     return {
         ok: true,
@@ -448,6 +488,17 @@ export function payoutFromRun(input: {
     tripLoot: number;
     tripStages: number;
     food: number;
+    /**
+     * 评级给的材料（S=3 / A=2 / B=1，**只在首次达成或刷新纪录时累计**）。
+     *
+     * 为什么走这条路而不是战斗侧直接写存档：这一趟的账只有一个出口，
+     * 中途退出也只按已经攒下的算。评级奖励如果自己写一份存档，
+     * 就会出现"退出时果子按一套算、材料按另一套算"，两条口径必然漂移
+     * （MEMORY 教训 2：同一件事存两份 = 必然漂移）。
+     *
+     * 缺省 0：老调用方（没有评级概念的那几屏）行为完全不变。
+     */
+    rankLogs?: number;
 }): RunPayout {
     const banked = input.kind === 'esc'
         ? Math.round((input.tripLoot || 0) + (input.food || 0))
@@ -455,7 +506,7 @@ export function payoutFromRun(input: {
     const stages = input.kind === 'esc' ? (input.tripStages || 0) : (input.lastStages || 0);
     return {
         apples: Math.max(1, banked),
-        logs: Math.max(0, stages),
+        logs: Math.max(0, stages) + Math.max(0, Math.round(input.rankLogs || 0)),
         coins: stages >= 2 ? 1 : 0,
     };
 }
@@ -602,4 +653,60 @@ export function canDispatch(prev: SaveState, id: string): boolean {
     if (id === prev.active) return false;
     if (prev.dispatch) return false;
     return true;
+}
+
+/* ============================================================================
+   ★ 战绩（2026-10-25）
+   ----------------------------------------------------------------------------
+   病理：`S.best` 从有评级那天起就在落盘，**但没有任何地方消费它**。
+   27 屏打完，玩家手上只有一个"进度 27 / 27" —— 那回答不了"我打得多好"，
+   因为所有人最终都是 27。
+
+   总星数是这个游戏唯一一个**单调可比**的数：
+     S=3 / A=2 / B=1 / 未通=0，满分 27×3 = 81。
+
+   为什么不用"最快用时"当主指标：单屏用时可以靠"不打死怪直接跑"刷（1 秒通关），
+   而总星数要求**用时达 par 且 用球达 par**两条同时满足（见 `grove.html` 的 `rate()`），
+   刷不出来。用时只适合当单项纪录，不适合当主分数。
+   ============================================================================ */
+
+/** 评级 → 星数。键必须和 `grove.html` 的 `S.best` 取值逐字相等 */
+export const STAR_OF: Record<string, number> = { S: 3, A: 2, B: 1 };
+/** 满分：27 屏 × 3 星 */
+export const STAR_MAX = STAGE_COUNT * 3;
+
+/** 总星数。**只认白名单里的三个字母** —— 存档是外部输入，`"SSS"` 不能变成 9 分 */
+export function starsOf(s: SaveState): number {
+    let n = 0;
+    const arr = Array.isArray(s.best) ? s.best : [];
+    for (let i = 0; i < STAGE_COUNT; i++) n += STAR_OF[arr[i] as string] || 0;
+    return n;
+}
+
+/** 四档统计：S / A / B / 还没通。战绩面板用它画一条分布 */
+export function rankCount(s: SaveState): { s: number; a: number; b: number; none: number } {
+    const arr = Array.isArray(s.best) ? s.best : [];
+    const o = { s: 0, a: 0, b: 0, none: 0 };
+    for (let i = 0; i < STAGE_COUNT; i++) {
+        const v = arr[i];
+        if (v === 'S') o.s++;
+        else if (v === 'A') o.a++;
+        else if (v === 'B') o.b++;
+        else o.none++;
+    }
+    return o;
+}
+
+/** 全 S 的屏数。它是"完美主义"那一条线的进度，比总星数更硬 */
+export function perfectCount(s: SaveState): number {
+    return rankCount(s).s;
+}
+
+/** 总星数落在哪一档。面板上给一句人话，不给玩家算百分比 */
+export function starsTitle(n: number): string {
+    if (n >= STAR_MAX) return '满星 · 全部打成了最好';
+    if (n >= STAR_MAX * 0.75) return '已成气候';
+    if (n >= STAR_MAX * 0.5) return '走了一半';
+    if (n > 0) return '刚起步';
+    return '还没有记录';
 }

@@ -3621,6 +3621,25 @@ console.log("\n=== 35. 改造件：全游戏唯一的永久成长 ===");
     ok(!!lm, "改造件带材料价格");
     ok(lm && Number(lm[1]) <= STAGES,
       "★ 材料价 <= 一趟产出（" + STAGES + "）—— 超过就要跑两趟，那是另一个节奏");
+
+    /* 图纸碎片（2026-10-25 加）：**派遣唯一的独占产出**。
+       三条边界，缺一条这个设计就退化成"又一个数字"：
+         · 必须 > 0 —— 0 的话"独占"是空话；
+         · 必须 <= 一趟派遣满额（`HomeBiz.DISPATCH_SHARD = 2`）——
+           超过就要派两趟才够买一件，而一趟派遣 10 分钟，节奏会断在这里；
+         · 战斗侧不许有 —— 有的话它就变成"打一局顺便拿"，独占性当场消失。 */
+    const sm = /shards: *([0-9]+)/.exec(perkSeg);
+    ok(!!sm, "改造件带碎片价格");
+    ok(sm && Number(sm[1]) > 0,
+      "★ 碎片价 > 0 —— 0 的话派遣的独占产出是空话",
+      sm ? "shards=" + sm[1] : "没找到");
+    ok(sm && Number(sm[1]) <= 2,
+      "★ 碎片价 <= 一趟派遣满额（HomeBiz.DISPATCH_SHARD = 2）",
+      sm ? "shards=" + sm[1] : "没找到");
+
+    const srcAll = fs.readFileSync(HTML, "utf8");
+    ok(!/S\.shards|\.shards =/.test(srcAll),
+      "★ 战斗侧不产碎片（战斗能拿到的话，派遣的独占性就没了）");
   }
 
   /* ⑦ 存档清洗：非法 id 必须被丢掉。
@@ -3762,6 +3781,88 @@ console.log("\n=== 36. 画面可读性：装饰层不许压玩法区 ===");
   ok(!/^const FG_EDGE_MIN/m.test(src), "★ 旧的归一化阈值 FG_EDGE_MIN 已删除（它等价于 68% 屏宽）");
   ok(/drawReeds\(g, 282, TH\.hillFar, 24, 54, 5, 34, 0\.40\);/.test(src), "远景芦苇参数被钉住");
   ok(/drawReeds\(g, 320, .*?, 14, 40, 23, 20, 0\.40\);/.test(src), "中景芦苇参数被钉住");
+}
+
+console.log("\n=== 37. 评级给奖励 + 战绩落盘 ===");
+{
+  /* 病理：`S.best` 从有评级那天起就在落盘，但**没有任何地方消费它**。
+     审计原文：「评级 S/A/B 只落盘，不给任何东西 → 玩家没有理由为『打得更好』
+     付出，刷 S 是纯自嗨」。这一节钉三件事：
+
+       A. 打平不给、降级不给、升级给 —— 不钉这条，重打第 1 屏能无限刷材料；
+       B. 战绩（最快用时 / 最高连锁）真的落盘，且**只快不慢、只高不低**；
+       C. 奖励走 `S.trip.rankLogs` 这个唯一出口，不自己写存档。
+
+     `rankAward` 被抽成纯函数就是为了这里能直接测边界 ——
+     塞在清屏流程里的话，测试只能靠机器人打到通关，而"这一趟正好拿 S"不可控。
+  */
+  const sb = boot(), P = sb.GROVE;
+  const path37 = require("path");
+  const GB_TS = path37.join(__dirname, "..", "assets", "scripts", "grove", "GroveBattle.ts");
+
+  /* ---- A. 评级奖励四条边界 ---- */
+  eq(P.rankAward("", "S").gain, 3, "首次拿到 S → 材料 +3");
+  eq(P.rankAward("", "A").gain, 2, "首次拿到 A → 材料 +2");
+  eq(P.rankAward("", "B").gain, 1, "首次拿到 B → 材料 +1");
+  eq(P.rankAward("A", "S").gain, 3, "A → S 提升给满额");
+  eq(P.rankAward("A", "A").gain, 0, "★ 打平不给 —— 否则第一屏能无限刷材料");
+  eq(P.rankAward("S", "S").gain, 0, "已经是 S 再拿 S 不给");
+  eq(P.rankAward("S", "A").gain, 0, "★ 降级不给");
+  eq(P.rankAward("S", "A").best, "S", "★ 降级也不覆盖旧纪录（只升不降）");
+  eq(P.rankAward("", "").gain, 0, "没有评级 → 0（失败结算不会误发）");
+
+  /* ---- B. 战绩落盘 ---- */
+  const store37 = {};
+  sb.localStorage = {
+    getItem: (k) => (k in store37 ? store37[k] : null),
+    setItem: (k, v) => { store37[k] = String(v); },
+    removeItem: (k) => { delete store37[k]; },
+  };
+
+  P._start(0, 3);
+  P.S.playT = 52.4;
+  P.S.stat.maxHolds = 3;
+  P.recordStats(3);
+  let st37 = P.loadStats();
+  near(st37.t[3], 52.4, 0.05, "第 4 屏记下用时");
+  eq(st37.c[3], 3, "第 4 屏记下最高连锁");
+  eq(st37.t.length, P.LEVELS.length, "数组长度 = 屏数（下标不打乱）");
+  eq(st37.t[0], 0, "没打过的屏是 0，不是 undefined（否则面板会算出 NaN）");
+
+  /* 更慢 / 更低的都不许覆盖 */
+  P.S.playT = 80;
+  P.S.stat.maxHolds = 2;
+  P.recordStats(3);
+  st37 = P.loadStats();
+  near(st37.t[3], 52.4, 0.05, "★ 更慢的用时不会覆盖最快纪录");
+  eq(st37.c[3], 3, "★ 更低的连锁不会覆盖最高纪录");
+
+  /* 更快 / 更高的覆盖 */
+  P.S.playT = 40.2;
+  P.S.stat.maxHolds = 5;
+  P.recordStats(3);
+  st37 = P.loadStats();
+  near(st37.t[3], 40.2, 0.05, "更快的用时覆盖");
+  eq(st37.c[3], 5, "更高的连锁覆盖");
+
+  /* 坏档 / 越界都不许崩 */
+  store37[P.STATS_KEY] = "{坏的 json";
+  const bad37 = P.loadStats();
+  ok(Array.isArray(bad37.t) && bad37.t.every((x) => x === 0), "★ 坏档 → 全 0，不崩");
+  eq(bad37.t.length >= 0, true, "坏档也返回数组");
+  P.recordStats(999);   /* 越界屏号 */
+  P.recordStats(-1);
+  ok(true, "越界屏号不抛（内部有范围检查）");
+
+  /* ---- C. 唯一出口：奖励走 trip，不自己写档 ---- */
+  const src37 = fs.readFileSync(HTML, "utf8");
+  ok(/S\.trip\.rankLogs = \(S\.trip\.rankLogs \|\| 0\) \+ aw\.gain/.test(src37),
+     "评级材料累加进 S.trip.rankLogs（跟着一趟的账走）");
+  ok(/recordStats\(idx\)/.test(src37), "清屏时真的调了 recordStats（机制有出口）");
+
+  const gb = fs.readFileSync(GB_TS, "utf8");
+  ok(/rankLogs: trip\.rankLogs \|\| 0/.test(gb),
+     "★ GroveBattle 把 rankLogs 传给 payoutFromRun（不传就等于白做）");
 }
 
 console.log("\n" + "=".repeat(56));

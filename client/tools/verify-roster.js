@@ -314,6 +314,60 @@ ok(squadSize(t.cleared) === 3, `通关 ${PETS[2].at} 场后满编 3 只`, `clear
 
 ok(rolesFor(squadSize(t.cleared)).length === 3, '满编后战斗真的会实例化 3 个角色');
 
+/* ---------- 9. 评级奖励 / 战绩 / 总星数 ----------
+   病理：`S.best` 一直在落盘，但**没有任何地方消费它**。
+   这一节钉"分数从哪来、怎么算、能不能被脏档带偏"三件事。
+   真正的战斗侧逻辑（`rankAward` / `recordStats`）在 grove-smoke §37 里测，
+   这里只管主界面这一侧的换算 —— 两边各测各的口径，合起来才闭合。 */
+{
+    const HB = require(path.join(BUILD, 'HomeBiz.js'));
+    const { loadBattleStats } = require(path.join(BUILD, 'SaveData.js'));
+
+    /* fakeStore 已经在上面建好并指向一个空存档；这里灌一份有用的评级 */
+    const mk = (best) => Object.assign({}, DEFAULT_SAVE, { best });
+    const all = (v) => new Array(LEVEL_COUNT).fill(v);
+
+    /* ① 星数换算：S=3 / A=2 / B=1 / 空=0 */
+    ok(HB.starsOf(mk(all('S'))) === LEVEL_COUNT * 3, '全 S = 满星', String(LEVEL_COUNT * 3));
+    ok(HB.starsOf(mk(all(''))) === 0, '全空 = 0 星');
+    ok(HB.starsOf(mk(all('B'))) === LEVEL_COUNT, '全 B = 屏数颗星');
+    ok(HB.STAR_MAX === LEVEL_COUNT * 3, '满星常量跟着屏数走', 'STAR_MAX=' + HB.STAR_MAX);
+
+    /* ② ★ 脏档：白名单外的值不能变成分 */
+    const dirty = Object.assign({}, DEFAULT_SAVE, { best: all('S') });
+    dirty.best[0] = 'SSS';
+    dirty.best[1] = 'S ';
+    dirty.best[2] = null;
+    dirty.best[3] = 3;
+    ok(HB.starsOf(dirty) === (LEVEL_COUNT - 4) * 3,
+        '★ 脏评级（SSS / "S " / null / 数字）一律不计分',
+        '得到 ' + HB.starsOf(dirty));
+    ok(HB.starsOf(Object.assign({}, DEFAULT_SAVE, { best: null })) === 0,
+        '★ best 整个是 null 也不崩');
+
+    /* ③ 四档统计必须加起来等于屏数 —— 少一档就会"总数对不上" */
+    const rc = HB.rankCount(dirty);
+    ok(rc.s + rc.a + rc.b + rc.none === LEVEL_COUNT, '四档之和 = 屏数');
+
+    /* ④ 战绩读取：长度对齐 + 脏值清 0 */
+    const t = loadBattleStats();
+    ok(t.t.length === LEVEL_COUNT && t.c.length === LEVEL_COUNT,
+        '战绩数组长度 = 屏数（下标不会错位）', `${t.t.length}/${t.c.length}`);
+    ok(t.t.every((x) => x === 0) && t.c.every((x) => x === 0), '没有战绩时全是 0，不是 undefined');
+
+    /* ⑤ ★ 结算出口：评级材料必须和一趟的账合流 */
+    const base = { kind: 'esc', lastLoot: 0, lastStages: 0, tripLoot: 100, tripStages: 3, food: 20 };
+    const noRank = HB.payoutFromRun(base);
+    const withRank = HB.payoutFromRun(Object.assign({}, base, { rankLogs: 5 }));
+    ok(noRank.logs === 3, '不传 rankLogs：材料 = 通关屏数（老行为不变）', 'logs=' + noRank.logs);
+    ok(withRank.logs === 8, '★ 传 rankLogs：材料 = 屏数 + 评级奖励', 'logs=' + withRank.logs);
+    ok(withRank.apples === noRank.apples, '评级奖励不影响果子（果子已经通胀 6.5×）');
+    ok(HB.payoutFromRun(Object.assign({}, base, { rankLogs: -9 })).logs === 3,
+        '★ 负的 rankLogs 被夹到 0（存档能手改）');
+    ok(HB.payoutFromRun(Object.assign({}, base, { rankLogs: NaN })).logs === 3,
+        '★ NaN 的 rankLogs 不会把材料写成 NaN');
+}
+
 delete globalThis.localStorage;
 
 /* ---------- 汇总 ---------- */

@@ -100,6 +100,18 @@ export interface SaveState {
     apples: number;
     logs: number;
     coins: number;
+    /**
+     * 图纸碎片 —— **只能靠派遣拿到**（2026-10-25）。
+     *
+     * 为什么要有它：审计结论是"派遣效率只有战斗的 1/7，且四样产出战斗全给更多"，
+     * 所以它在玩家眼里永远是"打不动游戏的时候才点"。问题不是效率，是**没有独占产出**。
+     * 碎片就是那个独占：战斗打不出来，只能派宠物去捡。
+     *
+     * 数值口径：满一趟派遣（10 趟 × 60 秒 = 10 分钟）给 `DISPATCH_SHARD` 个，
+     * 一件改造件要 2 个 —— 也就是"想装下一件，先去等一趟"。
+     * 它不影响 180 果 + 4 材那两条（那两条管的是"一趟买不到第二个"和"走满才够"）。
+     */
+    shards: number;
     /** 出战宠物 id（主界面出战卡显示的那只） */
     active: string;
     /**
@@ -180,6 +192,7 @@ export const DEFAULT_SAVE: SaveState = {
     apples: 248,
     logs: 36,
     coins: 12,
+    shards: 0,
     active: 'sugar-stand',
     satiety: 100,
     runs: 0,
@@ -341,6 +354,9 @@ export function loadSave(): SaveState {
         crafts: Math.floor(clampNum(o.crafts, 0, 0, 999_999)),
         dispatches: Math.floor(clampNum(o.dispatches, 0, 0, 999_999)),
         claimed: Array.isArray(o.claimed) ? o.claimed.filter((id) => typeof id === 'string') : [],
+        /* 旧存档没有这个字段（本批才加）。缺了就 0，**不能继承 DEFAULT_SAVE.shards** ——
+           以后如果改了初始赠送，老玩家不该凭空多出来一份。 */
+        shards: Math.floor(clampNum(o.shards, 0, 0, 999_999)),
         lastReward: typeof o.lastReward === 'string' ? o.lastReward.slice(0, 80) : '',
     };
 }
@@ -479,4 +495,46 @@ export function settleInto(
     };
     saveSave(next);
     return { next, loot };
+}
+
+/* ==========================================================================
+ * 5. 战绩（只读）
+ * ========================================================================== */
+
+/**
+ * 战斗侧写下的战绩：每屏最快用时（秒）/ 每屏最高连锁。
+ *
+ * **为什么主界面不能自己算**：它没有 `playT`，用时只在战斗里存在。
+ * 所以这份数据只能由清屏那一刻写（`grove.html` 的 `recordStats`），
+ * 主界面只读 —— 和 `perks` 同一套原则（真值一份，读侧不写）。
+ *
+ * 下标 = 全局屏号，长度恒为 `STAGE_COUNT`，0 表示"还没记过"。
+ * **不做 filter**：过滤会把下标压缩，`t[3]` 变成 `t[2]`，
+ * 于是第 3 屏的战绩挂到第 4 屏头上，而且看起来完全正常。
+ */
+export interface BattleStats {
+    t: number[];
+    c: number[];
+}
+
+export function loadBattleStats(): BattleStats {
+    const st = store();
+    const zeros = (): number[] => new Array<number>(STAGE_COUNT).fill(0);
+    if (!st) return { t: zeros(), c: zeros() };
+    const num = (v: unknown): number =>
+        (typeof v === 'number' && isFinite(v) && v > 0 ? v : 0);
+    try {
+        const raw = st.getItem('pawpack.stats');
+        if (!raw) return { t: zeros(), c: zeros() };
+        const o = JSON.parse(raw) as { t?: unknown; c?: unknown };
+        if (!o || typeof o !== 'object') return { t: zeros(), c: zeros() };
+        const ta = Array.isArray(o.t) ? o.t : [];
+        const ca = Array.isArray(o.c) ? o.c : [];
+        return {
+            t: Array.from({ length: STAGE_COUNT }, (_, i) => num(ta[i])),
+            c: Array.from({ length: STAGE_COUNT }, (_, i) => num(ca[i])),
+        };
+    } catch (e) {
+        return { t: zeros(), c: zeros() };
+    }
 }

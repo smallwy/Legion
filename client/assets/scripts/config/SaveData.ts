@@ -166,6 +166,26 @@ export interface SaveState {
      */
     tripGoals: string[];
     /**
+     * 主线做到第几条（0..STORY.length）。**串行推进，不做成勾选清单** ——
+     * 任务面板永远只显示手上这一条，玩家第一眼看到的是"下一步干什么"。
+     */
+    storyIdx: number;
+    /** 每日任务的日期键（YYYY-MM-DD）。和 `todayKey()` 不等就重抽 */
+    dailyAt: string;
+    /** 今天抽到的 3 条 id */
+    dailyPick: string[];
+    /** 今天已经领过的 id */
+    dailyClaimed: string[];
+    /**
+     * 抽签那一刻的计数快照。
+     *
+     * **为什么要有它**：每日任务是"今天打 2 场"，而 `runs` 是永久累计。
+     * 拿 `runs >= 2` 判的话，老玩家每天一开游戏就自动完成。
+     * 拍一份基线、算差值，就不需要给任何计数器加"今日"版本 ——
+     * 那种加法会让每个计数器都变成两份（MEMORY 教训 2）。
+     */
+    dailyBase: Record<string, number>;
+    /**
      * 已购的改造件 id。**这是全游戏唯一的"永久变强"凭证。**
      *
      * 为什么必须有这个字段：审计发现 `RECIPES` 只有干粮（消耗品）和
@@ -222,6 +242,11 @@ export const DEFAULT_SAVE: SaveState = {
     dispatches: 0,
     claimed: [],
     tripGoals: [],
+    storyIdx: 0,
+    dailyAt: '',
+    dailyPick: [],
+    dailyClaimed: [],
+    dailyBase: {},
     perks: [],
     lastReward: '',
 };
@@ -373,6 +398,17 @@ export function loadSave(): SaveState {
         tripGoals: Array.isArray(o.tripGoals)
             ? o.tripGoals.filter((id, i, a) => typeof id === 'string' && a.indexOf(id) === i).slice(0, 2)
             : [],
+        /* 主线进度夹在合法区间：手改成 999 会让 `storyNow` 返回 null，
+           面板上就永远是"主线全部完成"，看起来像 bug 而不是作弊。 */
+        storyIdx: Math.floor(clampNum(o.storyIdx, 0, 0, 99)),
+        dailyAt: typeof o.dailyAt === 'string' ? o.dailyAt : '',
+        dailyPick: Array.isArray(o.dailyPick)
+            ? o.dailyPick.filter((id) => typeof id === 'string').slice(0, 3)
+            : [],
+        dailyClaimed: Array.isArray(o.dailyClaimed)
+            ? o.dailyClaimed.filter((id) => typeof id === 'string').slice(0, 3)
+            : [],
+        dailyBase: (o.dailyBase && typeof o.dailyBase === 'object') ? o.dailyBase as Record<string, number> : {},
         /* 旧存档没有这个字段（本批才加）。缺了就 0，**不能继承 DEFAULT_SAVE.shards** ——
            以后如果改了初始赠送，老玩家不该凭空多出来一份。 */
         shards: Math.floor(clampNum(o.shards, 0, 0, 999_999)),

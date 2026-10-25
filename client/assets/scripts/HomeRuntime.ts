@@ -62,6 +62,8 @@ import {
     buyPerk, perkOwned,
     toggleMute, toggleCrisp, heartText, heartsOf, canDispatch, yieldText,
     TRIP_GOALS, TRIP_PICK, tripGoal, rollTripGoals, judgeTripGoals, tripReward,
+    STORY, storyNow, storyDone, settleStory, rewardText, sumReward,
+    dailyRows, claimDaily, rollDailyIfNeeded,
     starsOf, STAR_MAX,
 } from './config/HomeBiz';
 
@@ -1303,6 +1305,32 @@ class HomeController {
      * -------------------------------------------------------------------- */
 
     private bindSave() {
+        /* ★ 主线结算 + 跨天重抽（2026-10-25）。
+         *
+         * 放在 `bindSave` 是因为它有两个特性正好合用：
+         *   · 启动时会跑一次（重开游戏也能补发上次没领的主线）
+         *   · 每次 `commit` 后也会跑（打完一屏回来立刻结算）
+         *
+         * **循环会一次过完多条**：玩家可能一口气通过 9 屏，
+         * 第 6/7/8 条主线同时满足，只结算一条的话他得回三次家。
+         *
+         * 这里直接改 `this.save` 并落盘，**不调 `commit`** ——
+         * `commit` 会再调 `bindSave`，那就是递归。 */
+        {
+            const d = rollDailyIfNeeded(this.save);
+            if (d.changed) { this.save = d.next; saveSave(d.next); }
+            const st = settleStory(this.save);
+            if (st.gained.length) {
+                this.save = st.next;
+                saveSave(st.next);
+                /* 连跳好几条时报**总账**，不报名字。
+                   新手第一天很可能一次满足 3~4 条（出门/喂饭/摸头/制作），
+                   报 4 个名字的 toast 会横穿整个屏幕，而且玩家记不住。 */
+                this.toast(st.gained.length === 1
+                    ? `主线完成 · ${st.gained[0].name} · ${rewardText(st.gained[0].reward)}`
+                    : `主线完成 ${st.gained.length} 条 · ${rewardText(sumReward(st.gained))}`);
+            }
+        }
         const s = this.save;
 
         /* ---- 资源池 ---- */
@@ -3988,13 +4016,14 @@ class HomeController {
         const lb = btn?.getChildByName('txt')?.getComponent(Label);
         if (!btn || !lb) return;
         this.taskBtn = btn;
-        /* 2026-10-25：这里原来显示"任务 N"（N = 可领数）。
-           换成本趟目标之后**没有"可领"这个动作了** —— 奖励在结算自动发。
-           所以牌子回到光秃秃的「任务」，也不再呼吸（呼吸是"有事等你点"的信号，
-           没事还呼吸就是骗点击）。 */
-        lb.string = '任务';
-        this.taskPulse = 0;
-        btn.setScale(1, 1, 1);
+        /* 2026-10-25（第三版）：红点数 = **今天能领的每日任务条数**。
+           主线奖励是自动发的（`bindSave` 里结算），不参与红点 ——
+           一个"会自动消失的红点"会让玩家白点一次。 */
+        const rows = dailyRows(this.save);
+        const n = rows.filter((r) => r.done && !r.claimed).length;
+        lb.string = n > 0 ? `任务 ${n}` : '任务';
+        this.taskPulse = n > 0 ? 0.035 : 0;
+        if (n <= 0) btn.setScale(1, 1, 1);
     }
 
     /* ----------------------------------------------------------------------
@@ -4177,20 +4206,18 @@ class HomeController {
     }
 
     /**
-     * 画抽屉内容 —— 「本趟目标」。
+     * 画抽屉内容 —— **主线 + 每日**。
      *
-     * ★ 2026-10-25 整块重写。原来这里是 6 条任务的清单：每行一张圆角卡 +
-     *   一个"领取"按钮。用户第三次提同一个问题之后，代码都摆出来了：
-     *   `target` 全是 1、条件全是"玩着自动满足"、`claimed` 只增不减。
-     *   那不是"任务做完了"，那是**这个系统的结构就是一次性清单**。
+     * 用户原话：「你的任务系统做的稀烂 常规游戏不是引导玩家去玩游戏的一种刺激吗
+     *            1:主线任务 每日任务 等等 你越做越差」
      *
-     *   现在三块：
-     *     ① 本趟抽到的 2 条（**出门前抽**，战斗中 HUD 上一直挂着）
-     *     ② 目标池 5 条 —— 让玩家知道"下次可能抽到什么"
-     *     ③ 一句规则：完不成不扣东西，只是拿不到奖励
+     * 三个版本对照（这已经是我第三次改这个系统，前两次都错在"把任务当清单"）：
+     *   v1  6 条一次性清单，target 全 1，领完永久消失 → 零决策
+     *   v2  每趟抽 2 条随机约束 → 有决策，但**没有进步感、不指路**
+     *   v3  本版：主线串行（永远只有一条在手）+ 每日 3 条
      *
-     *   没有"领取"按钮了：奖励在结算时自动并进这一趟的收成
-     *   （`payoutFromRun.goalShards`），和果子的账同一个出口。
+     * 主线放在最上面、字号最大：玩家打开任务面板的唯一目的是
+     * **"下一步该干什么"**，不是"还有几件事能领"。
      */
     private paintTaskBody(panel: Node, DH: number) {
         const old = panel.getChildByName('body');
@@ -4199,75 +4226,100 @@ class HomeController {
         const DW = HomeController.DRAWER_W;
         const W0 = DW - 28;                    // 272
         const top = DH / 2;
+        const s = this.save;
 
         const body = new Node('body');
         body.parent = panel;
         body.addComponent(UITransform).setContentSize(DW, DH);
 
-        const s = this.save;
-        const picked = Array.isArray(s.tripGoals) ? s.tripGoals : [];
+        /* ================= ① 主线 ================= */
+        mkLeftLabel(body, 'sttl', '主线', 15, INK, -W0 / 2, top - 28, W0, 20);
+        mkRightLabel(body, 'snum', `${storyDone(s)} / ${STORY.length}`, 11, INK_SOFT,
+            W0 / 2, top - 28, 70, 16);
 
-        /* ---- 标题 ---- */
-        mkLeftLabel(body, 'ttl', '本趟目标', 17, INK, -W0 / 2, top - 30, W0, 24);
-        mkLeftLabel(body, 'sub', picked.length
-            ? `出门时抽 ${TRIP_PICK} 条 · 一趟一换`
-            : '还没出发 · 出发那一刻抽两条', 11, INK_SOFT, -W0 / 2, top - 50, W0, 16);
+        const cur = storyNow(s);
+        let y = top - 66;
+        if (cur) {
+            const card = new Node('story');
+            card.parent = body;
+            card.addComponent(UITransform).setContentSize(W0, 84);
+            card.setPosition(0, y - 42, 0);
+            const cg = card.addComponent(Graphics);
+            cg.fillColor = new Color(246, 232, 206, 255);
+            cg.roundRect(-W0 / 2, -42, W0, 84, 14);
+            cg.fill();
+            cg.lineWidth = 2;
+            cg.strokeColor = new Color(214, 176, 140, 255);
+            cg.roundRect(-W0 / 2, -42, W0, 84, 14);
+            cg.stroke();
 
-        /* ---- ① 本趟的 2 条 ---- */
-        let y = top - 92;
-        if (!picked.length) {
-            mkLeftLabel(body, 'none', '点「出门」就抽。每趟不一样，', 12, INK_SOFT, -W0 / 2, y, W0, 16);
-            mkLeftLabel(body, 'none2', '打完自动结算，不用领。', 12, INK_SOFT, -W0 / 2, y - 20, W0, 16);
-            y -= 60;
+            mkLeftLabel(card, 'n', cur.name, 16, INK, -W0 / 2 + 12, 26, W0 - 24, 22);
+            mkLeftLabel(card, 'd', cur.desc, 11, INK_SOFT, -W0 / 2 + 12, 4, W0 - 24, 16);
+            mkLeftLabel(card, 'r', '奖励 ' + rewardText(cur.reward), 11,
+                new Color(122, 146, 88, 255), -W0 / 2 + 12, -22, W0 - 24, 16);
+            y -= 96;
         } else {
-            for (const id of picked) {
-                const g = tripGoal(id);
-                if (!g) continue;
-                const card = new Node('g-' + id);
-                card.parent = body;
-                card.addComponent(UITransform).setContentSize(W0, 52);
-                card.setPosition(0, y - 26, 0);
-                const cg = card.addComponent(Graphics);
-                cg.fillColor = new Color(246, 232, 206, 255);
-                cg.roundRect(-W0 / 2, -26, W0, 52, 12);
-                cg.fill();
-                cg.lineWidth = 2;
-                cg.strokeColor = new Color(214, 176, 140, 255);
-                cg.roundRect(-W0 / 2, -26, W0, 52, 12);
-                cg.stroke();
-                mkLeftLabel(card, 'n', g.name, 14, INK, -W0 / 2 + 12, 16, 160, 20);
-                mkLeftLabel(card, 'd', g.desc, 11, INK_SOFT, -W0 / 2 + 12, -6, W0 - 80, 16);
-                const rw = [g.shards ? `碎片 ${g.shards}` : '', g.logs ? `材料 ${g.logs}` : '']
-                    .filter(Boolean).join(' · ');
-                mkRightLabel(card, 'r', rw, 11, new Color(122, 146, 88, 255), W0 / 2 - 12, -6, 90, 16);
-                y -= 60;
-            }
+            mkLeftLabel(body, 'sall', '主线全部做完了。剩下的 S 靠你自己刷。',
+                12, INK_SOFT, -W0 / 2, y, W0, 18);
+            y -= 34;
         }
 
-        /* ---- ② 目标池 ---- */
-        y -= 6;
-        mkLeftLabel(body, 'pool', `目标池 · 共 ${TRIP_GOALS.length} 条`, 12, INK, -W0 / 2, y, W0, 18);
-        y -= 24;
-        for (const g of TRIP_GOALS) {
-            const rw = [g.shards ? `碎片 ${g.shards}` : '', g.logs ? `材料 ${g.logs}` : '']
-                .filter(Boolean).join(' · ');
-            mkLeftLabel(body, `p-${g.id}`, g.name, 12, INK_SOFT, -W0 / 2, y, 110, 16);
-            mkRightLabel(body, `r-${g.id}`, rw, 11, new Color(150, 136, 120, 255), W0 / 2, y, 80, 16);
-            y -= 26;
+        /* ================= ② 每日 ================= */
+        y -= 8;
+        mkLeftLabel(body, 'dtl', '每日', 15, INK, -W0 / 2, y, W0, 20);
+        mkRightLabel(body, 'dnum', s.dailyAt || '今天', 10, INK_SOFT, W0 / 2, y, 80, 16);
+        y -= 26;
+
+        const rows = dailyRows(s);
+        if (!rows.length) {
+            mkLeftLabel(body, 'dnone', '今天还没抽，重开一次会抽 3 条。',
+                11, INK_SOFT, -W0 / 2, y, W0, 16);
+            y -= 24;
+        }
+        for (const r of rows) {
+            const row = new Node('d-' + r.def.id);
+            row.parent = body;
+            row.addComponent(UITransform).setContentSize(W0, 44);
+            row.setPosition(0, y - 22, 0);
+            const rg = row.addComponent(Graphics);
+            rg.fillColor = r.claimed ? new Color(228, 222, 210, 255)
+                : r.done ? new Color(232, 242, 216, 255)
+                    : new Color(240, 234, 220, 255);
+            rg.roundRect(-W0 / 2, -22, W0, 44, 11);
+            rg.fill();
+
+            mkLeftLabel(row, 'n', r.def.name, 13, r.claimed ? INK_SOFT : INK,
+                -W0 / 2 + 10, 8, 120, 18);
+            /* 进度用 "3 / 2" 这种超一格的写法会读成"超额了"，
+               所以 done 之后直接写"完成"。 */
+            mkLeftLabel(row, 'p', r.done ? '完成' : `${r.cur} / ${r.def.target}`,
+                10, r.done ? new Color(90, 140, 66, 255) : INK_SOFT,
+                -W0 / 2 + 10, -12, 120, 14);
+
+            const label = r.claimed ? '已领' : r.done ? '领取' : '进行中';
+            const bw = 64, bh = 30;
+            const can = r.done && !r.claimed;
+            this.mkPill(row, 'act', label, bw, bh, W0 / 2 - 10 - bw / 2, 0, can, () => {
+                const res = claimDaily(this.save, r.def.id);
+                this.toast(res.say);
+                if (!res.ok) return;
+                this.commit(res.next);
+                this.repaintDrawer();
+                this.refreshTaskBtn();
+            });
+            y -= 50;
         }
 
-        /* ---- ③ 规则 ----
-           y -= 20 而不是 8：目标池最后一条和规则之间只差 8px 时，
-           两行字的包围盒会粘在一起（截图 `_t-task` 第一版就是这样）。 */
-        y -= 20;
-        mkLeftLabel(body, 'rule1', '没做到不扣东西，只是这条奖励拿不到。', 11, INK_SOFT, -W0 / 2, y, W0, 16);
-        mkLeftLabel(body, 'rule2', '一趟最多抽两条 —— 三条会互相打架。', 11, INK_SOFT, -W0 / 2, y - 18, W0, 16);
+        /* ================= ③ 一句规则 ================= */
+        y -= 4;
+        mkLeftLabel(body, 'rule', '主线做完自动接下一条；每日按本地日期换。', 10, INK_SOFT,
+            -W0 / 2, y, W0, 16);
 
-        /* 内容层延迟淡入：纸是滑出来的，内容是随纸一起"显影"的 */
         const op = body.addComponent(UIOpacity);
         op.opacity = 0;
         tween(op).delay(0.14).to(0.22, { opacity: 255 }).start();
     }
+
 
     /**
      * 原地重画抽屉。**顶边钉住**：高度变了只改底边，否则纸会"往上长"，

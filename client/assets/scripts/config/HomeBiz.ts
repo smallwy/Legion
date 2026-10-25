@@ -286,6 +286,9 @@ function clone(s: SaveState): SaveState {
            否则 `next.perks.push()` 会在 undefined 上炸。 */
         perks: Array.isArray(s.perks) ? s.perks.slice() : [],
         tripGoals: Array.isArray(s.tripGoals) ? s.tripGoals.slice() : [],
+        dailyPick: Array.isArray(s.dailyPick) ? s.dailyPick.slice() : [],
+        dailyClaimed: Array.isArray(s.dailyClaimed) ? s.dailyClaimed.slice() : [],
+        dailyBase: { ...(s.dailyBase || {}) },
     };
 }
 
@@ -728,4 +731,345 @@ export function starsTitle(n: number): string {
     if (n >= STAR_MAX * 0.5) return '走了一半';
     if (n > 0) return '刚起步';
     return '还没有记录';
+}
+
+/* ============================================================================
+   ★ 主线任务 + 每日任务（2026-10-25 第二次重做）
+   ----------------------------------------------------------------------------
+   用户原话：「你的任务系统做的稀烂 常规游戏不是引导玩家去玩游戏的一种刺激吗
+              1:主线任务 每日任务 等等 你越做越差」
+
+   他说的对，而且比"稀烂"更准确的说法是：**我把"任务"做成了 roguelike 的
+   「契约」，不是任务。**
+
+   三个版本对照：
+     v1（原版）6 条一次性清单，target 全 1，条件全是"玩着自动满足" → 零决策
+     v2（上一版）每趟抽 2 条随机约束 → 有决策，但**没有进步感、没有引导**
+     v3（本版）主线（引导下一步做什么）+ 每日（今天来干什么）
+
+   **为什么要"主线"而不是"清单"**：常规游戏的任务是**指路**。
+   玩家打开任务面板，第一眼要看到"下一步该干什么"，而不是"还有 4 件事可以领"。
+   所以主线是**串行**的：做完第 3 条才出现第 4 条，永远只有一条在手上。
+
+   **为什么要"每日"**：给回访一个理由。
+   ⚠ 这是**手游留存模型**，用在买断制单机上会被说"手游味"。
+   但和当年的能量门禁不同 —— 每日任务**不拦人**：不做也能玩，只是少拿点资源。
+   （能量门禁是"不做不能玩"，性质完全不同，那一条红线没破。）
+   ============================================================================ */
+
+export interface Reward {
+    apples?: number;
+    logs?: number;
+    coins?: number;
+    shards?: number;
+}
+
+/** 一条主线。`done` 直接读存档 —— 主线的本质就是"存档推进到哪了" */
+export interface StoryDef {
+    id: string;
+    name: string;
+    /** 一句话说清"下一步该做什么"。这是玩家看任务面板的唯一目的 */
+    desc: string;
+    done: (s: SaveState) => boolean;
+    reward: Reward;
+}
+
+/** 摸到的心数（最高的那一只）。主线里"亲密度"那一条用它 */
+function maxHeart(s: SaveState): number {
+    let mx = 0;
+    if (s.pats) {
+        for (const id of Object.keys(s.pats)) {
+            const h = heartsOf(s.pats[id] || 0);
+            if (h > mx) mx = h;
+        }
+    }
+    return mx;
+}
+
+function starCount(s: SaveState): number {
+    let n = 0;
+    const arr = Array.isArray(s.best) ? s.best : [];
+    for (const v of arr) if (v === 'S') n++;
+    return n;
+}
+
+/**
+ * 主线 10 条 —— **顺序就是引导顺序**，不是难度顺序。
+ *
+ * 顺序按"玩家第一次打开游戏会依次撞上的系统"排：
+ *   出门 → 吃饭 → 摸头 → 制作 → 派遣 → 第二只 → S 评级 → 第一章 → 改造件 → 通关
+ * 每一条都对应一个真实的系统，做完就懂了那个系统（这就是"引导"）。
+ *
+ * 奖励合计：碎片 10 / 材料 10 / 果 65 / 币 2。
+ * 碎片 10 刚好够装 5 件改造件（2 个/件）—— 主线本身就是一条完整的成长线。
+ */
+export const STORY: ReadonlyArray<StoryDef> = [
+    {
+        id: 'out', name: '出门一趟', desc: '点「出门」，打一场回来',
+        done: (s) => s.runs >= 1,
+        reward: { apples: 12, logs: 2 },
+    },
+    {
+        id: 'feed', name: '喂一顿', desc: '在工坊给它喂一顿（饿了打不动）',
+        done: (s) => s.feeds >= 1,
+        reward: { logs: 4, apples: 6 },
+    },
+    {
+        id: 'pat', name: '摸到一颗心', desc: '在草地上点头像摸它，5 次一颗心',
+        done: (s) => maxHeart(s) >= 1,
+        reward: { apples: 15 },
+    },
+    {
+        id: 'craft', name: '做一份干粮', desc: '工坊 · 制作，干粮不花果子也能喂',
+        done: (s) => s.crafts >= 1,
+        reward: { apples: 8 },
+    },
+    {
+        id: 'send', name: '派一只出去', desc: '派遣让它自己去捡东西，60 秒一趟',
+        done: (s) => s.dispatches >= 1,
+        reward: { coins: 2, apples: 10 },
+    },
+    {
+        id: 'pal2', name: '第二只到家', desc: '通关 2 屏，会有新伙伴自己走回来',
+        done: (s) => unlockedPets(s.cleared).length >= 2,
+        reward: { shards: 1, logs: 4 },
+    },
+    {
+        id: 'rankS', name: '拿到第一个 S', desc: '一屏里「用时」和「用球」都达标就是 S',
+        done: (s) => starCount(s) >= 1,
+        reward: { shards: 2 },
+    },
+    {
+        id: 'ch1', name: '走完苔原', desc: '过完前 9 屏，枯木坡才开',
+        done: (s) => s.cleared >= 9,
+        reward: { apples: 30, logs: 6, shards: 1 },
+    },
+    {
+        id: 'perk1', name: '装上第一件改造件', desc: '工坊 · 改造，这是唯一能永久变强的东西',
+        done: (s) => (Array.isArray(s.perks) ? s.perks.length : 0) >= 1,
+        reward: { shards: 2, apples: 20 },
+    },
+    {
+        id: 'all', name: '走完 27 屏', desc: '三个产地全部走完，然后开始刷 S',
+        done: (s) => s.cleared >= STAGE_COUNT,
+        reward: { shards: 4, apples: 40 },
+    },
+];
+
+/** 当前手上那一条主线。全部做完返回 null */
+export function storyNow(s: SaveState): StoryDef | null {
+    const i = Math.max(0, Math.min(STORY.length, Math.floor(s.storyIdx || 0)));
+    return i < STORY.length ? STORY[i] : null;
+}
+
+/** 已经做完几条主线 */
+export function storyDone(s: SaveState): number {
+    return Math.max(0, Math.min(STORY.length, Math.floor(s.storyIdx || 0)));
+}
+
+/**
+ * 结算主线：一次可能连过好几条（存档跳得快的玩家）。
+ *
+ * **为什么要循环**：玩家可能一口气通过 9 屏，第 6/7/8 条同时满足。
+ * 只结算一条的话，他得回主界面 3 次才领完 —— 那是界面在拖后腿。
+ *
+ * 奖励直接写进存档（主线是"里程碑"，不是"这一趟的收成"，不走 payoutFromRun）。
+ */
+export function settleStory(prev: SaveState): { next: SaveState; gained: StoryDef[] } {
+    let s = clone(prev);
+    const gained: StoryDef[] = [];
+    /* 上限 STORY.length：存档被手改时 storyIdx 可能乱，循环不能无限跑 */
+    for (let k = 0; k < STORY.length; k++) {
+        const cur = storyNow(s);
+        if (!cur || !cur.done(s)) break;
+        s.storyIdx = Math.floor(s.storyIdx || 0) + 1;
+        s.apples += cur.reward.apples || 0;
+        s.logs += cur.reward.logs || 0;
+        s.coins += cur.reward.coins || 0;
+        s.shards = (s.shards || 0) + (cur.reward.shards || 0);
+        gained.push(cur);
+    }
+    return { next: s, gained };
+}
+
+/** 多条主线的奖励加起来（连跳好几条时 toast 要报总账，不是报 6 个名字） */
+export function sumReward(list: ReadonlyArray<{ reward: Reward }>): Reward {
+    const o: Reward = { apples: 0, logs: 0, coins: 0, shards: 0 };
+    for (const g of list) {
+        o.apples! += g.reward.apples || 0;
+        o.logs! += g.reward.logs || 0;
+        o.coins! += g.reward.coins || 0;
+        o.shards! += g.reward.shards || 0;
+    }
+    return o;
+}
+
+/** 主线奖励写成一句人话（结算 / toast 用） */
+export function rewardText(r: Reward): string {
+    const bits: string[] = [];
+    if (r.apples) bits.push(`果子 ${r.apples}`);
+    if (r.logs) bits.push(`材料 ${r.logs}`);
+    if (r.coins) bits.push(`吧唧 ${r.coins}`);
+    if (r.shards) bits.push(`碎片 ${r.shards}`);
+    return bits.join(' · ') || '无';
+}
+
+/* ---------------------------------------------------------------------------
+   每日任务
+   ---------------------------------------------------------------------------
+   3 条/天，按**本地日期**抽 —— 同一天永远同一组（可复现），换天换一组。
+
+   **进度靠"基线快照"而不是"清零"**：抽签那一刻把 `runs / feeds / ...`
+   记进 `dailyBase`，之后拿当前值减基线。这样不需要改任何累计计数器，
+   也不会因为"今天打了 3 场、昨天也打过"而算错。
+   --------------------------------------------------------------------------- */
+
+/** 每日任务的计数键。必须是 `SaveState` 上真实存在的累计字段 */
+export type DailyKey = 'runs' | 'feeds' | 'crafts' | 'dispatches' | 'cleared' | 'pats';
+
+export interface DailyDef {
+    id: string;
+    name: string;
+    /** 要涨多少 */
+    target: number;
+    key: DailyKey;
+    reward: Reward;
+}
+
+/** 8 条池。`cleared` 那两条是"推关"，其余是"养成"。 */
+export const DAILY_POOL: ReadonlyArray<DailyDef> = [
+    { id: 'd_run', name: '出门 2 趟', target: 2, key: 'runs', reward: { apples: 20 } },
+    { id: 'd_stage', name: '推进 2 屏', target: 2, key: 'cleared', reward: { apples: 25 } },
+    { id: 'd_feed', name: '喂 3 顿', target: 3, key: 'feeds', reward: { logs: 3 } },
+    { id: 'd_craft', name: '做 2 份', target: 2, key: 'crafts', reward: { apples: 10 } },
+    { id: 'd_send', name: '收 2 次派遣', target: 2, key: 'dispatches', reward: { logs: 2 } },
+    { id: 'd_pat', name: '摸 10 次', target: 10, key: 'pats', reward: { apples: 15 } },
+    { id: 'd_big', name: '再走 4 屏', target: 4, key: 'cleared', reward: { shards: 1 } },
+    { id: 'd_work', name: '出 4 趟', target: 4, key: 'runs', reward: { shards: 1 } },
+];
+
+export const DAILY_N = 3;
+
+/** 本地日期键。跨时区不管 —— 单机游戏的"今天"就是玩家机器的今天 */
+export function todayKey(now: number = Date.now()): string {
+    const d = new Date(now);
+    /* 不用 `padStart`：工程的 tsconfig target 是 ES2015，没有它的声明。
+       用 `('0'+n).slice(-2)` 效果一样，而且是 ES3 都能跑的写法。 */
+    const pad = (n: number) => ('0' + n).slice(-2);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/** 日期 → 一个稳定的 32 位种子。同一个日期永远抽同一组 */
+function hashDay(k: string): number {
+    let h = 2166136261;
+    for (let i = 0; i < k.length; i++) {
+        h ^= k.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+}
+
+/** 从池子里抽 3 条。同一天同一组，换天换一组 */
+export function rollDaily(dateKey: string): string[] {
+    const pool = DAILY_POOL.map((d) => d.id);
+    let x = hashDay(dateKey);
+    const rnd = () => {
+        x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
+        return x / 4294967296;
+    };
+    for (let i = pool.length - 1; i > 0; i--) {
+        const k = Math.floor(rnd() * (i + 1));
+        const t = pool[i]; pool[i] = pool[k]; pool[k] = t;
+    }
+    return pool.slice(0, Math.min(DAILY_N, pool.length));
+}
+
+/** 抽签那一刻的计数快照。今天第一次打开时写一次，之后不动 */
+export function dailyBaseOf(s: SaveState): Record<string, number> {
+    return (s.dailyBase && typeof s.dailyBase === 'object') ? s.dailyBase : {};
+}
+
+export function snapshotBase(s: SaveState): Record<string, number> {
+    const o: Record<string, number> = {};
+    for (const d of DAILY_POOL) {
+        if (o[d.key] !== undefined) continue;
+        o[d.key] = countOf(s, d.key);
+    }
+    return o;
+}
+
+/** 取某个计数的当前值。`pats` 是"所有宠物加起来摸了几次" */
+export function countOf(s: SaveState, key: DailyKey): number {
+    if (key === 'pats') {
+        let n = 0;
+        if (s.pats) for (const id of Object.keys(s.pats)) n += s.pats[id] || 0;
+        return n;
+    }
+    const v = (s as unknown as Record<string, unknown>)[key];
+    return typeof v === 'number' && isFinite(v) ? v : 0;
+}
+
+export interface DailyRow {
+    def: DailyDef;
+    /** 今天已经涨了多少 */
+    cur: number;
+    done: boolean;
+    claimed: boolean;
+}
+
+/** 今天的三条 + 各自进度 */
+export function dailyRows(s: SaveState): DailyRow[] {
+    const base = dailyBaseOf(s);
+    const ids = Array.isArray(s.dailyPick) ? s.dailyPick : [];
+    const claimed = Array.isArray(s.dailyClaimed) ? s.dailyClaimed : [];
+    const out: DailyRow[] = [];
+    for (const id of ids) {
+        const def = DAILY_POOL.find((d) => d.id === id);
+        if (!def) continue;
+        const b = typeof base[def.key] === 'number' ? (base[def.key] as number) : 0;
+        const cur = Math.max(0, countOf(s, def.key) - b);
+        out.push({
+            def,
+            cur: Math.min(cur, def.target),
+            done: cur >= def.target,
+            claimed: claimed.indexOf(id) >= 0,
+        });
+    }
+    return out;
+}
+
+/** 领一条每日奖励。**必须 `done` 且没领过** —— 否则就是白送资源 */
+export function claimDaily(prev: SaveState, id: string): ActResult {
+    const rows = dailyRows(prev);
+    const row = rows.find((r) => r.def.id === id);
+    if (!row) return { ok: false, say: '今天没有这条' };
+    if (row.claimed) return { ok: false, say: '这条今天已经领过了' };
+    if (!row.done) return { ok: false, say: `${row.def.name} · 还差 ${row.def.target - row.cur}` };
+    const next = clone(prev);
+    next.apples += row.def.reward.apples || 0;
+    next.logs += row.def.reward.logs || 0;
+    next.coins += row.def.reward.coins || 0;
+    next.shards = (next.shards || 0) + (row.def.reward.shards || 0);
+    next.dailyClaimed = (Array.isArray(prev.dailyClaimed) ? prev.dailyClaimed.slice() : []);
+    next.dailyClaimed.push(id);
+    return { ok: true, next, say: `${row.def.name} · 领到 ${rewardText(row.def.reward)}` };
+}
+
+/**
+ * 跨天重置。**在 `commit` / 每次打开任务面板前调一次**。
+ *
+ * 只做一件事：日期变了就重抽 3 条 + 重拍基线 + 清空已领。
+ * 不碰任何累计计数器（`runs` / `feeds` 那些是永久统计）。
+ */
+export function rollDailyIfNeeded(prev: SaveState, now: number = Date.now()): { next: SaveState; changed: boolean } {
+    const key = todayKey(now);
+    if (prev.dailyAt === key && Array.isArray(prev.dailyPick) && prev.dailyPick.length === DAILY_N) {
+        return { next: prev, changed: false };
+    }
+    const next = clone(prev);
+    next.dailyAt = key;
+    next.dailyPick = rollDaily(key);
+    next.dailyClaimed = [];
+    next.dailyBase = snapshotBase(prev);
+    return { next, changed: true };
 }

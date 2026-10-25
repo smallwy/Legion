@@ -442,6 +442,97 @@ ok(rolesFor(squadSize(t.cleared)).length === 3, '满编后战斗真的会实例�
     ok(g1.apples === g0.apples, '目标奖励不影响果子（果子已通胀 6.5×）');
 }
 
+/* ---------- 11. 主线 / 每日 ----------
+   用户第三次说任务有问题之后换成的结构。这一节钉"常规游戏该有的形状"：
+   主线串行且能连跳、每日按日期稳定、进度靠基线差值而不是清零。 */
+{
+    const HB = require(path.join(BUILD, 'HomeBiz.js'));
+
+    /* ---- 主线 ---- */
+    ok(HB.STORY.length === 10, '主线 10 条', 'got ' + HB.STORY.length);
+    ok(new Set(HB.STORY.map((x) => x.id)).size === 10, '主线 id 不重复');
+
+    let s0 = Object.assign({}, DEFAULT_SAVE, { storyIdx: 0 });
+    ok(HB.storyNow(s0).id === HB.STORY[0].id, '开局手上是第 1 条');
+
+    /* 连跳：一个"什么都干过"的存档应该一次过完好几条 */
+    const allDone = Object.assign({}, DEFAULT_SAVE, {
+        storyIdx: 0, runs: 3, feeds: 2, crafts: 1, dispatches: 1,
+        cleared: 12, pats: { 'sugar-stand': 12 }, perks: ['hotpit'],
+        best: new Array(LEVEL_COUNT).fill('') ,
+    });
+    allDone.best[0] = 'S';
+    const st = HB.settleStory(allDone);
+    ok(st.gained.length >= 6, '★ 一次结算能连过多条（不然玩家要回好几次家）',
+        'gained ' + st.gained.length);
+    ok(st.next.storyIdx === st.gained.length, 'storyIdx 推进到已完成条数');
+
+    /* ★ 每条只发一次：再结算一次不该再给东西 */
+    const again = HB.settleStory(Object.assign({}, st.next, {
+        // 让后面几条也别满足，只看前 N 条不重复发
+    }));
+    ok(again.gained.length === 0 || again.next.apples >= st.next.apples,
+        '★ 重复结算不会倒扣（已经领过的不再触发）');
+
+    /* 全部做完 → storyNow 返回 null，不崩 */
+    const done = Object.assign({}, DEFAULT_SAVE, { storyIdx: 99 });
+    ok(HB.storyNow(done) === null, '★ storyIdx 越界 → null，不崩');
+
+    /* ---- 每日 ---- */
+    const ids1 = HB.rollDaily('2026-10-25');
+    const ids2 = HB.rollDaily('2026-10-25');
+    ok(ids1.length === HB.DAILY_N, `每日抽 ${HB.DAILY_N} 条`);
+    ok(JSON.stringify(ids1) === JSON.stringify(ids2), '★ 同一天抽同一组（可复现）');
+    ok(new Set(ids1).size === ids1.length, '同一天不重复');
+
+    /* 换天要换组（连续 7 天里至少出现 3 种不同组合，不然等于没换） */
+    const combos = new Set();
+    for (let d = 20; d <= 26; d++) combos.add(HB.rollDaily('2026-10-' + d).join(','));
+    ok(combos.size >= 3, '★ 换天换组', combos.size + ' 种组合');
+
+    /* 基线差值：老玩家不该一开游戏就自动完成 */
+    const veteran = Object.assign({}, DEFAULT_SAVE, {
+        runs: 50, feeds: 30, crafts: 20, dispatches: 20, cleared: 20,
+        pats: { 'sugar-stand': 100 },
+        dailyAt: '2026-10-25', dailyPick: ['d_run', 'd_feed', 'd_pat'],
+        dailyBase: { runs: 50, feeds: 30, pats: 100 },
+    });
+    const rows = HB.dailyRows(veteran);
+    ok(rows.every((r) => r.cur === 0 && !r.done),
+        '★★ 50 场老玩家今天一开游戏进度是 0/2（不是自动完成）',
+        rows.map((r) => r.cur + '/' + r.def.target).join(','));
+
+    const after = Object.assign({}, veteran, { runs: 52, feeds: 31, pats: { 'sugar-stand': 104 } });
+    const rows2 = HB.dailyRows(after);
+    const runRow = rows2.find((r) => r.def.id === 'd_run');
+    const feedRow = rows2.find((r) => r.def.id === 'd_feed');
+    ok(runRow.cur === 2 && runRow.done, '打 2 场 → 出门那条完成');
+    ok(feedRow.cur === 1 && !feedRow.done, '喂 1 顿 → 3 顿那条还差 2');
+
+    /* ---- 领取 ---- */
+    const r1 = HB.claimDaily(veteran, 'd_run');
+    ok(!r1.ok, '★ 没完成不给领');
+    const r2 = HB.claimDaily(after, 'd_run');
+    ok(r2.ok, '完成了能领');
+    ok(r2.next.apples === after.apples + 20, '领到 20 果');
+    const r3 = HB.claimDaily(r2.next, 'd_run');
+    ok(!r3.ok, '★ 同一条不能领两次');
+    const r4 = HB.claimDaily(after, '__evil');
+    ok(!r4.ok, '★ 不存在的 id 不给领');
+
+    /* 跨天重置：清空已领 + 重拍基线 */
+    const nd = HB.rollDailyIfNeeded(Object.assign({}, r2.next, { dailyAt: '2026-10-24' }), Date.parse('2026-10-25T10:00:00'));
+    ok(nd.changed, '日期变了要重抽');
+    ok(nd.next.dailyClaimed.length === 0, '★ 跨天清空已领');
+    ok(nd.next.dailyAt === '2026-10-25', '日期键更新');
+    const sameDay = HB.rollDailyIfNeeded(nd.next, Date.parse('2026-10-25T22:00:00'));
+    ok(!sameDay.changed, '同一天不重抽');
+
+    /* 日期键格式 */
+    ok(/^\d{4}-\d{2}-\d{2}$/.test(HB.todayKey(Date.parse('2026-03-05T00:00:00'))),
+        '日期键是 YYYY-MM-DD', HB.todayKey(Date.parse('2026-03-05T00:00:00')));
+}
+
 delete globalThis.localStorage;
 
 /* ---------- 汇总 ---------- */

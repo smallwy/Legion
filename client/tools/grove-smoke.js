@@ -3500,6 +3500,172 @@ console.log("\n=== 34. 球额度是关卡字段，不是目标类型 ===");
   }
 }
 
+console.log("\n=== 35. 改造件：全游戏唯一的永久成长 ===");
+{
+  /* 病理（审计实测，不是印象）：
+       `RECIPES` 只有 `ration`（吃了就没）+ `basket`（一次性），
+       `MEALS` 三条全是消耗品，评级 S/A/B 只落盘不给东西
+       → 玩家第 1 小时和第 10 小时能力完全相同，**赚到的东西只能换成
+         "继续赚的燃料"，赚不到"更强"**。这就是用户说的"没成就感"。
+
+     这一节钉四件事：
+       A. 四项 id 在主界面表（HomeBiz.PERKS）和战斗侧表（PERK_IDS）
+          **逐字相等** —— 不同步的症状是"买了但没用"，最难查。
+       B. 每一件**真的改变数值**，而且 hotpit / bounty 用真实跑图对比，
+          不看算式（算式对了但没接上生效点是上一批踩过的坑）。
+       C. 没买的时候行为**完全不变**（默认路径不能被改造件污染）。
+       D. 定价仍然满足"一趟买不到第二个"（价格改了要立刻报红）。
+  */
+
+  const path = require("path");
+  const BIZ = path.join(__dirname, "..", "assets", "scripts", "config", "HomeBiz.ts");
+  const bizSrc = fs.readFileSync(BIZ, "utf8");
+  const perkSeg = bizSrc.slice(bizSrc.indexOf("export const PERKS"), bizSrc.indexOf("export function perkDef"));
+
+  /* ① 跨文件 id 对齐 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    eq(P.PERK_IDS.length, 4, "战斗侧声明了 4 个改造件");
+    const ids = [...perkSeg.matchAll(/id: *'([a-z]+)'/g)].map(m => m[1]);
+    eq(ids.length, 4, "主界面表里也是 4 件");
+    for (const id of ids) ok(P.PERK_IDS.indexOf(id) >= 0,
+      "★ 主界面的 " + id + " 战斗侧也认（不同步 = 买了没用）");
+    for (const id of P.PERK_IDS) ok(ids.indexOf(id) >= 0,
+      "★ 战斗侧的 " + id + " 主界面也有（否则永远买不到）");
+  }
+
+  /* ② 没买时行为完全不变 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    P._setPerks({});
+    eq(P.bellyCost(), P.BELLY_PER_CLEAR, "没买 thrift：掉饱还是 BELLY_PER_CLEAR");
+    for (const id of P.PERK_IDS) ok(!P.perkOn(id), "没买 " + id + "：perkOn 为 false");
+  }
+
+  /* ③ thrift：只改实际掉饱，不动基准常量 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    P._setPerks({ thrift: true });
+    eq(P.bellyCost(), 15, "★ thrift：每屏掉饱 20 → 15");
+    eq(P.BELLY_PER_CLEAR, 20,
+      "★ 只改 bellyCost()，不动 BELLY_PER_CLEAR（基准是 27 屏的隐式输入，动了等于把所有关卡调紧）");
+    ok(P.perkOn("thrift") && !P.perkOn("hotpit"), "四件互相独立，不串味");
+  }
+
+  /* ④ wideball：只改可用额度，不动关卡字段 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    const idx = P.LEVELS.findIndex(l => l.ballLimit != null);
+    ok(idx >= 0, "存在带额度的关");
+    P._setPerks({});
+    P._start(2, idx);
+    const before = P.ballBudget();
+    const fieldBefore = P.curStage().ballLimit;
+    P._setPerks({ wideball: true });
+    const after = P.ballBudget();
+    eq(after, before + 1, "★ wideball：可用额度 +1");
+    eq(P.curStage().ballLimit, fieldBefore,
+      "★ 关卡字段没变（改了会让 par.made 的评级口径跟着漂）");
+  }
+
+  /* ⑤ hotpit / bounty 用**真实跑图**对比。
+        算式写对了但生效点没接上，是上一批"机制做了没画"的同一类病。 */
+  {
+    const run = (perks, stage) => {
+      const sb = boot(), P = sb.GROVE, S = P.S;
+      seed(S);
+      P._setPerks(perks);
+      P._start(2, stage);
+      S.p.hp = 999; S.p.maxHp = 999;
+      botMem = {};
+      for (let i = 0; i < 60 * 240 && S.phase === "play"; i++) { botStep(P, S); P.tick(1 / 60); }
+      return { food: S.food, phase: S.phase, burned: S.stat.burned };
+    };
+
+    /* bounty：第 1 屏是清场目标，机器人能清 → 差 25 分 */
+    const a0 = run({}, 0);
+    const a1 = run({ bounty: true }, 0);
+    eq(a0.phase, "clear", "对照组：第 1 屏机器人能清场");
+    eq(a1.phase, "clear", "买 bounty 后第 1 屏也能清场");
+    eq(a1.food - a0.food, 25, "★ bounty：清场奖励 3 → 28（实测差 25，不是看算式）");
+
+    /* hotpit：第 2 屏机器人会烧球，烧的每一只 2 → 3 分 */
+    const b0 = run({}, 1);
+    const b1 = run({ hotpit: true }, 1);
+    ok(b0.burned > 0, "对照组：第 2 屏真的烧了球", "烧 " + b0.burned);
+    ok(b1.food > b0.food,
+      "★ hotpit：同样的打法收成变多（火坑每只 2 → 3）",
+      b0.food + " → " + b1.food);
+    /* 每烧一颗、装的只数 k，差值应该正好等于 k。这里只要求"变多"，
+       因为机器人对"收成变多"的反应路径会变（更早达标），差值不恒等。 */
+  }
+
+  /* ⑥ 定价仍然满足"一趟买不到第二个"。价格改了要立刻报红。
+        基准数来自 `tools/_t-econ.js` 实测，不是拍： */
+  {
+    const PER_SCREEN = 47.3;   // 27 屏达标屏平均收成
+    const MULTI = 1.225;       // 连锁倍率中段 1+0.15*1.5
+    const STAGES = 5;          // 满饱 100 / 每屏 20
+    const FEED = 40;           // 一趟喂饭 5 份野果 × 8 果
+    const perTrip = PER_SCREEN * STAGES * MULTI;
+
+    const m = /apples: *([0-9]+)/.exec(perkSeg);
+    ok(!!m, "改造件带果子价格");
+    const price = m ? Number(m[1]) : 0;
+    ok(price * 2 > perTrip,
+      "★ 一趟买不到第二个（不然\"取舍\"不成立）",
+      price + " × 2 = " + (price * 2) + " > " + perTrip.toFixed(0));
+    ok(price + FEED < perTrip,
+      "★ 买完还够喂饭（不然会因为买改造件饿死）",
+      price + " + " + FEED + " < " + perTrip.toFixed(0));
+
+    const lm = /logs: *([0-9]+)/.exec(perkSeg);
+    ok(!!lm, "改造件带材料价格");
+    ok(lm && Number(lm[1]) <= STAGES,
+      "★ 材料价 <= 一趟产出（" + STAGES + "）—— 超过就要跑两趟，那是另一个节奏");
+  }
+
+  /* ⑦ 存档清洗：非法 id 必须被丢掉。
+        存档是唯一的外部输入，手改 localStorage 就能塞进任意内容。
+        ★ 这一条**必须走 loadPerks 的真实路径**，不能用 `_setPerks`：
+          那是测试旁路，绕过了白名单 —— 用旁路测出来的"过滤生效"是假的
+          （第一版就这么写的，两条红了才发现测的是旁路）。
+        沙箱原本没有 localStorage，所以在 §35 里临时注入一个。 */
+  {
+    const sb = boot(), P = sb.GROVE;
+    const store = Object.create(null);
+    sb.localStorage = {
+      getItem: (k) => (k in store ? store[k] : null),
+      setItem: (k, v) => { store[k] = String(v); },
+      removeItem: (k) => { delete store[k]; },
+    };
+
+    store["pawpack.save.v1"] = JSON.stringify({
+      cleared: 3,
+      perks: ["hotpit", "__evil", "hotpit2", 42, "hotpit"],
+    });
+    P.loadPerks();
+    ok(P.perkOn("hotpit"), "合法 id 被读进来");
+    ok(!P.perkOn("__evil"), "★ 存档里的未知 id 不被认（PERK_IDS 白名单真的在用）");
+    ok(!P.perkOn("hotpit2"), "★ 前缀相似的 id 也不被认");
+    eq(P.PERK_IDS.filter(id => P.perkOn(id)).length, 1, "5 条脏数据里只活下来 1 条");
+
+    /* 坏存档 / 空存档都不能崩。存档损坏时玩家丢档比丢进度更痛。 */
+    store["pawpack.save.v1"] = "{坏的 json";
+    P.loadPerks();
+    ok(!P.perkOn("hotpit"), "坏 JSON → 清空，不崩");
+
+    delete store["pawpack.save.v1"];
+    P.loadPerks();
+    ok(!P.perkOn("hotpit"), "没存档 → 空");
+
+    /* ★ 只读：战斗侧绝不往回写。写了就是"同一件事存两份"，必然漂移。 */
+    const src = fs.readFileSync(HTML, "utf8");
+    const body = src.slice(src.indexOf("function loadPerks"), src.indexOf("loadPerks();"));
+    ok(!/setItem/.test(body), "★ loadPerks 里没有 setItem（只读，不跟主界面抢真值）");
+  }
+}
+
 console.log("\n" + "=".repeat(56));
 if (fail) {
   console.log("通过 " + pass + " · 失败 " + fail);

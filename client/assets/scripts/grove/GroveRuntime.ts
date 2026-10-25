@@ -2649,6 +2649,48 @@ function rampAt(x) {
    4. 状态
    ========================================================================== */
 
+/* ============================================================================
+   ★ 改造件（perk）—— 全游戏唯一的"永久变强"出口
+   ----------------------------------------------------------------------------
+   为什么需要这个东西：审计下来 `RECIPES` 只有干粮（消耗品）和收集篮（一次性），
+   `MEALS` 三条也全是消耗品 —— **没有任何一条产出能让玩家变强**。
+   于是第 1 小时和第 10 小时的能力完全相同，经济是循环不是螺旋，
+   评级 S/A/B 也只是记录、不给任何东西，玩家没有理由为"打得更好"付出。
+
+   设计约束（三条，都是踩过的坑）：
+    1. **只读副本，不双向镜像。** 真值只存在主界面那份存档
+       （`pawpack.save.v1` 的 `perks` 数组）。战斗侧启动时读一次进内存，
+       绝对不往回写 —— MEMORY 第 2 条教训：同一件事存两份必然漂移。
+    2. **生效点必须少而集中。** 一个 perk 只改一处，改完能直接被断言盯住。
+       散在五个地方的改造件，没有一个能被验证"真的生效了"。
+    3. **不动关卡几何的隐式输入。** 坡的 `0.45`、`dashT/dashCd/dashPow`、
+       `PUSH_BASE` 都是 27 屏按满饱调过的，改它们会让 ALL9 大范围超时。
+       所以"坡道省力"这类改造**不做**，宁可换一个不碰物理的。
+   ============================================================================ */
+
+/** 四件改造件。id 必须和 `HomeBiz.ts` 的 `PERKS` 逐字相等（冒烟有断言）。 */
+const PERK_IDS = ["hotpit", "wideball", "thrift", "bounty"];
+
+/** 已购的改造件，只读。key 存在且为 true 表示已拥有。 */
+let PERKS = Object.create(null);
+
+function perkOn(id) { return PERKS[id] === true; }
+
+/** 从主界面存档读改造件。**只读** —— 见上面第 1 条约束。 */
+function loadPerks() {
+  PERKS = Object.create(null);
+  try {
+    const raw = localStorage.getItem("pawpack.save.v1");
+    if (!raw) return;
+    const home = JSON.parse(raw) || {};
+    const arr = Array.isArray(home.perks) ? home.perks : [];
+    for (const id of arr) if (PERK_IDS.indexOf(id) >= 0) PERKS[id] = true;
+  } catch (e) { PERKS = Object.create(null); }
+}
+
+/* 进游戏读一次。主界面买完改造件后回到战斗会重新加载本页，所以不需要监听。 */
+loadPerks();
+
 const S = {
   /* select(选人) | pick(挑一屏) | play | clear | fail
    *
@@ -3065,7 +3107,10 @@ function curGoal() { return GOALS[curStage().goal]; }
 function ballBudget() {
   const st = curStage();
   if (st.ballLimit == null) return Infinity;
-  return Math.max(0, st.ballLimit - S.stat.made);
+  /* `wideball` 加的是**可用额度**，不改 `st.ballLimit` 本身。
+     改字段的话，`par.made` 的评级口径会跟着漂 —— 那是关卡数据，不是玩家资产。 */
+  const cap = st.ballLimit + (perkOn("wideball") ? 1 : 0);
+  return Math.max(0, cap - S.stat.made);
 }
 
 /**
@@ -3381,6 +3426,16 @@ function pushPowerNow() {
 
 const BELLY_PER_CLEAR = 20;
 
+/** 这一屏实际掉多少饱。`thrift`（精打细算）是唯一的修改者。
+ *
+ * **为什么要把 20 包一层函数，而不是直接在扣血处写三元**：
+ * 掉饱被读的地方有两处 —— 真扣（通关时）和预览（`nextBellyHint` 的
+ * "下一屏之后是几档"）。两处各写一次三元，就会出现"预览说还有半饱、
+ * 打完发现已经饿了"的分叉。函数只有一个返回值，两处不可能不一样。 */
+function bellyCost() {
+  return perkOn("thrift") ? 15 : BELLY_PER_CLEAR;
+}
+
 /** 结算卡「继续」副标题上的力气变化。**三态，不是两态。**
  *
  *  第一版只写了"降一档 / 见底"两个分支，结果满饱时（100 → 80，
@@ -3393,7 +3448,7 @@ const BELLY_PER_CLEAR = 20;
 function nextBellyHint(from) {
   const cur = from === undefined ? S.belly : from;
   const a = bellyTier(cur);
-  const b = bellyTier(Math.max(0, cur - BELLY_PER_CLEAR));
+  const b = bellyTier(Math.max(0, cur - bellyCost()));
   if (b >= a) return "力气不变";
   return b === 0 ? "力气见底" : "力气降一档";
 }
@@ -5247,7 +5302,10 @@ function ballTerrain(b, fallVy) {  // 火坑：烧掉，收成翻倍，但球没
     if (b.x > pit.x + 8 && b.x < pit.x + pit.w - 8 && b.y >= pit.y - 8) {
       b.dead = true;
       S.stat.burned++;
-      const gain = b.holds * (b.boss ? 14 : 2);
+      /* `hotpit` 只改普通敌人的系数。BOSS 的 14 不动 —— 那一个数是按
+         "打掉 BOSS ≈ 打掉 7 只" 定的，乘 1.5 会让 BOSS 变成唯一正解。 */
+      const per = b.boss ? 14 : (perkOn("hotpit") ? 3 : 2);
+      const gain = b.holds * per;
       S.food += gain;
       S.killed += b.holds;
       addText(b.x, pit.y - 70, "烧掉了 +" + gain, "#FFB05C", 22);
@@ -12663,7 +12721,10 @@ function tick(dt) {
     if (allSpawned && S.foes.length === 0 && S.balls.length === 0 && S.phase === "play") {
       if (checkGoal()) {
         S.phase = "clear";
-        S.food += 3;   // 清场奖励
+        /* 清场奖励 3 → 3+25（`bounty`）。
+           3 这个数太小了：一屏收成实测 31~64，3 分等于 5%，
+           玩家根本感觉不到"把场上清干净"有额外好处。 */
+        S.food += perkOn("bounty") ? 28 : 3;
         /* 记账顺手把"谁刚到家"接住。**返回值不能丢** ——
          * 丢了的话，解锁这件事就只剩 recordClear 内部那条 3.6 秒的 DOM 提示
          * （而且还只在 ?from=home 时才弹）。结算卡要靠这份数据画横幅。 */
@@ -12679,7 +12740,7 @@ function tick(dt) {
            中途那段"火力没变化"的日子会让人麻木。
            20 之后：过 1 屏满饱、2-3 屏半饿、4 屏全饿，
            一趟自然收到 4-5 屏（≈6 分钟）—— 短到能重开，长到有弧线。 */
-        S.belly = Math.max(0, S.belly - BELLY_PER_CLEAR);
+        S.belly = Math.max(0, S.belly - bellyCost());
         const rk = rate();
         const ORD2 = { B: 1, A: 2, S: 3 };
         const idx = S.stage;
@@ -14174,7 +14235,12 @@ export const GROVE: any = {
   goHome, bellyTier, bellyPower, bellyWord, sayLine, finishSay, settleBtns, inRect,
   /* 饱食的两个真值：每屏掉多少、下一屏的力气变化怎么说。
      导出是为了让冒烟验真身，不是验副本。 */
-  BELLY_PER_CLEAR, nextBellyHint,
+  BELLY_PER_CLEAR, nextBellyHint, bellyCost,
+  /* 改造件。真值在主界面存档（`pawpack.save.v1`.perks），这里是只读副本；
+     `_setPerks` 只给测试用 —— "买了之后战斗侧真的变了"只能这样验，
+     光看 `perkOn()` 的返回值证明不了任何事。 */
+  PERK_IDS, perkOn, loadPerks,
+  _setPerks: (o) => { PERKS = Object.create(null); for (const k in o) if (o[k]) PERKS[k] = true; },
   recordClear, readHomeSave, FROM_HOME,
   /* 解锁节奏与分章几何：冒烟要能直接问"第 20 屏属于哪个产地""这屏送谁"。
      问不出来的话，只能靠截图目测，而截图看不出边界到底在 9 还是 10。 */

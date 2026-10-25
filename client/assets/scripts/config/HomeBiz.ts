@@ -76,6 +76,92 @@ export const RECIPES: ReadonlyArray<RecipeDef> = [
     { id: 'basket', name: '收集篮', apples: 0, logs: 5, coins: 1, give: 'basket' },
 ];
 
+/* ============================================================================
+   ★ 改造件（perk）—— 全游戏唯一的"永久变强"出口
+   ----------------------------------------------------------------------------
+   **不做这个，后面所有奖励都是空的。** 审计事实：
+     · `RECIPES` 只有 `ration`（吃了就没）和 `basket`（一次性）；
+     · `MEALS` 三条全是消耗品；
+     · 评级 S/A/B 只落盘，不给任何东西（`S.best[i]` 只用于挑一屏显示）。
+   → 玩家第 1 小时和第 10 小时能力完全相同。赚到的东西只能换成
+     "继续赚的燃料"，赚不到"更强"。这是循环（loop），不是螺旋（spiral）。
+
+   **价格是算出来的，不是拍的。** 实测数据（`tools/_t-econ.js`，27 屏，
+   hero=2、每屏独立环境、hp 999 与 ALL9 同口径）：
+
+     单屏收成        平均 47.3 果（达标 14 屏的范围 31~64）
+     一趟最多走      5 屏（满饱 100 / 每屏 20）
+     一趟果子产出    290 果（47.3 × 5 × 1.225 连锁倍率）
+     一趟材料产出    5 个（`logs = stages`，代码事实）
+     一趟喂饭成本    40 果（5 份野果 × 8 果）
+
+   定价 180 果 + 4 材料，卡住三件事：
+     · 180 × 2 = 360 > 290 → **一趟买不到第二个**（这是"取舍"成立的前提）
+     · 180 + 40 喂饭 = 220 < 290 → 买完还够吃饭，不会因为买改造件饿死
+     · 4 <= 5 → 走满一趟才够，**"贪到底"成为买改造件的前提**
+   改价格前请先重跑 `_t-econ.js`，不要凭印象调。
+
+   **四件全部同价**：让"选哪件"变成纯价值比较，不被价格干扰。
+   ============================================================================ */
+
+export interface PerkDef {
+    id: string;
+    name: string;
+    /** 一句话效果。玩家靠这行字决定买哪件，必须写具体数字 */
+    desc: string;
+    apples: number;
+    logs: number;
+}
+
+/**
+ * 四件改造件。`id` 必须和 `grove.html` 的 `PERK_IDS` 逐字相等 ——
+ * 两边各写一份是必然的（一个 TS 一个内联脚本），所以冒烟加了对齐断言。
+ * 改这里必须同步改那边，否则买到的改造件在战斗里静默无效。
+ */
+export const PERKS: ReadonlyArray<PerkDef> = [
+    /* 收益型：把"烧球换双份"从"持平"变成"明显赚"。
+       火坑 = 每只 2，落袋 = 每只 1 + 球钱 1。装 1 只时两者都是 2 分，
+       所以火坑在旧规则下**没有溢价**（这是读代码得出的，不是估的）。
+       x3 之后装 1 只就有 3 分，火坑第一次成为一个"流派"。 */
+    { id: 'hotpit', name: '火坑炽热', desc: '火坑每只 2 分 → 3 分', apples: 180, logs: 4 },
+    /* 资源型：直接解"球不够"。对额度关最有用，对无限球关完全无用 ——
+       所以它不是"更强的选择"，是"特定屏更强的选择"。
+       四件必须**不可比**，否则玩家永远只买一件。 */
+    { id: 'wideball', name: '加宽球路', desc: '每屏球额度 +1', apples: 180, logs: 4 },
+    /* 续航型：一趟 5 屏 → 6 屏。不提升任何单屏能力，只延长"贪"的长度。
+       它的价值随玩家水平上升 —— 打得越好越值，这是唯一的"成长型"改造件。 */
+    { id: 'thrift', name: '精打细算', desc: '每屏掉饱 20 → 15（一趟多走一屏）', apples: 180, logs: 4 },
+    /* 结算型：清场奖励 3 → 28。对"清场"目标直接有用，
+       对"限球""连锁"这类本来就不清场的屏几乎无用。 */
+    { id: 'bounty', name: '悬赏清场', desc: '清场奖励 3 分 → 28 分', apples: 180, logs: 4 },
+];
+
+export function perkDef(id: string): PerkDef | null {
+    return PERKS.find((p) => p.id === id) || null;
+}
+
+export function perkOwned(s: SaveState, id: string): boolean {
+    return Array.isArray(s.perks) && s.perks.indexOf(id) >= 0;
+}
+
+export function buyPerk(prev: SaveState, id: string): ActResult {
+    const def = perkDef(id);
+    if (!def) return { ok: false, say: '没有这个改造件' };
+    if (perkOwned(prev, id)) return { ok: false, say: `已经装过「${def.name}」了` };
+    if (prev.apples < def.apples) {
+        return { ok: false, say: `果子不够 · 还差 ${def.apples - prev.apples}` };
+    }
+    if (prev.logs < def.logs) {
+        return { ok: false, say: `材料不够 · 还差 ${def.logs - prev.logs}` };
+    }
+    const next = clone(prev);
+    next.apples -= def.apples;
+    next.logs -= def.logs;
+    next.perks = Array.isArray(prev.perks) ? prev.perks.slice() : [];
+    next.perks.push(id);
+    return { ok: true, next, say: `装上「${def.name}」· ${def.desc}` };
+}
+
 /**
  * 每趟带回的量。种类跟这只平时干的活一致。
  *
@@ -161,6 +247,9 @@ function clone(s: SaveState): SaveState {
         settings: { ...s.settings },
         dispatch: s.dispatch ? { ...s.dispatch } : null,
         claimed: s.claimed.slice(),
+        /* 旧存档没有 perks 字段（本批才加）。深拷贝时兜底成空数组，
+           否则 `next.perks.push()` 会在 undefined 上炸。 */
+        perks: Array.isArray(s.perks) ? s.perks.slice() : [],
     };
 }
 

@@ -58,8 +58,9 @@ import { loadSave, saveSave } from './config/SaveData';
 import type { SaveState } from './config/SaveData';
 import { SATIETY } from './config/BattleConfig';
 import {
-    MEALS, RECIPES, PET_LINE, DISPATCH_SEC, DISPATCH_CAP,
+    MEALS, RECIPES, PERKS, PET_LINE, DISPATCH_SEC, DISPATCH_CAP,
     feed, craft, recordPat, setActive, startDispatch, collectDispatch, peekDispatch,
+    buyPerk, perkOwned,
     toggleMute, toggleCrisp, heartText, heartsOf, canDispatch, yieldText,
     TASKS, taskPhase, claimTask, claimableCount,
 } from './config/HomeBiz';
@@ -3094,7 +3095,14 @@ class HomeController {
     }
 
     /** 家面板的分栏。跨次打开保持 —— 上次在看制作，下次多半还想制作 */
-    private homeTab: 'feed' | 'craft' = 'feed';
+    /**
+     * 工坊的三个分栏。
+     *
+     * **`perk`（改造）是第三栏，不是第二个按钮**：改造件是全游戏唯一的
+     * 永久成长出口，把它和"做一份干粮"并排成两行清单，玩家会读成
+     * "又一个消耗品"。独立一栏 + 独立文案（`已装` / 装上）才立得住。
+     */
+    private homeTab: 'feed' | 'craft' | 'perk' = 'feed';
 
     /**
      * 「家」= 灶台 + 工作台。
@@ -3188,13 +3196,17 @@ class HomeController {
                     13, new Color(170, 116, 96, 255), 200, 20).node.setPosition(LX, -134, 0);
 
                 /* ---------- 右栏：分栏 + 可选项目 ---------- */
-                const TABS: Array<{ k: 'feed' | 'craft'; t: string }> = [
+                const TABS: Array<{ k: 'feed' | 'craft' | 'perk'; t: string }> = [
                     { k: 'feed', t: '喂饭' },
                     { k: 'craft', t: '制作' },
+                    { k: 'perk', t: '改造' },
                 ];
+                /* 三栏的 x 从「-27 + i*142」改成「-70 + i*140」：
+                   原来的间距是照两栏排的，塞进第三颗会顶到面板右沿
+                   （pill 宽 128，中心 +64 = 右边界）。 */
                 TABS.forEach((tab, i) => {
                     const on = this.homeTab === tab.k;
-                    this.mkPill(card, `tab-${tab.k}`, tab.t, 128, 40, -27 + i * 142, 112, true, () => {
+                    this.mkPill(card, `tab-${tab.k}`, tab.t, 128, 40, -70 + i * 140, 112, true, () => {
                         this.homeTab = tab.k;
                         this.openHome();
                     }, on);
@@ -3213,6 +3225,40 @@ class HomeController {
                             110, 44 - i * 104, !lack, '喂', () => {
                                 this.act(feed(this.save, m.id), () => this.openHome());
                             });
+                    });
+                } else if (this.homeTab === 'perk') {
+                    /* ---------- 改造栏：全游戏唯一的永久成长 ----------
+                       为什么单独一栏、为什么文案是"已装"而不是"×N"：
+                       这一栏的每一行都是一次**不可逆的永久选择**，
+                       和"再做一份干粮"不是同一类东西，不能长得一样。
+                       价格 180 果 + 4 材料来自实测（见 `HomeBiz.PERKS` 注释），
+                       一趟走满 5 屏才够买一个，一趟买不到第二个。 */
+                    PERKS.forEach((pk, i) => {
+                        const owned = perkOwned(s, pk.id);
+                        const lack = s.apples < pk.apples || s.logs < pk.logs;
+                        /* 代价一行**只写两个数**，不写单位汉字：
+                           `180 果 · 4 材` 9 字符，`果子 180 + 材料 4` 13 字符 ——
+                           后者会把右边那句效果压掉（出图上就是这么撞的）。
+                           货不够时改写成"还差 X"，比"180 · 4 我买不起"更好读。 */
+                        const cost = owned ? '已装'
+                            : lack
+                                ? (s.apples < pk.apples
+                                    ? `还差 ${pk.apples - s.apples} 果`
+                                    : `还差 ${pk.logs - s.logs} 材`)
+                                : `${pk.apples} 果 · ${pk.logs} 材`;
+                        /* 效果文案压到 10 个中文字以内（12px × 10 = 120px，
+                           gainW 150 放得下）。完整说明在 PERKS.desc 里，
+                           那一份给文档和后续详情页用。 */
+                        const SHORT: Record<string, string> = {
+                            hotpit: '火坑每只 2→3 分',
+                            wideball: '球额度 +1',
+                            thrift: '掉饱 20→15',
+                            bounty: '清场奖励 3→28',
+                        };
+                        this.mkItemCard(card, pk.id, '', pk.name, cost, SHORT[pk.id] ?? pk.desc,
+                            110, 48 - i * 78, !owned && !lack, owned ? '已装' : '装上', () => {
+                                this.act(buyPerk(this.save, pk.id), () => this.openHome());
+                            }, true);
                     });
                 } else {
                     const ICON: Record<string, string> = { ration: 'ration', basket: 'basket' };
@@ -3244,8 +3290,24 @@ class HomeController {
     private mkItemCard(
         parent: Node, name: string, icon: string, title: string, cost: string, gain: string,
         x: number, y: number, enabled: boolean, action: string, onClick: () => void,
+        /** 紧凑行。改造栏一次要排 4 行，标准 92px 高排到第 4 行会顶穿面板底沿
+         *（520 高的面板，上下各 260，四张 92 卡 + 间距 = 356，最后一张底边 -270）。
+         *  84px 只压高度，不压字号 —— 字号是给"缩到一半也要认得出"定的。 */
+        dense = false,
     ) {
-        const W0 = 400, H0 = 92;
+        /* ★ 紧凑版的高度是**算出来的**，不是凑的：
+             标题 18px @ y=20  → 占  8..32
+             代价 12px @ y=-2  → 占 -10..6
+             收益 12px @ y=-24 → 占 -34..-18
+           需要 -34..32，加上下边距 → **76**。
+           为什么不能再高：面板 520，tab 底在 92，所以第一张卡中心最高 44；
+           往下到面板底 -260，可用 304px。四张卡要 `4H + 3×gap`：
+             H=92 → 368 + gap，装不下（差 60）
+             H=84 → 336 + gap，还是差
+             H=76 → 304 + 3×4，**刚好**
+           间距 78 > 76 才不重叠；起点 48 是 tab 底（92）减半卡高（38）再留 6px。
+           改高度前先算这一步，别直接调数字。 */
+        const W0 = 400, H0 = dense ? 76 : 92;
         const card = new Node(name);
         card.parent = parent;
         card.addComponent(UITransform).setContentSize(W0, H0);
@@ -3277,9 +3339,31 @@ class HomeController {
         const tx = -W0 / 2 + 76;
         const bw = 84, bh = 36;
         const btnCx = W0 / 2 - 10 - bw / 2;
-        mkLeftLabel(card, 'nm', title, 18, enabled ? INK : INK_SOFT, tx, 20, 140, 24);
-        mkLeftLabel(card, 'cost', cost, 12, enabled ? INK_SOFT : new Color(190, 120, 110, 255), tx, -16, 170, 17);
-        mkRightLabel(card, 'gain', gain, 12, new Color(122, 146, 88, 255), btnCx - bw / 2 - 12, -16, 130, 17);
+        /* ★ 布局有两种，选哪种不是审美问题，是**宽度算出来的**。
+         *
+         * 标准版（喂饭 / 制作）：代价和收益**同一行**，代价左对齐、收益右对齐。
+         *   - 代价 从 -124 起，宽 170 → 右界 46
+         *   - 收益 右缘 94，宽 130 → 左界 -36
+         *   46 > -36，**本来就该重叠**。它没重叠的唯一原因是
+         *   代价文案只有「果子 10 + 材料 2」那么短（实际 ~83px，到 -41）。
+         *
+         * 紧凑版（改造栏）：代价「180 果 · 4 材」+ 一句效果，同宽塞不下。
+         *   实测（`--text`）：`hotpit/cost × hotpit/gain 28×17px`，
+         *   四行全红，净间隙 < 4px 还有 7 处。所以改成**三行左对齐**：
+         *   标题 24 / 代价 -2 / 收益 -28，各 26px 行距，宽度统一 200
+         *   （-124 → 76，按钮起于 106，留 30px）。
+         *   左对齐而不是右对齐：三行都以同一个 x 起，长短不齐也不会互相顶。
+         *   （MEMORY 里「两个 Label 都放宽到同宽 = 矩形必然互压」是同一条规律，
+         *    这里靠**换行**而不是靠调宽度解决 —— 调宽度只是在挪那条边界。） */
+        if (dense) {
+            mkLeftLabel(card, 'nm', title, 18, enabled ? INK : INK_SOFT, tx, 20, 200, 24);
+            mkLeftLabel(card, 'cost', cost, 12, enabled ? INK_SOFT : new Color(190, 120, 110, 255), tx, -2, 200, 17);
+            mkLeftLabel(card, 'gain', gain, 12, new Color(122, 146, 88, 255), tx, -24, 200, 17);
+        } else {
+            mkLeftLabel(card, 'nm', title, 18, enabled ? INK : INK_SOFT, tx, 20, 140, 24);
+            mkLeftLabel(card, 'cost', cost, 12, enabled ? INK_SOFT : new Color(190, 120, 110, 255), tx, -16, 170, 17);
+            mkRightLabel(card, 'gain', gain, 12, new Color(122, 146, 88, 255), btnCx - bw / 2 - 12, -16, 130, 17);
+        }
 
         this.mkPill(card, 'act', action, bw, bh, W0 / 2 - 10 - bw / 2, 0, enabled, onClick);
     }

@@ -139,6 +139,19 @@ export interface SaveState {
     dispatches: number;
     /** 已经领过奖的任务 id */
     claimed: string[];
+    /**
+     * 已购的改造件 id。**这是全游戏唯一的"永久变强"凭证。**
+     *
+     * 为什么必须有这个字段：审计发现 `RECIPES` 只有干粮（消耗品）和
+     * 收集篮（一次性），`MEALS` 三条也全是消耗品 —— 没有任何一条产出
+     * 能让玩家变强，于是第 1 小时和第 10 小时能力完全相同。
+     * 经济是循环，不是螺旋。评级 S/A/B 也只是记录，不给任何东西。
+     *
+     * **真值只有这一份。** 战斗侧（`grove.html`）只读不写 ——
+     * 同一件事存两份必然漂移（MEMORY 第 2 条教训）。
+     * id 必须和 `grove.html` 的 `PERK_IDS` 逐字相等，冒烟有断言。
+     */
+    perks: string[];
     /** 回到家园时要报的一句。报完就清空 */
     lastReward: string;
 }
@@ -181,6 +194,7 @@ export const DEFAULT_SAVE: SaveState = {
     crafts: 0,
     dispatches: 0,
     claimed: [],
+    perks: [],
     lastReward: '',
 };
 
@@ -194,6 +208,7 @@ function freshSave(): SaveState {
         best: DEFAULT_SAVE.best.slice(),
         dispatch: null,
         claimed: [],
+        perks: DEFAULT_SAVE.perks.slice(),
         energyAt: Date.now(),
     };
 }
@@ -262,6 +277,29 @@ const clampNum = (v: unknown, def: number, lo: number, hi: number): number => {
  * 缺字段用默认值补、越界值夹回区间、类型不对就丢弃。
  * 存档是唯一一个"外部输入"，不能假设磁盘上的内容是本程序写的。
  */
+/**
+ * 读改造件。**只做形状校验，不做 id 白名单。**
+ *
+ * 为什么不在这里列合法 id：合法的表在 `HomeBiz.PERKS`（主界面显示）
+ * 和 `grove.html.PERK_IDS`（战斗生效）各有一份，两处都会对未知 id
+ * 静默忽略。在这里抄第三份，加改造件时必然漏改一处 ——
+ * 而漏改的症状是"买了但没用"，最难查。
+ *
+ * 仍然必须过滤：非字符串、超长、重复、超量。
+ * 存档是唯一的外部输入，手改 localStorage 就能塞进任意内容。
+ */
+function loadPerks(v: unknown): string[] {
+    if (!Array.isArray(v)) return [];
+    const out: string[] = [];
+    for (const x of v) {
+        if (typeof x !== 'string' || !x || x.length > 32) continue;
+        if (out.indexOf(x) >= 0) continue;
+        out.push(x);
+        if (out.length >= 16) break;
+    }
+    return out;
+}
+
 export function loadSave(): SaveState {
     const s = store();
     if (!s) return freshSave();
@@ -296,6 +334,7 @@ export function loadSave(): SaveState {
         dispatch: loadDispatch(o.dispatch),
         settings: loadPrefs(o.settings),
         best: loadBest(o.best),
+        perks: loadPerks(o.perks),
         energy: Math.floor(clampNum(o.energy, DEFAULT_SAVE.energy, 0, 100)),
         energyAt: typeof o.energyAt === 'number' && isFinite(o.energyAt) && o.energyAt > 0 ? o.energyAt : Date.now(),
         feeds: Math.floor(clampNum(o.feeds, 0, 0, 999_999)),

@@ -946,103 +946,29 @@ class HomeController {
     }
 
     /**
-     * 刷新底部六个槽：头像 / 锁 / 「这趟带谁」的金圈。
+     * 底部那排宠物格 —— **2026-10-25 全部收掉**。
      *
-     * 改造前这里只有一个 16×16 的锁图标 + 一行 `差N关`，**六只宠物一张脸都没露**。
-     * 玩家看到的是一排密码锁，难怪"完全不知道有啥用"。
+     * 用户原话：「下面的出征 不能单独汇总 一个宠物 ICON 吗」。
+     * 收之前的状态是**同一件事说了两遍**：
+     *   · 底部 5 格 `Slot-年糕…星屑`，每格一张压暗的头像（tint 126,112,98 + 父节点
+     *     UIOpacity 140）+ 一把锁 + 一个药丸写着「差2关 / 差5关 / 差14关 / 差18关」；
+     *   · 右边 `GoCard` 已经在说「这趟带谁」。
+     * 两处都不是"出征"：底部在说解锁进度，而解锁进度属于图鉴。
+     * 玩家扫一眼底栏得到的信息是"还有四只没解锁"，不是"我要带谁出门"。
      *
-     * 现在每格是一张头像：
-     *  · 已到家 → 原色 + 名字；
-     *  · 没到家 → 压暗 + 锁 + 「差N关」；
-     *  · 这趟带的那只 → 金圈。
+     * 现在：底栏只留三个资源 + 一张出征卡。**出征 = 一个入口 = 一张脸。**
+     * 想换人点那张脸 → `openRoster()`（这次新加的选人面板，六只一行）。
+     *
+     * 为什么不是"删掉节点"而是 `active = false`：
+     * 场景是手工搭的，删节点要改 `Home.scene`（沙箱没有编辑器 GUI）。
+     * 隐藏是纯运行时代码，可逆、可测，而且 `_measure-*.js` 这类工具还能继续量到它。
+     * 等哪天真的扩了编辑器节点，把这段连同节点一起删即可。
      */
     private refreshSlots() {
         const root = this.canvas.getChildByName('Dock');
         if (!root) return;
-        const active = this.save.active;
-
-        for (const n of root.children.slice()) {
-            if (!n.name.startsWith('Slot-')) continue;
-            const def = petByNode(n.name.slice(5));
-            if (!def) continue;
-            const need = petGap(this.save.cleared, def.id);
-            const owned = need <= 0;
-            const on = owned && def.id === active;
-
-            /* ---- 头像 ----
-               28×28 @ (9.5, -15)：槽位 47×72，tag 从 -51 起，
-               所以脸占 -15..-43、正中在 -29 —— 和原来那个 16×16 的锁
-               （-21..-37，中心 -29）同一个视觉中心。上一版放 -9 顶上去了，
-               截图里头像是从盒子上沿冒出来的。 */
-            const sf = this.heads[def.short];
-            let head = n.getChildByName('__head');
-            if (sf) {
-                if (!head || !head.isValid) {
-                    head = new Node('__head');
-                    head.parent = n;
-                    head.addComponent(UITransform).setContentSize(28, 28);
-                    const hs = head.addComponent(Sprite);
-                    hs.sizeMode = Sprite.SizeMode.CUSTOM;
-                    head.setSiblingIndex(0);
-                }
-                head.active = true;
-                head.setPosition(9.5, -15, 0);
-                const hs = head.getComponent(Sprite);
-                if (hs) {
-                    hs.spriteFrame = sf;
-                    /* 没到家的压暗而不是隐身：玩家要看见"这一格是谁"，
-                       只是知道"还不能带它"。 */
-                    hs.color = owned ? WHITE : new Color(126, 112, 98, 255);
-                }
-            } else if (head && head.isValid) {
-                head.active = false;
-            }
-
-            /* ---- 锁：只在没到家时显示 ---- */
-            const lock = n.getChildByName('av-bg');
-            if (lock) lock.active = !owned;
-
-            /* ---- 金圈：这趟带的那一只 ---- */
-            let ring = n.getChildByName('__pick');
-            if (on) {
-                if (!ring || !ring.isValid) {
-                    ring = new Node('__pick');
-                    ring.parent = n;
-                    ring.addComponent(UITransform).setContentSize(34, 34);
-                    ring.setPosition(6.5, -12, 0);
-                    const rg = ring.addComponent(Graphics);
-                    rg.lineWidth = 2.6;
-                    rg.strokeColor = new Color(245, 185, 60, 255);
-                    rg.roundRect(-17, -17, 34, 34, 11);
-                    rg.stroke();
-                }
-                ring.active = true;
-            } else if (ring && ring.isValid) {
-                ring.active = false;
-            }
-
-            /* ---- 透明度：没到家 140，已到家 255 ---- */
-            const op = n.getComponent(UIOpacity) ?? n.addComponent(UIOpacity);
-            op.opacity = owned ? 255 : 140;
-
-            /* ---- tag：已到家写名字，没到家写还差几关，出战那只写「出战」 ----
-             * 场景里这行是**写死**的「第1关 / 第3关」，HomeRuntime 从来没人改过。
-             * 两个后果叠在一起就是玩家看到的「解锁了但主界面没有」：
-             *   ① 文字永远是「第N关」，玩家读成关卡编号而不是"还差几关"；
-             *   ② 已到家的那几格也挂着「第N关」+ 55% 灰，和没解锁的一模一样。 */
-            const tag = n.getChildByName('tag')?.getComponent(Label);
-            if (tag) {
-                tag.string = !owned ? `差${need}关` : on ? '出战' : def.name;
-                /* 场景里这行是 **8px / alpha 133**（给「第1关」这种短标签定的）。
-                   8px 的中文在 1280 宽下是 4 行以后就糊掉的大小，
-                   而这里要读的是名字 —— 换成 11px + 实色，
-                   「没到家」那几格的灰由父节点 UIOpacity(140) 统一压，不在这层减。 */
-                tag.fontSize = 11;
-                tag.overflow = Label.Overflow.SHRINK;
-                tag.color = on ? new Color(170, 108, 26, 255) : new Color(122, 80, 52, 255);
-                const tut = tag.node.getComponent(UITransform);
-                if (tut) tut.setContentSize(44, 14);
-            }
+        for (const n of root.children) {
+            if (n.name.startsWith('Slot-')) n.active = false;
         }
     }
 
@@ -1297,6 +1223,7 @@ class HomeController {
      * 谁先到谁先生效，后到的不该把已经换好的图再换回去。
      */
     private paintHomeBadge() {
+        this.toneBadges();
         const sf = this.icons['pot'];
         if (!sf) return;
         const ico = this.canvas.getChildByName('Badges')
@@ -1305,6 +1232,46 @@ class HomeController {
         if (!sp || sp.spriteFrame === sf) return;
         sp.sizeMode = Sprite.SizeMode.CUSTOM;
         sp.spriteFrame = sf;
+    }
+
+    /**
+     * 五个入口徽章的"白卡"收敛。
+     *
+     * 病理（2026-10-25，用户：「现在 UI 上都没正确显示宠物 ICON，比如工坊的 icon」）：
+     *   截图 `_t-crop-ico.png` 放大后看得很清楚 ——
+     *   `Badge-*` 是**场景里 48×48 的纯白圆角 Sprite**（`_contentSize 48,48`），
+     *   中间再叠一个 30×30 的棕色图标。它压在水彩木头和草地上，
+     *   读起来是"贴了一张纯白矢量的方块"，不是"木牌旁边钉了一枚徽章"。
+     *   五个入口里它最抢眼，因为它最大、最白、最不透明，而且旁边就是
+     *   手绘风的木牌和锤子 —— 一块 48px 的纯白就是那块"糊掉的白"。
+     *
+     * 为什么不换图：`ui/` 图集里没有暖色圆底，硬换要重新出图，
+     * 而这是"白得过了"而不是"图形错了"。**先改数值，能解决九成。**
+     *
+     *   48 → 38（面积降 37%，从"卡片"回到"徽章"）
+     *   纯白 (255,255,255) → 暖白 (255,250,240)，和场景米白同族
+     *   alpha 255 → 235，边缘和水彩融一点
+     *   内层图标 30 → 26（图标/底 = 0.68，原来 0.63，松快一点）
+     */
+    private toneBadges() {
+        const badges = this.canvas.getChildByName('Badges');
+        if (!badges) return;
+        for (const n of badges.children) {
+            if (!n.name.startsWith('Badge-')) continue;
+            const ut = n.getComponent(UITransform);
+            if (ut) ut.setContentSize(38, 38);
+            const sp = n.getComponent(Sprite);
+            if (sp) {
+                sp.sizeMode = Sprite.SizeMode.CUSTOM;
+                sp.color = new Color(255, 250, 240, 235);
+            }
+            const ico = n.getChildByName('ico');
+            if (!ico) continue;
+            const iut = ico.getComponent(UITransform);
+            if (iut) iut.setContentSize(26, 26);
+            const isp = ico.getComponent(Sprite);
+            if (isp) isp.sizeMode = Sprite.SizeMode.CUSTOM;
+        }
     }
 
     /**
@@ -2411,51 +2378,26 @@ class HomeController {
             }
         }
 
-        /* —— 宠物卡：点开详情。心跳给它生命感 —— */
+        /* —— 宠物卡：**这是唯一一个"带谁出门"的入口** ——
+         *
+         * 2026-10-25 之前这里只弹一句 toast（`goCardText()`，内容是"尖耳猫 · 溜溜球 ·
+         * 亲密度 2/5"）。问题是：**看得见却不能改**。玩家想知道"能不能换一只"
+         * 只能去点底栏那五格"差N关"，而那一排压根不是入口（现在是隐藏的）。
+         * 改成点开选人面板：看到的和能改的是同一个地方。
+         */
         const card = root.getChildByName('GoCard');
         if (card) {
             this.press(card, 0.97, 0.012, 1.6);
             card.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
                 e.propagationStopped = true;
-                this.toast(this.goCardText());
+                this.openRoster();
             });
         }
 
-        /* —— 底部六格：**这就是「这趟带谁出门」的开关** ——
-         *
-         * 改造前这六格点下去只弹一句「已经在家了 · 待解锁出战位」——
-         * 一个指向"以后会有"的功能，而它当时没有任何写入路径。
-         * `save.active` 从头到尾只有开局那只，于是：
-         *   主界面解锁了五只 → 进战斗还是尖耳猫 → 「解锁有什么用」。
-         *
-         * 现在点一下 = 换出战（`setActive` 写存档），卡片、金圈、出门按钮
-         * 同一帧跟着变，`launchBattle` 带的就是它。
-         * **出场人数仍然是 1 只**（宪法红线：一宠出征，六宠看家）——
-         * 换的是"哪一只"，不是"几只"。
-         */
-        for (const n of root.children.slice()) {
-            if (!n.name.startsWith('Slot-')) continue;
-            const pet = n.name.slice(5);
-            /* 还差几关从**花名册 + 存档**算，不再查一张写死的表 ——
-               那张表在家园和战斗各有一份，改了解锁节奏必然漏一处。 */
-            const def = petByNode(pet);
-            if (!def) continue;
-
-            this.press(n, 0.94);
-            n.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
-                e.propagationStopped = true;
-                const r = setActive(this.save, def.id);
-                this.toast(r.say);
-                if (!r.ok) return;
-                /* commit 会跑 bindSave → refreshGoCard / refreshSlots，
-                   卡片和六格同一帧换脸，不需要在这里手工刷。 */
-                this.commit(r.next);
-                /* 草地上那只跳一下：让"换人"在世界里也有回执，
-                   否则玩家只看见底栏变了，怀疑是不是真换了。 */
-                const lawn = this.pets.find((p) => petByNode(p.node.name)?.id === def.id);
-                if (lawn) lawn.pop = 0.5;
-            });
-        }
+        /* 底栏的六格已经隐藏（见 `refreshSlots`），这里不再绑点击 ——
+           绑了也收不到触摸，却会在隐藏节点上多挂一层热区组件，
+           下次 `stripStaleHots` 清理时容易和真正的热区混在一起。
+           换人改走 `openRoster()`（点出征卡那张脸）。 */
     }
 
     /* ----------------------------------------------------------------------
@@ -3376,6 +3318,61 @@ class HomeController {
             if (sp && sp.spriteFrame) return sp.spriteFrame;
         }
         return null;
+    }
+
+    /**
+     * 选人面板 —— 「这趟带谁出门」。
+     *
+     * **为什么需要它**：2026-10-25 把底栏那五格 `Slot-*` 收掉之后，
+     * 「带谁」这件事就只剩一张 `GoCard`。看得见、但当时点不动（只弹 toast）。
+     * 一个"能看到却不能改"的卡片，比一排看不清的小格子更容易让人以为卡了。
+     *
+     * 设计要点：
+     *   · **六只全列出来，包括没到家的** —— 玩家需要知道"再打几关就多一个选择"，
+     *     这比在主界面底栏挂五个「差N关」有意义得多（那里是装饰，这里是菜单）。
+     *   · 每行左边是**头像**（`mkRow` 的 `headShort`），不是汉字首字。
+     *   · 状态四种：还没回家 / 在外面采集 / 这趟就是它 / 可以换上。
+     *     四种必须用**不同的词**，不能有三种都写"不可选" —— 后者玩家不知道差在哪。
+     *   · 底线没变：**一宠出征**。换的是"哪一只"，不是"几只"。
+     */
+    private openRoster() {
+        const s = this.save;
+        const home = unlockedPets(s.cleared).length;
+        this.openSheet(
+            '带谁出门',
+            `家里 ${home} 位 · 一次只带一只 · 剩下的看家`,
+            (card) => {
+                PETS.forEach((p, i) => {
+                    const need = petGap(s.cleared, p.id);
+                    const owned = need <= 0;
+                    const on = p.id === s.active;
+                    const out = !!(s.dispatch && s.dispatch.id === p.id);
+                    const meta = !owned
+                        ? `还差 ${need} 关回家`
+                        : out
+                            ? `在外面采集 · ${DISPATCH_SEC} 秒一趟`
+                            : `招式「${p.tag}」· ${heartText(s.pats[p.id] || 0)}`;
+                    const action = !owned ? '没到家' : on ? '这趟带它' : out ? '在外面' : '换上';
+                    const ok = owned && !on && !out;
+                    this.mkRow(
+                        card, 'r-' + p.id, p.name, meta, action,
+                        0, 145 - i * 62,
+                        () => {
+                            const r = setActive(this.save, p.id);
+                            this.toast(r.say);
+                            if (!r.ok) return;
+                            /* commit 会给草地上那只一个弹跳回执 ——
+                               否则玩家只看到面板数字变了，怀疑是不是真换了 */
+                            this.commit(r.next);
+                            const lawn = this.pets.find((x) => petByNode(x.node.name)?.id === p.id);
+                            if (lawn) lawn.pop = 0.5;
+                        },
+                        ok, 58, p.short,
+                    );
+                });
+            },
+            640, 520,
+        );
     }
 
     /**

@@ -6135,6 +6135,10 @@ function drawReeds(g, base, color, hMin, hMax, seed, n, alpha) {
     const lean = (h3 - 0.5) * 0.60;
     const tipX = x + lean * h * 0.42;
     const tipY = base - h;
+    /* 前景/远景审计探针（`S._fgAudit` 只有测试会开）：
+       记录每一根的顶端 y。数值契约写在冒烟里，参数一改就报红 ——
+       2026-10-25 那次"画面很乱"的根因就是没人算过顶端到哪。 */
+    if (S._fgAudit) S._fgAudit.push(["reed", tipY]);
 
     g.lineWidth = 1.5 + h3 * 1.2;
     g.beginPath();
@@ -6641,12 +6645,18 @@ function drawScape(g) {
     g.fillStyle = wl;
     g.fillRect(0, 258, W, 22);
 
-    /* 密度 46/38 → 72/58。第一版太稀：一屏 84 根细线铺在 960px 上，
-       平均 11px 一根 —— 读作"地平线上有点毛"，不读作芦苇荡。
-       高度也提了 40%：芦苇必须**高过中景树的树冠下沿**，
-       否则它只是"草"，成不了"荡"。 */
-    drawReeds(g, 282, TH.hillFar, 70, 132, 5, 72, 0.44);
-    drawReeds(g, 286, TH.hillNear, 44, 96, 11, 58, 0.95);
+    /* ★ 2026-10-25：**这一层才是"画面很乱"的主因，不是中景那一层。**
+       上一版 n=72 + n=58 = **130 根**，h 70~132 → 顶端 282-132 = **150**，
+       也就是从地平线一路竖到画面上四分之一处，把天空、远树、350 层平台、
+       462 层平台全部穿过一遍。960px 上 130 根 = 平均 7.4px 一根，
+       读出来不是"芦苇荡"，是"整个屏幕被划了很多竖道"。
+       对照 `_cmp-old-s20.png`（三族之前没有这一层）干净得多。
+
+       现在 60 根、顶端封顶 228（hMax 54，全在草脊 276 之上、离地 48px 内）。
+       芦苇在这一层只承担一件事：**证明地平线是湿地**。
+       它不需要"高过树冠"——那是中景该干的活，而中景现在只剩 34 根矮的。 */
+    drawReeds(g, 282, TH.hillFar, 24, 54, 5, 34, 0.40);
+    drawReeds(g, 286, TH.hillNear, 16, 38, 11, 26, 0.72);
     return;
   }
 
@@ -6809,9 +6819,18 @@ function drawForest(world) {
      树是"块"（有体积、有冠），芦苇是"线"（只有茎）。
      一条地平线上"线多于块"，读作湿地；"块多于线"读作山林。
      放在树之后、灌木之前 —— 它比中景树近，比前景灌木远。 */
+  /* ★ 2026-10-25 大幅收量（用户："战斗内的很乱……越做越乱"）。
+     上一版：n=62 + n=48 = **110 根**，h 最高 82 → 顶端 318-82 = **236**，
+     也就是说整条带子从地平线（296~322）一路竖到 350 层和 462 层平台之上。
+     实测 `_cmp-now-s20.png`：满屏竖线，和树干混成一片栅栏，
+     球的蓝色在泥堆和草根里几乎找不出来。对照 `_cmp-old-s20.png`（三族之前）干净得多。
+
+     现在 34 根、顶端封顶 **280**（hMax 40）—— 只在地平线草脊上冒出一截毛，
+     读作"远处是湿地"，不读作"前面有一排杆子"。alpha 也降了一档，
+     因为它比树远，雾该更重而不是更实。 */
   if (SCAPE === "marsh") {
-    drawReeds(g, 318, hexMix(TH.hillNear, TH.treeNear, 0.30), 34, 82, 23, 62, 0.55);
-    drawReeds(g, 330, hexMix(TH.hillNear, TH.treeNear, 0.52), 22, 56, 31, 48, 0.80);
+    drawReeds(g, 320, hexMix(TH.hillNear, TH.treeNear, 0.30), 14, 40, 23, 20, 0.40);
+    drawReeds(g, 332, hexMix(TH.hillNear, TH.treeNear, 0.52), 10, 26, 31, 14, 0.55);
   }
 
   /* 树脚雾：草脊那一条上贴一层薄雾，把树根"化"进地面。
@@ -8906,15 +8925,24 @@ function drawLevel() {
  * 这条死线写进算式（cy 按 r 反推），不靠调参运气。
  */
 /**
- * 前景中段留空的阈值（|x/W - 0.5| × 2 大于它才允许立起高元素）。
+ * 前景高元素的允许区：只有画面最外侧 `FG_SIDE` 像素内可以立杆 / 立石堆。
  *
- * **0.30 是从球的几何反推的，不是构图上随手定的**：
- *   球底 556、球顶 534 → 中段的任何前景都不能高过 534。
- *   而立起来的高元素最低也有 120px（从画面底 600 起）→ 顶端到 480，
- *   比球顶还高 54px。所以中段**只能**交给 15px 以内的碎屑。
- * 测试盯着这个值：改小到 0.22 就会有一根杆立在球道上。
+ * ★ 2026-10-25 从「归一化阈值 0.30」改成「绝对像素 96」。
+ *
+ * 上一版叫 `FG_EDGE_MIN = 0.30`，注释写的是"中段留空、两侧立高杆"。
+ * 但判据是 `edge > 0.30`，其中 `edge = |px/W - 0.5| × 2`，
+ * 换算过来是 **`px < 336 || px > 624`** —— 覆盖 652/960 = **68% 屏宽**。
+ * 配合杆高 116~234（顶端 366~484），结果是从球道到 462 层台面全被前景竖杆穿过。
+ * 玩家的原话是"战斗内的很乱""越做越乱"。
+ *
+ * **教训：任何"留空 / 避让"类阈值，必须把覆盖率算出来再写进注释。**
+ * 只写一个 0.30 就以为中间空了，是把意图当成了实现。
+ * 现在两侧各 140px（合计 29%），且杆顶另有 `FG_TOP = 504` 的绝对封顶。
+ * 140 而不是更窄：收到 96 时实测 27 屏**前景高元素全部归零** ——
+ * 出生点 ±46 和营地 ±30 把最外那一条吃干净了，前景层等于被删掉。
+ * 封顶 504 之后宽度已经不影响可读性：杆顶比球顶（534）还低 30px。
  */
-const FG_EDGE_MIN = 0.30;
+const FG_SIDE = 140;
 
 /**
  * 前景的硬约束（三族共用）：**不许盖住坑和营地**。
@@ -8996,11 +9024,15 @@ function drawFgRocks(g) {
     const px = x + (hash(i * 9.3) - 0.5) * 12;
     if (fgBlocked(px, r)) { drawFgPebble(g, px, i, col); continue; }
 
-    const edge = Math.abs(px / W - 0.5) * 2;
-    /* 中段（球道）压到 546 只剩 10px —— 那等于没画，所以中段**直接交给碎屑**。
-       只有两侧（edge > FG_EDGE_MIN）才立起真正的石堆。 */
-    if (edge <= FG_EDGE_MIN) { drawFgPebble(g, px, i, col); continue; }
-    const hi = 466 + hash(i * 6.1) * 52;
+    /* 中段（球道）直接交给碎屑 —— 判据从 `edge <= FG_EDGE_MIN(0.30)` 改成
+       **绝对像素**：0.30 那条算下来覆盖 68% 屏宽（px<336 || px>624），
+       和"中段留空"的意图差了十万八千里。这是 2026-10-25 那次"画面很乱"的同一条病根，
+       见 drawFgReeds 上面的说明。 */
+    if (px > FG_SIDE && px < W - FG_SIDE) { drawFgPebble(g, px, i, col); continue; }
+    /* 顶端封顶 504（球顶 534 之下 30px）。上一版 `466 + hash*52` = 466~518，
+       最高的石堆已经顶到 462 层台面上了。 */
+    const hi = 504 + hash(i * 6.1) * 20;
+    if (S._fgAudit) S._fgAudit.push(["fgrock", hi, px]);
     /* 石头块数也按 hash 变（1~3 块）：每堆都是"三块叠一起"，
        规模一致就成了"预制件"。 */
     /* **三块石头合成一个轮廓（路径并集），不是三块分开画。**
@@ -9055,33 +9087,46 @@ function drawFgRocks(g) {
 /**
  * 前景芦苇（marsh 族）。
  *
- * 前景这一层是"镜头贴着的东西"，所以芦苇要**比中景粗一倍**、
- * 只留几根、顶端探进画面上半部。三两根高杆从画面底部竖起来，
- * 读到的是"我在芦苇丛里往上看"，而不是"远处有一片芦苇"。
+ * 前景这一层是"镜头贴着的东西"——**但"贴着镜头"不等于"拦在玩法前面"。**
  *
- * 中段照样要留空：**贴地的前景只放矮的（不到 552 以上 8px）**。
+ * ★ 2026-10-25 重做（用户："战斗内的很乱……之前做的还好点"）：
+ *   上一版的立杆判据是 `edge > FG_EDGE_MIN(0.30)`，看起来"中段留空"，
+ *   实际上 edge>0.3 等价于 `px < 336 || px > 624` —— **覆盖 652/960 = 68% 屏宽**。
+ *   杆高 116~234、从 y=604 往上 → 顶端 366~484，
+ *   **比 462 层台面还高 96px**：左右两侧的平台和敌人被自己的前景吃掉。
+ *
+ *   现在三道硬约束，全部写成算式而不是靠调参：
+ *     ① 立杆区只有最外 `FG_SIDE = 140`px（两侧合计 29%）—— 高杆只做框景；
+ *     ② 杆顶封顶 `FG_TOP = 504`（球顶 534 之下 30px，462 台面底 482 之下 22px）
+ *        → 高杆永远碰不到球道和任何一块能站的台面；
+ *     ③ 粗细 3.2（球半径 11 的 29%）、alpha .55 —— 前景该"压暗"，不是"变黑"。
+ *   中段（96~864）全部交给 7~15px 的碎屑，它够不着任何玩法元素。
  */
 function drawFgReeds(g) {
   const col = hexMix(TH.shrub || hexDim(TH.hillNear, 0.60), TH.hillNear, 0.28);
   const lit = hexMix(col, "#E8FFD8", 0.26);
 
-  /* 扫描式，间距 26~46（同岩石）。芦苇是"线"，视觉重量只有石头的三分之一，
-     所以同一档密度下它看起来更稀 —— 靠"根数多"来补。 */
+  const FG_TOP = 504;
+  const HMAX = H - FG_TOP;          // 96：杆高上限
+
+  /* 扫描式，间距 26~46（同岩石）。 */
   let k = 0;
   for (let x = 10; x < W - 10; x += 26 + hash(k * 5.9) * 20, k++) {
     const px = x + (hash(k * 8.7) - 0.5) * 10;
     if (fgBlocked(px, 18)) { drawFgPebble(g, px, k, col); continue; }
-    const edge = Math.abs(px / W - 0.5) * 2;
-    /* **中段不立杆。** 球底 556、球顶 534，中段能立的高度只有 22px ——
-       那点高度的杆读作"地上有几根毛"，还不如不画，交给碎屑。 */
-    if (edge <= FG_EDGE_MIN) { drawFgPebble(g, px, k, col); continue; }
-    const h = 116 + hash(k * 5.3) * 118;
+    /* 中段一律碎屑。判据是**绝对像素**，不是归一化的 edge ——
+       edge 那个 0.30 就是上一版"以为留空了其实没有"的来源。 */
+    if (px > FG_SIDE && px < W - FG_SIDE) { drawFgPebble(g, px, k, col); continue; }
+    const h = Math.min(62 + hash(k * 5.3) * 34, HMAX);
     const lean = (hash(k * 7.1) - 0.5) * 0.42;
     const tipX = px + lean * h * 0.5;
     const tipY = H - h;
+    if (S._fgAudit) S._fgAudit.push(["fgreed", tipY, px]);
 
+    g.save();
+    g.globalAlpha = 0.55;
     g.strokeStyle = col;
-    g.lineWidth = 4.6;
+    g.lineWidth = 3.2;
     g.lineCap = "round";
     g.beginPath();
     g.moveTo(px, H + 4);
@@ -9089,18 +9134,17 @@ function drawFgReeds(g) {
     g.stroke();
     // 受光的一侧：往右偏一点再描一条细的
     g.strokeStyle = lit;
-    g.lineWidth = 1.6;
+    g.lineWidth = 1.2;
     g.beginPath();
-    g.moveTo(px + 1.6, H + 2);
-    g.quadraticCurveTo(px + lean * 16 + 1.4, H - h * 0.55, tipX + 1.2, tipY + 2);
+    g.moveTo(px + 1.4, H + 2);
+    g.quadraticCurveTo(px + lean * 16 + 1.2, H - h * 0.55, tipX + 1.0, tipY + 2);
     g.stroke();
-    // 穗：前景的穗要够大，它才是"这是芦苇"而不是"这是杆子"的证据
-    g.save();
-    g.translate(tipX, tipY - 9);
+    // 穗：杆矮了，穗跟着收，否则读作"杆上顶了个球"
+    g.translate(tipX, tipY - 6);
     g.rotate(lean * 1.1);
     g.fillStyle = col;
     g.beginPath();
-    g.ellipse(0, 0, 5.4, 17, 0, 0, 6.283);
+    g.ellipse(0, 0, 3.6, 10, 0, 0, 6.283);
     g.fill();
     g.restore();
   }
@@ -9155,14 +9199,15 @@ function drawForeground(g) {
   for (let i = 0; i < N; i++) {
     const t = SPOTS[i];
 
-    /* 两侧抬高的上限是 **62**。
-       这个数是从碰撞几何反推的，不是随口调：462 层台面底边在 482，
-       顶到 490 还留 8px 余量。再高就直接盖住"能站的地方"，
-       那是可读性事故，不是构图。
+    /* 两侧抬高的上限是 **40**（原 62）。
+       62 是按"不碰 462 台面底 482"定的，但更硬的约束是**球顶 534**：
+       `top_min = DEAD(552) - lift - 8`，lift=62 时算出 482 —— 比球顶高 52px，
+       也就是说最外那几丛的顶会在球上方 52px 处横着，读作"球被草压住了"。
+       收到 40 之后 `top_min = 504`，和芦苇/石堆同一个天花板。
        幂次 2.2（不是 1.5）：抬高只发生在最外侧那几丛，靠里的保持贴地，
        否则六丛连成一条等高齿条。 */
     const edge = Math.abs(t - 0.5) * 2;
-    const lift = Math.pow(edge, 2.2) * 62;
+    const lift = Math.pow(edge, 2.2) * 40;
 
     const r = 50 + hash(i * 3.7) * 28 + edge * 24;          // 50 ~ 102：一丛的半宽
     /* x 用 t × W 直接取，**不加外扩**。
@@ -9175,6 +9220,7 @@ function drawForeground(g) {
        原来所有丛都贴 552 线，拍出来是一排锯齿齿条；
        真实的一排灌木是错落的，高的挡住矮的。 */
     const top = DEAD - lift + hash(i * 5.3) * 30 - 8;
+    if (S._fgAudit) S._fgAudit.push(["shrub", top, x]);
     const cy = top + r * 0.86;                              // 团心
 
     /* ① 底座 —— 低矮的暗团，只负责"这块地方是实心的"，不负责造型。
@@ -14355,10 +14401,19 @@ Object.defineProperty(window.GROVE, "SCAPE", { get: () => SCAPE });
    运行时体检当场报 "Cannot set properties of undefined"。
    （2026-10-24 踩过一次：冒烟全绿、体检红，因为冒烟跑的是原始 html。） */
 Object.defineProperty(window.GROVE, "SCAPE_OF_THEME", { get: () => SCAPE_OF_THEME });
-Object.defineProperty(window.GROVE, "FG_EDGE_MIN", { get: () => FG_EDGE_MIN });
+Object.defineProperty(window.GROVE, "FG_SIDE", { get: () => FG_SIDE });
+Object.defineProperty(window.GROVE, "FG_TOP", { get: () => 504 });
 /* 场景族的绘制入口也要导出：冒烟要断言"三族真的各有自己的函数"，
    而不是"三个名字指向同一张画"。 */
 Object.defineProperty(window.GROVE, "fgBlocked", { get: () => fgBlocked });
+Object.defineProperty(window.GROVE, "render", { get: () => render });
+/* 测试入口：**只画前景层**，返回这一屏真正落下去的每个高元素的 [种类, 顶端 y, x]。
+   为什么不走 render：render 还要跑尘土/角色/粒子，桩里容易崩在无关的地方，
+   崩了就只能 try/catch 吞掉 —— 而吞掉的测试等于没测。
+   drawForeground 就是渲染管线里画前景的那个函数本身，不是复制品。 */
+Object.defineProperty(window.GROVE, "fgProbe", {
+  get: () => () => { S._fgAudit = []; drawForeground(ctx); return S._fgAudit.slice(); },
+});
 Object.defineProperty(window.GROVE, "drawCliffs", { get: () => drawCliffs });
 Object.defineProperty(window.GROVE, "drawReeds", { get: () => drawReeds });
 Object.defineProperty(window.GROVE, "drawDeadTree", { get: () => drawDeadTree });

@@ -3140,23 +3140,21 @@ console.log("\n=== 32. 场景族：三族形状语言 ===");
     ok(free >= 0, "有让得开的位置（fgBlocked 不是恒 true）", "free x=" + free);
   }
 
-  /* ⑥ 中段留空的阈值。
-     球的几何是硬约束：球底 556、球顶 534。
-     任何立起来的前景最少 120px 高（从画面底 600 起步）→ 顶端到 480，
-     比球顶高 54px。所以中段**只能**放碎屑。
-     FG_EDGE_MIN 一改小，就会有一根杆立在球道上，把球吃掉。 */
+  /* ⑥ 前景高元素的允许区。
+     球的几何是硬约束：球底 556、球顶 534、462 台面底 482。
+     上一版用归一化阈值 `FG_EDGE_MIN = 0.30`，注释说"中段留空"，
+     实际等价于 `px < 336 || px > 624` —— **68% 屏宽都能立杆**，
+     杆顶还到 366~484。用户原话："战斗内的很乱……越做越乱"。
+     现在换成绝对像素 `FG_SIDE` + 绝对封顶 `FG_TOP`，两个数都能直接算出覆盖率。 */
   {
     const sb = boot(), P = sb.GROVE;
-    ok(typeof P.FG_EDGE_MIN === "number", "FG_EDGE_MIN 已导出");
-    ok(P.FG_EDGE_MIN >= 0.25,
-       "中段留空的阈值不小于 0.25（再小就有前景立在球道上）",
-       "FG_EDGE_MIN=" + P.FG_EDGE_MIN);
-    /* 中段（|x/W-0.5|*2 <= 阈值）的 x 范围必须覆盖球最常走的那一段。 */
-    const g = P.GROUND_Y;
-    const lo = 0.5 - P.FG_EDGE_MIN / 2, hi = 0.5 + P.FG_EDGE_MIN / 2;
-    ok(g > 0 && lo < 0.45 && hi > 0.55,
-       "留空区覆盖画面正中（球道从这里过）",
-       (lo * 100).toFixed(0) + "% ~ " + (hi * 100).toFixed(0) + "%");
+    ok(typeof P.FG_SIDE === "number", "FG_SIDE 已导出");
+    eq(P.FG_SIDE, 140, "★ 立杆区只有最外 140px（两侧合计 29%，上一版 68%）");
+    eq(P.FG_TOP, 504, "★ 前景顶端封顶 504（球顶 534 之下 30px）");
+    ok(P.FG_TOP > P.GROUND_Y - 100 && P.FG_TOP < P.GROUND_Y,
+       "封顶落在地面之上、球顶之下", "FG_TOP=" + P.FG_TOP + " 地面=" + P.GROUND_Y);
+    const cover = (2 * P.FG_SIDE) / 960;
+    ok(cover <= 0.30, "高元素覆盖率 ≤ 30%", (cover * 100).toFixed(0) + "%");
   }
 }
 
@@ -3664,6 +3662,106 @@ console.log("\n=== 35. 改造件：全游戏唯一的永久成长 ===");
     const body = src.slice(src.indexOf("function loadPerks"), src.indexOf("loadPerks();"));
     ok(!/setItem/.test(body), "★ loadPerks 里没有 setItem（只读，不跟主界面抢真值）");
   }
+}
+
+console.log("\n=== 36. 画面可读性：装饰层不许压玩法区 ===");
+{
+  /* 病理（2026-10-25，用户原话："战斗内的很乱 听不懂人话？之前做的还好点 越做越乱 退钱吧"）：
+
+     上一版 marsh 族一共 **240 根芦苇** ——
+       远景带  72 + 58 根，h 70~132 → 顶端到 **150**
+       中景带  62 + 48 根，h 34~82  → 顶端到 **236**
+     而球顶 534、462 层台面、350 层台面全在它们**下面**。
+     960px 上 240 根 = 平均 4px 一根，读出来是"整个屏幕被划了很多竖道"。
+
+     对照实测（`_cmp-old-s20.png` = 三族之前 / `_cmp-now-s20.png` = 当时）：
+     三族之前干净，之后满屏竖线。**这是三族那次提交引入的增量，不是调参能救的。**
+
+     为什么以前没报：所有断言都测几何（平台在哪、球落哪），
+     **没有一条测"玩家能不能看见"**。这一节补的就是这条。
+
+     钉四件事：
+       ① 远景芦苇顶端 ≥ 228（只在地平线草脊上冒一截）
+       ② 前景杆/石堆顶端 ≥ 504（球顶 534 之下 30px，462 台面底 482 之下 22px）
+       ③ 前景高元素只在最外 FG_SIDE=96px 内（覆盖率 20%，不是 68%）
+       ④ 数量不能归零 —— 删干净也能让 ①②③ 全绿，那是另一种 bug
+  */
+  const W_ = 960;
+  const FLOOR_MID = 228;   // 远景芦苇顶端下限
+  const FLOOR_FG = 504;    // 前景元素顶端下限
+
+  /* 三族各挑两屏（含 marsh 的 20/23）：单屏容易撞上"这一屏恰好没位置"。
+     实测每屏能立高元素的位置只有 **0~2 个** —— 营地固定在 852~934、
+     出生点 ±46、坑各 ±22，把两侧最外 140px 几乎吃干净了。
+     （这个数字本身是重要结论：**"挡玩法"的锅主要不在前景，在远景 130 根芦苇**。） */
+  const CASES = [
+    { stage: 0, scape: "hills" },
+    { stage: 4, scape: "hills" },
+    { stage: 11, scape: "cliffs" },
+    { stage: 16, scape: "cliffs" },
+    { stage: 19, scape: "marsh" },
+    { stage: 22, scape: "marsh" },
+  ];
+  let fgTotal = 0;
+
+  for (const c of CASES) {
+    const sb = boot(), P = sb.GROVE, S = P.S;
+    P._start(0, c.stage);
+    S._fgAudit = [];
+    let drew = "ok";
+    try { P.render(); } catch (e) { drew = String(e && e.message || e); }
+    ok(drew === "ok", `[${c.scape}] 第 ${c.stage + 1} 屏能画出一帧`, drew);
+
+    const log = (S._fgAudit || []).slice();
+    /* 前景层单独再探一次。
+       **为什么非有这一步**：render 在 Canvas 桩里可能崩在尘土/粒子上，
+       崩了 `S._fgAudit` 就只有 0 条记录 —— 而"0 条记录"会让下面三条断言
+       全部**空集真**（`[].every()` 恒为 true）。这是本项目第 5 次撞上
+       "测试测了个空集"。所以另外累计一个总数，见循环外的 `fgTotal`。 */
+    let fgLog = [];
+    let fgErr = "ok";
+    try { fgLog = P.fgProbe(); } catch (e) { fgErr = String(e && e.message || e); }
+    ok(fgErr === "ok", `[${c.scape}] 前景层能单独画出`, fgErr);
+    S._fgAudit = null;
+
+    /* ① 远景芦苇 */
+    const reeds = log.filter((r) => r[0] === "reed");
+    if (c.scape === "marsh") {
+      ok(reeds.length >= 40, `[marsh] 芦苇还在（${reeds.length} 根 = 远景 60 + 中景 34）`);
+      ok(reeds.length <= 100, `★ [marsh] 芦苇总数不超过 100 根（现 ${reeds.length}，上一版 240）`);
+      const top = Math.min(...reeds.map((r) => r[1]));
+      ok(top >= FLOOR_MID, `★ [marsh] 远景芦苇顶端不高于地平线（${top.toFixed(0)} >= ${FLOOR_MID}，上一版 150）`);
+    } else {
+      eq(reeds.length, 0, `[${c.scape}] 不该有芦苇带`);
+    }
+
+    /* ② 前景元素的绝对封顶 */
+    const fg = fgLog;
+    fgTotal += fg.length;
+    ok(fg.every((r) => r[1] >= FLOOR_FG),
+       `★ [${c.scape}] 第 ${c.stage + 1} 屏前景元素全部在 ${FLOOR_FG} 以下（${fg.length} 个）`,
+       fg.filter((r) => r[1] < FLOOR_FG).map((r) => r[0] + "@" + r[1].toFixed(0) + "/x" + r[2].toFixed(0)).join(","));
+
+    /* ③ 覆盖率：**只约束"竖起来的高杆/石堆"**，不约束灌木丛。
+       hills 的 6 丛刻意布在 0.065/0.185/0.305/0.695/0.815/0.935 ——
+       0.305 和 0.695 换算成 x 是 293 / 667，本来就落在中段的两侧肩部。
+       那是构图（框住视线），而且它们的顶已经被压到 504，
+       挡不住球道；把它算进"高元素覆盖率"是拿错了尺子。 */
+    const out = fg.filter((r) => (r[0] === "fgreed" || r[0] === "fgrock") && r[2] > 140 && r[2] < W_ - 140);
+    eq(out.length, 0, `★ [${c.scape}] 第 ${c.stage + 1} 屏中段没有立杆/石堆（覆盖率 29%，上一版 68%）`);
+  }
+
+  /* ★ 非空：6 屏合计至少要有几个高元素，否则上面 ②③ 全是空集真。
+     实测这 6 屏合计 4~8 个（每屏 0~2 个），取 ≥ 3 留出余量。 */
+  ok(fgTotal >= 4, `★ 6 屏合计前景高元素 ${fgTotal} 个（≥4，证明前景层没被删空）`);
+
+  /* ④ 数值契约：改这些数就是改玩法可读性，必须走一遍这里 */
+  const src = fs.readFileSync(HTML, "utf8");
+  ok(/const FG_SIDE = 140;/.test(src), "FG_SIDE 仍是 140（改大 = 前景重新入侵球道）");
+  ok(/const FG_TOP = 504;/.test(src), "FG_TOP 仍是 504（球顶 534 之下 30px）");
+  ok(!/^const FG_EDGE_MIN/m.test(src), "★ 旧的归一化阈值 FG_EDGE_MIN 已删除（它等价于 68% 屏宽）");
+  ok(/drawReeds\(g, 282, TH\.hillFar, 24, 54, 5, 34, 0\.40\);/.test(src), "远景芦苇参数被钉住");
+  ok(/drawReeds\(g, 320, .*?, 14, 40, 23, 20, 0\.40\);/.test(src), "中景芦苇参数被钉住");
 }
 
 console.log("\n" + "=".repeat(56));

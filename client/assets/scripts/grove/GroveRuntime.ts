@@ -2386,6 +2386,452 @@ const LEVELS = [
 ];
 
 /* ============================================================================
+   3.4b 深巢地形生成器（N1：构件库 + 槽位装配 + C1~C6 校验）
+   ----------------------------------------------------------------------------
+   用户 2026-10-25：「深巢无尽模式 我需要改变地形 需要改变新鲜感」。
+   设计见 docs/Legion-深巢地形生成设计_20261025.md，这里是 N1：
+   **不含参数扰动**（用户已拍板「N1 先不含参数扰动，机器人绿了再加」）。
+
+   一条铁律：**不从零随机几何**。每一块台、每一条坡、每一个坑的参数都来自
+   27 屏里真实跑通过的几何 —— 生成器只做"重新组装"，不做"新造"。
+   从零随机会同时炸物理、寻路、机器人三条线（设计文档 §7：明确不做）。
+
+   为什么"重排原语"不够（设计文档 §1 的判定）：27 屏里坡只有 6 条、
+   营地 27/28 在 x≈852，重排只是洗牌 152 个平台，玩家第 3 层就认出
+   「哦还是那些台子」。所以四个零风险手段必须同时上：
+     ① 整屏镜像（营地 27/28 从没在左边 → 立即是没见过的画面）
+     ② 主题轮换（纯皮肤，物理一个数不动）
+     ③ 波次配方（waves 是纯数据）
+     ④ 危险密度（坑的数量随深度开放）
+   手段 ① 的代价是零：镜像后 WALL_L/WALL_R 与地面段完全对称。
+
+   每个候选都要过 C1~C6（设计文档 §4），不过就换种子重抽；
+   20 次仍不过就退到"最简版"——那个版本几何上不可能不过。
+   ========================================================================== */
+
+const NEST = {
+  /* 三层的 y 与主线**同一套**三段台阶。改这里 = 造新物理几何，
+     C1/C2 的判定和所有机器人口径全部失效 —— 不许改。 */
+  LAYERS: [462, 350, 248],
+  CAMP_W: 82,
+  /* 坑宽上限 140 是 27 屏里最宽的坑，机器人能跳过去；再宽就不是"跳得过去
+     的障碍"而是"必须走台"的另一种关卡设计，不在这里做。 */
+  PIT_MIN: 80, PIT_MAX: 140,
+  PIT_GAP: 120,        // C4：相邻坑缘间距下限
+  SPAWN_CLEAR: 100,    // C6：出生点净空
+  CAMP_CLEAR: 160,     // C2a：营地前净空（球滚进营地前不许有坑）
+  RAMP_W: 226,         // 94 落差下的 2.4H，峰值 ≤32°（主线注释里的那条规则）
+  MAX_TRIES: 20,
+  /* 坡是稀缺件：主线 27 屏只有 6 条，当"这一层有个坡"的事件用，
+     不当标配（设计文档 §2：浅层 30%、深层 80%）。 */
+  RAMP_P: (d) => Math.min(0.8, 0.3 + d * 0.04),
+};
+
+/* 主题分池：浅层偏亮、深层偏暗。纯皮肤，随便换。 */
+const NEST_THEME_LIGHT = ["tundra", "snow", "slope", "bouncy"];
+const NEST_THEME_DARK  = ["cliff", "well", "tower", "stairs"];
+const NEST_PIT_KINDS   = ["fire", "mud", "water"];
+
+/* ---- 构件库：从 27 屏真实几何里收集，一条都不新造 ----
+ * `ledges[462]` 里每一条都是某屏真实存在过、机器人跑通过的 (x,w)。 */
+const NEST_LIB = (function () {
+  const lib = { ledges: { 462: [], 350: [], 248: [] } };
+  for (const L of LEVELS) {
+    for (const p of (L.plats || [])) {
+      if (p.kind === "ledge" && lib.ledges[p.y]) lib.ledges[p.y].push({ x: p.x, w: p.w });
+    }
+  }
+  return lib;
+})();
+
+/** 确定性伪随机（mulberry32）。**不能用 Math.random** ——
+ *  同一层要能复现：玩家重进第 7 层必须还是那一层，否则"记住地形"这件事不存在，
+ *  而记忆地形正是无尽模式的乐趣来源之一。 */
+function nestRand(seed) {
+  let s = seed >>> 0;
+  return function () {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** 第 depth 层的主题。池子按深度换，索引带 depth 偏移 —— 相邻层不会同色。 */
+function nestThemeOf(depth, R) {
+  const pool = depth <= 5 ? NEST_THEME_LIGHT
+             : depth >= 16 ? NEST_THEME_DARK
+             : NEST_THEME_LIGHT.concat(NEST_THEME_DARK);
+  return pool[(depth + Math.floor(R() * pool.length)) % pool.length];
+}
+
+/** 整屏镜像：x' = W - x - w。WALL_L/WALL_R 与地面段完全对称，
+ *  所以镜像后一片台都不会出画 —— 这就是它"物理风险为零"的原因。 */
+function nestMirror(L) {
+  const fx = (x, w) => W - x - w;
+  L.plats = L.plats.map(p => Object.assign({}, p, { x: fx(p.x, p.w) }));
+  L.pits = L.pits.map(p => Object.assign({}, p, { x: fx(p.x, p.w) }));
+  L.ramps = L.ramps.map(r => Object.assign({}, r, { x: fx(r.x, r.w) }));
+  /* 坡的 yL/yR 是"左端高还是右端高"——镜像后必须**交换**，
+     否则镜像出来的坡会从地面往天上爬。 */
+  L.ramps.forEach(r => { const t = r.yL; r.yL = r.yR; r.yR = t; });
+  L.camp = Object.assign({}, L.camp, { x: fx(L.camp.x, L.camp.w) });
+  L.spawn = Object.assign({}, L.spawn, { x: W - L.spawn.x });
+  /* 敌人也镜像：不镜像的话，镜像层里敌人全挤在营地那头，
+     第一波就贴脸 —— 那是"镜像"这个手段最容易带出来的副作用。 */
+  L.waves = L.waves.map(w => w.map(f => {
+    const o = Object.assign({}, f);
+    if (o.x != null) o.x = W - o.x;
+    return o;
+  }));
+  return L;
+}
+
+/** 装配一个候选（未校验）。坐标全在"营地靠右"的坐标系里算，最后统一镜像。 */
+function nestBuildRaw(depth, seed) {
+  const R = nestRand((seed ^ (depth * 7919)) >>> 0);
+  const rnd = (a, b) => a + R() * (b - a);
+  const ri = (a, b) => Math.floor(rnd(a, b + 0.999));
+  const pick = (arr) => arr[Math.floor(R() * arr.length)];
+
+  const theme = nestThemeOf(depth, R);
+  const campX = WALL_R - NEST.CAMP_W;
+  const spawnX = 90;
+
+  /* ---- 地面：恒一整段（坑是"挖在地面里"，不是把地面切成几段）---- */
+  const plats = [{ x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" }];
+
+  /* ---- 台层：按深度开放层数，每层从库里抽 1~2 条 ----
+   * 抽中的片段保留它**自己原本的 x/w** —— 那是真实关卡里验证过的位置，
+   * 我只做"同层不重叠"这一道筛。 */
+  const layers = depth >= 16 ? NEST.LAYERS : depth >= 6 ? [462, 350] : [462];
+  for (const y of layers) {
+    const want = y === 462 ? ri(1, 2) : (R() < 0.55 ? 1 : 2);
+    const placed = [];
+    let guard = 0;
+    while (placed.length < want && guard++ < 40) {
+      const cand = pick(NEST_LIB.ledges[y]);
+      if (!cand) break;
+      /* 同层留 30 间隙：两块台贴在一起就是一块长台，抽两条没意义 */
+      const clash = placed.some(u =>
+        !(cand.x + cand.w + 30 <= u.x || u.x + u.w + 30 <= cand.x));
+      if (clash) continue;
+      placed.push({ x: cand.x, y: y, w: cand.w, h: 20, kind: "ledge" });
+    }
+    plats.push.apply(plats, placed);
+  }
+
+  /* ---- 坡：从 462 台滑到地面。位置由台决定，不由随机决定 ----
+   * 为什么只做"462 ↔ 地面"这一种落差：这是主线 6 条坡里唯一同时满足
+   * 「坡顶接台、坡底落地、不钻台底」的形态，另外几条各有各的前提。
+   * 深巢第一版不赌第二种。
+   *
+   * **两个方向都要试。** 库里的台大量贴着右墙（x+w 常等于 934），
+   * 只从右端往右下伸的话，坡几乎永远抽不出来。左坡合法：
+   * rampSurfY 只认 yL/yR，球往哪边滚由两端高度差决定，与"往哪边下降"无关。
+   *
+   * **坡在坑之前生成**（上一版是坑在前，结果 40 层里只有 3 层有坡）：
+   * 坡是稀缺件（主线 27 屏只有 6 条），它的落脚点是"必须留出来"的，
+   * 坑才是可以挪的。顺序反过来，坡的落点每次都被坑占掉，
+   * 于是"这层有个坡"这个事件基本不发生 —— 而那正是新鲜的来源之一。 */
+  const ramps = [];
+  if (depth >= 3 && R() < NEST.RAMP_P(depth)) {
+    const bases = plats.filter(p => p.y === 462 && p.kind === "ledge");
+    const cands = [];
+    for (const b of bases) {
+      const rx = b.x + b.w, rx2 = rx + NEST.RAMP_W;
+      if (rx2 <= campX - 20) cands.push({ x: rx, w: NEST.RAMP_W, yL: 462, yR: GROUND_Y });
+      const lx = b.x - NEST.RAMP_W;
+      if (lx >= WALL_L + 20) cands.push({ x: lx, w: NEST.RAMP_W, yL: GROUND_Y, yR: 462 });
+    }
+    /* 打乱一下再挑：永远取第一条的话，"有坡的层"坡都在同一个位置 */
+    for (let i = cands.length - 1; i > 0; i--) {
+      const j = Math.floor(R() * (i + 1));
+      const t = cands[i]; cands[i] = cands[j]; cands[j] = t;
+    }
+    if (cands.length) {
+      const c = cands[0];
+      ramps.push({ x: Math.round(c.x), w: c.w, yL: c.yL, yR: c.yR });
+    }
+  }
+
+  /* ---- 坑：只挖在"出生点 → 营地"这段地面里，两端留净空 ----
+   * 这样 C2a（营地净空）和 C6（出生点净空）从生成方式上就成立，
+   * 不靠事后校验去兜 —— 校验是兜底，不是生成本身的设计。
+   * 坑要避开坡的整段（lo..hi）：坡底落进坑里读作"坑里长出一块木头"。 */
+  const pits = [];
+  const nPit = Math.min(3, 1 + Math.floor(depth / 12));
+  let px = spawnX + NEST.SPAWN_CLEAR + rnd(30, 120);
+  for (let i = 0; i < nPit; i++) {
+    const w = rnd(NEST.PIT_MIN, NEST.PIT_MAX);
+    if (px + w > campX - NEST.CAMP_CLEAR) break;
+    const clashRamp = ramps.some(r => !(px + w + 40 <= r.x || px >= r.x + r.w + 40));
+    if (clashRamp) { px += w + NEST.PIT_GAP; continue; }
+    pits.push({ x: Math.round(px), y: GROUND_Y, w: Math.round(w), kind: pick(NEST_PIT_KINDS) });
+    px += w + NEST.PIT_GAP + rnd(10, 110);
+  }
+
+  /* ---- 兵站只认**地面与 462 台** ----
+   * 清场的动词是"把人推进营地"，不是"打死"。站在 350 / 248 台上的虫子
+   * **推不下来**：球从地面滚不上去，玩家跳上去也只能打，不能把一只虫子
+   * 从三层高台运到营地。机器人实测就是这个死法 —— 41 层 8 只里 5 只在
+   * 350/248 上，240 秒只送走 3 只，然后超时。
+   *
+   * 主线里 350/248 也摆了 53 + 14 只，但主线是**手摆地形**，每个高台旁边
+   * 都有能下去的路。深巢没有连通性校验（C1~C6 只验几何合法，不验"人能不能
+   * 被运走"），所以只能把兵站压到"推一把就落地"的两层：
+   *   地面 556  → 直接推进营地
+   *   台 462    → 台沿一推就落地，坡也能把人送下去
+   * 350 / 248 台照旧生成 —— 它们的职责是**承接弹道**、拉开层次，不是站人。
+   *
+   * 席位按 170px 一格拆开，抽中的是"一个人能站的地方"而不是"一整块台"：
+   * 抽台的话 5 只虫子会挤在同一个 x 上互相重叠。 */
+  const spots = [];
+  for (const p of plats) {
+    if (p.y !== GROUND_Y && p.y !== 462) continue;
+    /* 台宽不足 140 就不放人了（两侧各留 40，剩下的不够一只虫巡逻） */
+    if (p.y !== GROUND_Y && p.w < 140) continue;
+    const lo = p.x + 40, hi = p.x + p.w - 40;
+    for (let gx = lo; gx <= hi; gx += 170) {
+      spots.push({ y: p.y, x: gx, x1: Math.min(gx + 70, hi) });
+    }
+  }
+  /* 地面席位要避开坑：站坑口上会自己掉下去 */
+  const groundSeats = spots.filter(s => s.y === GROUND_Y);
+  for (const s of groundSeats) {
+    const onPit = pits.some(p => s.x1 > p.x - 40 && s.x < p.x + p.w + 40);
+    if (onPit) spots.splice(spots.indexOf(s), 1);
+  }
+  if (!spots.length) {
+    for (let gx = WALL_L + 70; gx < campX - NEST.CAMP_CLEAR - 70; gx += 170) {
+      const onPit = pits.some(p => gx > p.x - 50 && gx < p.x + p.w + 50);
+      if (!onPit) spots.push({ y: GROUND_Y, x: gx, x1: gx + 70 });
+    }
+  }
+  /* 一个席位只用一次 —— 两只虫站同一个 x 会叠成一只 */
+  const seatPool = spots.slice();
+  const takeSeat = () => (seatPool.length
+    ? seatPool.splice(Math.floor(R() * seatPool.length), 1)[0] : null);
+  const waves = [];
+  /* 敌人密度：`2 + min(3, depth/8)`，深层封顶 5 只小怪。
+     设计文档写的是"1 + depth/20"的连续曲线，但生成器的台数是**离散**的
+     （最多 6 块台），51 层按 depth/4 算出 6 只小怪 + boar + crow + boss = 9 只，
+     实测机器人稳定卡在 7/9 —— 不是地形死路，是**场上敌人比可站位还多**。
+     密度曲线要服从"台的数量"，不能只看深度。 */
+  const n1 = 2 + Math.min(3, Math.floor(depth / 8));
+  const w1 = [];
+  for (let i = 0; i < n1; i++) {
+    const s = takeSeat();
+    if (!s) break;
+    w1.push({ foe: "bug", x: Math.round(rnd(s.x, s.x1)), y: s.y });
+  }
+  if (w1.length) waves.push(w1);
+
+  /* 第二波：深一点才给 boar / crow。crow 会飞，不受台限制。 */
+  if (depth >= 2) {
+    const w2 = [];
+    const s = depth >= 4 ? takeSeat() : null;
+    if (s) w2.push({ foe: "boar", x: Math.round(rnd(s.x, s.x1)), y: s.y });
+    const nCrow = depth >= 8 ? 1 : 0;
+    for (let i = 0; i < nCrow; i++) {
+      w2.push({ foe: "crow", x: Math.round(rnd(WALL_L + 120, campX - 160)), y: 300, fly: 1 });
+    }
+    if (w2.length) waves.push(w2);
+  }
+  /* 最后一波 BOSS：lv 随深度涨，封顶 5（设计文档 §5） */
+  waves.push([{ foe: "boss", x: Math.round(campX - 160), y: GROUND_Y, lv: Math.min(5, 1 + Math.floor(depth / 6)) }]);
+
+  /* ---- 目标：按深度开放池（设计文档 §3.4）----
+   * **浅层不给 limit。** 浅层敌人只有 3~4 只，额度怎么给都接近"不限"；
+   * 而一旦给紧（3 颗 vs 3 只）就是几何上无解 —— 机器人实测 1 层、41/51 层
+   * 三局全灭，全是这条。额度公式也不能只看深度，必须跟敌人数挂钩。 */
+  /* 池子里 clear 出现两次 = 权重加倍。三种目标不是等价的：
+     clear 是"标准层"（大多数层该是它），collect 是"顺手多攒"，
+     limit 是挑战（要求卷球）—— 等权抽的话 62% 的层都在限球，
+     而限球关机器人过不去是预期行为，等于三分之二的层"看起来不可玩"。 */
+  const goalPool = depth <= 5 ? ["clear", "clear", "collect"]
+                 : depth <= 15 ? ["clear", "clear", "collect", "collect", "limit"]
+                 : ["clear", "clear", "collect", "collect", "limit"];
+  const goal = pick(goalPool);
+  const foes = waves.reduce((n, w) => n + w.length, 0);
+  /* ---- S 线跟着这一层的敌人数走，不写死 ----
+   * 写死 `70 秒 / 8 颗` 的后果不是"难"，是**深层永远拿不到 S**：
+   * 层 6 是 6~7 只，层 51 是 9 只还带两波压场，同一根 70 秒的线
+   * 在第 6 层随便过、在第 51 层不存在。评级一旦变成"深层必然 B"，
+   * 玩家就不再读它了 —— 而深巢是纯刷分模式，评级是它唯一的分。
+   *
+   * 系数取自主线 27 屏实测（8~14 只 ↔ par.time 60~135，约 6 秒/只），
+   * 深巢再松一档：生成地形没有手摆地形那么顺，容错要给。
+   * `par.made` 取 0.70 × 敌人数 —— 主线是 0.67（12 只给 8 颗）。 */
+  const parTime = Math.round(52 + foes * 3.4);
+  const parMade = Math.max(3, Math.round(foes * 0.70));
+  const L = {
+    id: "nest-" + depth,
+    name: "第 " + depth + " 层",
+    sub: "深巢 · 深度 " + depth,
+    note: "深巢第 " + depth + " 层。地形每次下潜都不一样，打不过就只丢这一层",
+    theme: theme,
+    goal: goal,
+    par: { time: parTime, made: parMade },
+    plats: plats,
+    ramps: ramps,
+    pits: pits,
+    stumps: [],
+    camp: { x: campX, y: GROUND_Y, w: NEST.CAMP_W },
+    waves: waves,
+    spawn: { x: spawnX, y: GROUND_Y },
+    nest: { depth: depth, seed: seed },
+  };
+  /* 额度跟**敌人数**挂钩，不跟深度挂钩：深度只决定敌人有多少，
+     额度要回答的是"这层够不够卷"。`min(foes-1, ...)` 保证额度严格小于敌人数
+     （等于敌人数就等于没限，那这个目标不存在）；`0.55` 让一球平均卷两只是正解 ——
+     一颗球实测最多卷 3 只，所以 0.55 大约是"两球卷掉三只"的强度。 */
+  if (goal === "limit") {
+    L.ballLimit = Math.max(2, Math.min(foes - 1, Math.round(foes * 0.55)));
+    /* 带额度的关，`par.made` **必须等于额度**。
+       额度 3 而 S 线写 8 的话，"用球"这一项永远达标 —— 限球关的评级
+       等于白送，玩家读到的是"这层我打得很好",实际只是线画错了。
+       这条是主线就定下的规矩（`ballBudget()` 判 `ballLimit == null`），深巢照抄。 */
+    L.par.made = L.ballLimit;
+  }
+  /* 收成目标贴着**主线实测区间**定：27 屏的 collect 全是 12/13/14，
+     单屏收成 31~64 —— 目标只有收成的 1/3 到 1/2，这才是"顺手就够，
+     刻意去攒更快"的量级。深巢按敌人数的 1.6 倍加半档深度，封顶 22：
+     层 6 = 10，层 26 = 17，层 51 = 20。上一版按 foes*2.6 算出 40+，
+     机器人实测收成 9~13，那不是"难"，是几何上够不着。 */
+  /* 收成目标的**上限**由这一层自己决定，不是公式拍一个数。
+     机制：火坑 = holds × 2（球烧掉）、营地 = holds + 1。所以
+       有火坑的层：每只最多 2 收成 → cap = foes × 2
+       没火坑的层：只能走营地，一球卷多只时那个 +1 被摊薄 → cap ≈ foes × 1.4
+     目标取 cap 的 6 成。**不能取满**：取满等于"每只都必须单独进营地"，
+     而一球卷三只才是这游戏的正解 —— 卷 3 只得 4 收成、单独 3 次得 6，
+     目标一顶到上限，正解就变成亏本买卖。
+     机器人实测就是这个死法：21 层目标 14 = 上限 14，三局收工在 1~2 收成。 */
+  if (goal === "collect") {
+    const cap = pits.length ? foes * 2 : Math.round(foes * 1.4);
+    L.collect = Math.max(8, Math.min(22, Math.round(cap * 0.6)));
+  }
+  if (goal === "chain") L.chain = Math.max(2, Math.min(4, Math.round(foes * 0.5)));
+
+  /* ---- 镜像：一半的层整屏翻过来。营地 27/28 在右边，翻过来就是新画面 ---- */
+  if (R() < 0.5) nestMirror(L);
+  return L;
+}
+
+/** C1~C6 校验。返回 { ok, fails }。**纯几何，不跑物理** ——
+ *  跑物理要给每一层跑一遍机器人，那样生成一层的成本比打完一层还高。 */
+function nestCheck(L) {
+  const fails = [];
+  const ground = L.plats.find(p => p.kind === "ground");
+  const ledges = L.plats.filter(p => p.kind === "ledge");
+  const pits = L.pits || [];
+  const ramps = L.ramps || [];
+
+  /* C3 没有顶死墙角：一块台不能同时贴左右墙（那样台下就是个死胡同） */
+  for (const p of ledges) {
+    if (p.x <= WALL_L + 20 && p.x + p.w >= WALL_R - 20) fails.push("C3 台顶死墙角");
+  }
+  /* C4 坑不连成墙：相邻坑缘间距 ≥ 120（连成墙 = 人过不去，只能走台） */
+  const ps = pits.slice().sort((a, b) => a.x - b.x);
+  for (let i = 1; i < ps.length; i++) {
+    if (ps[i].x - (ps[i - 1].x + ps[i - 1].w) < NEST.PIT_GAP) fails.push("C4 坑连成墙");
+  }
+  /* C4b 坑宽不超上限（超了就不是"跳得过去的坑"） */
+  for (const p of pits) if (p.w > NEST.PIT_MAX + 1) fails.push("C4b 坑过宽");
+  /* C5 坡不钻台底：坡的 x 区间不能整段落在某块台的**正下方**。
+     判据必须是"台比坡高"（p.y 更小），**不能用 yL 当坡顶** ——
+     坡现在左右两个方向都会生成，左坡的 yL 是地面（556），
+     拿它当坡顶会把"坡身在地面上"误判成"钻台底"。 */
+  for (const r of ramps) {
+    const topY = Math.min(r.yL, r.yR);
+    for (const p of ledges) {
+      if (p.x <= r.x && r.x + r.w <= p.x + p.w && p.y <= topY - 4) {
+        fails.push("C5 坡钻台底");
+      }
+    }
+  }
+  /* C6 出生点不落坑、不在坑边 */
+  for (const p of pits) {
+    if (L.spawn.x + NEST.SPAWN_CLEAR > p.x && L.spawn.x < p.x + p.w + NEST.SPAWN_CLEAR) {
+      fails.push("C6 出生点离坑太近");
+    }
+  }
+  /* C2a 营地前净空：球滚到营地之前不被坑吃掉 */
+  for (const p of pits) {
+    if (p.x + p.w > L.camp.x - NEST.CAMP_CLEAR && p.x < L.camp.x + L.camp.w) {
+      fails.push("C2a 营地前有坑");
+    }
+  }
+  /* C1 人到得了营地：地面从出生点到营地，沿途每个坑都要跳得过去。
+     C4 已经保证 ≤140，这里再挡一次"某段被两个坑夹成一个窄岛"的情况。 */
+  {
+    const lo = Math.min(L.spawn.x, L.camp.x), hi = Math.max(L.spawn.x, L.camp.x + L.camp.w);
+    for (let i = 1; i < ps.length; i++) {
+      const a = ps[i - 1], b = ps[i];
+      if (a.x + a.w >= lo && b.x <= hi && b.x - (a.x + a.w) < 60) fails.push("C1 中间站不住");
+    }
+  }
+  /* 每一波敌人必须站在某块台面或地面上（飘着的敌人打不到） */
+  const surf = (L.plats || []).filter(p => p.kind !== "ramp");
+  for (const w of L.waves) {
+    for (const f of w) {
+      if (f.fly) continue;
+      const on = surf.some(p => f.y >= p.y - 2 && f.y <= p.y + 4 && f.x >= p.x - 10 && f.x <= p.x + p.w + 10);
+      if (!on) fails.push("敌人悬空");
+    }
+  }
+  return { ok: fails.length === 0, fails: fails };
+}
+
+/** 最简版：一块 462 台 + 一个坑。几何上不可能不过任何一条校验，
+ *  是所有重抽都失败时的兜底 —— 宁可这层无聊，不可这层不可玩。 */
+function nestSimpleLevel(depth) {
+  const L = nestBuildRaw(1, 1);
+  L.id = "nest-" + depth;
+  L.name = "第 " + depth + " 层";
+  L.sub = "深巢 · 深度 " + depth;
+  L.theme = NEST_THEME_LIGHT[depth % NEST_THEME_LIGHT.length];
+  L.goal = "clear";
+  /* 兜底版恒 4 只（3 小怪 + 1 BOSS），S 线照 nestBuildRaw 同一套公式算：
+     52 + 4×3.4 ≈ 66 秒、0.70×4 ≈ 3 颗。写死别的数会让兜底层评级失真。 */
+  L.par = { time: 66, made: 3 };
+  L.plats = [
+    { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
+    { x: 26, y: 462, w: 594, h: 20, kind: "ledge" },
+  ];
+  L.ramps = [{ x: 620, w: NEST.RAMP_W, yL: 462, yR: GROUND_Y }];
+  L.pits = [{ x: 380, y: GROUND_Y, w: 100, kind: "mud" }];
+  L.camp = { x: WALL_R - NEST.CAMP_W, y: GROUND_Y, w: NEST.CAMP_W };
+  L.spawn = { x: 90, y: GROUND_Y };
+  L.waves = [
+    [{ foe: "bug", x: 130, y: 462 }, { foe: "bug", x: 300, y: 462 }, { foe: "bug", x: 480, y: 462 }],
+    [{ foe: "boss", x: 700, y: GROUND_Y, lv: Math.min(5, 1 + Math.floor(depth / 6)) }],
+  ];
+  L.nest = { depth: depth, seed: 0 };
+  return L;
+}
+
+/** 生成第 depth 层：抽 → 校验 → 不过换种子重抽（上限 20 次）→ 兜底最简版。
+ *  `seed` 默认由 depth 决定，所以**同一层每次都长一样**（可记忆）。 */
+function nestLevel(depth, seed) {
+  const s0 = seed == null ? (depth * 2654435761) >>> 0 : seed;
+  let last = null;
+  for (let t = 0; t < NEST.MAX_TRIES; t++) {
+    const L = nestBuildRaw(depth, (s0 + t * 1013) >>> 0);
+    const r = nestCheck(L);
+    if (r.ok) return { level: L, tries: t + 1, fails: [] };
+    last = r.fails;
+  }
+  return { level: nestSimpleLevel(depth), tries: NEST.MAX_TRIES, fails: last || [] };
+}
+
+/* 当前生效的关卡表。主线 = 27 屏；深巢 = 只有当前这一层的单元素表。
+   `loadLevel` / `curStage` / `beginRun` 全部走它，所以"换一张表 = 换一个玩法"，
+   不需要在绘制、物理、机器人任何一处加 if。 */
+let ACTIVE = LEVELS;
+
+/* ============================================================================
    3.5 目标
    ----------------------------------------------------------------------------
    七种目标，四种是"多做一点"，三种是"不许做某事"。后三种才真的会改写最优解：
@@ -2567,7 +3013,7 @@ let TH = THEMES[LEVELS[0].theme];
 
 /** 把一关装进全局绑定。没写的特殊件一律给空数组，代码不用到处判 null */
 function loadLevel(i) {
-  const L = LEVELS[i] || LEVELS[0];
+  const L = ACTIVE[i] || ACTIVE[0] || LEVELS[0];
   TH = THEMES[L.theme] || THEMES.tundra;
   /* 场景族跟着主题走。**必须在这里重置** —— 忘了的话，
      上一个产地的形状会跟到下一个产地（第 9 屏还在画第 8 屏的岩柱）。 */
@@ -2717,6 +3163,14 @@ const S = {
    * ③ 通关最后一屏之后 —— 那一步原本直接把人送回第一屏，等于游戏结束。 */
   phase: "select",
   stage: 0,             // 当前关卡索引
+  /* 深巢：`null` = 主线；`{ depth }` = 正在深巢第 depth 层。
+   *
+   * 深巢的层**不进 LEVELS** —— 它生成的关卡对象只活在这一趟里，
+   * 挂在 `ACTIVE` 这张长度为 1 的表上。为什么这么绕而不是往 LEVELS 里 push：
+   * 主线的 27 屏是**基线**（ALL9 / 冒烟 1384 条 / best 数组长度 / 星靶 81 格），
+   * 往 LEVELS 里塞一屏，这些全部跟着变，而深巢的层又不需要被任何基线认识。
+   * 设计文档 §7 那句「深巢代码不许拖垮主线」在代码层就是这个 `ACTIVE`。 */
+  nest: null,
   /* 推到第几关（存档用）= **第一个还没通的关的索引**。
    *
    * 取值域是 `0 .. LEVELS.length`，注意上界是**闭区间**：
@@ -3121,7 +3575,7 @@ function stepBody(b, dt) {
    6. 建局
    ========================================================================== */
 
-function curStage() { return LEVELS[S.stage] || LEVELS[0]; }
+function curStage() { return ACTIVE[S.stage] || ACTIVE[0] || LEVELS[0]; }
 function curGoal() { return GOALS[curStage().goal]; }
 
 /** 还剩几颗造球额度；没写 `ballLimit` 的关卡返回 Infinity。
@@ -3319,7 +3773,7 @@ function resetRun() {
 function beginRun(i) {
   /* 本趟目标：每次起一屏都重读 —— 玩家可能在主界面换了一趟再进来。 */
   S.tripGoals = readTripGoals();
-  if (typeof i === "number") S.stage = clamp(i, 0, LEVELS.length - 1);
+  if (typeof i === "number") S.stage = clamp(i, 0, ACTIVE.length - 1);
   S.playT = 0;
   S.clearT = 0;
   /* 清掉上一关留下的"打之前最好成绩"。不清的话，重打第 3 关时
@@ -3339,7 +3793,11 @@ function beginRun(i) {
   S.starMet = [];
   S.starFresh = [];
   S.starGain = { shards: 0, logs: 0 };
-  S.progress = Math.max(S.progress, S.stage);
+  /* 深巢不写主线进度：`S.progress` 的唯一语义是"主线推到第几屏"，
+     深巢的层号是**另一条轴**（S.nest.depth + 存档的 nest 字段）。
+     混在一起的话，下潜 20 层会把主线进度顶到 20，回主界面一看
+     "已经打通 20 屏"而实际一屏没打 —— 这是"一个数字表达两件事"。 */
+  if (!S.nest) S.progress = Math.max(S.progress, S.stage);
   const SI = curStage();
   loadLevel(S.stage);
   setupLevel();
@@ -3372,9 +3830,15 @@ function beginRun(i) {
    * 否则同一块屏幕上两种编号打架。
    */
   {
-    const ch = chapterOfStage(S.stage);
-    addText(W / 2, 150, ch.name + " 第 " + (S.stage - ch.from + 1) + " 屏 · " + SI.name,
-            "#FFFFFF", 26, 1.6);
+    /* 深巢的层号是另一条轴，开场只报「深巢 · 第 N 层」（层名就是"第 N 层"，
+       再拼屏名会变成"第 7 层 · 第 7 层"）。主线沿用「产地 第 N 屏 · 屏名」。 */
+    if (S.nest) {
+      addText(W / 2, 150, "深巢 · 第 " + S.nest.depth + " 层", "#FFFFFF", 26, 1.6);
+    } else {
+      const ch = chapterOfStage(S.stage);
+      addText(W / 2, 150, ch.name + " 第 " + (S.stage - ch.from + 1) + " 屏 · " + SI.name,
+              "#FFFFFF", 26, 1.6);
+    }
   }
   // 全饿的第一关必须说明白。不说的话，玩家按 K 没反应只会觉得游戏坏了
   if (bellyTier() === 0) {
@@ -3391,8 +3855,17 @@ function beginRun(i) {
  * 挑一屏 2026-10-26 删除后换成回出征页 —— 那里有当前进度、三颗星条件，
  * 想刷 S 从那儿再进同一屏，想收工按 E。**"没得玩了"这句话不该由游戏来说。 */
 function nextLevel() {
+  /* ---- 深巢：无尽 ---- */
+  /* 打不过 → 重打本层（ACTIVE 里只有这一层，"只丢这一层的收成"）；
+     打过 → 直接下潜下一层。**不回出征页** —— 每层断一次，
+     无尽就退化成"闯关列表"，而列表恰恰是这游戏刻意不做的东西。 */
+  if (S.nest) {
+    if (S.phase === "fail") { beginRun(0); return; }
+    enterNest(S.nest.depth + 1);
+    return;
+  }
   if (S.phase === "fail") { beginRun(S.stage); return; }
-  if (S.stage + 1 < LEVELS.length) { beginRun(S.stage + 1); return; }
+  if (S.stage + 1 < ACTIVE.length) { beginRun(S.stage + 1); return; }
   openGates();
 }
 
@@ -4231,6 +4704,26 @@ function updatePlayer(dt) {
    8. 敌人
    ========================================================================== */
 
+/** 敌人掉出屏幕 —— **消失即算送走，必须计入 killed。**
+ *
+ *  病根（2026-10-26，深巢第 1 层机器人实测）：
+ *  原来这三处只 `f.dead = true` 不记账，于是场上的确清空了，
+ *  但 `S.killed < S.total` 永远成立 —— `checkGoal` 第一条就返回 false，
+ *  整局直接判负，而 failWhy 报的是「人都送走了，但用了 3 颗球（只给 8 颗）」，
+ *  读数的人和看代码的人都以为是额度问题，实际是记账问题。
+ *
+ *  主线 27 屏的地形是手摆的，敌人基本走不到台边缘，这条"不该发生"的兜底路径
+ *  从来没被走到过。深巢的台是生成的、常常更窄，它变成了**常见**路径 ——
+ *  一行不记账，整个玩法就不可玩。这也正是设计文档 §6 要求第二套机器人的原因：
+ *  ALL9 跑主线 27 屏永远照不到这里。 */
+function killByFall(f) {
+  if (f.dead) return;
+  f.dead = true;
+  /* 只给"算在 S.total 里"的敌人记账。BOSS 召唤的幼虫（larva）是运行时生成的，
+     不在 total 里 —— 给它记账，结算会写出「11 / 9」这种读数。 */
+  if (!f.larva && S.killed < S.total) S.killed += 1;
+}
+
 function updateFoe(f, dt) {
   if (f.dead) return;
   if (f.isBoss) { updateBoss(f, dt); return; }
@@ -4314,7 +4807,7 @@ function updateFoe(f, dt) {
     }
     stepBody(f, dt);
     if (f.hitWall) f.dir = -f.hitWall;
-    if (f.y > H + 100) f.dead = true;
+    if (f.y > H + 100) killByFall(f);
     return;
   }
 
@@ -4349,7 +4842,7 @@ function updateFoe(f, dt) {
   }
   if (f.hitWall) f.dir = -f.hitWall;
 
-  if (f.y > H + 100) f.dead = true;
+  if (f.y > H + 100) killByFall(f);
 }
 
 /* ----------------------------------------------------------------------------
@@ -4547,7 +5040,7 @@ function updateBoss(f, dt) {
   if (f.hitWall) f.face = -f.face;
 
   // 掉进坑里（不该发生，但兜一下）
-  if (f.y > H + 120) f.dead = true;
+  if (f.y > H + 120) killByFall(f);
 }
 
 /**
@@ -4638,6 +5131,20 @@ function crackPlat(f, forced) {
  * 放置规则：**朝玩家那一侧**铺。铺在 BOSS 背后等于没铺（玩家在另一边）。
  * 最多 3 段：铺满全屏之后，这一屏就只剩"到处都慢"，没有"哪段快哪段慢"。
  */
+/** 营地"门口那一截"（球滚进门的最后 280px）的判定。
+ *
+ *  **方向必须跟着营地走。** 主线 27 屏营地恒贴右墙（x≈852），所以历史上
+ *  写死的是 `x0 + w > CAMP.x - 280`（禁区在营地左边）。深巢整屏镜像后
+ *  营地搬到左墙（x=26），同一个式子变成 `x0 + w > -254` —— 几乎恒真，
+ *  泥潮在镜像层里一次都铺不出来。而泥是 BOSS `spawn` 动作的一部分，
+ *  三动作谁都不许关（硬红线）。这里按营地贴哪面墙判断禁区在哪一侧。
+ */
+function nearCampApproach(x0, w) {
+  const campOnRight = CAMP.x + CAMP.w / 2 > W / 2;
+  if (campOnRight) return x0 + w > CAMP.x - 280 && x0 < CAMP.x + CAMP.w;
+  return x0 < CAMP.x + CAMP.w + 280 && x0 + w > CAMP.x;
+}
+
 /** 泥潮的**选址**。和"铺下去"分开 —— 同 crackTarget 的理由：
  * 预告画在哪一段，最后就得铺哪一段。 */
 function mudSpot(f) {
@@ -4649,11 +5156,14 @@ function mudSpot(f) {
   const w = 130;
   const cx = clamp(f.x + dir * (f.w * 0.5 + 80), WALL_L + w / 2, WALL_R - w / 2);
   const x0 = cx - w / 2;
-  /* ★ 营地左边 280px 内不铺。
+  /* ★ 营地门口那一截（球滚进门的最后 280px）不铺。
      那一段是"球滚进门的最后一截"：铺上去球会在门口停住，
      玩家看着球停在营地外面，读作"门坏了"。
-     （第 15 屏落袋 3 vs 目标 4 就是这么来的。） */
-  if (x0 + w > CAMP.x - 280) return null;
+     （第 15 屏落袋 3 vs 目标 4 就是这么来的。）
+     **禁区方向跟着营地走**：主线营地在右墙，禁区在它左边；
+     深巢整屏镜像后营地在左墙，禁区必须在它右边 —— 写死 `CAMP.x - 280`
+     的话镜像层里这个式子几乎恒真，泥潮一次都铺不出来。 */
+  if (nearCampApproach(x0, w)) return null;
   // 已经有泥在附近 → 不叠（叠了只是把同一段加深，玩家看不出变化）
   for (const g of GROUNDS) {
     if (g.kind !== "mud") continue;
@@ -4671,7 +5181,7 @@ function mudRise(f, forced) {
     /* 锁定之后要**复验**：这 0.95 秒里可能已经铺过一段，或者刚好又到上限。
        复验不过就落空 —— 不另找地方铺（画一段铺另一段是最难查的那种不一致）。 */
     spot = forced;
-    if (spot.x0 + spot.w > CAMP.x - 280) return false;
+    if (nearCampApproach(spot.x0, spot.w)) return false;
     for (const g of GROUNDS) {
       if (g.kind !== "mud") continue;
       if (spot.x0 < g.x + g.w + 20 && spot.x0 + spot.w > g.x - 20) return false;
@@ -4968,8 +5478,17 @@ function updateBalls(dt) {
     // 防止极端情况下球卡在某个角上永远不死
     if (b.t > 45) { burstBall(b); continue; }
 
-    // 掉出世界（不该发生，但一旦发生就永远不消失，把整局卡死）
-    if (b.y > H + 200) { b.dead = true; continue; }
+    /* 掉出世界：**不该发生**，但一旦发生绝不能让人凭空消失。
+     * 原来只有一行 `b.dead = true` —— 球没了，装在里面的人也没了，
+     * 而 `killed` 不涨，`checkGoal` 的第一条永远不成立，这一层就成了
+     * 不可通关。玩家看到的只是"我的球滚着滚着不见了"。
+     * 现在按"白推"处理（和左右端滚出同一个口径）：记账 + 人放回场上。 */
+    if (b.y > H + 200) {
+      b.dead = true;
+      S.stat.lost = (S.stat.lost || 0) + Math.max(1, b.holds);
+      for (const f of respawnPacked(b, 1, WALL_L + 46)) S.foes.push(f);
+      continue;
+    }
 
     // ---- 漏气：这一版的核心压力
     // 滚动时慢慢漏，停着漏得更快。于是"攒 3 只再推"不是免费的：
@@ -5346,6 +5865,22 @@ function updateBalls(dt) {
                 "滚出去了 · " + lostN + " 只白推", "#CBD8E8", 18);
         for (let i = 0; i < 8; i++) addFrag(14, GROUND_Y - 10, 5, "#8B5A32");
         continue;
+      }
+      /* ---- 右端**夹紧**，不留开口 ----
+       * 和左端不对称是故意的：左边是出口，右边是墙。
+       *
+       * 主线营地永远贴右墙，球滚到那儿先被营地吃掉，所以"从右边滚出去"
+       * 从来没发生过 —— 地面车道也就一直没做右侧夹紧。深巢有一半的层是
+       * **整屏镜像**的（营地贴左墙），右边于是成了空地：球滚过 934 之后
+       * 没人接，一路飞到 x≈1300、y 掉到 810，最后被 `b.y > H + 200`
+       * 兜底静默清除 —— 装在里面的人凭空消失，`killed` 不加，
+       * 这一层就永远差几只、永远打不通。机器人实测 21/31 层就死在这条路上。
+       *
+       * 夹紧而不是"滚出去"：右端没有出口的语义，让球贴墙停住（然后漏气崩开）
+       * 比"人白推一趟"更符合玩家对这一侧的理解。 */
+      if (b.x + b.r > WALL_R) {
+        b.x = WALL_R - b.r;
+        if (b.vx > 0) b.vx = -b.vx * 0.62;
       }
     } else {
       b.x = clamp(b.x, WALL_L + b.r, WALL_R - b.r);
@@ -11332,8 +11867,12 @@ function drawTrail(g) {
   g.strokeStyle = "rgba(6,20,14,.55)";
   /* 「产地 · 第 N 屏 + 关卡名」。**不写「N / 本章屏数」**（2026-10-26
      用户：「我不想暴露最大关卡 只显示当前进度即可」）—— 本章一共几屏
-     是内部数字，报进度不报总数。 */
-  const label = CH.name + " · 第 " + (S.stage - CH.from + 1) + " 屏   " + curStage().name;
+     是内部数字，报进度不报总数。
+     深巢：层号是另一条轴，只报「深巢 · 第 N 层」，不拼屏名
+     （层名本身就是"第 N 层"，拼起来是"第 7 层 第 7 层"）。 */
+  const label = S.nest
+    ? "深巢 · 第 " + S.nest.depth + " 层"
+    : CH.name + " · 第 " + (S.stage - CH.from + 1) + " 屏   " + curStage().name;
 
   /* 波次：一关 2~3 波，最后一波是 BOSS。没有这一行，玩家不知道"还剩多久"。
    *
@@ -12294,16 +12833,24 @@ const GATE = {
      标题只是给这一页起名，而起名这件事底部操作提示已经做了。
      小卡 y 168→52 补标题的空位；预览卡同步放大
      （360×303→384×318）并右缘钉死 920：右下角留 40 给 gateTip 呼吸，
-     顶部让不开月亮（光晕占 y 20–168），所以 y 保持 176。 */
-  w: 208, h: 118, gapX: 14, gapY: 14,
-  x: 88, y: 52, cols: 2,
+     顶部让不开月亮（光晕占 y 20–168），所以 y 保持 176。
+     2026-10-26 第五次调整：**小卡改竖排大卡 358×201，撑满左列**
+     （用户：「直接移动上方…注意布局不能太突兀」）。预览卡上移到 52 齐顶后
+     变成 420 高，而横排两张 118 高的小卡只占 250 —— 左下半空，重心全压右上，
+     比原来更突兀。竖排两张 (52..253 / 271..472) 底正好 472 与预览卡齐平，
+     左右两列等高，才是"两块拼一起"而不是"一大一小"。
+     358×201 仍是 16:9（≈1.781），cover 不裁。 */
+  w: 358, h: 201, gapX: 14, gapY: 18,
+  x: 88, y: 52, cols: 1,
   get slots() { return GATES.length; },
-  /* 预览卡：y 取 176 不取更上 —— 右上月亮光晕下沿约 168（月心 816,94，
-     光晕 r74），压上去会被曝光吃掉。
-     h = artH + 102：名字 24 + 当前进度行 22 + 进度条 12 + 三星条件行 22 + 余量 22。
-     w 216→384（2026-10-26 第四次）：用户「右边的图同步要设置合适的位置和大小」——
-     384 宽 16:9 反推 artH 216，右缘 536+384=920 与左列边距 88 形成右贴左疏。 */
-  pv: { x: 536, y: 176, w: 384, artH: 216, h: 318 },
+  /* 预览卡：**与小卡齐顶**（2026-10-26 第五次，用户红框圈这张卡：
+     「直接移动上方 把上面的内容去掉 点击之后的显示 注意布局不能太突兀」）。
+     之前 y 卡在 176 是因为右上月亮光晕压到 168 —— 现在出征页不画月亮
+     （drawNightSky 第四参 false），卡顶得以对齐小卡的 52。
+     h = artH 216 + 信息区 204：名字 22 + 进度行 12.5 + 进度条 7 +
+     分隔线 + 三条条件各一行（竖排，不再挤一行截断）+ 底留 24。
+     底 52+420 = 472，与底部操作提示（中心 558）留 86 呼吸。 */
+  pv: { x: 536, y: 52, w: 384, artH: 216, h: 420 },
 };
 const GATES = [
   {
@@ -12318,11 +12865,12 @@ const GATES = [
   {
     id: "nest",
     name: "深巢无尽",
-    /* 没开放的门才需要一句话：回答"门后面是什么"，否则这张卡只剩一个
-       "即将开放"的标签，玩家不会期待它。这句话不许带总数。 */
     sub: "越往下越深 · 每层地形都不一样",
     art: "gate-nest",
-    open: false,
+    /* 2026-10-26 开放：地形生成器（N1）已经过 1..60 层 × 10 种子的 C1~C6
+       批量校验，能玩才开门。开门这件事本身**不需要改版式** ——
+       GATE.slots 是 getter，两扇门都开时网格还是两行。 */
+    open: true,
   },
 ];
 
@@ -12361,6 +12909,10 @@ function gateHit(mx, my) {
 function openGates() {
   S.phase = "portals";
   S.p = null;
+  /* 从深巢回来必须把表换回主线 —— 否则出征页的 gateCur 正常、
+     一点「苔原古道」却进了刚才那层深巢（curStage 读的是 ACTIVE）。
+     放在这里而不是每个退出口各自清，是因为"回出征页"是唯一出口。 */
+  if (S.nest) exitNest();
   /* 不重置 gateCur：从战斗退回来还应该停在刚才那扇门上。
      只 clamp —— 门数变了（以后加门）也不至于指到空位。 */
   S.gateCur = clamp(S.gateCur || 0, 0, GATES.length - 1);
@@ -12383,7 +12935,52 @@ function enterGate(i) {
   }
   if (p.id === "trail") {
     beginRun(clamp(S.progress, 0, LEVELS.length - 1));
+  } else if (p.id === "nest") {
+    enterNest();
   }
+}
+
+/* ---------------------------------------------------------------------------
+   深巢：下潜
+
+   「一路往下，深度无上限」。三件事必须同时成立才算"无尽"：
+     ① 每层地形不一样（nestLevel 生成 + 镜像 + 主题）
+     ② 通关自动往下，**不回出征页** —— 每层断一次就变成"闯关列表"
+     ③ 打不过只丢这一层的收成，最深处记录永久保留（硬红线 3：无失败惩罚）
+
+   最深深度存在独立的 `pawpack.nest` 里，**不混进 pawpack.progress**：
+   那个数字的唯一语义是"主线推到第几屏"，混用就会出现"下潜 20 层、
+   主界面显示已通关 20 屏"这种一个数字表达两件事的错。
+   --------------------------------------------------------------------------- */
+const NEST_KEY = "pawpack.nest";
+
+function readNestDepth() {
+  try { return Math.max(0, parseInt(localStorage.getItem(NEST_KEY), 10) || 0); }
+  catch (e) { return 0; }
+}
+
+/** 只增不减：重打浅层不许把"下到过第几层"拍回去 */
+function writeNestDepth(d) {
+  try { if (d > readNestDepth()) localStorage.setItem(NEST_KEY, String(d)); } catch (e) {}
+}
+
+/** 下潜到第 depth 层。不传 = 接着存档里的最深处（没有记录就从第 1 层）。 */
+function enterNest(depth) {
+  const d = depth == null ? Math.max(1, readNestDepth()) : Math.max(1, Math.floor(depth));
+  const r = nestLevel(d);
+  ACTIVE = [r.level];
+  S.nest = { depth: d };
+  S.stage = 0;
+  writeNestDepth(d);
+  beginRun(0);
+}
+
+/** 离开深巢（回出征页 / 回家）：表换回主线，nest 状态清空。
+ *  **必须清**：不清的话下一次进主线会拿深巢的那一层当第 0 屏打。 */
+function exitNest() {
+  S.nest = null;
+  ACTIVE = LEVELS;
+  S.stage = 0;
 }
 
 /** 五角星。`on` = 已拿到（实心金），否则空心灰描边 */
@@ -12426,6 +13023,12 @@ const FACTIONS = [
    最后一章取余量，允许和前两章不等长。
    --------------------------------------------------------------------------- */
 function chapterOfStage(idx) {
+  /* 深巢：层号不是主线的一条"屏"。给一个 count=1 的伪章节 ——
+     顶部进度点只画一颗（画 9 颗等于暗示"这一章还有 9 层"，
+     而深巢是无限的，任何数字都在撒谎）。 */
+  if (typeof S !== "undefined" && S && S.nest) {
+    return { row: 0, name: "深巢", from: 0, count: 1 };
+  }
   const per = Math.ceil(LEVELS.length / FACTIONS.length);
   const row = clamp(Math.floor(idx / per), 0, FACTIONS.length - 1);
   const from = row * per;
@@ -12609,8 +13212,11 @@ function drawJump(g) {
 const RANK_COLOR = { S: "#E8951A", A: "#4F9B24", B: "#3F82A2" };
 
 /** 夜空底。出征页和门口选人共用这一份 —— 两处各画一遍，
-    改配色时必然只改一处，玩家会在两个连续页面之间看到天色不一样。 */
-function drawNightSky(g, t, HZ) {
+    改配色时必然只改一处，玩家会在两个连续页面之间看到天色不一样。
+    `withMoon`：出征页传 false（2026-10-26 用户：「直接移动上方 把上面的内容去掉」
+    —— 月亮+光晕占 y 20–168，是右侧预览卡没法跟左上小卡齐顶的唯一原因）；
+    门口选人页仍传默认 true，那里的月亮没人挡。 */
+function drawNightSky(g, t, HZ, withMoon) {
   const sky = g.createLinearGradient(0, 0, 0, HZ + 10);
   sky.addColorStop(0, "#0A1520");
   sky.addColorStop(0.52, "#12232A");
@@ -12627,11 +13233,13 @@ function drawNightSky(g, t, HZ) {
     g.fillRect(x, y, 1.7, 1.7);
   }
 
-  // 月亮
-  g.fillStyle = "rgba(226,240,214,.86)";
-  g.beginPath(); g.arc(816, 94, 29, 0, 6.283); g.fill();
-  g.fillStyle = "rgba(226,240,214,.045)";
-  g.beginPath(); g.arc(816, 94, 74, 0, 6.283); g.fill();
+  // 月亮（出征页去掉：见函数注释）
+  if (withMoon !== false) {
+    g.fillStyle = "rgba(226,240,214,.86)";
+    g.beginPath(); g.arc(816, 94, 29, 0, 6.283); g.fill();
+    g.fillStyle = "rgba(226,240,214,.045)";
+    g.beginPath(); g.arc(816, 94, 74, 0, 6.283); g.fill();
+  }
 
   // 远树剪影
   g.fillStyle = "#0E2820";
@@ -12774,10 +13382,22 @@ function drawGateArt(g, p, x, y, w, h) {
   g.restore();
 }
 
+/** 出征页每扇门的副行。一个函数管两扇门 —— 写在绘制里就会变成
+ *  "古道报第 N 屏、深巢也报第 N 屏"这种两条轴混用一个数字的错。 */
+function gateSubLine(p) {
+  if (p.id === "nest") {
+    const d = readNestDepth();
+    return d > 0 ? "最深 " + d + " 层" : "没下潜过";
+  }
+  return S.progress > 0 ? "第 " + (clamp(S.progress, 0, LEVELS.length - 1) + 1) + " 屏" : "还没出发";
+}
+
 function drawGates(g) {
   const FONT = "'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
   const HZ = 470;
-  drawNightSky(g, S.t, HZ);
+  /* 第四参 false = 不画月亮：月亮+光晕占 y 20–168，右侧预览卡要跟左上小卡
+     齐顶（y 52）就必须让开它。选人页仍画（那边没人挡）。 */
+  drawNightSky(g, S.t, HZ, false);
   g.fillStyle = "#0C1F1A";
   g.fillRect(0, HZ, W, H - HZ);
 
@@ -12801,25 +13421,27 @@ function drawGates(g) {
 
     /* 底部压暗：名字直接压在立绘上。第一版只压 58px、终点 .92，
        苔原那张的草地太亮，白字"苔原古道"读起来是糊的 —— 加深到 70px
-       并在 55% 处就压到 .72，让字有一层真正的中灰底而不是"亮图上一层薄雾"。 */
-    const fade = g.createLinearGradient(0, r.y + r.h - 70, 0, r.y + r.h);
+       并在 55% 处就压到 .72，让字有一层真正的中灰底而不是"亮图上一层薄雾"。
+       2026-10-26 第五次：卡放大到 358×201，压暗区按比例跟到 96。 */
+    const fade = g.createLinearGradient(0, r.y + r.h - 96, 0, r.y + r.h);
     fade.addColorStop(0, "rgba(10,20,18,0)");
     fade.addColorStop(0.55, "rgba(10,20,18,.72)");
     fade.addColorStop(1, "rgba(10,20,18,.97)");
     g.fillStyle = fade;
-    g.fillRect(r.x, r.y + r.h - 70, r.w, 70);
+    g.fillRect(r.x, r.y + r.h - 96, r.w, 96);
 
     g.textAlign = "left";
     g.fillStyle = "#F2F7EE";
-    g.font = "bold 15.5px " + FONT;
-    g.fillText(fitText(g, p.name, r.w - 28), r.x + 14, r.y + r.h - 30);
+    g.font = "bold 20px " + FONT;
+    g.fillText(fitText(g, p.name, r.w - 40), r.x + 20, r.y + r.h - 42);
 
     /* 副行只报**当前进度**，不报总数：「/ 27」就是用户不想暴露的最大关卡 */
     g.fillStyle = p.open ? "rgba(200,222,200,.80)" : "rgba(240,200,120,.86)";
-    g.font = "bold 11.5px " + FONT;
-    g.fillText(p.open
-      ? (S.progress > 0 ? "第 " + (cur + 1) + " 屏" : "还没出发")
-      : "即将开放", r.x + 14, r.y + r.h - 12);
+    g.font = "bold 13.5px " + FONT;
+    /* 副行只报**当前进度**，不报总数：「/ 27」就是用户不想暴露的最大关卡。
+       深巢 2026-10-26 开放后不能再用主线那句 —— 它的"我在哪"是**最深下到
+       第几层**，报主线屏号等于把两条轴混成一个数字。 */
+    g.fillText(p.open ? gateSubLine(p) : "即将开放", r.x + 20, r.y + r.h - 20);
 
     // 描边最后画：压在图上，选中那格一眼看得出来
     g.strokeStyle = i === focus ? "#F0A81E" : "rgba(160,200,180,.30)";
@@ -12865,20 +13487,45 @@ function drawGates(g) {
       const ty = v.y + v.artH;
       g.textAlign = "left";
       g.fillStyle = "#F2F7EE";
-      g.font = "bold 21px " + FONT;
-      g.fillText(p.name, v.x + 22, ty + 24);
+      g.font = "bold 22px " + FONT;
+      g.fillText(p.name, v.x + 22, ty + 34);
 
-      if (p.open) {
+      if (p.open && p.id === "nest") {
+        /* 深巢预览卡（2026-10-26 开放）：**不挂主线的屏序 / 进度条 / 三星**。
+           那三样都是 27 屏的东西，深巢一层一生成，既没有"第几屏"也没有靶。
+           信息区 204 拿来讲"这玩法怎么玩" —— 玩家第一次进深巢之前，
+           最该知道的三件事就是下面这三条。 */
+        const d = readNestDepth();
+        g.fillStyle = "rgba(200,222,200,.72)";
+        g.font = "12.5px " + FONT;
+        g.fillText(d > 0 ? "最深 第 " + d + " 层" : "还没下潜过", v.x + 22, ty + 60);
+
+        g.fillStyle = "rgba(160,200,180,.22)";
+        g.fillRect(v.x + 22, ty + 96, v.w - 44, 1);
+        g.fillStyle = "rgba(200,222,200,.52)";
+        g.font = "bold 11.5px " + FONT;
+        g.fillText("往下是这样的", v.x + 22, ty + 120);
+
+        const rules = ["地形每层都不一样", "打不过只丢这一层", "下到哪层就记在哪层"];
+        g.font = "12.5px " + FONT;
+        for (let kk = 0; kk < rules.length; kk++) {
+          const ry = ty + 144 + kk * 24;
+          g.fillStyle = "#7FC24A";
+          g.fillText("·", v.x + 24, ry);
+          g.fillStyle = "rgba(200,222,200,.72)";
+          g.fillText(rules[kk], v.x + 38, ry);
+        }
+      } else if (p.open) {
         /* 当前进度行：第几屏 + 产地名。产地名帮玩家建立方位
            （"我在枯木坡"比"我在第 15 屏"更像人话），且不暴露总屏数。 */
         const CH = chapterOfStage(cur);
         g.fillStyle = "rgba(200,222,200,.72)";
         g.font = "12.5px " + FONT;
-        g.fillText("第 " + (cur + 1) + " 屏 · " + CH.name, v.x + 22, ty + 46);
+        g.fillText("第 " + (cur + 1) + " 屏 · " + CH.name, v.x + 22, ty + 60);
 
         /* 进度条只画比例、不写数字 —— 写数字就等于回答"一共多少屏"，
            而总数正是用户不想暴露的东西。 */
-        const bw = v.w - 44, bx2 = v.x + 22, by2 = ty + 58;
+        const bw = v.w - 44, bx2 = v.x + 22, by2 = ty + 72;
         g.fillStyle = "rgba(160,200,180,.20)";
         rr(g, bx2, by2, bw, 7, 4);
         g.fill();
@@ -12886,33 +13533,34 @@ function drawGates(g) {
         rr(g, bx2, by2, Math.max(4, bw * S.progress / LEVELS.length), 7, 4);
         g.fill();
 
-        /* ---- 三颗星 + 条件原文 ----
+        /* ---- 三颗星 + 条件原文（**竖排三条**）----
          * 挑一屏删了，出征页是**出门前**唯一能读到"这一屏三颗星怎么拿"的
          * 地方（桌面原来靠 hover 行、触屏原来靠条件卡，两套一起没了）。
-         * 左边三颗星回答"拿没拿到"，右边原文回答"怎么拿"。 */
+         * 2026-10-26 第五次：卡高从 318 涨到 420，信息区从 100 涨到 204，
+         * 三条条件不必再挤一行截断（旧版靠 `break` 丢第三条），改竖排
+         * 各占一行 —— 信息区变大正是为了这件事，不是留白。
+         * 行距 24：12.5px 字中心距 ≥ 0.65*(12.5+12.5)+4 = 20.25。 */
+        g.fillStyle = "rgba(160,200,180,.22)";
+        g.fillRect(v.x + 22, ty + 96, v.w - 44, 1);
+        g.fillStyle = "rgba(200,222,200,.52)";
+        g.font = "bold 11.5px " + FONT;
+        g.fillText("这一屏的三颗星", v.x + 22, ty + 120);
+
         const row = STAR_OF_STAGE[cur] || [];
         const bits = (S.starBits && S.starBits[cur]) || [];
+        g.font = "12.5px " + FONT;
         for (let kk = 0; kk < row.length; kk++) {
-          const sx = v.x + 32 + kk * 20, sy = ty + 80;
-          starPath(g, sx, sy, 7.5);
+          const ry = ty + 144 + kk * 24;
+          starPath(g, v.x + 30, ry - 4, 6.5);
           if (bits[kk] === 1) { g.fillStyle = "#F0A81E"; g.fill(); }
           else {
-            g.strokeStyle = "rgba(200,222,200,.45)";
+            g.strokeStyle = "rgba(200,222,200,.40)";
             g.lineWidth = 1.4;
             g.stroke();
           }
-        }
-        let px = v.x + 22 + 66;
-        g.font = "12px " + FONT;
-        g.textAlign = "left";
-        for (let kk = 0; kk < row.length; kk++) {
-          const t = (bits[kk] === 1 ? "✓ " : "— ") + (STAR_CN[row[kk]] || row[kk]);
-          /* 超出预览卡右界就停：三条原文并排塞不下，截断比压到卡外好看。
-             （fitText 是单色的，做不到"逐段上色 + 截断"，这里手动截。） */
-          if (px + g.measureText(t).width > v.x + v.w - 18) break;
-          g.fillStyle = bits[kk] === 1 ? "#7FC24A" : "rgba(200,222,200,.62)";
-          g.fillText(t, px, ty + 80);
-          px += g.measureText(t).width + 14;
+          g.fillStyle = bits[kk] === 1 ? "#7FC24A" : "rgba(200,222,200,.58)";
+          g.fillText((bits[kk] === 1 ? "✓ " : "— ") + (STAR_CN[row[kk]] || row[kk]),
+                     v.x + 46, ry);
         }
       } else {
         /* 没开放的门也要把"后面是什么"说清楚，否则这张卡只剩一个
@@ -12937,10 +13585,10 @@ function drawGates(g) {
     }
   }
 
-  /* 提示条（点没开放的门时）。2026-10-26 第四次：从画面中央 (480,496)
-     挪到**左列两卡下方居中** (303,196)。原位置在预览卡底（489）与操作
-     提示（558）之间只剩 69px，预览卡放大到 318 高后更挤；左列小卡底
-     170 往下是大片夜景空地，放这里不挨任何人。 */
+  /* 提示条（点没开放的门时）。2026-10-26 第五次：左列改成竖排大卡后
+     (303,196) 被第二张卡（271..472）占掉，挪回**底部操作提示正上方**中央
+     (480,496) —— 这是 toast 的常规位置，两列都已结束（底 472），谁也不挨。
+     放画面中间会被预览卡的信息区压住。 */
   if (S.gateTip.life > 0) {
     const a = clamp(S.gateTip.life / 0.4, 0, 1) * clamp((2.4 - S.gateTip.life) / 0.14, 0, 1);
     g.globalAlpha = a;
@@ -12948,11 +13596,11 @@ function drawGates(g) {
     const tw2 = g.measureText(S.gateTip.txt).width;
     const bw2 = tw2 + 44;
     g.fillStyle = "rgba(240,200,90,.14)";
-    rr(g, 303 - bw2 / 2, 196, bw2, 32, 16);
+    rr(g, W / 2 - bw2 / 2, 496, bw2, 32, 16);
     g.fill();
     g.textAlign = "center";
     g.fillStyle = "#F0C060";
-    g.fillText(S.gateTip.txt, 303, 212);
+    g.fillText(S.gateTip.txt, W / 2, 512);
     g.globalAlpha = 1;
   }
 
@@ -13293,6 +13941,14 @@ function checkGoal() {
 
 function goalFailWhy() {
   const st = curStage();
+  /* ---- 最优先：还有人没送走 ----
+   * 这条原来缺着，于是 `checkGoal` 因为 `killed < total` 返回 false 时，
+   * 面板照样去解释"收成/额度"那一层 —— 实测报出过
+   * 「收成只有 10（要 8）」这种自相矛盾的句子：10 明明 ≥ 8。
+   * 玩家会照它去攒早就不缺的东西，永远修不好真正的问题。 */
+  if (S.killed < S.total) {
+    return "还有人没送走：场上剩 " + (S.total - S.killed) + " 只（这一趟只送走 " + S.killed + " 只）";
+  }
   /* 赛道排最前：其他原因（球用超了、挨打了）玩家自己能看到，
      而"球没走完那条路"是看不见的 —— 球确实进了营地，只是没走完整条线。 */
   if (TOUR.length && S.stat.toured < (st.tourNeed || 1)) {
@@ -13300,7 +13956,13 @@ function goalFailWhy() {
   }
   if (st.goal === "chain") return "人都送走了，但没有一颗球装够 " + st.chain + " 只（最大 x" + S.stat.maxHolds + "）";
   if (st.goal === "bank")  return "人都送走了，但从营地过的只有 " + S.stat.bankHolds + " 只（要 " + st.bank + " 只）";
-  if (st.goal === "collect") return "人都送走了，但收成只有 " + S.food + "（要 " + st.collect + "）—— 火坑 ×2 才是正路";
+  if (st.goal === "collect") {
+    /* "火坑 ×2 才是正路" 只在本层真有火坑时成立。深巢的坑是随机抽的，
+       有的层一个火坑都没有 —— 那时这句话是在指路指向一块空地。 */
+    const hasFire = (st.pits || []).some(p => p.kind === "fire");
+    return "人都送走了，但收成只有 " + S.food + "（要 " + st.collect + "）—— " +
+           (hasFire ? "火坑 ×2 才是正路" : "一颗球多装几只再进营地");
+  }
   if (st.goal === "tour")    return "人都送走了，但走完赛道的只有 " + S.stat.toured + " 颗（要 " + (st.tourNeed || 1) + " 颗）—— 那三段跑道是一层一层接着掉下去的，不是随便滚";
   if (st.goal === "intact")  return "人都送走了，但崩了 " + S.stat.burst + " 颗球（一次都不许）";
   if (st.goal === "nohit")   return "人都送走了，但挨了 " + S.stat.hits + " 下（一次都不许）";
@@ -13411,8 +14073,15 @@ function tick(dt) {
            放在 phase 赋值后面、奖励前面：judgeStar 读的是 S.stat，
            而 clear 分支下面才开始改 S.food / S.belly，顺序反了不会错，
            但放这儿读代码的人一眼能看出"判定发生在改动发生之前"。 */
-        S.starMet = judgeStar(S.stage, S.stat);
-        S.starFresh = recordStar(S.stage, S.starMet);
+        /* 深巢不挂星靶：81 个靶是 27 屏的，深巢的层没有靶表 ——
+           不挡的话 STAR_OF_STAGE[0] 会让「第 7 层」点亮主线第 1 屏的星。 */
+        if (S.nest) {
+          S.starMet = [];
+          S.starFresh = [];
+        } else {
+          S.starMet = judgeStar(S.stage, S.stat);
+          S.starFresh = recordStar(S.stage, S.starMet);
+        }
         /* 清场奖励 3 → 3+25（`bounty`）。
            3 这个数太小了：一屏收成实测 31~64，3 分等于 5%，
            玩家根本感觉不到"把场上清干净"有额外好处。 */
@@ -13420,7 +14089,9 @@ function tick(dt) {
         /* 记账顺手把"谁刚到家"接住。**返回值不能丢** ——
          * 丢了的话，解锁这件事就只剩 recordClear 内部那条 3.6 秒的 DOM 提示
          * （而且还只在 ?from=home 时才弹）。结算卡要靠这份数据画横幅。 */
-        S.unlocked = recordClear(S.stage);
+        /* 深巢不写主线存档：recordClear 会写"通过哪一屏"（cleared 数组 +
+         * 主界面镜像 + 解锁宠物），下潜 20 层等于谎报主线通了 20 屏。 */
+        S.unlocked = S.nest ? [] : recordClear(S.stage);
         // ---- 一趟的账 ----
         // loot 累加、倍率涨一档、肚子掉一档。**重打同一关不会重复计**，
         // 因为只有 checkGoal 通过（真的过关）才走到这里，失败重打时 S.food 是 0。
@@ -13439,8 +14110,11 @@ function tick(dt) {
         /* 评级只升不降：拿过一次 S，之后打 A 不会把 S 抹掉 ——
            否则玩家不敢重打（"万一打差了纪录没了"）。
            先存下"打之前"的最佳，结算面板拿它判断是不是新纪录。 */
-        S.rankPrev = S.best[idx] || "";
-        const aw = rankAward(S.best[idx], rk);
+        S.rankPrev = S.nest ? "" : (S.best[idx] || "");
+        /* 深巢不参与 27 屏的评级体系：`S.best[0]` 是主线第 1 屏的成绩，
+           深巢写进去就污染它，而"第 7 层打了 S"也不该记到第 1 屏头上。
+           结算卡照样显示这一层的评级（rk），只是不落盘、不发材料。 */
+        const aw = S.nest ? { better: false, best: "", gain: 0 } : rankAward(S.best[idx], rk);
         if (aw.better) {
           S.best[idx] = aw.best;
           saveBest();
@@ -13460,8 +14134,12 @@ function tick(dt) {
          * （`_bankRun` → `payoutFromRun`），和果子/材料现有口径完全一致。 */
         S.rankGain = aw.gain;
         if (aw.gain > 0) S.trip.rankLogs = (S.trip.rankLogs || 0) + aw.gain;
-        recordStats(idx);
-        S.progress = Math.max(S.progress, S.stage + 1);
+        /* 主线的三本账（统计 / 进度 / 全通奖励）深巢一律不碰：
+           它们的语义都是"27 屏走到哪了"，深巢的层号在另一条轴上。 */
+        if (!S.nest) {
+          recordStats(idx);
+          S.progress = Math.max(S.progress, S.stage + 1);
+        }
         /* ---- 走完全部 27 屏 ----
          *
          * 奖励必须在这一刻发。挂在「收工」上是错的 —— 收工有两条路
@@ -13471,20 +14149,27 @@ function tick(dt) {
          * 顺带把 progress 顶到 LEVELS.length：这才是"全通"在存档里的写法。
          * 不写的话，第 27 屏通完 progress 是 27（= length），刚好也是全通 ——
          * 但那是碰巧对，不是设计对。显式写一次，读代码的人不用反推。 */
-        if (S.stage + 1 >= LEVELS.length) {
+        if (!S.nest && S.stage + 1 >= LEVELS.length) {
           S.progress = LEVELS.length;
           S.trip.loot += 12;
           addText(W / 2, 292, "27 屏全走完了 · +12 份口粮", "#FFD86B", 22, 3.2);
         }
-        saveProgress();
-        addText(W / 2, 250, "这一屏清干净了", "#FFE9B0", 32, 2.2);
+        if (!S.nest) saveProgress();
+        addText(W / 2, 250, S.nest ? ("沉到第 " + S.nest.depth + " 层") : "这一屏清干净了",
+                "#FFE9B0", 32, 2.2);
       } else {
         S.phase = "fail";
         S.failWhy = goalFailWhy();
         /* 失败也判星靶：「这趟没白打」要有证据。完不成不惩罚（红线 3），
-           但打出来的靶照样算 —— 和本趟目标同一个口径。 */
-        S.starMet = judgeStar(S.stage, S.stat);
-        S.starFresh = recordStar(S.stage, S.starMet);
+           但打出来的靶照样算 —— 和本趟目标同一个口径。
+           深巢没有靶表，一律置空（同通关分支的理由）。 */
+        if (S.nest) {
+          S.starMet = [];
+          S.starFresh = [];
+        } else {
+          S.starMet = judgeStar(S.stage, S.stat);
+          S.starFresh = recordStar(S.stage, S.starMet);
+        }
       }
     }
 
@@ -14328,14 +15013,20 @@ function render() {
       g.textAlign = "left";
       {
         /* 角标只报「产地 第 N 屏」，不报「N / 本章屏数」——
-           2026-10-26 用户：「我不想暴露最大关卡 只显示当前进度即可」。 */
-        const ch = chapterOfStage(S.stage);
-        g.fillText(ch.name + " · 第 " + (S.stage - ch.from + 1) + " 屏",
-                   cardX + 30, cardY + 24);
+           2026-10-26 用户：「我不想暴露最大关卡 只显示当前进度即可」。
+           深巢报「深巢 · 深度 N」：层号是另一条轴，混进屏序会读成主线进度。 */
+        if (S.nest) {
+          g.fillText("深巢 · 深度 " + S.nest.depth, cardX + 30, cardY + 24);
+        } else {
+          const ch = chapterOfStage(S.stage);
+          g.fillText(ch.name + " · 第 " + (S.stage - ch.from + 1) + " 屏",
+                     cardX + 30, cardY + 24);
+        }
       }
       if (S.trip.stages > 1) {
         g.textAlign = "right";
-        g.fillText("连走 " + S.trip.stages + " 屏", cardX + CARD_W - 30, cardY + 24);
+        g.fillText((S.nest ? "连沉 " + S.trip.stages + " 层" : "连走 " + S.trip.stages + " 屏"),
+                   cardX + CARD_W - 30, cardY + 24);
       }
 
       // ---- 关卡 · 目标 ----
@@ -14454,7 +15145,10 @@ function render() {
          *
          * 文案只给"新纪录/首次记录"两种：比上次好才叫纪录，
          * 打平不叫（打平就没人想继续刷了）。 */
-        if (S.rankPrev !== rk) {
+        /* 深巢不贴这张纸。它没有"这一屏的最佳纪录"——`S.rankPrev` 在深巢恒为
+           `""`，于是 `!== rk` 恒真，每层都贴一张"首次记录"，读起来像系统坏了。
+           深巢的成绩是**深度**，不是评级纪录。 */
+        if (!S.nest && S.rankPrev !== rk) {
           g.save();
           g.translate(cx + 58, rankY - 46);
           g.rotate(-0.16);
@@ -14581,7 +15275,7 @@ function render() {
        * 只有两态（✓/✗）的话，"早就有了"和"刚拿到"长得一样，
        * 而这两个对玩家的意义完全相反。 */
       {
-        const srow = STAR_OF_STAGE[S.stage] || [];
+        const srow = S.nest ? [] : (STAR_OF_STAGE[S.stage] || []);
         if (srow.length) {
           const PW = 156, PH = 30, PG = 11;
           const py = cardY + 352;
@@ -14635,6 +15329,22 @@ function render() {
             g.fillText("新摘到 " + S.starFresh.length + " 颗星星 · 碎片 +" +
                        gg.shards + " · 材料 +" + gg.logs, cx, cardY + 400);
           }
+        } else if (S.nest) {
+          /* ---- 深巢没有星靶 —— 但这一行不能空着 ----
+           * 直接跳过的话卡面会在 352~400 之间空出 48px，和按钮之间多一道白沟，
+           * 读起来像"图没加载完"，而不是"这里本来就没内容"。
+           *
+           * 换成「这一趟的账」：送走几只 / 带回多少 / 历史最深。
+           * 三件都是**出了这一层就再也看不到**的数 —— 深巢没有星靶可刷、
+           * 没有纪录可比，账单就是它的成绩单。这比硬塞三颗主线星靶诚实得多。 */
+          g.textAlign = "center";
+          g.textBaseline = "alphabetic";
+          g.fillStyle = K.cream ? "rgba(74,53,36,.62)" : "rgba(255,255,255,.62)";
+          g.font = "bold 13px " + FONT;
+          g.fillText("送走 " + S.killed + " 只　·　收成 " +
+                     Math.round(S.trip.loot) + " 果　·　最深 第 " +
+                     Math.max(readNestDepth(), S.nest.depth) + " 层",
+                     cx, cardY + 367);
         }
       }
 
@@ -14692,9 +15402,13 @@ function render() {
              收工 → +28 果 · 吃完回满
          这比再写一行说明文字有效 —— 说明文字没人读，按钮副标题一定被读。 */
       if (ok && !last) {
-        const nx = LEVELS[S.stage + 1];
-        drawBtn(B.cont, hiCont, "继续深入",
-                nx.name + " · ×" + nextMulti.toFixed(2) + " · " + nextBellyHint(), true);
+        /* 深巢的"下一关"是**下一层**。这里读 `LEVELS[S.stage + 1]` 会取到
+           主线第 2 屏的屏名 —— 深巢的 `S.stage` 永远是 0，于是每层都写着
+           "雪原 · …"。两条轴不能混进同一句话。 */
+        const sub = S.nest
+          ? "第 " + (S.nest.depth + 1) + " 层 · ×" + nextMulti.toFixed(2) + " · " + nextBellyHint()
+          : LEVELS[S.stage + 1].name + " · ×" + nextMulti.toFixed(2) + " · " + nextBellyHint();
+        drawBtn(B.cont, hiCont, "继续深入", sub, true);
       } else if (ok && last) {
         /* 最后一屏通了 —— **主按钮不再是"收工"**。
          * 原来这里写"全部通关 / 点这里收工"，按下去 = 存档归零 = 没得玩了。
@@ -15082,6 +15796,13 @@ export const GROVE: any = {
   /* GATE 是网格/预览的布局常量：冒烟要用它验"槽位 = 玩法数（无空槽）"和
      "预览区不与网格重叠"，写死数字的断言迟早和界面漂移。 */
   GATE,
+  /* 深巢地形生成器。**必须导出** —— C1~C6 是纯几何题，截图一张都验不出来；
+     设计文档 §6 要求「depth 1..60 × 10 个种子 100% 过校验」，
+     这条只能靠 tools/nest-check.js 直接问生成器。 */
+  NEST, NEST_LIB, nestRand, nestThemeOf, nestBuildRaw, nestCheck, nestSimpleLevel, nestLevel,
+  /* 深巢入口三件：截图脚本要走**真实入口**（enterNest）而不是手工拼关卡 ——
+     手工拼能拍出图，真机那条路却可能一直坏着。 */
+  enterNest, exitNest, readNestDepth,
   FACTIONS,
   /* 测试跳关（F2）。导出是为了**能自动验证**："27 格都点得到、
      点第 N 格真的进第 N 屏、跳关不写存档"这三条只能靠代码问，截图看不出来。

@@ -74,6 +74,20 @@ if (!args.length) { console.log("给个 tag，例如 s1 / clear:3"); process.exi
         S.kills = 9; S.total = 9; S.maxBall = 3; S.time = 41.2;
         S.usedBall = 2; S.bag = 21;
       }, Number(s || 0));
+    } else if (kind === "nestclear") {
+      /* 深巢第 N 层的结算卡（`nestclear:11`）。**先用真实入口 enterNest**，
+         再只把 phase 拨到 clear —— 结算卡读的是 S.nest / S.stat / S.trip，
+         那些必须由真实链路填，手工造一个关卡对象的话，卡上文案是假的。 */
+      await page.evaluate((arg) => {
+        const G = window.GROVE;
+        const d = Number(arg);
+        if (!Number.isFinite(d) || d < 1) throw new Error(`nestclear 只接层号，收到 "${arg}"`);
+        G.enterNest(d);
+        const S = G.S;
+        S.phase = "clear";
+        S.trip.stages = 3;
+        S.belly = Math.max(0, S.belly - 20);
+      }, s === undefined ? 0 : s);
     } else if (kind === "star") {
       /* `star:5` = 第 6 屏的结算卡，**三颗靶三态同屏**：
            金底 ✓ = 这一趟新达成（fresh）
@@ -161,6 +175,18 @@ if (!args.length) { console.log("给个 tag，例如 s1 / clear:3"); process.exi
         /* `portals:1:tip` = 点一下那扇没开的门，验提示条真的画出来 */
         if (parts[1] === "tip") G.enterGate(1);
       }, s === undefined ? "" : s);
+    } else if (kind === "nest") {
+      /* 深巢第 N 层（`nest:7`）。**走真实入口 enterNest** —— 手工拼一个
+         关卡对象喂给 loadLevel 也能出图，但那样拍出来的东西和玩家点门
+         走的那条路是两套代码，"截图能过、真机是坏的"就是这么来的。 */
+      await page.evaluate((arg) => {
+        const G = window.GROVE;
+        const d = Number(arg);
+        if (!Number.isFinite(d) || d < 1) {
+          throw new Error(`nest 场景只接层号（1 起的数字），收到 "${arg}"；写作 nest:7`);
+        }
+        G.enterNest(d);
+      }, a.slice(5));
     } else if (kind === "boss") {
       /* `boss:12` = 第 12 屏，BOSS 站着抬手（断台预告）。
          `boss:20:mud` = 第 20 屏，泥潮预告。

@@ -12383,39 +12383,68 @@ function drawBubble(g, x, y, text, alpha) {
    换的是"我要去哪儿"这个决定重新回到玩家手上。
    ========================================================================== */
 const GATE = {
-  /* 216×256：第一版 340×336 被用户打回 ——「太大了，不需要展示里面的，
-     只需要一个简易的」。门是**选择器**不是海报：名字 + 一笔简笔示意 +
-     当前关卡就够。缩下来还有一层硬收益：玩法以后不止两个，
-     w=216/gap=24 时 3 门 696、4 门 936，960 宽的画布都排得下；
-     340 宽排 3 门就溢出了。 */
-  w: 216, h: 256, gap: 24, y: 196,
+  /* 2026-10-25 第二次打回：「不要全屏 玩法在左上角排列就要可以 给其他玩法预留空间
+     每个玩法需要背景立绘啊」。
+     所以门从"居中的大卡"降级成**左上角的入口网格**：
+       小卡 208×118（16:9），2 列 4 槽 —— 已开 2 个，空槽画虚框「筹备中」，
+       以后加玩法只往槽里填，版式不动。
+     右侧 360 宽留给「当前选中这条路的立绘预览」：小卡只够放名字，
+     "这条路长什么样"必须有地方放大，否则立绘等于没画。
+     216→208 是 16:9 反推的（208/118 = 1.763，立绘画的 768×432 = 1.778，
+     cover 裁掉不到 1%，看不出）。 */
+  w: 208, h: 118, gapX: 14, gapY: 14,
+  x: 88, y: 168, cols: 2, slots: 4,
+  /* 预览卡：y 取 176 不取 168 —— 右上月亮光晕下沿约 168，压上去会被曝光吃掉 */
+  pv: { x: 560, y: 176, w: 360, artH: 203 },
 };
 const GATES = [
   {
     id: "trail",
     name: "苔原古道",
     sub: "27 屏 · 一屏一屏推过去",
+    /* 背景立绘：768×432（16:9，2 倍图），资源在 grove/gate/trail.png。
+       加载失败时 drawGates 回退到简笔 drawTrailArt —— 回退必须看得见，
+       不能静默变成一块空白（这个项目栽过"静默降级"）。 */
+    art: "gate-trail",
     open: true,
   },
   {
     id: "nest",
     name: "深巢无尽",
     sub: "越往下越深 · 每层地形都不一样",
+    art: "gate-nest",
     open: false,
   },
   /* desc 字段已删（2026-10-25 门卡缩型）：小卡只放得下名字 + 一行 sub，
      "门里是什么"由 sub 一句话承担。以后加门照这个字段集来。 */
 ];
 
-/** 第 i 扇门的矩形。和命中判定共用 —— 两处各算一套坐标，改布局必然错开 */
-function gateRect(i) {
-  const total = GATES.length * GATE.w + (GATES.length - 1) * GATE.gap;
-  const x0 = (W - total) / 2;
-  return { x: x0 + i * (GATE.w + GATE.gap), y: GATE.y, w: GATE.w, h: GATE.h };
+/** 出征页的点击出口：小卡和右侧大图是同一个动作。
+ *  点大图没反应会让玩家以为那张图是装饰，而它其实是"这条路长什么样"的
+ *  唯一放大窗口 —— 图看着能点就必须能点。 */
+function gateTap(mx, my) {
+  const i = gateHit(mx, my);
+  if (i >= 0) { enterGate(i); return; }
+  const v = GATE.pv;
+  if (mx >= v.x && mx <= v.x + v.w && my >= v.y && my <= v.y + v.artH + 84) {
+    enterGate(clamp(S.gateCur, 0, GATES.length - 1));
+  }
 }
 
+/** 第 i 个槽的矩形（含**空槽**）。和命中判定共用 —— 两处各算一套坐标，改布局必然错开 */
+function gateRect(i) {
+  const col = i % GATE.cols, row = Math.floor(i / GATE.cols);
+  return {
+    x: GATE.x + col * (GATE.w + GATE.gapX),
+    y: GATE.y + row * (GATE.h + GATE.gapY),
+    w: GATE.w, h: GATE.h,
+  };
+}
+
+/** 命中：**含空槽**。空槽也要有反馈 —— 点了没动静是最差的交互，
+ *  返回的槽号可能 >= GATES.length，由 enterGate 判成「筹备中」。 */
 function gateHit(mx, my) {
-  for (let i = 0; i < GATES.length; i++) {
+  for (let i = 0; i < GATE.slots; i++) {
     const r = gateRect(i);
     if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) return i;
   }
@@ -12434,10 +12463,15 @@ function openGates() {
   S.starBits = loadStarBits();
 }
 
-/** 选一扇门。开着的进对应玩法，关着的说一句话（不静默吞点击）。 */
+/** 选一扇门。开着的进对应玩法，关着/空槽的**必须说一句话**（不静默吞点击）。 */
 function enterGate(i) {
   const p = GATES[i];
-  if (!p) return;
+  if (!p) {
+    /* 空槽（槽号 >= GATES.length）。画面上是「筹备中」的虚框，
+       点了也要有回音 —— 静默吞点击是这个项目反复栽的坑。 */
+    S.gateTip = { txt: "这条路还在筹备 · 先把现有的走透", life: 2.4 };
+    return;
+  }
   if (!p.open) {
     S.gateTip = { txt: p.name + " 还没通，先把古道走完", life: 2.4 };
     return;
@@ -12909,6 +12943,42 @@ function drawNestArt(g, x, y, w, h) {
 }
 
 /** 出征界面 */
+/** 立绘 cover 绘制：按比例铺满目标框，多出的从中心裁掉。
+ *  两张立绘都是 16:9、目标框几乎 16:9，实际裁切不到 1%，
+ *  所以不必给每个用途单独切一张图。 */
+function drawArtCover(g, img, x, y, w, h) {
+  const iw = img.width || 1, ih = img.height || 1;
+  const ir = iw / ih, br = w / h;
+  let sw = iw, sh = ih, sx = 0, sy = 0;
+  if (ir > br) { sw = ih * br; sx = (iw - sw) / 2; }
+  else { sh = iw / br; sy = (ih - sh) / 2; }
+  g.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+}
+
+/** 一格玩法卡的底图：有立绘用立绘，没有就回退简笔。
+ *  **回退必须看得见** —— 静默变空白是这个项目反复栽的坑（美术没解包 /
+ *  路径错位时，玩家只会看到一块黑，而没人知道是资源问题）。 */
+function drawGateArt(g, p, x, y, w, h) {
+  const img = p.art ? ART[p.art] : null;
+  g.save();
+  rr(g, x, y, w, h, 12);
+  g.clip();
+  if (img) drawArtCover(g, img, x, y, w, h);
+  else if (p.id === "trail") drawTrailArt(g, x, y, w, h);
+  else if (p.id === "nest") drawNestArt(g, x, y, w, h);
+  else { g.fillStyle = "#1A2E2A"; g.fillRect(x, y, w, h); }
+  /* 没开放的玩法只**在图上**盖一层薄纱，不整张卡压暗 ——
+     整卡压暗后立绘变成一团黑，这张画就白出了；而文字压暗会让
+     "深巢无尽"四个字都读不出来，玩家不知道这条路后面是什么。
+     纱只给 16%：深巢那张立绘本就是暗紫，30% 时在 208 宽的小卡里
+     只剩几颗蘑菇点，等于没画。 */
+  if (!p.open) {
+    g.fillStyle = "rgba(8,14,20,.16)";
+    g.fillRect(x, y, w, h);
+  }
+  g.restore();
+}
+
 function drawGates(g) {
   const FONT = "'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
   const HZ = 470;
@@ -12923,14 +12993,14 @@ function drawGates(g) {
   g.fillText("出征", 88, 56);
   g.fillStyle = "rgba(200,222,200,.60)";
   g.font = "13.5px " + FONT;
-  g.fillText("挑一道门走 · 门里的打法不一样", 88, 90);
+  g.fillText("挑一条路走 · 路上的打法不一样", 88, 90);
 
-  /* 这趟的手牌（通到哪 / 星靶多少）挂在标题下面**左侧**，不放右上角：
+  /* 这趟的手牌（通到哪 / 摘了多少星）挂在标题下面**左侧**，不放右上角：
      右上角是月亮（816,94 半径 74 的光晕）—— 数字放那儿会被曝光吃掉，
-     第一版就是这样，"星靶 32 / 81" 前半截全是白的，读不出来。 */
+     第一版就是这样，"摘星星 32 / 81" 前半截全是白的，读不出来。 */
+  let done = 0;
+  for (let i = 0; i < LEVELS.length; i++) if (S.best[i]) done++;
   {
-    let done = 0;
-    for (let i = 0; i < LEVELS.length; i++) if (S.best[i]) done++;
     let gotStar = 0;
     if (S.starBits) {
       for (let i = 0; i < S.starBits.length; i++)
@@ -12946,104 +13016,145 @@ function drawGates(g) {
     g.fillText("·  已通 " + done + " / " + LEVELS.length + " 屏", 196, 120);
   }
 
-  const focus = S.hoverGate >= 0 ? S.hoverGate : S.gateCur;
+  const focus = clamp(S.hoverGate >= 0 ? S.hoverGate : S.gateCur, 0, GATES.length - 1);
 
-  for (let i = 0; i < GATES.length; i++) {
+  /* ---------- 左上角：玩法入口网格 ----------
+   * 4 个槽，已做的填前面，剩下的画成虚线「新的路还在修」。
+   * 空槽不是装饰：它明确回答"以后加玩法往哪儿放"，也让玩家知道
+   * 这游戏还有东西没挖出来（比留一片纯空好看，也不用改版式）。 */
+  for (let i = 0; i < GATE.slots; i++) {
     const r = gateRect(i);
     const p = GATES[i];
-    const on = i === focus && p.open;
 
-    // 卡底：深色玻璃
-    g.fillStyle = "rgba(18,34,32,.78)";
-    rr(g, r.x, r.y, r.w, r.h, 20);
-    g.fill();
-    g.strokeStyle = on ? "#F0A81E" : "rgba(160,200,180,.26)";
-    g.lineWidth = on ? 2.6 : 1.6;
-    rr(g, r.x, r.y, r.w, r.h, 20);
-    g.stroke();
-
-    // 概念图：圆角裁剪，只占卡片上半（简笔示意，112 高就够——门是选择器不是海报）
-    const artH = 112;
-    g.save();
-    g.beginPath();
-    /* 只圆上面两个角：下面接着卡身，圆下角会露出一道缝 */
-    const k = 18;
-    g.moveTo(r.x + k, r.y);
-    g.lineTo(r.x + r.w - k, r.y);
-    g.quadraticCurveTo(r.x + r.w, r.y, r.x + r.w, r.y + k);
-    g.lineTo(r.x + r.w, r.y + artH);
-    g.lineTo(r.x, r.y + artH);
-    g.lineTo(r.x, r.y + k);
-    g.quadraticCurveTo(r.x, r.y, r.x + k, r.y);
-    g.closePath();
-    g.clip();
-    if (p.id === "trail") drawTrailArt(g, r.x, r.y, r.w, artH);
-    else drawNestArt(g, r.x, r.y, r.w, artH);
-    /* 没开放的门只**在图上**盖一层薄纱，不整张卡压暗 ——
-       整卡压暗后概念图变成一团黑，这张图就白画了；而文字压暗会让
-       "深巢无尽"四个字都读不出来，玩家不知道这扇门后面是什么。
-       第一版就是整卡 dim 0.62，截图里只剩一个黑框。 */
-    if (!p.open) {
-      g.fillStyle = "rgba(8,14,20,.30)";
-      g.fillRect(r.x, r.y, r.w, artH);
+    if (!p) {
+      g.save();
+      g.setLineDash([7, 6]);
+      g.strokeStyle = "rgba(160,200,180,.24)";
+      g.lineWidth = 1.6;
+      rr(g, r.x, r.y, r.w, r.h, 12);
+      g.stroke();
+      g.restore();
+      g.textAlign = "center";
+      g.fillStyle = "rgba(200,222,200,.32)";
+      g.font = "12.5px " + FONT;
+      g.fillText("新的路还在修", r.x + r.w / 2, r.y + r.h / 2);
+      continue;
     }
-    g.restore();
 
-    // 概念图底部压一条暗边，让标题区压得住（不然木色地面直接顶到字上）
-    /* 渐变终点对齐卡身色（rgba(18,34,32)）：终点用更暗的色会在图与卡身
-       之间留一条硬分界，缩型后卡片小，那条缝比大字版更显眼。 */
-    const fade = g.createLinearGradient(0, r.y + artH - 36, 0, r.y + artH);
-    fade.addColorStop(0, "rgba(18,34,32,0)");
-    fade.addColorStop(1, "rgba(18,34,32,.92)");
+    drawGateArt(g, p, r.x, r.y, r.w, r.h);
+
+    /* 底部压暗：名字直接压在立绘上。第一版只压 58px、终点 .92，
+       苔原那张的草地太亮，白字"苔原古道"读起来是糊的 —— 加深到 70px
+       并在 55% 处就压到 .72，让字有一层真正的中灰底而不是"亮图上一层薄雾"。 */
+    const fade = g.createLinearGradient(0, r.y + r.h - 70, 0, r.y + r.h);
+    fade.addColorStop(0, "rgba(10,20,18,0)");
+    fade.addColorStop(0.55, "rgba(10,20,18,.72)");
+    fade.addColorStop(1, "rgba(10,20,18,.97)");
     g.fillStyle = fade;
-    g.fillRect(r.x, r.y + artH - 36, r.w, 36);
+    g.fillRect(r.x, r.y + r.h - 70, r.w, 70);
 
     g.textAlign = "left";
     g.fillStyle = "#F2F7EE";
-    g.font = "bold 18px " + FONT;
-    g.fillText(p.name, r.x + 20, r.y + 138);
+    g.font = "bold 15.5px " + FONT;
+    g.fillText(fitText(g, p.name, r.w - 28), r.x + 14, r.y + r.h - 30);
 
-    g.fillStyle = "rgba(200,222,200,.62)";
-    g.font = "12px " + FONT;
-    g.fillText(fitText(g, p.sub, r.w - 40), r.x + 20, r.y + 162);
+    g.fillStyle = p.open ? "rgba(200,222,200,.80)" : "rgba(240,200,120,.86)";
+    g.font = "bold 11.5px " + FONT;
+    g.fillText(p.open
+      ? (done > 0 ? "推到第 " + Math.min(done + 1, LEVELS.length) + " / " + LEVELS.length + " 屏" : "还没出发")
+      : "即将开放", r.x + 14, r.y + r.h - 12);
 
-    // 状态行
-    if (p.id === "trail") {
-      let done = 0;
-      for (let j = 0; j < LEVELS.length; j++) if (S.best[j]) done++;
-      /* 「当前关卡」直接写在门上（用户要求）：进度条 + 已通到第几屏。
-         216 宽的门里进度条 176、文字压 y+218，离卡底（256）还有 38。 */
-      const bw = r.w - 40, bx = r.x + 20, by = r.y + 192;
-      g.fillStyle = "rgba(160,200,180,.20)";
-      rr(g, bx, by, bw, 8, 4);
+    // 描边最后画：压在图上，选中那格一眼看得出来
+    g.strokeStyle = i === focus ? "#F0A81E" : "rgba(160,200,180,.30)";
+    g.lineWidth = i === focus ? 2.4 : 1.4;
+    rr(g, r.x, r.y, r.w, r.h, 12);
+    g.stroke();
+  }
+
+  /* ---------- 右侧：当前选中这条路的立绘预览 ----------
+   * 小卡只放得下名字，"这条路长什么样"必须有地方放大 ——
+   * 否则立绘等于只画了一半（用户要求的就是立绘）。
+   * 预览卡本身可点：点大图进和点小卡进是同一个动作。 */
+  {
+    const v = GATE.pv, p = GATES[focus];
+    if (p) {
+      const vh = v.artH + 84;
+      g.fillStyle = "rgba(18,34,32,.74)";
+      rr(g, v.x, v.y, v.w, vh, 18);
       g.fill();
-      g.fillStyle = "#7FC24A";
-      rr(g, bx, by, Math.max(4, bw * done / LEVELS.length), 8, 4);
-      g.fill();
-      g.fillStyle = "rgba(200,222,200,.78)";
-      g.font = "bold 12.5px " + FONT;
-      g.fillText(done > 0
-        ? "推到第 " + Math.min(done + 1, LEVELS.length) + " / " + LEVELS.length + " 屏"
-        : "还没出发", bx, by + 26);
-    } else {
-      /* 没开放的门也要把"门后面是什么"说清楚，否则这张卡只剩一个
-         "即将开放"的标签，玩家不会期待它 */
-      g.fillStyle = "rgba(240,200,90,.16)";
-      rr(g, r.x + 20, r.y + 196, 92, 25, 12);
-      g.fill();
-      g.fillStyle = "#F0C060";
-      g.font = "bold 12px " + FONT;
-      g.textAlign = "center";
-      g.fillText("即将开放", r.x + 66, r.y + 209);
+
+      g.save();
+      g.beginPath();
+      /* 只圆上面两个角：下面接着卡身，圆下角会露出一道缝 */
+      const k = 16;
+      g.moveTo(v.x + k, v.y);
+      g.lineTo(v.x + v.w - k, v.y);
+      g.quadraticCurveTo(v.x + v.w, v.y, v.x + v.w, v.y + k);
+      g.lineTo(v.x + v.w, v.y + v.artH);
+      g.lineTo(v.x, v.y + v.artH);
+      g.lineTo(v.x, v.y + k);
+      g.quadraticCurveTo(v.x, v.y, v.x + k, v.y);
+      g.closePath();
+      g.clip();
+      drawGateArt(g, p, v.x, v.y, v.w, v.artH);
+      g.restore();
+
+      // 立绘底压一条暗边，让名字压得住
+      const vf = g.createLinearGradient(0, v.y + v.artH - 40, 0, v.y + v.artH);
+      vf.addColorStop(0, "rgba(18,34,32,0)");
+      vf.addColorStop(1, "rgba(18,34,32,.94)");
+      g.fillStyle = vf;
+      g.fillRect(v.x, v.y + v.artH - 40, v.w, 40);
+
+      const ty = v.y + v.artH;
       g.textAlign = "left";
-      g.fillStyle = "rgba(200,222,200,.46)";
+      g.fillStyle = "#F2F7EE";
+      g.font = "bold 21px " + FONT;
+      g.fillText(p.name, v.x + 22, ty + 22);
+
+      g.fillStyle = "rgba(200,222,200,.66)";
       g.font = "12px " + FONT;
-      g.fillText("正在挖", r.x + 122, r.y + 209);
+      g.fillText(fitText(g, p.sub, v.w - 44), v.x + 22, ty + 42);
+
+      if (p.open) {
+        /* 条与文字都往上收 4px：第一版文字基线 ty+76、卡底 ty+84，
+           实测只剩 3px 余量，进度条看着像贴在卡沿上。 */
+        const bw = v.w - 44, bx2 = v.x + 22, by2 = ty + 51;
+        g.fillStyle = "rgba(160,200,180,.20)";
+        rr(g, bx2, by2, bw, 7, 4);
+        g.fill();
+        g.fillStyle = "#7FC24A";
+        rr(g, bx2, by2, Math.max(4, bw * done / LEVELS.length), 7, 4);
+        g.fill();
+        g.fillStyle = "rgba(200,222,200,.80)";
+        g.font = "bold 11.5px " + FONT;
+        g.fillText(done > 0
+          ? "推到第 " + Math.min(done + 1, LEVELS.length) + " / " + LEVELS.length + " 屏"
+          : "还没出发 · 第 1 / " + LEVELS.length + " 屏", bx2, ty + 72);
+      } else {
+        /* 没开放的玩法也要把"后面是什么"说清楚，否则这张卡只剩一个
+           "即将开放"的标签，玩家不会期待它 */
+        g.fillStyle = "rgba(240,200,90,.16)";
+        rr(g, v.x + 22, ty + 50, 92, 24, 12);
+        g.fill();
+        g.textAlign = "center";
+        g.fillStyle = "#F0C060";
+        g.font = "bold 12px " + FONT;
+        g.fillText("即将开放", v.x + 68, ty + 62);
+        g.textAlign = "left";
+        g.fillStyle = "rgba(200,222,200,.46)";
+        g.fillText("正在挖", v.x + 122, ty + 62);
+      }
+
+      g.strokeStyle = "rgba(160,200,180,.22)";
+      g.lineWidth = 1.4;
+      rr(g, v.x, v.y, v.w, vh, 18);
+      g.stroke();
     }
   }
 
-  /* 提示条（点没开放的门时）。卡片底 474、底部提示 558，中间这 84px
-     刚好放一条 —— 放画面上方会被标题抢走注意力，放最底会和操作提示叠。 */
+  /* 提示条（点没开放的门 / 空槽时）。网格底 418、底部提示 558，中间放一条；
+     放画面上方会被标题抢走注意力，放最底会和操作提示叠。 */
   if (S.gateTip.life > 0) {
     const a = clamp(S.gateTip.life / 0.4, 0, 1) * clamp((2.4 - S.gateTip.life) / 0.14, 0, 1);
     g.globalAlpha = a;
@@ -13062,7 +13173,7 @@ function drawGates(g) {
   g.textAlign = "center";
   g.fillStyle = "rgba(200,222,200,.46)";
   g.font = "11.5px " + FONT;
-  g.fillText("点一道门进去   ·   方向键挑   ·   Enter 进   ·   ESC 回主界面", W / 2, H - 42);
+  g.fillText("点一张卡进去   ·   方向键挑   ·   Enter 进   ·   ESC 回主界面", W / 2, H - 42);
 }
 
 function drawPick(g) {
@@ -15232,8 +15343,7 @@ cv.addEventListener("mousedown", (ev) => {
     return;
   }
   if (S.phase === "portals") {
-    const i = gateHit(loc.x, loc.y);
-    if (i >= 0) enterGate(i);
+    gateTap(loc.x, loc.y);
     return;
   }
   /* 挑一屏：锁着的格子**点不动**，但点上去不弹提示 —— 格子上已经写着
@@ -15278,8 +15388,7 @@ cv.addEventListener("touchstart", (ev) => {
     pickTap(mx, my);
     return;
   }
-  const i = gateHit(mx, my);
-  if (i >= 0) enterGate(i);
+  if (S.phase === "portals") { gateTap(mx, my); return; }
 }, { passive: false });
 
 /* ---------- 启动 ---------- */
@@ -15540,7 +15649,10 @@ window.GROVE = {
   drawAsk, askHit, askRect, askBtns, pickTap,
   /* 出征页：drawGates 给截图器，gateHit/enterGate/openGates
      给冒烟验"点开着的门进玩法、点没开的门不静默吞" */
-  drawGates, gateHit, gateRect, enterGate, openGates, GATES,
+  drawGates, gateHit, gateRect, gateTap, enterGate, openGates, GATES,
+  /* GATE 是网格/预览的布局常量：冒烟要用它验"槽位比玩法多（预留）"和
+     "预览区不与网格重叠"，写死数字的断言迟早和界面漂移。 */
+  GATE,
   PICK, FACTIONS, RANK_COLOR,
   /* 测试跳关（F2）。导出是为了**能自动验证**："27 格都点得到、
      点第 N 格真的进第 N 屏、跳关不写存档"这三条只能靠代码问，截图看不出来。

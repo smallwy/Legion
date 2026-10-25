@@ -41,6 +41,9 @@ if (!args.length) { console.log("给个 tag，例如 s1 / clear:3"); process.exi
       "head-cat", "head-dog", "head-ham", "head-rab", "head-ox", "head-fox",
       "ui-arrow", "ui-belly", "ui-btn", "ui-coin", "ui-cream", "ui-pip",
       "ui-pip-on", "ui-prog", "ui-res", "ui-ring", "ui-star", "ui-tip",
+      /* 出征页的玩法立绘（768×432）。少了这两张，出征页会走简笔回退分支，
+         截出来和真机不是一个东西。 */
+      "gate-trail", "gate-nest",
     ];
     /* 资源按用途分目录：pet-cat -> grove/pet/cat.png。
        只替换第一个 '-'，'ui-pip-on' 才会变成 ui/pip-on 而不是 ui/pip/on。 */

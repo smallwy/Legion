@@ -4334,23 +4334,84 @@ console.log("\n=== 41. 出征页：两扇门 / 点开着的门进玩法 / 没开
     eq(P.S.phase, "portals", "越界门号不崩也不放行");
   }
 
-  /* ---- E. 真的画了 ---- */
-  ok(/if \(p\.id === "trail"\) drawTrailArt\(g, r\.x, r\.y, r\.w, artH\);/.test(src41),
-     "★ 苔原那张概念图真的被调用");
-  ok(/else drawNestArt\(g, r\.x, r\.y, r\.w, artH\);/.test(src41),
-     "★ 深巢那张概念图真的被调用");
+  /* ---- E. 真的画了 ----
+     2026-10-25 第三版：门卡从"居中大卡 + 概念图"改成"左上角入口网格 +
+     右侧立绘预览"。这里钉的是**立绘这条链**：字段有、清单里加载、
+     绘制侧真的 cover 画出来、没图时回退简笔（回退必须看得见）。 */
+  ok(/function drawGateArt\(g, p, x, y, w, h\)[\s\S]{0,400}const img = p\.art \? ART\[p\.art\] : null;/.test(src41),
+     "★ 玩法卡真的去取 p.art 那张立绘");
+  ok(/function drawArtCover\(g, img, x, y, w, h\)[\s\S]{0,400}g\.drawImage\(img, sx, sy, sw, sh, x, y, w, h\);/.test(src41),
+     "★ 立绘按 cover 铺满（不 cover 会被拉成扁图）");
+  ok(/if \(img\) drawArtCover\(g, img, x, y, w, h\);/.test(src41),
+     "立绘优先");
+  ok(/else if \(p\.id === "trail"\) drawTrailArt\(g, x, y, w, h\);/.test(src41),
+     "★ 没图时回退简笔（静默变空白是这个项目的经典病）");
+  ok(/else if \(p\.id === "nest"\) drawNestArt\(g, x, y, w, h\);/.test(src41),
+     "深巢同样有回退");
   ok(/drawNightSky\(g, S\.t, HZ\)/.test(src41) && /drawNightSky\(g, T, HZ\)/.test(src41),
      "★ 夜空由出征页与门口共用一份（两处各画一遍必然漂移）");
   ok(/drawTrailArt[\s\S]{0,800}g\.arc\(x \+ w \* 0\.30, gy - 10, 8/.test(src41),
-     "★ 苔原简笔图里有球（这条线唯一要做的动作）——2026-10-25 用户打回精细版，概念图改简笔");
+     "苔原简笔回退图里有球（这条线唯一要做的动作）");
   ok(/drawNestArt[\s\S]{0,2000}const dim = 1 - i \* 0\.18;/.test(src41),
      "深巢概念图逐层变暗（\"越往下越深\"必须画出来）");
-  ok(/if \(!p\.open\) \{\s*\n\s*g\.fillStyle = "rgba\(8,14,20,\.30\)";/.test(src41),
+  ok(/if \(!p\.open\) \{\s*\n\s*g\.fillStyle = "rgba\(8,14,20,\.[0-9]+\)";/.test(src41),
      "★ 没开放的门只给图加纱、不整卡压暗（压暗后图和字一起读不出来）");
   ok(/g\.fillText\(S\.gateTip\.txt, W \/ 2, 512\)/.test(src41),
      "★ 提示条真的被画出来（不是只写进 S）");
   ok(/S\.phase === "portals" && S\.gateTip\.life > 0\) S\.gateTip\.life -= dt/.test(src41),
      "提示条自己衰减（挂在 S.say 上会永不消失：那段走钟只在 play 里跑）");
+
+  /* ---- E2. 左上角网格 + 预留空槽 + 右侧预览（用户第三轮要求） ---- */
+  {
+    for (const g of G41) {
+      ok(!!g.art, `${g.id} 有背景立绘的 ART key`);
+    }
+    /* 立绘清单真的加载了这两张（路径写错不会报错，只会静默回退） */
+    const gb41b = fs.readFileSync(
+      path.join(__dirname, "..", "assets", "scripts", "grove", "GroveBattle.ts"), "utf8");
+    for (const g of G41) {
+      ok(gb41b.indexOf("'" + g.art + "'") >= 0,
+         `★ ${g.art} 在 ART_MANIFEST 里（不进清单 = 真机永远看不到立绘）`);
+    }
+    /* 网格：2 列、槽位 > 玩法数（预留），空槽不与真实卡重叠 */
+    eq(P.GATE.cols, 2, "2 列网格");
+    ok(P.GATE.slots > G41.length, "槽位比玩法多（给后面加玩法预留位置）",
+       `slots ${P.GATE.slots} vs 玩法 ${G41.length}`);
+    const rs = [];
+    for (let i = 0; i < P.GATE.slots; i++) rs.push(P.gateRect(i));
+    for (let i = 0; i < rs.length; i++) {
+      ok(rs[i].x >= 0 && rs[i].x + rs[i].w <= CW && rs[i].y + rs[i].h <= CH,
+         `槽 ${i} 在画布里`);
+      for (let j = i + 1; j < rs.length; j++) {
+        ok(rs[i].x + rs[i].w <= rs[j].x || rs[j].x + rs[j].w <= rs[i].x ||
+           rs[i].y + rs[i].h <= rs[j].y || rs[j].y + rs[j].h <= rs[i].y,
+           `槽 ${i} 与槽 ${j} 不重叠`);
+      }
+    }
+    /* 左上角：网格必须压在标题下面、画面左半边 */
+    ok(rs[0].x < CW / 2 && rs[0].y < CH / 2, "网格从左上角开始",
+       `${rs[0].x},${rs[0].y}`);
+    /* 右侧预览区不与网格重叠、在画布里 */
+    const pv = P.GATE.pv;
+    ok(pv.x >= rs[1].x + rs[1].w, "预览区在网格右侧", `pv.x ${pv.x}`);
+    ok(pv.x + pv.w <= CW && pv.y + pv.artH + 84 <= CH, "预览区在画布里");
+    /* 空槽点了要有回音 */
+    const emptyIdx = G41.length;
+    eq(P.gateHit(P.gateRect(emptyIdx).x + 10, P.gateRect(emptyIdx).y + 10), emptyIdx,
+       "★ 空槽命中（不是 point 不到的死区）");
+    P.openGates();
+    P.S.gateTip = { txt: "", life: 0 };
+    P.enterGate(emptyIdx);
+    eq(P.S.phase, "portals", "点空槽不放人进去");
+    ok(P.S.gateTip.txt && P.S.gateTip.life > 0, "★ 点空槽有话说（不静默吞点击）",
+       P.S.gateTip.txt);
+    /* 右侧大图可点：点它 = 进当前选中的玩法 */
+    P.openGates();
+    P.S.gateCur = 0;
+    P.S.progress = 0;
+    P.gateTap(pv.x + pv.w / 2, pv.y + 40);
+    eq(P.S.phase, "pick", "★ 点右侧大立绘 = 进当前这条路的玩法（图看着能点就必须能点）");
+  }
 
   /* ---- F. 入口与退路（键盘/启动没法派发事件，走源码断言） ---- */
   ok(/else if \(FROM_HOME\) \{ S\.progress = st >= 0 \? st : LEVELS\.length; openGates\(\); \}/.test(src41),

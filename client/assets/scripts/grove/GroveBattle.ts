@@ -149,6 +149,10 @@ const ART_MANIFEST: ReadonlyArray<readonly [string, string]> = [
     ['ui-ring', 'grove/ui/ring'],
     ['ui-star', 'grove/ui/star'],
     ['ui-arrow', 'grove/ui/arrow'],
+    /* 出征页的玩法立绘（768×432，16:9）。缺了不白屏 —— 出征页会回退到
+       简笔概念图，但那样和设计稿差得远，所以这四条要和 GATES[].art 同名同数。 */
+    ['gate-trail', 'grove/gate/trail'],
+    ['gate-nest', 'grove/gate/nest'],
 ];
 
 @ccclass('GroveBattle')

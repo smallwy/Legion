@@ -4184,6 +4184,28 @@ console.log("\n=== 40. 出征页交互：点门直达当前进度 / 没开的门
   ok(!!P.S.nest && P.S.nest.depth >= 1, "★ 进的是深巢（S.nest 立起来）", JSON.stringify(P.S.nest));
   eq(P.S.progress, 5, "★ 深巢不动主线进度（层号与屏序是两条轴）");
   eq(P.S.stage, 0, "深巢只有当前一层，stage 恒 0");
+  /* ---- B2. 墙宽跟着关卡换（2026-10-25：活动区砍到 640）----
+     深巢的物理墙必须是 NEST.L..NEST.R（640），回主线必须还原成 26..934。
+     这条错了不会报错、也不会崩，只会**静静地把主线变成窄路** ——
+     玩家看到的是"球在离右缘 134px 的地方撞了一下空气墙"。
+     所以两个方向都要钉一次，而不是只验进深巢。 */
+  eq(P.WALL_L, P.NEST.L, "★ 深巢的墙 = 井左缘（640 而不是 908）");
+  eq(P.WALL_R, P.NEST.R, "★ 深巢的墙 = 井右缘");
+  eq(P.NEST.R - P.NEST.L, 640, "★ 活动区 640（用户拍板）");
+  {
+    /* 深巢几何里的每一件都在井内 —— 出井 = 球和人永远够不到 */
+    const L = P.curStage();
+    const bad = [];
+    for (const q of L.plats) if (q.x < P.WALL_L || q.x + q.w > P.WALL_R) bad.push("台" + q.x);
+    for (const q of L.plats.filter(q => q.kind === "ground")) {
+      if (q.x !== P.WALL_L || q.w !== P.WALL_R - P.WALL_L) bad.push("地面没铺满井");
+    }
+    ok(bad.length === 0, "★ 深巢的台与地面都在井内", bad.join("/"));
+  }
+  P.openGates();
+  eq(P.WALL_L, 26, "★ 回出征页墙还原成主线左墙（漏还原 = 主线变窄路）");
+  eq(P.WALL_R, 934, "★ 回出征页墙还原成主线右墙");
+
   /* 未开放分支必须**留着**：以后还会加门（星靶 / 图鉴入口），
      那一句提示是"点了没动静"的唯一解药。 */
   ok(/if \(!p\.open\)/.test(src40) && /还没挖通/.test(src40),
@@ -4191,6 +4213,16 @@ console.log("\n=== 40. 出征页交互：点门直达当前进度 / 没开的门
   ok(!P.S.say.txt || P.S.say.txt.indexOf("还没挖通") < 0,
      "★ 提示**不走 S.say**：那句是玩家头顶的气泡，出征页没有玩家对象，写了永远看不见");
   P.openGates();
+
+  /* ---- B3. 进出征页谁也不放大（2026-10-25 第七次）----
+     用户原话：「一进去不放大呀 鼠标放上去才放大 你怎么擅作主张呢」。
+     上一版 drawGates 里写了 `hoverGate >= 0 ? hoverGate : gateCur` 的兜底，
+     意思是"指针不在就当选中 gateCur 那张" —— 结果一进页面第一张就是大的。
+     **放大是反馈（回答"我指着哪张"），不是状态展示**；没有指针就没有答案。
+     这条断言钉的是"状态"这一半，另一半（真的移动鼠标才亮）在源码里判。 */
+  eq(P.S.hoverGate, -1, "★ 进出征页一张卡都不放大（没有指针就没有焦点）");
+  ok(!/: S\.gateCur/.test(src40) && /const focus = S\.hoverGate;/.test(src40),
+     "★ 焦点只由 hoverGate 决定（不能再有 gateCur 兜底）");
 
   /* ---- C. 预览卡已删（2026-10-25 第六次）----
      用户原话：「鼠标放在上面原图就放大就可以了啊」。整页现在只有卡可点，

@@ -173,7 +173,11 @@ def main():
     # 对象字面量 `window.GROVE.CARD = {...}`。后者不在循环里，
     # 漏掉的话 Cocos 侧会去给一个不存在的 window.GROVE 赋值。
     body = must(body, 'window.GROVE.CARD =', 'GROVE.CARD =')
-    for k in ('GROUND_Y', 'WALL_L', 'WALL_R'):
+    # WALL_L / WALL_R 2026-10-25 起是**变量**（深巢 640 井会改它们），
+    # 导出口改成了 `Object.defineProperty(..., {get})`，由上面那行统一处理。
+    # 留在这里的 must 会让抽取直接失败 —— 那也是它该做的事：
+    # 锚点消失时宁可报错，也不要静默抽出一份"墙永远 26/934"的运行时。
+    for k in ('GROUND_Y',):
         body = must(body, 'window.GROVE.%s = %s;' % (k, k), 'GROVE.%s = %s;' % (k, k))
 
     # ③ 回主界面 -> 钩子

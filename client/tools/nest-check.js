@@ -45,7 +45,29 @@ for (let d = 1; d <= MAX_DEPTH; d++) {
        `第 ${d} 层地面段数 = 1`);
     ok(L.spawn.y === 556 && Math.abs(L.camp.y - 556) < 0.01,
        `第 ${d} 层出生点/营地在 GROUND_Y`);
-    ok(L.spawn.x > 26 && L.spawn.x < 934, `第 ${d} 层出生点在墙内`);
+    /* ---- 井内断言（2026-10-25：活动区砍到 640）----
+       这是这一版最容易被"悄悄改坏"的约束：任何一件东西的 x 落到
+       井外（26..160 或 800..934），物理上都拿不到它 —— 球被夹在
+       WALL_L..WALL_R 之间，人也是。画面上它还在那儿（背景照画），
+       表现就是"这层的营地推不进球"或者"有个敌人永远打不到"。
+       所以生成器每一样都要钉在井内，且用 NEST.L/R 判，不用 26/934。 */
+    const NL = G.NEST.L, NR = G.NEST.R;
+    ok(NR - NL === 640, `第 ${d} 层井宽 640`);
+    {
+      const out = [];
+      for (const p of L.plats) if (p.x < NL || p.x + p.w > NR) out.push("台 " + p.x + "+" + p.w);
+      for (const p of L.pits) if (p.x < NL || p.x + p.w > NR) out.push("坑 " + p.x + "+" + p.w);
+      for (const r of L.ramps) if (r.x < NL || r.x + r.w > NR) out.push("坡 " + r.x + "+" + r.w);
+      if (L.camp.x < NL || L.camp.x + L.camp.w > NR) out.push("营地 " + L.camp.x);
+      if (L.spawn.x < NL || L.spawn.x > NR) out.push("出生点 " + L.spawn.x);
+      for (const w of L.waves) for (const f of w) {
+        if (f.x < NL || f.x > NR) out.push("敌人 " + f.foe + "@" + f.x);
+      }
+      ok(out.length === 0, `第 ${d} 层全部几何在 640 井内`, out.join(" / "));
+    }
+    /* 地面段恒等于井（少一段就有"看着是地、其实是空的"的死亡区） */
+    ok(L.plats[0].x === NL && L.plats[0].w === 640, `第 ${d} 层地面 = 井宽`);
+    ok(L.spawn.x >= NL && L.spawn.x <= NR, `第 ${d} 层出生点在井内`);
     ok(L.waves.length >= 2, `第 ${d} 层至少两波（小怪 + BOSS）`);
     ok(JSON.stringify(L.waves[L.waves.length - 1].map(f => f.foe)) === '["boss"]',
        `第 ${d} 层最后一波是 BOSS`);

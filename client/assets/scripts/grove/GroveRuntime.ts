@@ -405,7 +405,13 @@ const FOES = {
    ========================================================================== */
 
 const GROUND_Y = 556;
-const WALL_L = 26, WALL_R = 934;
+/* 左右逻辑墙。**主线是常量值，但变量本身必须是 let** ——
+   深巢的活动区是 640（见 NEST.W），墙要跟着往内缩。
+   全程只有两个写入点：`applyWalls()` 一个函数，`loadLevel` 调它。
+   散在别处赋值的话，"从深巢回主线"早晚漏一次，主线就会变成一条
+   两端各少 134px 的窄路，而那种错在截图上看不出来（背景还是满屏的）。 */
+const WIDE_L = 26, WIDE_R = 934;
+let WALL_L = WIDE_L, WALL_R = WIDE_R;
 
 /* ============================================================================
    空间语法 · 一：地面材质带（N1 地脉）
@@ -2410,6 +2416,20 @@ const LEVELS = [
    ========================================================================== */
 
 const NEST = {
+  /* 活动区宽度。主线是 WALL_L 26 → WALL_R 934，可走 908；深巢砍到 **640**
+     （用户 2026-10-25 拍板「活动区砍到 640」）。
+     砍下来的 268 分到两侧岩壁（各 134），不是靠边站 —— 井居中，镜像后
+     还是自己（(960-800)=160、960-160=800），所以 nestMirror 的
+     `x' = W - x - w` 在井坐标系里仍然成立。
+     为什么"窄"是深巢的立身之本：主线的乐趣是**长途**（把兽从 x=90 推到
+     x=852，600px 的规划），深巢反过来 —— 494px 的推送距离里塞 3~5 个坑
+     和两层台，一球卷三只靠的不是滚得远，是**选顺序**。
+     同一个推力参数，两套距离 = 两种游戏。 */
+  W: 640,
+  /* 井的左缘 / 右缘。生成器全用这两个，不用全局 WALL_L/WALL_R ——
+     生成发生在 enterNest 里，那时墙还没切过来，读全局会拿到主线值。 */
+  get L() { return Math.round((W - this.W) / 2); },      // 160
+  get R() { return this.L + this.W; },                   // 800
   /* 三层的 y 与主线**同一套**三段台阶。改这里 = 造新物理几何，
      C1/C2 的判定和所有机器人口径全部失效 —— 不许改。 */
   LAYERS: [462, 350, 248],
@@ -2466,6 +2486,27 @@ function nestThemeOf(depth, R) {
   return pool[(depth + Math.floor(R() * pool.length)) % pool.length];
 }
 
+/** 把主线坐标的台子搬进 640 井里：**位置按比例缩，宽度原样保留**。
+ *
+ *  为什么宽度不缩：台宽决定"上面站不站得下一只虫"（席位要 140），
+ *  按 640/908 = 0.70 缩的话，350/248 层那些 154 / 174 的台会变成
+ *  108 / 122，一只都站不下 —— 而这两层本来就是靠宽度承接弹道的。
+ *
+ *  为什么位置按比例：库里的台有一个真实分布（大量贴着左墙 x=26、
+ *  少数在中段），按 rel = (x-26)/908 映射能把这个分布原样带过来。
+ *  直接 clamp 的话所有贴墙的台会全部堆在井左缘，一层里三块台叠在一起。
+ *
+ *  宽度上限 `NEST.W - 80`：留两侧各 40。**不能取到 W-40** —— 那样
+ *  794 那种整条长台会变成"左右都贴墙"，撞上 C3 顶死墙角，从此每层
+ *  都被重抽掉。560 = 640-80 是"能当长球道、但左右至少各留 40"的值。 */
+function nestFit(x, w) {
+  const cap = NEST.W - 80;
+  const ww = Math.min(w, cap);
+  const slack = NEST.W - 40 - ww;                       // >= 40
+  const rel = clamp((x - WIDE_L) / (WIDE_R - WIDE_L), 0, 1);
+  return { x: Math.round(NEST.L + 20 + rel * slack), w: Math.round(ww) };
+}
+
 /** 整屏镜像：x' = W - x - w。WALL_L/WALL_R 与地面段完全对称，
  *  所以镜像后一片台都不会出画 —— 这就是它"物理风险为零"的原因。 */
 function nestMirror(L) {
@@ -2496,11 +2537,15 @@ function nestBuildRaw(depth, seed) {
   const pick = (arr) => arr[Math.floor(R() * arr.length)];
 
   const theme = nestThemeOf(depth, R);
-  const campX = WALL_R - NEST.CAMP_W;
-  const spawnX = 90;
+  /* 营地贴**井**右壁，不是贴画面右缘 —— 640 之后这两件事差 134px。
+     写 WALL_R 的话营地会掉到井外，球永远推不到（而画面上营地还在那儿）。 */
+  const campX = NEST.R - NEST.CAMP_W;
+  /* 出生点离井左壁 64 = 人宽 46 + 18 呼吸。写死 90 的话，
+     地面从 160 才开始，人会一开始就悬在井外往下掉。 */
+  const spawnX = NEST.L + 64;
 
   /* ---- 地面：恒一整段（坑是"挖在地面里"，不是把地面切成几段）---- */
-  const plats = [{ x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" }];
+  const plats = [{ x: NEST.L, y: GROUND_Y, w: NEST.W, h: 44, kind: "ground" }];
 
   /* ---- 台层：按深度开放层数，每层从库里抽 1~2 条 ----
    * 抽中的片段保留它**自己原本的 x/w** —— 那是真实关卡里验证过的位置，
@@ -2513,11 +2558,14 @@ function nestBuildRaw(depth, seed) {
     while (placed.length < want && guard++ < 40) {
       const cand = pick(NEST_LIB.ledges[y]);
       if (!cand) break;
+      /* 先搬进井里，再做"同层不重叠"的筛 —— 顺序反过来是在**主线坐标**
+         上判重叠，搬完可能又叠上了（rel 把不同 x 压到相近位置）。 */
+      const fit = nestFit(cand.x, cand.w);
       /* 同层留 30 间隙：两块台贴在一起就是一块长台，抽两条没意义 */
       const clash = placed.some(u =>
-        !(cand.x + cand.w + 30 <= u.x || u.x + u.w + 30 <= cand.x));
+        !(fit.x + fit.w + 30 <= u.x || u.x + u.w + 30 <= fit.x));
       if (clash) continue;
-      placed.push({ x: cand.x, y: y, w: cand.w, h: 20, kind: "ledge" });
+      placed.push({ x: fit.x, y: y, w: fit.w, h: 20, kind: "ledge" });
     }
     plats.push.apply(plats, placed);
   }
@@ -2540,10 +2588,13 @@ function nestBuildRaw(depth, seed) {
     const bases = plats.filter(p => p.y === 462 && p.kind === "ledge");
     const cands = [];
     for (const b of bases) {
+      /* 坡必须整段落在井内：坡身出井 = 一半悬在岩壁里，读作"木头插进石头"，
+         而且球滑到坡底正好撞墙。上界用 NEST.R 而不是 campX ——
+         坡底落地后玩家还能往右推一段，不必留 20 空隙给营地。 */
       const rx = b.x + b.w, rx2 = rx + NEST.RAMP_W;
-      if (rx2 <= campX - 20) cands.push({ x: rx, w: NEST.RAMP_W, yL: 462, yR: GROUND_Y });
+      if (rx2 <= NEST.R) cands.push({ x: rx, w: NEST.RAMP_W, yL: 462, yR: GROUND_Y });
       const lx = b.x - NEST.RAMP_W;
-      if (lx >= WALL_L + 20) cands.push({ x: lx, w: NEST.RAMP_W, yL: GROUND_Y, yR: 462 });
+      if (lx >= NEST.L) cands.push({ x: lx, w: NEST.RAMP_W, yL: GROUND_Y, yR: 462 });
     }
     /* 打乱一下再挑：永远取第一条的话，"有坡的层"坡都在同一个位置 */
     for (let i = cands.length - 1; i > 0; i--) {
@@ -2592,7 +2643,15 @@ function nestBuildRaw(depth, seed) {
     if (p.y !== GROUND_Y && p.y !== 462) continue;
     /* 台宽不足 140 就不放人了（两侧各留 40，剩下的不够一只虫巡逻） */
     if (p.y !== GROUND_Y && p.w < 140) continue;
-    const lo = p.x + 40, hi = p.x + p.w - 40;
+    /* 地面席位的右端必须收在**营地之前**。
+       640 之后地面是 160..800、营地在 718，不减这一刀的话最后一格
+       会落到 710~760 —— 那只虫一开局就站在营地里，画面上是
+       "还没推就消失了"，而 killed 记账发生在进营地那一下，
+       实际表现是"这一层永远少一只"。21 层 / 51 层都撞过这条。 */
+    let lo = p.x + 40, hi = p.x + p.w - 40;
+    if (p.y === GROUND_Y) hi = Math.min(hi, campX - 50);
+    /* 剩不到 70 就不放人了：一只虫加巡逻余量需要的宽度 */
+    if (hi - lo < 70) continue;
     for (let gx = lo; gx <= hi; gx += 170) {
       spots.push({ y: p.y, x: gx, x1: Math.min(gx + 70, hi) });
     }
@@ -2604,7 +2663,7 @@ function nestBuildRaw(depth, seed) {
     if (onPit) spots.splice(spots.indexOf(s), 1);
   }
   if (!spots.length) {
-    for (let gx = WALL_L + 70; gx < campX - NEST.CAMP_CLEAR - 70; gx += 170) {
+    for (let gx = NEST.L + 70; gx < campX - NEST.CAMP_CLEAR - 70; gx += 170) {
       const onPit = pits.some(p => gx > p.x - 50 && gx < p.x + p.w + 50);
       if (!onPit) spots.push({ y: GROUND_Y, x: gx, x1: gx + 70 });
     }
@@ -2635,7 +2694,7 @@ function nestBuildRaw(depth, seed) {
     if (s) w2.push({ foe: "boar", x: Math.round(rnd(s.x, s.x1)), y: s.y });
     const nCrow = depth >= 8 ? 1 : 0;
     for (let i = 0; i < nCrow; i++) {
-      w2.push({ foe: "crow", x: Math.round(rnd(WALL_L + 120, campX - 160)), y: 300, fly: 1 });
+      w2.push({ foe: "crow", x: Math.round(rnd(NEST.L + 120, campX - 160)), y: 300, fly: 1 });
     }
     if (w2.length) waves.push(w2);
   }
@@ -2647,12 +2706,21 @@ function nestBuildRaw(depth, seed) {
    * 而一旦给紧（3 颗 vs 3 只）就是几何上无解 —— 机器人实测 1 层、41/51 层
    * 三局全灭，全是这条。额度公式也不能只看深度，必须跟敌人数挂钩。 */
   /* 池子里 clear 出现两次 = 权重加倍。三种目标不是等价的：
-     clear 是"标准层"（大多数层该是它），collect 是"顺手多攒"，
-     limit 是挑战（要求卷球）—— 等权抽的话 62% 的层都在限球，
-     而限球关机器人过不去是预期行为，等于三分之二的层"看起来不可玩"。 */
-  const goalPool = depth <= 5 ? ["clear", "clear", "collect"]
-                 : depth <= 15 ? ["clear", "clear", "collect", "collect", "limit"]
-                 : ["clear", "clear", "collect", "collect", "limit"];
+     clear 是"标准层"（大多数层该是它），collect 是"顺手多攒"。
+     等权抽的话 62% 的层都在限球，而限球关机器人过不去是预期行为，
+     等于三分之二的层"看起来不可玩"。
+
+     **深巢不要 limit（2026-10-25）。** 不是"太难"，是机制对不上：
+     限球的解法是"一颗球按顺序卷掉多只"，它需要两样东西 ——
+     ① 一条够长的连续球道（球滚得越久卷得越多）
+     ② 一个能就地销毁球的出口（坑）
+     深巢的生成地形两样都不保证：沿用到池子里的 6 个限球层实测
+     0/6 通关，换了 640 井之后仍然 0/3（21/26/46 层，26 层直接报
+     "球用完了还有 3 只没送走"，46 层 240 秒只用掉 2 颗）。
+     这跟"玩家水平"无关，是**额度算不出一球卷两只的余量**。
+     主线保留 limit（那是手摆地形，两条前提都满足）；深巢换成
+     clear / collect 两种，各占一半权重 —— 它们都不需要额外前提。 */
+  const goalPool = ["clear", "clear", "collect", "collect"];
   const goal = pick(goalPool);
   const foes = waves.reduce((n, w) => n + w.length, 0);
   /* ---- S 线跟着这一层的敌人数走，不写死 ----
@@ -2730,7 +2798,7 @@ function nestCheck(L) {
 
   /* C3 没有顶死墙角：一块台不能同时贴左右墙（那样台下就是个死胡同） */
   for (const p of ledges) {
-    if (p.x <= WALL_L + 20 && p.x + p.w >= WALL_R - 20) fails.push("C3 台顶死墙角");
+    if (p.x <= NEST.L + 20 && p.x + p.w >= NEST.R - 20) fails.push("C3 台顶死墙角");
   }
   /* C4 坑不连成墙：相邻坑缘间距 ≥ 120（连成墙 = 人过不去，只能走台） */
   const ps = pits.slice().sort((a, b) => a.x - b.x);
@@ -2796,17 +2864,21 @@ function nestSimpleLevel(depth) {
   /* 兜底版恒 4 只（3 小怪 + 1 BOSS），S 线照 nestBuildRaw 同一套公式算：
      52 + 4×3.4 ≈ 66 秒、0.70×4 ≈ 3 颗。写死别的数会让兜底层评级失真。 */
   L.par = { time: 66, made: 3 };
+  /* 兜底版的每一件都按井重排（640 之后旧坐标全部出界：
+     台 26..620 会伸到岩壁里、坡 620..846 右半截悬空、营地 852 在井外）。 */
   L.plats = [
-    { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-    { x: 26, y: 462, w: 594, h: 20, kind: "ledge" },
+    { x: NEST.L, y: GROUND_Y, w: NEST.W, h: 44, kind: "ground" },
+    { x: NEST.L + 20, y: 462, w: 300, h: 20, kind: "ledge" },
   ];
-  L.ramps = [{ x: 620, w: NEST.RAMP_W, yL: 462, yR: GROUND_Y }];
-  L.pits = [{ x: 380, y: GROUND_Y, w: 100, kind: "mud" }];
-  L.camp = { x: WALL_R - NEST.CAMP_W, y: GROUND_Y, w: NEST.CAMP_W };
-  L.spawn = { x: 90, y: GROUND_Y };
+  L.ramps = [{ x: NEST.L + 320, w: NEST.RAMP_W, yL: 462, yR: GROUND_Y }];
+  L.pits = [{ x: NEST.L + 260, y: GROUND_Y, w: 100, kind: "mud" }];
+  L.camp = { x: NEST.R - NEST.CAMP_W, y: GROUND_Y, w: NEST.CAMP_W };
+  L.spawn = { x: NEST.L + 64, y: GROUND_Y };
   L.waves = [
-    [{ foe: "bug", x: 130, y: 462 }, { foe: "bug", x: 300, y: 462 }, { foe: "bug", x: 480, y: 462 }],
-    [{ foe: "boss", x: 700, y: GROUND_Y, lv: Math.min(5, 1 + Math.floor(depth / 6)) }],
+    [{ foe: "bug", x: NEST.L + 70, y: 462 }, { foe: "bug", x: NEST.L + 150, y: 462 },
+     { foe: "bug", x: NEST.R - 200, y: GROUND_Y }],
+    [{ foe: "boss", x: NEST.R - NEST.CAMP_W - 160, y: GROUND_Y,
+       lv: Math.min(5, 1 + Math.floor(depth / 6)) }],
   ];
   L.nest = { depth: depth, seed: 0 };
   return L;
@@ -2830,6 +2902,16 @@ function nestLevel(depth, seed) {
    `loadLevel` / `curStage` / `beginRun` 全部走它，所以"换一张表 = 换一个玩法"，
    不需要在绘制、物理、机器人任何一处加 if。 */
 let ACTIVE = LEVELS;
+
+/** 逻辑墙宽：深巢 = 640 井，主线 = 26..934。
+ *  **唯一写入点**（`loadLevel` 调），物理里三十多处引用读它。
+ *  为什么必须收口成一个函数：漏还原一次，主线就会变成一条两端各少
+ *  134px 的窄路 —— 而这种错在截图上看不出来（背景还是满屏的），
+ *  只有"球在离右缘 134px 的地方撞了一下空气墙"能暴露它。 */
+function applyWalls(narrow) {
+  if (narrow) { WALL_L = NEST.L; WALL_R = NEST.R; }
+  else { WALL_L = WIDE_L; WALL_R = WIDE_R; }
+}
 
 /* ============================================================================
    3.5 目标
@@ -3014,6 +3096,12 @@ let TH = THEMES[LEVELS[0].theme];
 /** 把一关装进全局绑定。没写的特殊件一律给空数组，代码不用到处判 null */
 function loadLevel(i) {
   const L = ACTIVE[i] || ACTIVE[0] || LEVELS[0];
+  /* 墙宽跟着关卡走，**在读关卡的第一行**就要切好 ——
+     物理里三十多处 `clamp(x, WALL_L, WALL_R)`，它们读的是这对变量。
+     写在这里而不是 enterNest：所有"换关卡"的路径（重打、下一层、
+     跳关面板、从主界面出发）都必然过 loadLevel，漏一条就变成
+     "深巢的墙漏到主线，主线的墙漏到深巢"。 */
+  applyWalls(!!L.nest);
   TH = THEMES[L.theme] || THEMES.tundra;
   /* 场景族跟着主题走。**必须在这里重置** —— 忘了的话，
      上一个产地的形状会跟到下一个产地（第 9 屏还在画第 8 屏的岩柱）。 */
@@ -3431,7 +3519,13 @@ function onKeyDown(ev) {
       return;
     } else if (ev.code === "KeyE") { goHome(false); return; }
     else return;
-    if (!ev.repeat) S.gateCur = clamp(c, 0, GATES.length - 1);
+    if (!ev.repeat) {
+      S.gateCur = clamp(c, 0, GATES.length - 1);
+      /* 键盘挑门也要放大 —— 否则按了 ←→ 画面一动不动，玩家不知道
+         现在选的是哪张、Enter 会进哪里。放大由**操作**触发（按键），
+         不由"当前选中"这种状态触发（那会让一进页面就有一张是大的）。 */
+      S.hoverGate = S.gateCur;
+    }
     ev.preventDefault();
     return;
   }
@@ -3631,7 +3725,13 @@ function foeFromSpec(sp, fromSky) {
     cm: isBoss ? Math.min(4 + lv, 10) : 3,
     dead: false,
     onGround: !sp.fly && !fromSky, ground: null,
-    fly: !!sp.fly, homeY: sp.y,
+    /* 悬停基准高度。**必须夹在可打区间里** —— fly 的 y 是每帧用
+       `homeY + 18 + sin` 直接赋值的（不走 stepBody，没有重力、不会掉下去），
+       所以 homeY 一旦非法，这只鸦就永久挂在那个高度：不落地、不越界、
+       也不会被"掉出屏幕"兜底收掉。它会一直占着"还有一只没送走"，
+       整层清场判定永远不成立 → 240 秒超时。
+       上限取 GROUND_Y - 80：再低就贴地了（视觉上像站在地上飞）。 */
+    fly: !!sp.fly, homeY: Math.min(sp.y, GROUND_Y - 80),
     stun: 0, hitT: 0, bob: rand(0, 6.28),
     /* 步态相位：**出生定死，永不推进**。
        `bob` 和它必须分成两个字段，混用是这个游戏最长寿的一个 bug：
@@ -6279,7 +6379,11 @@ function respawnPacked(b, coat, atX) {
       vx: rand(-60, 60), vy: -260,
       face: -1, coat: coat, dead: false,
       onGround: false, ground: null,
-      fly: def.kind === "fly", homeY: b.y - b.r * 2 - 20,
+      /* 从球炸开的位置继承悬停高度 —— 但**球可能是在坑里炸的**。
+         坑里的球 y 能到 700+，减掉球径还有 650，接过来的鸦就飘在
+         屏幕下方的黑暗里，永远打不到也永远不死（51 层实测）。
+         所以继承之后必须夹一次上限。 */
+      fly: def.kind === "fly", homeY: Math.min(b.y - b.r * 2 - 20, GROUND_Y - 80),
       stun: 0.5, hitT: 0, bob: rand(0, 6.28),
       dir: S.rng() < 0.5 ? -1 : 1,
       chargeT: 2, charging: 0,
@@ -9756,6 +9860,160 @@ function drawLevel() {
   for (const d of REFLECTS) drawReflect(g, d);
   for (const pt of PORTALS) drawPortal(g, pt);
   for (const s of S.stumps) drawStump(g, s);
+  drawNestWalls(g);
+}
+
+/** 深巢的井壁。
+ *
+ *  **为什么必须有这一层**：活动区砍到 640 之后，地面只有 160..800，
+ *  两侧各 134 是空的。物理没错（球被 `clamp(x, WALL_L, WALL_R)` 夹住），
+ *  但第一版截图是这样的：草地浮在湖中间，一个地面块的两端凭空断掉、
+ *  下面直接是背景水面 —— 玩家不会读作"这是井"，只会读作"这游戏画错了"。
+ *  **物理正确 + 视觉不解释 = 看起来像 bug**，这类亏在项目里吃过很多次。
+ *
+ *  内缘不是直线：直线读作"贴了一张遮罩"，参差才读作岩层。
+ *  轮廓用两个正弦叠加（周期 170 / 580），零状态、每帧同一结果，
+ *  不需要缓存进 S，也不会在两帧之间跳。
+ *
+ *  基准往井内收 10px（`L-10` / `R+10`）：内缘 ±9 的抖动被这 10px 吃掉，
+ *  所以永远是岩壁压住地面边缘 —— 反过来就是地面边缘露出一条 9px 的缝。
+ */
+function drawNestWalls(g) {
+  if (!S.nest) return;
+  const L = NEST.L, R = NEST.R;
+  /* 两个正弦叠加：周期 240（大起伏）+ 90（碎石感）。
+     幅度 ±14 是**看着参差、又不至于把地面边缘露出来**的临界值 ——
+     第一版给 ±9，配合 12px 的受光面，整条内缘读成一根直线，
+     看起来像两块 UI 遮罩贴在屏幕上，完全不像石头。
+     基准往井内收 18：±14 被这 18 吃掉，所以永远是岩壁压住地面边缘。 */
+  const wob = (y) => Math.sin(y * 0.026) * 9 + Math.sin(y * 0.069 + 1.7) * 5;
+  const inner = (y, side) => side < 0 ? L - 18 + wob(y) : R + 18 - wob(y + 260);
+  const vein = nestRand((S.nest.depth || 1) * 7717);
+
+  for (const side of [-1, 1]) {
+    const outX = side < 0 ? 0 : W;
+
+    /* ① 岩体主体 */
+    g.beginPath();
+    g.moveTo(outX, 0);
+    for (let y = 0; y <= H; y += 8) g.lineTo(inner(y, side), y);
+    g.lineTo(outX, H);
+    g.closePath();
+    g.fillStyle = TH.dirt2;
+    g.fill();
+
+    /* ② 内缘近侧压一层中间色，8px。这一条的作用是"厚度"：
+       只有两档色（岩体 / 背景）时，接缝读作剪纸；
+       加一档中间色，接缝读作"石头的侧面被光照到"。 */
+    g.beginPath();
+    for (let y = 0; y <= H; y += 8) {
+      const x = inner(y, side);
+      if (y === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.strokeStyle = TH.dirt;
+    g.lineWidth = 8;
+    g.lineJoin = "round";
+    g.stroke();
+
+    /* ③ 层理：每 64px 一道水平的暗线，从内缘往画面外走 26~54px。
+       石头的"层"是水平的、树的年轮是圆的 —— 这道线一加上，
+       竖井的第一眼就成立，比任何高光都省。 */
+    for (let y = 40; y < H; y += 64) {
+      const x = inner(y, side);
+      const len = 26 + ((y * 37) % 28);
+      g.strokeStyle = "rgba(0,0,0,.22)";
+      g.lineWidth = 2;
+      g.beginPath();
+      g.moveTo(x - side * 2, y);
+      g.lineTo(x - side * len, y + ((y % 3) - 1) * 2);
+      g.stroke();
+    }
+
+    /* ④ 内缘分界线：一条贴边的暗线，把岩壁从**亮背景**（湖面 / 雪原）里
+       分离出来。第一版用的是 wood3 亮线，截图上是两根发光的柱子，
+       比背景还抢眼 —— 边界的职责是"分开"，不是"发光"。 */
+    g.beginPath();
+    for (let y = 0; y <= H; y += 8) {
+      const x = inner(y, side);
+      if (y === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.strokeStyle = "rgba(0,0,0,.34)";
+    g.lineWidth = 2.5;
+    g.stroke();
+
+    /* ⑤ 矿脉：三道斜向短线。位置由**深度**决定 ——
+       同一层每次进去都长在同一个地方（跟地形一样可记忆），
+       换一层就换位置。这是"深度"这件事唯一的视觉刻度。 */
+    for (let i = 0; i < 3; i++) {
+      const y = 110 + vein() * 380;
+      const x = inner(y, side);
+      g.strokeStyle = TH.accent || "#FFE066";
+      g.globalAlpha = 0.30;
+      g.lineWidth = 2;
+      g.beginPath();
+      g.moveTo(x - side * 18, y);
+      g.lineTo(x - side * 4, y + 26);
+      g.stroke();
+      g.globalAlpha = 1;
+    }
+  }
+
+  /* ⑥ 井底碎石：地面与岩壁的交接处堆几块石头。
+     没有这一层时，地面块的两端是"切平"的，读作被裁掉；
+     堆两块碎石就有了"地面是被岩壁压住"的因果。 */
+  for (const side of [-1, 1]) {
+    const bx = side < 0 ? L : R;
+    for (let i = 0; i < 3; i++) {
+      const x = bx + side * (2 + i * 13);
+      const r = 9 + ((i * 7 + 3) % 6);
+      g.fillStyle = i % 2 ? TH.dirt : TH.dirt2;
+      g.beginPath();
+      g.ellipse(x, GROUND_Y - r * 0.45, r, r * 0.8, 0, 0, 6.283);
+      g.fill();
+    }
+  }
+}
+
+/** 深巢的"暗"。
+ *
+ *  **为什么这一步是必须的，不是美化**：活动区砍到 640、加上井壁之后，
+ *  画面变成了"白天的森林中间立着两根石柱"。井壁只解决了**结构**上的
+ *  地下，光还是主线的右上斜阳 —— 玩家第一眼仍然判定"这是同一款游戏"。
+ *  同一个台子，白天是路，烛光下是未知。**光从哪来，比地形怎么长
+ *  更能定义一个空间的性质。**
+ *
+ *  **为什么要挖一个洞而不是整体调暗**：整体调暗只是把画面拍灰，
+ *  玩家反而更难读地形。挖洞（玩家周围不压）同时办了三件事：
+ *  ① 世界变暗，读作地下；② 视野有半径，读作"继续往下会看不见"；
+ *  ③ 球和角色画在遮罩之后，所以永远是亮的 —— 顺手把
+ *  "球是火、人是火把"这条讲清楚了，不需要任何教学文案。
+ *
+ *  **半径随深度收**：1~5 层 470（跟白天差不多，先熟悉这套地形），
+ *  6~15 层 380（开始靠记忆走），16+ 层 300（看不清的地方不敢扔球）。
+ *  上限受画面限制：屏幕对角线的一半是 566，超过它整屏就是亮的，等于没画。
+ *
+ *  **压暗值刻意保守（0.06 → 0.52）**。这不是恐怖游戏，玩家要读地形
+ *  才能推球；压到 0.7 以上时地面材质带（冰 / 泥）就分不出来了，
+ *  而那是 N1 的物理机制，不是装饰。
+ */
+function drawNestDark(g) {
+  if (!S.nest) return;
+  const d = S.nest.depth || 1;
+  const R = d <= 5 ? 470 : d <= 15 ? 380 : 300;
+  const kEdge = d <= 5 ? 0.42 : d <= 15 ? 0.50 : 0.56;
+  const cx = S.p && !S.p.dead ? S.p.x : W / 2;
+  const cy = S.p && !S.p.dead ? S.p.y - 30 : H / 2 + 40;
+
+  /* 亮圈的半径先按 0.30R 起（圆心附近几乎不压），到 1.25R 收敛到 kEdge。
+     1.25 而不是 1.0：四角距离圆心 566，若只铺到 R=470 就停，
+     四角会是一块**纯色**（渐变越界后按末端色填充），读作"画面被切了"。
+     铺到 1.25R 让四角自然衰减，看不出边界。 */
+  const grd = g.createRadialGradient(cx, cy, R * 0.30, cx, cy, R * 1.25);
+  grd.addColorStop(0, "rgba(5,7,18,0.06)");
+  grd.addColorStop(0.55, "rgba(5,7,18," + (kEdge * 0.42).toFixed(3) + ")");
+  grd.addColorStop(1, "rgba(5,7,18," + kEdge + ")");
+  g.fillStyle = grd;
+  g.fillRect(0, 0, W, H);
 }
 
 /* 前景灌木：画面最底边一排压暗的剪影。
@@ -13016,6 +13274,12 @@ function exitNest() {
   S.nest = null;
   ACTIVE = LEVELS;
   S.stage = 0;
+  /* 墙也立刻还原，不等下一次 loadLevel。
+     `loadLevel` 里已经会按关卡切墙，所以严格说这里可以省 ——
+     但"退出深巢之后、进主线之前"那段状态（出征页）里 WALL_L 还是 160，
+     而冒烟正好在这个窗口读它，一读就露。**状态要么立刻一致，要么就
+     得记住"它现在是不一致的"** —— 后者靠人记，早晚忘。 */
+  applyWalls(false);
 }
 
 /** 五角星。`on` = 已拿到（实心金），否则空心灰描边 */
@@ -13528,7 +13792,15 @@ function drawGates(g) {
   /* 「出征」大标题已删（2026-10-26 第四次，用户：「出征去掉啊」）。
      标题只是给这一页起名，而这件事底部操作提示已经做了。 */
 
-  const focus = clamp(S.hoverGate >= 0 ? S.hoverGate : S.gateCur, 0, GATES.length - 1);
+  /* 焦点 = **只有指针真的停在某张卡上**（`hoverGate`，-1 = 没停在任何卡）。
+     2026-10-26 第七次（用户：「一进去不放大呀 鼠标放上去才放大 你怎么擅作
+     主张呢」）：之前这里写了 `hoverGate >= 0 ? hoverGate : gateCur` 的兜底，
+     意思是"指针不在，就当你选中 gateCur 那张"，结果一进出征页第一张就是
+     放大态 —— 还没动鼠标画面就已经"替你选好了"。
+     放大是个**反馈**，不是状态展示：它回答"我现在指着的这张是什么"。
+     没有指针就没有问题，也就不该有答案。键盘 ←→ 是主动操作，所以那边
+     自己把 hoverGate 写上（见 bindKeys），不靠这里兜底。 */
+  const focus = S.hoverGate;
   const withDetail = GATE.h >= GATE.detailMinH;
 
   /* 画两遍：先所有非焦点，再焦点。悬停放大会盖住邻居，绘制顺序决定谁在上 ——
@@ -14529,6 +14801,11 @@ function render() {
   // 尘土：属于地面，必须在单位之前。画在球后面 = 球压着尘土滚过去，
   // 画在球前面 = 烟雾糊脸 —— 后者看起来像特效坏了。
   drawDust(g);
+
+  /* 深巢的暗罩：盖住所有**世界**（背景 / 地面 / 平台 / 前景 / 尘土），
+     但不盖角色和球 —— 它们在这之后画，所以永远亮着。
+     这一步的顺序就是设计本身：球是火，人是火把，其余地方是黑的。 */
+  drawNestDark(g);
 
   if (S.phase === "jump") {
     /* 面板第一行就把整屏铺满了（见 drawJump），所以不用管下面画过什么。
@@ -15874,8 +16151,11 @@ Object.defineProperty(GROVE, "PUSH_RUN", { get: () => PUSH_RUN });
 // 写死 544 那种事干过一次 —— 卡片一加高，断言就变成在验一个不存在的尺寸。
 GROVE.CARD = { w: CARD_W, y: CARD_Y, h: CARD_H, btnY: BTN_Y, btnH: BTN_H, btnW: BTN_W };
 GROVE.GROUND_Y = GROUND_Y;
-GROVE.WALL_L = WALL_L;
-GROVE.WALL_R = WALL_R;
+/* **必须是 getter**：WALL_L / WALL_R 现在是变量（深巢 640 井会改它们），
+   写成 `window.GROVE.WALL_L = WALL_L` 记的是加载那一刻的快照 ——
+   测试里读到的永远是 26/934，深巢相关断言等于在验一个不存在的东西。 */
+Object.defineProperty(GROVE, "WALL_L", { get: () => WALL_L });
+Object.defineProperty(GROVE, "WALL_R", { get: () => WALL_R });
 
 /* ---------- Cocos 侧 API ----------
    原型里"取 canvas"和"起 requestAnimationFrame"是启动段的活；

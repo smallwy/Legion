@@ -55,7 +55,13 @@ if (!args.length) { console.log("给个 tag，例如 s1 / clear:3"); process.exi
   await sleep(400);
 
   for (const a of args) {
-    const [kind, s] = a.split(":");
+    /* 场景串可以有三段以上（`pick:9:stars:4`）。这里只切**第一刀**，
+       剩下的整段交给分支自己 split —— 用 `const [kind, s] = a.split(":")`
+       会把第三段以后全丢掉，而丢掉的部分恰好是"要不要塞星靶种子"
+       （第一版就这么拍的：总账 0/81，三颗星全是空心）。 */
+    const cut = a.indexOf(":");
+    const kind = cut < 0 ? a : a.slice(0, cut);
+    const s = cut < 0 ? undefined : a.slice(cut + 1);
     if (kind === "clear") {
       await page.evaluate((st) => {
         const G = window.GROVE;
@@ -108,18 +114,105 @@ if (!args.length) { console.log("给个 tag，例如 s1 / clear:3"); process.exi
       });
     } else if (kind === "pick") {
       /* 挑一屏。不带数字 = 全通（27 格全亮，每格带评级）；
-         带数字 = 只通到那一屏，后面的格子应该是锁的。 */
-      await page.evaluate((pr) => {
+         带数字 = 只通到那一屏，后面的格子应该是锁的。
+         `pick:9:stars` = 再造一份星靶完成位，用来验格子底部
+             那三颗星的三态（实心金 / 空心灰 / 集满行）。
+         `pick:9:stars:4` = 同上，再把 hover 停在第 5 格上 ——
+             底部条件行是跟着 hover/键盘光标换的，不悬停就看不到它。
+
+         为什么直接写 S.starBits 而不是塞 localStorage：这个页面是
+         **file://** 打开的，Chromium 对 file:// 的 localStorage 抛
+         SecurityError，grove.html 里每一处都裹着 try/catch 所以平时
+         看不出异常，但种子会被静默吞掉（第一版就这么拍的：总账 0/81）。
+         完成位走 localStorage 的真链路由冒烟 §39 + _t-star-run.js 覆盖，
+         截图器只负责"画出来对不对"。 */
+      await page.evaluate((arg) => {
         const G = window.GROVE, S = G.S;
+        const parts = String(arg === undefined ? "" : arg).split(":");
         const n = G.LEVELS.length;
+        const pr = parts[0];
         const k = (pr === null || pr === undefined || pr === "") ? n : Number(pr);
         S.progress = k;
         for (let i = 0; i < n; i++) {
           // 造一组有分布的评级：全 S 看不出色阶，全 B 看不出金色
           S.best[i] = i < k ? ["S", "A", "B"][i % 3] : null;
         }
-        S.hoverStage = -1;
         G.openPick();
+        if (parts[1] === "stars") {
+          /* 前三屏集满 / 第 4 屏拿 1 颗 / 第 5 屏拿 2 颗 / 其余全空。
+             为什么三种状态都要有：实心与空心的色差在压暗格子上
+             几乎看不出来，必须同屏对比才敢说"画对了"。 */
+          const seed = [];
+          for (let i = 0; i < n; i++) {
+            const r = [0, 0, 0];
+            if (i < 3) r[0] = r[1] = r[2] = 1;
+            else if (i === 3) r[1] = 1;
+            else if (i === 4) r[0] = r[2] = 1;
+            seed.push(r);
+          }
+          S.starBits = seed;
+        }
+        /* hover 必须在 openPick **之后**设：openPick 会把它清成 -1 */
+        S.hoverStage = parts[2] !== undefined ? Number(parts[2]) : -1;
+      }, s === undefined ? "" : s);
+    } else if (kind === "ask") {
+      /* 触屏条件卡。`ask:4:stars` = 弹第 5 屏的卡，并塞星靶种子
+         （前三屏集满 / 第 4 屏 1 颗 / 第 5 屏 2 颗），这样卡上的
+         "还差 1 颗" 和三颗星的三态能同时验到。 */
+      await page.evaluate((arg) => {
+        const G = window.GROVE, S = G.S;
+        const parts = String(arg === undefined ? "" : arg).split(":");
+        const n = G.LEVELS.length;
+        S.progress = n;
+        for (let i = 0; i < n; i++) S.best[i] = i < n ? ["S", "A", "B"][i % 3] : null;
+        G.openPick();
+        if (parts[1] === "stars") {
+          const seed = [];
+          for (let i = 0; i < n; i++) {
+            const r = [0, 0, 0];
+            if (i < 3) r[0] = r[1] = r[2] = 1;
+            else if (i === 3) r[1] = 1;
+            else if (i === 4) r[0] = r[2] = 1;
+            seed.push(r);
+          }
+          S.starBits = seed;
+        }
+        /* 走真交互入口 pickTap（点格子中心），不直接写 S.pickAsk ——
+           这张卡的价值一半在"点格子才弹"这个语义上，直接赋值就把
+           要验的那一步跳过了 */
+        const idx = Number(parts[0] || 0);
+        const c = G.pickCell(idx);
+        G.pickTap(c.x + c.w / 2, c.y + c.h / 2);
+      }, s === undefined ? "" : s);
+    } else if (kind === "portals") {
+      /* 出征页。`portals` = 常态；`portals:n` = 键盘光标停在第 n 扇门；
+         `portals:n:rich` = 再塞一份"推了很多屏 + 一堆星"的存档，
+         验进度条与星靶总账不是永远 0。 */
+      await page.evaluate((arg) => {
+        const G = window.GROVE, S = G.S;
+        const parts = String(arg === undefined ? "" : arg).split(":");
+        const n = G.LEVELS.length;
+        if (parts[1] === "rich") {
+          S.progress = n;
+          for (let i = 0; i < n; i++) S.best[i] = ["S", "A", "B"][i % 3];
+        } else {
+          S.progress = 6;
+          for (let i = 0; i < n; i++) S.best[i] = i < 6 ? ["S", "A", "B"][i % 3] : null;
+        }
+        G.openGates();
+        if (parts[1] === "rich") {
+          const seed = [];
+          for (let i = 0; i < n; i++) {
+            const r = [0, 0, 0];
+            if (i < 9) r[0] = r[1] = r[2] = 1;
+            else if (i < 14) r[0] = 1;
+            seed.push(r);
+          }
+          S.starBits = seed;
+        }
+        if (parts[0] !== undefined && parts[0] !== "") S.gateCur = Number(parts[0]);
+        /* `portals:1:tip` = 点一下那扇没开的门，验提示条真的画出来 */
+        if (parts[1] === "tip") G.enterGate(1);
       }, s === undefined ? "" : s);
     } else if (kind === "boss") {
       /* `boss:12` = 第 12 屏，BOSS 站着抬手（断台预告）。

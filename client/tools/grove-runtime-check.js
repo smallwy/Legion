@@ -38,7 +38,7 @@ function toJs(ts) {
         ['let exitHook: ((kind: string) => void) | null = null;', 'let exitHook = null;'],
         ['function groveExit(kind: string): boolean {', 'function groveExit(kind) {'],
         ['function groveSetExitHook(fn: ((kind: string) => void) | null): void {', 'function groveSetExitHook(fn) {'],
-        ['function groveBoot(hero?: number, stage?: number): void {', 'function groveBoot(hero, stage) {'],
+        ['function groveBoot(hero?: number, stage?: number, fromHome?: boolean): void {', 'function groveBoot(hero, stage, fromHome) {'],
         ['const GROVE: any = {', 'const GROVE = {'],
         ['const s: any = readHomeSave();', 'const s = readHomeSave();'],
         ['function groveAttachCanvas(c: any): void {', 'function groveAttachCanvas(c) {'],
@@ -87,6 +87,13 @@ const canvasStub = {
     width: 960,
     height: 600,
     getContext: () => ctxStub,
+    /* 触屏条件卡给 canvas 挂了 touchstart，取元素时是它 —— 桩里没有
+       addEventListener 会让整份运行时在加载阶段就崩（不是断言失败，
+       是抛异常），体检直接停在那里。 */
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 960, height: 600 }),
+    style: {},
 };
 
 /* ---------------- 3) DOM 桩 ---------------- */
@@ -98,7 +105,9 @@ const localStorageStub = {
 };
 
 const documentStub = {
-    getElementById: () => null,       // unlockTip / toHome：外面都有 null 保护
+    /* cv 要返回真元素：grove.html 的 `const cv = document.getElementById("cv")`
+       后面直接挂事件。unlockTip / toHome 外面都有 null 保护，继续给 null。 */
+    getElementById: (id) => (id === 'cv' ? canvasStub : null),
     createElement: () => canvasStub,
 };
 
@@ -175,6 +184,33 @@ for (let i = 0; i < G.GROVE.LEVELS.length; i++) {
     if (err) console.log(err);
 }
 
+/* 出征页：Cocos 侧入口（groveBoot 第三参 fromHome）。
+   为什么必须在这里验一遍：原型靠 URL 的 `?from=home`，Cocos 里没有 URL ——
+   如果只验原型，出征页会"原型里有、真机上没有"，而这个项目的用户
+   只在真机上看画面。 */
+{
+    let err = null;
+    try {
+        G.groveBoot(0, undefined, true);
+        for (let f = 0; f < 120; f++) { G.groveTick(1 / 60); G.groveRender(); }
+    } catch (e) {
+        err = e;
+    }
+    ok(!err, 'fromHome 后出征页跑 2 秒不抛', err ? String(err && err.message || err) : '');
+    ok(G.GROVE.S.phase === 'portals',
+       '★ fromHome=true 落到的第一屏是出征页（不是直接开打）',
+       'phase=' + G.GROVE.S.phase);
+    try {
+        G.GROVE.enterGate(0);
+        for (let f = 0; f < 30; f++) { G.groveTick(1 / 60); G.groveRender(); }
+    } catch (e) {
+        err = e;
+    }
+    ok(!err && G.GROVE.S.phase === 'pick',
+       '★ 出征页点第一道门 → 挑一屏（玩法的入口真的接上了）',
+       'phase=' + G.GROVE.S.phase);
+}
+
 /* 收工回家：钩子必须被子系统叫到，而不是去跳 URL */
 let exited = null;
 G.groveSetExitHook((k) => { exited = k; });
@@ -184,7 +220,8 @@ ok(exited === 'done', 'goHome 会通知退出钩子', 'kind=' + exited);
 /* 状态自检：跑到这里，玩家/球/敌人这些核心对象都得是活的 */
 const S = G.GROVE.S;
 ok(S && typeof S === 'object', 'S（全局状态）存在');
-ok(S.phase === 'select' || S.phase === 'play' || S.phase === 'clear' || S.phase === 'fail',
+ok(S.phase === 'select' || S.phase === 'play' || S.phase === 'clear' || S.phase === 'fail'
+   || S.phase === 'portals' || S.phase === 'pick',
    'S.phase 是已知状态', 'phase=' + (S && S.phase));
 
 console.log('');

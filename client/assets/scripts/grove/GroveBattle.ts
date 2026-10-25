@@ -199,7 +199,11 @@ export class GroveBattle extends Component {
          * `heroIndexOf` 是 id → HEROES 下标的唯一换算点。
          */
         const save = loadSave();
-        groveBoot(heroIndexOf(save.active));
+        /* 第三个参数 fromHome = 先到出征页挑门。
+         * **Cocos 里必须显式传**：原型的 FROM_HOME 是读 URL 的
+         * `?from=home`，而真机上没有 URL，那个判断恒为 false ——
+         * 出征页在原型里出现、在真机上不出现，同一个按钮两个结果。 */
+        groveBoot(heroIndexOf(save.active), undefined, true);
 
         this._bindCocosInput();
         this._ready = true;

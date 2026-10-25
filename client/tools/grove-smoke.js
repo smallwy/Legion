@@ -4126,6 +4126,267 @@ console.log("\n=== 39. 星靶：81 个靶的配靶规则 / 判定 / 落盘 / 真
      "★ 收工重置整趟星靶累计");
 }
 
+console.log("\n=== 40. 触屏条件卡：点一下只弹卡，卡上再点才进关 ===");
+{
+  /* 病根不是「少了个面板」，是**手机上根本读不到靶条件** —— 条件原文原来
+     只挂在鼠标悬停和方向键光标上，手机两样都没有，玩家只能盯着格子底部
+     三个空心星瞎猜。所以这一节验的不是"卡画出来了"，而是行为语义：
+
+       A. 点解锁格 → 只弹卡（phase 不变、stage 不变）；
+       B. 锁着的格点不动（不能靠点卡绕过进度）；
+       C. 卡面吃掉点击，三个可点区的命中；
+       D. 点「打这一屏」才真的进关，并且开的是卡上那屏；
+       E. 卡片整个在画布里；
+       F. STAR_DESC 与 StarTargets.ts 逐字一致（两份数据必须由门禁焊住）。
+
+     键盘那两条（Enter 认卡 / 方向键自动关卡）在这里没法派发事件 ——
+     grove-env 的 window.addEventListener 是 noop，键盘处理也没导出成函数。
+     所以走源码断言，和 §39-G 同一个手法，别当行为测试看。 */
+  const sb40 = boot(), P = sb40.GROVE;
+  const src40 = fs.readFileSync(HTML, "utf8");
+  /* grove-env 的 mkCanvas 是 960×600，页面里 W/H 也是这个数（顶层 const
+     不挂全局，所以只能从这里取） */
+  const CW = 960, CH = 600;
+
+  function freshPick() {
+    P.S.progress = P.LEVELS.length;
+    for (let i = 0; i < P.LEVELS.length; i++) P.S.best[i] = "S";
+    P.S.stage = 0;
+    P.S.pickAsk = -1;
+    P.openPick();
+  }
+  function cellMid(i) {
+    const c = P.pickCell(i);
+    return { x: c.x + c.w / 2, y: c.y + c.h / 2 };
+  }
+
+  /* ---- A. 点解锁格只弹卡 ---- */
+  freshPick();
+  const m4 = cellMid(4);
+  P.pickTap(m4.x, m4.y);
+  eq(P.S.pickAsk, 4, "★ 点第 5 格 → 只是弹卡（pickAsk = 4）");
+  eq(P.S.phase, "pick", "★ 点一下不会直接开打（phase 还是 pick）");
+  eq(P.S.stage, 0, "★ stage 没变（没偷偷进关）");
+
+  /* ---- B. 锁着的格点不动 ---- */
+  freshPick();
+  P.S.progress = 3;
+  P.openPick();
+  const m20 = cellMid(20);
+  P.pickTap(m20.x, m20.y);
+  eq(P.S.pickAsk, -1, "锁着的格点不出卡");
+  eq(P.S.phase, "pick", "锁着的格也进不去关");
+
+  /* ---- C. 卡面吃点击 + 三个可点区 ---- */
+  freshPick();
+  P.pickTap(m4.x, m4.y);
+  const r40 = P.askRect();
+  eq(P.askHit(r40.x + 10, r40.y + 8), "card",
+     "点卡面空白 → 认成 card（不是 go）");
+  P.pickTap(r40.x + 10, r40.y + 8);
+  eq(P.S.pickAsk, 4, "★ 点卡面空白不关卡（卡片吃掉点击）");
+  eq(P.S.phase, "pick", "点卡面空白也不会开打");
+  eq(P.askHit(4, 4), "", "卡片外的点不归卡片管（透回格子）");
+
+  const B40 = P.askBtns();
+  eq(P.askHit(B40.go.x + B40.go.w / 2, B40.go.y + B40.go.h / 2), "go", "主按钮命中 go");
+  eq(P.askHit(B40.close.x + B40.close.w / 2, B40.close.y + B40.close.h / 2), "close",
+     "次按钮命中 close");
+
+  /* ---- D. 「再看看」关卡 / 「打这一屏」进关 ---- */
+  P.pickTap(B40.close.x + 5, B40.close.y + 5);
+  eq(P.S.pickAsk, -1, "★ 点「再看看」关卡");
+  eq(P.S.phase, "pick", "点「再看看」不进关");
+
+  freshPick();
+  P.pickTap(m4.x, m4.y);
+  const B40b = P.askBtns();
+  P.pickTap(B40b.go.x + B40b.go.w / 2, B40b.go.y + B40b.go.h / 2);
+  eq(P.S.phase, "play", "★ 卡上点「打这一屏」才真的进关");
+  eq(P.S.stage, 4, "★ 进的是卡上那一屏（不是光标那屏）");
+  eq(P.S.pickAsk, -1, "进关前把卡收掉（回来时不该还挂着）");
+
+  /* ---- E. 卡片不越界 ---- */
+  ok(r40.x >= 0 && r40.y >= 0 && r40.x + r40.w <= CW && r40.y + r40.h <= CH,
+     "★ 卡片整个在画布里",
+     `${r40.x},${r40.y} ${r40.w}×${r40.h}`);
+  ok(B40.go.x + B40.go.w <= r40.x + r40.w && B40.close.x >= r40.x,
+     "两个按钮都在卡内（左右不溢出）");
+  ok(B40.go.y >= r40.y && B40.go.y + B40.go.h <= r40.y + r40.h,
+     "按钮在卡内（上下不溢出）");
+
+  /* ---- F. STAR_DESC 与 TS 逐字一致 ---- */
+  {
+    const ts40 = fs.readFileSync(
+      path.join(__dirname, "..", "assets", "scripts", "config", "StarTargets.ts"), "utf8");
+    const descHtml = {};
+    const mh = src40.match(/const STAR_DESC = \{([\s\S]*?)\n\};/);
+    ok(!!mh, "grove.html 有 STAR_DESC（触屏卡的口径原文）");
+    if (mh) {
+      const re = /(\w+):\s*"([^"]+)"/g;
+      let g2;
+      while ((g2 = re.exec(mh[1]))) descHtml[g2[1]] = g2[2];
+    }
+    const descTs = {};
+    const reTs = /id:\s*'(\w+)',\s*name:\s*'([^']+)',\s*\n\s*desc:\s*'([^']+)'/g;
+    let g3;
+    while ((g3 = reTs.exec(ts40))) descTs[g3[1]] = g3[3];
+
+    eq(Object.keys(descHtml).length, 8, "8 条靶都有口径原文");
+    for (const id of Object.keys(descHtml)) {
+      eq(descHtml[id], descTs[id], `靶 ${id} 的口径两边逐字一致`);
+    }
+  }
+
+  /* ---- G. 键盘/触屏源码断言（理由见本节开头） ---- */
+  ok(/pickStage\(S\.pickAsk >= 0 \? S\.pickAsk : S\.pickCur\)/.test(src40),
+     "★ Enter 认卡：开着卡时开的是卡上那屏，不是光标那屏");
+  ok(/S\.pickAsk >= 0 && ev\.code === "Escape"/.test(src40),
+     "★ ESC 先关卡（不是一口气退回门口）");
+  ok(/S\.hoverStage = -1;\s*\n\s*\/\/ 动光标[\s\S]{0,80}S\.pickAsk = -1;/.test(src40),
+     "★ 方向键移动时自动关卡（否则卡片挡住刚移到的那格）");
+  ok(/addEventListener\("touchstart"[\s\S]{0,120}S\.phase !== "pick"/.test(src40),
+     "★ 触屏只在 pick 阶段接管 —— 其他阶段无条件 preventDefault 会让手机整体点不动");
+  ok(/addEventListener\("touchstart"[\s\S]{0,900}passive: false/.test(src40),
+     "触屏监听带 passive:false（否则 preventDefault 无效，点一次等于点两次）");
+  ok(/openPick\(\)[\s\S]{0,400}S\.pickAsk = -1;/.test(src40),
+     "openPick 重置条件卡（重进挑一屏不该还挂着上一屏的卡）");
+}
+
+console.log("\n=== 41. 出征页：两扇门 / 点开着的门进玩法 / 没开的门不静默吞 ===");
+{
+  /* 用户原话：「出门之后 应该有一个出征界面 融合这些玩法的 每个玩法一个小的概念图」
+
+     病根：主界面点「出征」直接掉进第 N 屏，玩家**没有"挑玩法"这一步** ——
+     27 屏是一条线，深巢是另一条线，代码里两条都在，界面上只露一条。
+     这一节钉五件事：
+       A. 门表形状（id 唯一、字段齐、都带一句"门里是什么"）；
+       B. 布局（两扇门不重叠、都在画布内）；
+       C. 命中（点得到、边缘外不误判）；
+       D. 语义（开着的门进对应玩法；没开的门**必须有话说**，不能静默吞点击）；
+       E. 概念图与共用夜空真的被调用（不是只画了两个空框）。 */
+  const sb41 = boot(), P = sb41.GROVE;
+  const src41 = fs.readFileSync(HTML, "utf8");
+  const CW = 960, CH = 600;
+  const G41 = P.GATES;
+
+  /* ---- A. 门表 ---- */
+  ok(Array.isArray(G41) && G41.length >= 2, "至少两扇门（一扇门就等于没有选择）",
+     G41 ? String(G41.length) : "无");
+  {
+    const ids = G41.map((g) => g.id);
+    eq(new Set(ids).size, ids.length, "门的 id 不重复");
+    for (const g of G41) {
+      ok(!!g.name && !!g.sub && !!g.desc,
+         `${g.id} 三件都有：名字 / 一行说明 / 门里是什么`);
+    }
+    eq(G41.filter((g) => g.open).length >= 1, true, "至少一扇门是开着的");
+  }
+
+  /* ---- B. 布局不重叠、不越界 ---- */
+  {
+    const rs = G41.map((_, i) => P.gateRect(i));
+    for (let i = 0; i < rs.length; i++) {
+      const r = rs[i];
+      ok(r.x >= 0 && r.y >= 0 && r.x + r.w <= CW && r.y + r.h <= CH,
+         `第 ${i + 1} 扇门在画布里`, `${r.x},${r.y} ${r.w}×${r.h}`);
+      for (let j = i + 1; j < rs.length; j++) {
+        const o = rs[j];
+        ok(r.x + r.w <= o.x || o.x + o.w <= r.x,
+           `第 ${i + 1} 扇与第 ${j + 1} 扇不重叠（矩形交 = 点不到后一张）`);
+      }
+    }
+  }
+
+  /* ---- C. 命中 ---- */
+  {
+    const r0 = P.gateRect(0);
+    eq(P.gateHit(r0.x + r0.w / 2, r0.y + 40), 0, "点第一扇门中心 → 0");
+    eq(P.gateHit(4, 4), -1, "点左上角空白 → 没有门");
+    eq(P.gateHit(CW - 4, 4), -1, "点右上角空白 → 没有门");
+  }
+
+  /* ---- D. 语义 ---- */
+  {
+    /* 开着的门：进挑一屏 */
+    P.S.progress = 5;
+    P.S.stage = 0;
+    P.openGates();
+    eq(P.S.phase, "portals", "openGates 进的是出征页");
+    P.enterGate(0);
+    eq(P.S.phase, "pick", "★ 点开着的门 → 进挑一屏（玩法入口真的接上了）");
+
+    /* 没开的门：不许静默吞点击 —— 点了要有一句话 */
+    const closedIdx = G41.findIndex((g) => !g.open);
+    if (closedIdx >= 0) {
+      P.openGates();
+      P.S.gateTip = { txt: "", life: 0 };
+      P.enterGate(closedIdx);
+      eq(P.S.phase, "portals", "★ 点没开的门 → 留在出征页（不放人进空玩法）");
+      ok(P.S.gateTip.txt && P.S.gateTip.life > 0,
+         "★ 点没开的门有话说（不是静默吞点击）", P.S.gateTip.txt);
+      ok(!P.S.say.txt || P.S.say.txt.indexOf("还没通") < 0,
+         "★ 提示**不走 S.say**：那句台词是玩家头顶的气泡，出征页没有玩家对象，写了永远看不见");
+    }
+    /* 越界索引不崩（键盘 clamp 失效时的兜底） */
+    P.openGates();
+    P.enterGate(99);
+    eq(P.S.phase, "portals", "越界门号不崩也不放行");
+  }
+
+  /* ---- E. 真的画了 ---- */
+  ok(/if \(p\.id === "trail"\) drawTrailArt\(g, r\.x, r\.y, r\.w, artH\);/.test(src41),
+     "★ 苔原那张概念图真的被调用");
+  ok(/else drawNestArt\(g, r\.x, r\.y, r\.w, artH\);/.test(src41),
+     "★ 深巢那张概念图真的被调用");
+  ok(/drawNightSky\(g, S\.t, HZ\)/.test(src41) && /drawNightSky\(g, T, HZ\)/.test(src41),
+     "★ 夜空由出征页与门口共用一份（两处各画一遍必然漂移）");
+  ok(/drawTrailArt[\s\S]{0,1200}g\.ellipse\(x \+ 0\.35 \* w/.test(src41),
+     "苔原概念图里有坑（地形会咬人的唯一线索）");
+  ok(/drawNestArt[\s\S]{0,2000}const dim = 1 - i \* 0\.18;/.test(src41),
+     "深巢概念图逐层变暗（\"越往下越深\"必须画出来）");
+  ok(/if \(!p\.open\) \{\s*\n\s*g\.fillStyle = "rgba\(8,14,20,\.30\)";/.test(src41),
+     "★ 没开放的门只给图加纱、不整卡压暗（压暗后图和字一起读不出来）");
+  ok(/g\.fillText\(S\.gateTip\.txt, W \/ 2, 512\)/.test(src41),
+     "★ 提示条真的被画出来（不是只写进 S）");
+  ok(/S\.phase === "portals" && S\.gateTip\.life > 0\) S\.gateTip\.life -= dt/.test(src41),
+     "提示条自己衰减（挂在 S.say 上会永不消失：那段走钟只在 play 里跑）");
+
+  /* ---- F. 入口与退路（键盘/启动没法派发事件，走源码断言） ---- */
+  ok(/else if \(FROM_HOME\) \{ S\.progress = st >= 0 \? st : LEVELS\.length; openGates\(\); \}/.test(src41),
+     "★ 从家园进来先到出征页（不再一键掉进第 N 屏）");
+  ok(/if \(S\.phase === "pick"\) \{ openGates\(\); return; \}/.test(src41),
+     "★ 挑一屏按 ESC 一律回出征页（想换门 ≠ 重新点一次出征）");
+  ok(!/FROM_HOME && S\.phase === "pick"/.test(src41),
+     "★ ESC 回门页**不判 FROM_HOME**（Cocos 里它恒为 false，否则同一次按键原型一个行为、真机另一个）");
+
+  /* ---- G. Cocos 侧入口真的接上了 ----
+     这一组读的是 GroveRuntime.ts / GroveBattle.ts，不是原型 ——
+     原型里能玩、真机上没有，是这个项目栽过的坑（URL 参数在 Cocos 里不存在）。 */
+  {
+    const rt41 = fs.readFileSync(
+      path.join(__dirname, "..", "assets", "scripts", "grove", "GroveRuntime.ts"), "utf8");
+    ok(/export function groveBoot\(hero\?: number, stage\?: number, fromHome\?: boolean\)/.test(rt41),
+       "★ groveBoot 有 fromHome 口子（Cocos 没有 URL，只能显式传）");
+    ok(/if \(fromHome\) \{ S\.progress = st >= 0 \? st : LEVELS\.length; openGates\(\); return; \}/.test(rt41),
+       "★ fromHome 时先到出征页，不直升第一屏");
+    /* 断言的是「真的挂着监听」这件事，不是文本里出现过这个词 ——
+       抽取时插入的说明注释里也写着 cv.addEventListener("touchstart")。 */
+    ok(!/\ncv\.addEventListener\("touchstart"/.test(rt41),
+       "★ 触屏监听没漏进运行时顶层（cv 那时是 null，会让整个模块加载失败）");
+    ok(/if \(S\.phase === "pick"\) \{ openGates\(\); return; \}/.test(rt41),
+       "运行时里的 ESC 与原型一致（抽取没把这一段改歪）");
+    const gb41 = fs.readFileSync(
+      path.join(__dirname, "..", "assets", "scripts", "grove", "GroveBattle.ts"), "utf8");
+    ok(/groveBoot\(heroIndexOf\(save\.active\), undefined, true\)/.test(gb41),
+       "★ GroveBattle 真的传了 fromHome=true（不传 = 界面白做）");
+  }
+  ok(/if \(S\.phase === "portals"\) \{[\s\S]{0,400}enterGate\(S\.gateCur\)/.test(src41),
+     "出征页 Enter 进当前门");
+  ok(/S\.gateCur = clamp\(S\.gateCur \|\| 0, 0, GATES\.length - 1\);/.test(src41),
+     "从挑一屏退回来还停在刚才那扇门（不是每次都回到第一扇）");
+}
+
 console.log("\n" + "=".repeat(56));
 if (fail) {
   console.log("通过 " + pass + " · 失败 " + fail);

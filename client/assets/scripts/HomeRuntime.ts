@@ -52,11 +52,7 @@ import {
 import { EDITOR } from 'cc/env';
 import { MAX_SQUAD, PETS, petByNode, petGap, petById, squadSize, unlockedPets } from './config/Roster';
 import type { PetDef } from './config/Roster';
-import { CHAPTERS, STAGE_COUNT, chapterOf, stageLabel, stageInChapter } from './config/Stages';
-import {
-    STAR_TYPES, STAR_OF_STAGE, starBitsOf, stageStarFull, chapterStarFull,
-    STAR_FULL_SHARDS, STAR_FULL_LOGS, STAR_CHAPTER_SHARDS, STAR_CHAPTER_LOGS,
-} from './config/StarTargets';
+import { STAGE_COUNT, stageLabel } from './config/Stages';
 import { loadSave, saveSave, loadBattleStats } from './config/SaveData';
 import type { SaveState } from './config/SaveData';
 import { SATIETY } from './config/BattleConfig';
@@ -339,8 +335,6 @@ const BADGE_INFO: Record<string, string> = {
  * ========================================================================== */
 
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
-/** 「第一章」。图鉴星靶页的章标签和章集满条共用 —— 一处写死三处必然漂移 */
-const chapterOrd = (ch: number) => `第${['一', '二', '三', '四', '五'][ch] || ch + 1}章`;
 const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
 /** 帧率无关的指数平滑：dt 抖动不会改变收敛速度 */
@@ -639,10 +633,6 @@ class HomeController {
     /* 图鉴面板（右侧竖栏的「图鉴」入口打开） */
     private codex: Node | null = null;
     private codexOp: UIOpacity | null = null;
-    /** 图鉴面板当前停在哪一页。`pet` = 宠物，`star` = 星靶（81 格） */
-    private codexTab: 'pet' | 'star' = 'pet';
-    /** 星靶页选中的屏（0 基）。-1 = 没选中，详情区显示引导句 */
-    private starPick = -1;
 
     /** 灶台 / 工作台 / 派遣 / 设置共用的一张卡片。同时只开一张。 */
     private sheet: Node | null = null;
@@ -893,12 +883,11 @@ class HomeController {
         if (!this.codex) return;
         const card = this.codex.getChildByName('card');
         if (!card) return;
-        /* 宠物格在 page-pet 底下，不在 card 底下 —— 星靶页开来时
-           整页宠物节点都不 active，遍历不到也无妨（heads 只补宠物页的脸）。 */
-        const page = card.getChildByName('page-pet');
-        if (!page) return;
+        /* 宠物格直接挂在 card 底下（2026-10-26 星靶页撤出后没有 page 层了）。
+           面板没打开时整棵子树都不 active，getChildByName 仍能找到节点，
+           补脸是无副作用的（只改 Sprite，不碰显隐）。 */
         for (const p of PETS) {
-            const cell = page.getChildByName(`cell-${p.id}`);
+            const cell = card.getChildByName(`cell-${p.id}`);
             const head = cell?.getChildByName('head');
             const sf = this.heads[p.short];
             if (!cell || !head || !sf) continue;
@@ -3841,12 +3830,8 @@ class HomeController {
             this.codex = null;
             this.codexOp = null;
         }
-        /* 每次打开都从宠物页开始、不记住上次选中的屏。
-           图鉴是**常驻重建**的（这里每次都销毁再 ensure），所以页签状态
-           只能靠字段带过来 —— 不重置的话，上次翻到星靶页又选了第 12 屏，
-           这次点"图鉴"直接落在星靶页，玩家会以为点错了入口。 */
-        this.codexTab = 'pet';
-        this.starPick = -1;
+        /* 每次打开都销毁再重建：内容全部从存档现算，喂完、做完、收回来，
+           数字都是刚写进存档的（不重建就会显示上一次的旧数）。 */
         this.ensureCodex();
         /* 取到局部变量再判空：TS 不会因为调用 `ensureCodex()` 就认为
            `this.codex` 可能又变成非空，于是在 `this.codex = null` 之后
@@ -3905,13 +3890,13 @@ class HomeController {
         sg.fill();
         scrim.on(Node.EventType.TOUCH_END, () => this.closeCodex());
 
-        /* ★ 2026-10-26：卡面 510 → 620，图鉴从"宠物名册"扩成两页：
-           宠物（原样）+ 星靶（27 屏 × 3 靶 = 81 格）。星靶是"挑战收集"，
-           和宠物收集是同一类东西，所以不新开入口 ICON（rail 四徽标已满），
-           在这里开第二页。
-           原「战绩条」一行（S×n A×n B×n）并进副标题 —— 信息一个字没少，
-           但副标题下面的位置腾出来放 tab 了。 */
-        const CW = 700, CH = 620;
+        /* ★ 2026-10-26：星靶页**撤出图鉴**（用户：「放在图鉴里 你觉得合适吗」）。
+           三星改挂到挑一屏的格子底部（grove.html drawPick）—— 它回答的是
+           「这一屏打得够不够好」，和评级同类，品类里属于关卡地图；
+           图鉴只留「这是什么」（宠物）。
+           卡面从 620 收回 510；原「战绩条」一行（S×n A×n B×n）就此并进
+           副标题 —— 那一行本来就是总账，和收服数、通关数同一句话。 */
+        const CW = 700, CH = 510;
         const card = new Node('card');
         card.parent = root;
         card.addComponent(UITransform).setContentSize(CW, CH);
@@ -3919,121 +3904,26 @@ class HomeController {
         /* 卡面吃掉点击，别透到遮罩上把面板关掉 */
         card.on(Node.EventType.TOUCH_END, (e: EventTouch) => { e.propagationStopped = true; });
 
-        mkLabel(card, 'title', '图鉴', 34, INK, 400, 48).node.setPosition(0, 190, 0);
-        /* 副标题跟着 tab 走：宠物页报收服/通关/评级，星靶页报靶数/章集满。
-           容器 620 宽 + SHRINK：星靶页文案比宠物页长，写死 400 会被截。 */
-        const subLb = mkLabel(card, 'sub', '', 18, INK_SOFT, 620, 28);
-        subLb.overflow = Label.Overflow.SHRINK;
-        subLb.node.setPosition(0, 146, 0);
-
-        /* tab：宠物 / 星靶。两颗各 120×36，心在 ±90，中间空 60。 */
-        this.mkCodexTab(card, 'pet', '宠物', -90);
-        this.mkCodexTab(card, 'star', '星靶', 90);
-
-        /* 两页都是空壳容器（锚点对齐 card 中心，内部用 card 绝对坐标）——
-           内容**打开时现画**：存档可能被战斗侧的 recordStar 改过，
-           建一次就再也不刷的面板会显示上一次的旧完成位。 */
-        const pagePet = new Node('page-pet');
-        pagePet.parent = card;
-        pagePet.addComponent(UITransform).setContentSize(CW, CH);
-
-        const pageStar = new Node('page-star');
-        pageStar.parent = card;
-        pageStar.addComponent(UITransform).setContentSize(CW, CH);
-
-        this.syncCodexTab(pagePet, pageStar);
-
-        this.codexOp = root.addComponent(UIOpacity);
-    }
-
-    /**
-     * 图鉴的页签。选中态 = 深底白字，未选 = 浅底深字。
-     * 点击只改 `codexTab` 再走 `syncCodexTab` 重画 —— 不在这里直接切 active，
-     * 否则"两页各画一次"的初始化路径和"点一次切一页"的路径会各写一半。
-     */
-    private mkCodexTab(card: Node, key: 'pet' | 'star', text: string, x: number) {
-        const TW = 120, TH = 36;
-        const btn = new Node(`tab-${key}`);
-        btn.parent = card;
-        btn.addComponent(UITransform).setContentSize(TW, TH);
-        btn.setPosition(x, 108, 0);
-        const g = btn.addComponent(Graphics);
-        const on = this.codexTab === key;
-        g.fillColor = on ? new Color(176, 122, 60, 255) : new Color(240, 226, 206, 255);
-        g.roundRect(-TW / 2, -TH / 2, TW, TH, 18);
-        g.fill();
-        g.lineWidth = 2;
-        g.strokeColor = new Color(198, 168, 136, 255);
-        g.roundRect(-TW / 2, -TH / 2, TW, TH, 18);
-        g.stroke();
-        mkLabel(btn, 'txt', text, 17, on ? new Color(255, 250, 240, 255) : INK, TW - 16, TH - 6)
-            .node.setPosition(0, 0, 0);
-        btn.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
-            e.propagationStopped = true;
-            if (this.codexTab === key) return;
-            this.codexTab = key;
-            this.starPick = -1;
-            const card0 = btn.parent;
-            const pp = card0?.getChildByName('page-pet');
-            const ps = card0?.getChildByName('page-star');
-            if (pp && ps) this.syncCodexTab(pp, ps);
-        });
-    }
-
-    /**
-     * 按当前 tab 重画：副标题文案 + 两页显隐 + 当前页内容。
-     * 页签的选中配色也在这里刷（`mkCodexTab` 画的是初始态）。
-     */
-    private syncCodexTab(pagePet: Node, pageStar: Node) {
-        const card = pagePet.parent;
         const cleared = this.save.cleared;
         const owned = PETS.filter((p) => cleared >= p.at).length;
         const cnt: Record<string, number> = { S: 0, A: 0, B: 0 };
         for (const r of this.save.best) if (r === 'S' || r === 'A' || r === 'B') cnt[r]++;
-        const bits = starBitsOf(this.save.star);
-        let gotStars = 0;
-        for (let i = 0; i < STAGE_COUNT; i++) for (let k = 0; k < 3; k++) if (bits[i] && bits[i][k]) gotStars++;
-        let fullCh = 0;
-        for (let c = 0; c < CHAPTERS.length; c++) if (chapterStarFull(bits, c)) fullCh++;
 
-        const sub = card?.getChildByName('sub')?.getComponent(Label);
-        if (sub) {
-            sub.string = this.codexTab === 'pet'
-                ? `已收服 ${owned} / ${PETS.length} · 已通 ${cleared} / ${STAGE_COUNT} · S×${cnt.S} A×${cnt.A} B×${cnt.B}`
-                : `星靶 ${gotStars} / ${STAGE_COUNT * 3} · 章集满 ${fullCh} / ${CHAPTERS.length}`;
-        }
+        mkLabel(card, 'title', '图鉴', 34, INK, 400, 48).node.setPosition(0, 190, 0);
+        /* 副标题一行报三笔账：收服 / 通关 / 评级。容器 620 + SHRINK ——
+           英德俄长文案会把这一行撑爆，SHRINK 是唯一不截断也不越界的解法。 */
+        const subLb = mkLabel(card, 'sub',
+            `已收服 ${owned} / ${PETS.length} · 已通 ${cleared} / ${STAGE_COUNT} · S×${cnt.S} A×${cnt.A} B×${cnt.B}`,
+            18, INK_SOFT, 620, 28);
+        subLb.overflow = Label.Overflow.SHRINK;
+        subLb.node.setPosition(0, 148, 0);
 
-        /* 页签配色：两颗都重画（Graphics 没有"改个颜色"的 API，只能重画） */
-        const tp = card?.getChildByName('tab-pet');
-        const ts = card?.getChildByName('tab-star');
-        this.paintCodexTab(tp, 'pet');
-        this.paintCodexTab(ts, 'star');
+        /* 宠物格直接挂在 card 上（内容每次打开现画） */
+        this.drawPetPage(card);
 
-        pagePet.active = this.codexTab === 'pet';
-        pageStar.active = this.codexTab === 'star';
-        pagePet.removeAllChildren();
-        pageStar.removeAllChildren();
-        if (this.codexTab === 'pet') this.drawPetPage(pagePet);
-        else this.drawStarPage(pageStar);
-    }
+        mkLabel(card, 'tip', '点空白处关闭', 14, INK_SOFT, 400, 22).node.setPosition(0, -232, 0);
 
-    /** 页签重画。和 `mkCodexTab` 里的绘制逐字同源，只差"选中"这一个输入 */
-    private paintCodexTab(btn: Node | undefined | null, key: 'pet' | 'star') {
-        if (!btn) return;
-        const g = btn.getComponent(Graphics);
-        const txt = btn.getChildByName('txt')?.getComponent(Label);
-        if (!g || !txt) return;
-        const TW = 120, TH = 36;
-        const on = this.codexTab === key;
-        g.clear();
-        g.fillColor = on ? new Color(176, 122, 60, 255) : new Color(240, 226, 206, 255);
-        g.roundRect(-TW / 2, -TH / 2, TW, TH, 18);
-        g.fill();
-        g.lineWidth = 2;
-        g.strokeColor = new Color(198, 168, 136, 255);
-        g.roundRect(-TW / 2, -TH / 2, TW, TH, 18);
-        g.stroke();
-        txt.color = on ? new Color(255, 250, 240, 255) : INK;
+        this.codexOp = root.addComponent(UIOpacity);
     }
 
     /**
@@ -4044,11 +3934,11 @@ class HomeController {
     private drawPetPage(page: Node) {
         const cleared = this.save.cleared;
 
-        /* 3 列 × 2 行。列宽 200、行高 160 —— 六个格子占满 600×320。
-           行心 [6,-154]：第一行顶 81 让开 tab（底 90），第二行底 -229
-           让开 tip（顶 -273）。 */
+        /* 3 列 × 2 行。列宽 200、行心 [46,-134] —— 卡面 510 的原始排法：
+           第一行格顶 121 让开副标题（底 134），第二行格底 -209，
+           tip 在 -232（[-243,-221]），与格内 line 行（底 -213）净间隙 8px。 */
         const COL_X = [-200, 0, 200];
-        const ROW_Y = [6, -154];
+        const ROW_Y = [46, -134];
 
         PETS.forEach((p, i) => {
             const cx0 = COL_X[i % 3];
@@ -4116,175 +4006,8 @@ class HomeController {
             mkLabel(cell, 'line', got ? (PET_LINE[p.id] || '') : '', 13, INK_SOFT, 180, 18)
                 .node.setPosition(0, -70, 0);
         });
-
-        /* 本页自己的 tip（星靶页另有一个 y=-296 的）——
-           卡面 510→620 之后两页底部留白不一样，共用一个坐标必有一页贴边。 */
-        mkLabel(page, 'tip', '点空白处关闭', 14, INK_SOFT, 400, 22).node.setPosition(0, -272, 0);
     }
 
-    /**
-     * 星靶页：27 屏 × 3 靶 = 81 格，按章分三行。
-     *
-     * **为什么一屏一格、格内画三颗点，而不是画 81 个独立格子**：
-     * 81 个可点目标在一屏里是噪声；玩家先认出"第 5 屏"，再关心它挂哪三靶。
-     * 格内三点 = 该屏三靶的完成位，集满的格加金框。
-     *
-     * 三态分色沿用结算卡口径，但图鉴里没有"本趟"概念，所以只有两态：
-     * 达成 = 金底白勾 / 未达成 = 灰底空心。"早就有了"和"从没拿到"在两态里
-     * 也读得出来（金 / 灰），而"刚拿到"的 hot 感由结算卡承担。
-     */
-    private drawStarPage(page: Node) {
-        /* 这一页有两个入口：切 tab（syncCodexTab 已清过）和**点格子重画**
-           （cell.on 直接调它，page 是脏的）。不在这里清，第二轮开始
-           旧网格和旧详情就全留在节点树上，和新的一份叠着画。 */
-        page.removeAllChildren();
-        const bits = starBitsOf(this.save.star);
-        const COL_X: number[] = [];
-        for (let i = 0; i < 9; i++) COL_X.push(-216 + 54 * i);
-        /* 三行的章标签心 / 格心。标签 16 高、格 44 高，
-           相邻容器净间隙全部 ≥4px（audit 的红线）。 */
-        const LAB_Y = [78, 2, -72];
-        const CELL_Y = [44, -34, -108];
-        const GOLD = new Color(214, 148, 40, 255);
-        const GOLD_PALE = new Color(246, 222, 168, 255);
-        const GRAY = new Color(206, 198, 186, 255);
-
-        for (let ch = 0; ch < CHAPTERS.length; ch++) {
-            const c = CHAPTERS[ch];
-            mkLabel(page, `ch-lab-${ch}`, `${chapterOrd(ch)} · ${c.name}`, 15, INK_SOFT, 400, 16)
-                .node.setPosition(0, LAB_Y[ch], 0);
-
-            let chGot = 0;
-            for (let j = 0; j < c.count; j++) {
-                const i = c.from + j;
-                const cell = new Node(`star-${i}`);
-                cell.parent = page;
-                cell.addComponent(UITransform).setContentSize(44, 44);
-                cell.setPosition(COL_X[j], CELL_Y[ch], 0);
-                const cg = cell.addComponent(Graphics);
-                const full = stageStarFull(bits, i);
-                /* 集满的格铺金底，没满的铺米白 —— 远看就知道哪几屏打穿了 */
-                cg.fillColor = full ? GOLD_PALE : new Color(248, 242, 230, 255);
-                cg.roundRect(-22, -22, 44, 44, 10);
-                cg.fill();
-                cg.lineWidth = full ? 3 : 1.5;
-                cg.strokeColor = full ? GOLD : new Color(198, 168, 136, 255);
-                cg.roundRect(-22, -22, 44, 44, 10);
-                cg.stroke();
-
-                /* 屏号小字贴格底（11px），三点在格心偏上 10px */
-                mkLabel(cell, 'no', String(i + 1), 11, INK_SOFT, 40, 14)
-                    .node.setPosition(0, -14, 0);
-                let got = 0;
-                for (let k = 0; k < 3; k++) {
-                    const met = !!(bits[i] && bits[i][k]);
-                    if (met) got++;
-                    const dot = new Node(`dot-${k}`);
-                    dot.parent = cell;
-                    dot.addComponent(UITransform).setContentSize(14, 14);
-                    dot.setPosition((k - 1) * 14, 8, 0);
-                    const dg = dot.addComponent(Graphics);
-                    if (met) {
-                        dg.fillColor = GOLD;
-                        dg.circle(0, 0, 6);
-                        dg.fill();
-                        mkLabel(dot, 'ck', '✓', 9, new Color(255, 252, 245, 255), 12, 12)
-                            .node.setPosition(0, 0, 0);
-                    } else {
-                        dg.fillColor = new Color(255, 255, 255, 255);
-                        dg.circle(0, 0, 6);
-                        dg.fill();
-                        dg.lineWidth = 1.5;
-                        dg.strokeColor = GRAY;
-                        dg.circle(0, 0, 6);
-                        dg.stroke();
-                    }
-                }
-                chGot += got;
-
-                /* 选中框：点过的格描粗棕边，告诉玩家"详情区正在说这一屏" */
-                if (this.starPick === i) {
-                    cg.lineWidth = 3;
-                    cg.strokeColor = new Color(122, 80, 52, 255);
-                    cg.roundRect(-22, -22, 44, 44, 10);
-                    cg.stroke();
-                }
-
-                cell.on(Node.EventType.TOUCH_END, (e: EventTouch) => {
-                    e.propagationStopped = true;
-                    this.starPick = this.starPick === i ? -1 : i;
-                    const ps = cell.parent;
-                    if (ps) this.drawStarPage(ps);
-                });
-            }
-
-            /* 章集满条：三段并排，与网格同宽（476）。
-               满章铺金 —— 和格子的集满标记同一套颜色。 */
-            const seg = new Node(`ch-bar-${ch}`);
-            seg.parent = page;
-            seg.addComponent(UITransform).setContentSize(152, 22);
-            seg.setPosition(-162 + 162 * ch, -148, 0);
-            const bgg = seg.addComponent(Graphics);
-            const chFull = chapterStarFull(bits, ch);
-            bgg.fillColor = chFull ? GOLD_PALE : new Color(240, 226, 206, 255);
-            bgg.roundRect(-76, -11, 152, 22, 11);
-            bgg.fill();
-            bgg.lineWidth = 1.5;
-            bgg.strokeColor = chFull ? GOLD : new Color(198, 168, 136, 255);
-            bgg.roundRect(-76, -11, 152, 22, 11);
-            bgg.stroke();
-            mkLabel(seg, 'txt',
-                chFull ? `${chapterOrd(ch)} 集满 ✓` : `${chapterOrd(ch)} ${chGot} / ${c.count * 3}`,
-                13, chFull ? new Color(133, 94, 20, 255) : INK_SOFT, 140, 18)
-                .node.setPosition(0, 0, 0);
-        }
-
-        this.drawStarDetail(page, bits);
-    }
-
-    /**
-     * 星靶详情区：选中一屏 → 屏名 + 三靶条件原文（`STAR_TYPES[].desc`，
-     * 出发前就要能读懂，所以不截断）；没选中 → 引导句 + 奖励口径。
-     *
-     * 奖励口径（一屏集满 +2 碎片 +1 材料）写在右侧计数行里，不单开一行：
-     * 620 的卡高放完「网格 + 章条 + 详情 + tip」之后只剩两行，
-     * 而"集满给多少"必须贴着"这屏还差几靶"读才成立。
-     */
-    private drawStarDetail(page: Node, bits: number[][]) {
-        const i = this.starPick;
-        if (i < 0 || i >= STAGE_COUNT) {
-            mkLabel(page, 'd-hint', '点一格，看这一屏的三颗靶和达成条件', 15, INK_SOFT, 620, 20)
-                .node.setPosition(0, -182, 0);
-            mkLabel(page, 'd-prize',
-                `一屏集满 碎片 +${STAR_FULL_SHARDS} · 材料 +${STAR_FULL_LOGS}　一章集满 碎片 +${STAR_CHAPTER_SHARDS} · 材料 +${STAR_CHAPTER_LOGS}`,
-                13, INK_SOFT, 620, 20).node.setPosition(0, -208, 0);
-            mkLabel(page, 'tip', '点空白处关闭', 14, INK_SOFT, 400, 22).node.setPosition(0, -296, 0);
-            return;
-        }
-
-        const ids = STAR_OF_STAGE[i] || [];
-        const got = ids.filter((id, k) => bits[i] && bits[i][k]).length;
-        const full = stageStarFull(bits, i);
-        mkLeftLabel(page, 'd-title', `第 ${i + 1} 屏 · ${stageLabel(i)}`, 17, INK, -320, -180, 340, 24);
-        mkRightLabel(page, 'd-count',
-            full ? '一屏集满 ✓'
-                : `${got} / 3 · 集满奖 碎片+${STAR_FULL_SHARDS} 材料+${STAR_FULL_LOGS}`,
-            13, full ? new Color(133, 94, 20, 255) : INK_SOFT, 320, -178, 280, 20);
-
-        ids.forEach((id, k) => {
-            const t = STAR_TYPES.find((x) => x.id === id);
-            const met = !!(bits[i] && bits[i][k]);
-            const y = -208 - 20 * k;
-            mkLeftLabel(page, `d-mk-${k}`, met ? '✓' : '—', 13,
-                met ? new Color(63, 125, 36, 255) : new Color(150, 144, 136, 255), -320, y, 24, 16);
-            mkLeftLabel(page, `d-nm-${k}`, t ? t.name : id, 13, INK, -292, y, 110, 16);
-            mkLeftLabel(page, `d-ds-${k}`, t ? t.desc : '', 13, INK_SOFT, -176, y, 496, 16);
-        });
-
-        mkLabel(page, 'tip', '点空白处关闭', 14, INK_SOFT, 400, 22).node.setPosition(0, -296, 0);
-    }
-
-    /** 出门入口。这就是「点了要有反应」的落点。 */
     private openDepart() {
         this.closeSheet();
         if (this.depart) {

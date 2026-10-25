@@ -7,7 +7,7 @@
 
    导出：
      groveAttachCanvas(canvas)  绑定画布
-     groveBoot(hero?, stage?)   开一局（不传就按存档推）
+     groveBoot(hero?, stage?, fromHome?)   开一局（fromHome = 先到出征页挑门）
      groveTick(dt) / groveRender()
      groveSetExitHook(fn)       "收工 / ESC 退出"交给 Cocos 处理
      groveSetArt(key, img)      注入美术图（pet-cat / head-cat / ui-coin …）
@@ -91,6 +91,22 @@ function rr(g, x, y, w, h, r) {
   g.quadraticCurveTo(x, y + h, x, y + h - k);
   g.lineTo(x, y + k);
   g.quadraticCurveTo(x, y, x + k, y);
+  g.closePath();
+}
+
+/** 五角星路径（不 fill）。挑一屏格子底部那三颗靶就是它 ——
+ *  为什么是星不是圆点：玩家对"关卡挂星"的读法已经固化（实心 = 拿到），
+ *  换成圆点等于把这句话翻译一遍。内半径取 0.45 是瘦长星，
+ *  0.5 以上在 r=4 这个尺度上会胖成一团糊。 */
+function starPath(g, cx, cy, r) {
+  g.beginPath();
+  for (let k = 0; k < 10; k++) {
+    const a = -Math.PI / 2 + (k * Math.PI) / 5;
+    const rad = k % 2 === 0 ? r : r * 0.45;
+    const x = cx + Math.cos(a) * rad;
+    const y = cy + Math.sin(a) * rad;
+    if (k === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
   g.closePath();
 }
 
@@ -2807,6 +2823,27 @@ const S = {
   starGain: { shards: 0, logs: 0 },
   starShards: 0,
   starLogs: 0,
+  /* 挑一屏地图用的完成位视图（27×3 的 0/1，loadStarBits 现读现填）。
+     **不是真值**：真值在 localStorage 的 pawpack.save.star，这里只是
+     openPick 时拍的一张快照 —— 每帧 loadStarBits 会让 JSON.parse
+     跑 60 次/秒，而这张图在 pick 阶段是只读的。 */
+  starBits: null,
+  /* 触屏条件卡：pick 阶段点格子先弹这张，卡上再点「打这一屏」才进关。
+     `-1` = 没弹。
+     **为什么改成点两次。** 三颗靶的条件原文原来只挂在两处：鼠标悬停、
+     方向键光标。手机两样都没有 —— 触屏玩家只能盯着格子底部三个空心星
+     瞎猜，进了关才发现"这一屏要一球不打火坑"。鼠标悬停那条路保留
+     （底部条件行照样跟着指针走，桌面老玩家一个动作不多），点击语义统一
+     成"先看卡、再开打"：同一个位置点一下是看、点两下是开打，那才是最
+     难预期的设计，宁多一次点击。 */
+  pickAsk: -1,
+  hoverAsk: "",         // 条件卡上指针指着谁："" / "go" / "close"
+  /* 出征界面（phase === "portals"）：键盘光标停在第几扇门 / 鼠标指着第几扇 */
+  gateCur: 0,
+  hoverGate: -1,
+  /* 出征页的提示条。**不复用 S.say**：那句台词是画在玩家头顶的气泡，
+     而且只在 play 阶段衰减 —— 出征页没有玩家对象，写了永远看不见。 */
+  gateTip: { txt: "", life: 0 },
   // 饱食度 0..100。出门满，**每过一关掉 20**：过 1 屏满饱、2-3 屏半饿、4 屏全饿。
   // 三档**全部**接进战斗：推球力 1.00 / 0.95 / 0.86（见 bellyPower），
   // 外加冲刺分档（满饱冲得更远、半饿原样、全饿冲不动）。
@@ -2916,8 +2953,23 @@ function onKeyDown(ev) {
     ev.preventDefault();
     return;
   }
+  /* 条件卡开着时：ESC 只关卡，不一口气退回门口。
+     玩家点开卡片往往是因为"这颗星怎么拿"，ESC 的意图是「再看看别的格子」，
+     不是「离开挑一屏」。 */
+  if (S.phase === "pick" && S.pickAsk >= 0 && ev.code === "Escape") {
+    S.pickAsk = -1;
+    S.hoverAsk = "";
+    ev.preventDefault();
+    return;
+  }
   if (ev.code === "Escape" && S.phase !== "select") {
-    // 从家园进来的，ESC 就是"收工回家" —— 主界面已经取代了门口选人这一站
+    /* 挑一屏的 ESC **一律**退到出征页：他刚从那道门进来，"想换一道门"
+       不该等于"重新点一次出征"。
+       **不判 FROM_HOME** —— Cocos 里没有 URL，FROM_HOME 恒为 false，
+       带上这个条件会让真机上按 ESC 直接踢回主界面（原型里却退回门页），
+       同一个键两个行为。 */
+    if (S.phase === "pick") { openGates(); return; }
+    /* 从家园进来的，ESC 就是"收工回家" —— 主界面已经取代了门口选人这一站。 */
     if (groveExit("esc")) return;
     S.phase = "select";
     S.p = null;
@@ -2941,6 +2993,24 @@ function onKeyDown(ev) {
     return;
   }
 
+  /* 出征页：左右键在两扇门之间挑，Enter 进。
+   * 只有两扇门，所以不分行列 —— 上下键也当左右用，手机外接键盘和
+   * 习惯按上下的人都不至于按了没反应。 */
+  if (S.phase === "portals") {
+    let c = S.gateCur;
+    if (ev.code === "ArrowLeft" || ev.code === "ArrowUp") c -= 1;
+    else if (ev.code === "ArrowRight" || ev.code === "ArrowDown") c += 1;
+    else if (ev.code === "Enter" || ev.code === "Space") {
+      enterGate(S.gateCur);
+      ev.preventDefault();
+      return;
+    } else if (ev.code === "KeyE") { goHome(false); return; }
+    else return;
+    if (!ev.repeat) S.gateCur = clamp(c, 0, GATES.length - 1);
+    ev.preventDefault();
+    return;
+  }
+
   /* 挑一屏：3 行 × 9 列的方向键导航。`ev.repeat` 必须挡掉 ——
    * 按住方向键一秒会连发 30 次，光标直接从第 5 屏飞到第 27 屏。 */
   if (S.phase === "pick") {
@@ -2951,7 +3021,9 @@ function onKeyDown(ev) {
     else if (ev.code === "ArrowUp")    c -= cols;
     else if (ev.code === "ArrowDown")  c += cols;
     else if (ev.code === "Enter" || ev.code === "Space") {
-      pickStage(S.pickCur);
+      /* 卡片开着时 Enter = 确认这张卡。不然玩家刚点开第 5 屏的条件、
+         手还在键盘上，一按回车开的却是光标那一屏 —— 又不是他刚点的那屏。 */
+      pickStage(S.pickAsk >= 0 ? S.pickAsk : S.pickCur);
       ev.preventDefault();
       return;
     } else if (ev.code === "KeyE") { goHome(false); return; }
@@ -2962,6 +3034,8 @@ function onKeyDown(ev) {
       // 上下越界不绕圈 —— 绕圈会让人以为"按到底又从头上开始了"
       S.pickCur = clamp(c, 0, n - 1);
       S.hoverStage = -1;
+      // 动光标 = 想看别的屏，条件卡自动收起（否则卡片挡住刚移到的那一格）
+      S.pickAsk = -1;
     }
     ev.preventDefault();
     return;
@@ -3703,6 +3777,21 @@ const STAR_CN = {
   bigchain: "大打卷",
   shroom3: "三弹菇",
   ramp: "坡道入营",
+};
+
+/** id → 达成口径原文。**逐字照抄 `StarTargets.ts` 的 `STAR_TYPES[].desc`**，
+    冒烟 §39 有跨文件比对（和 STAR_CN 同一条断言链），抄歪了门禁会响。
+    唯一用途是触屏条件卡：格子底部那三颗星只回答"拿没拿到"，不回答
+    "怎么拿"，而手机上除了这张卡没有别的地方能读到条件。 */
+const STAR_DESC = {
+  nofire: "一趟下来一次火坑都没用（烧球净消灭另算收成，这里不让用）",
+  nolost: "一趟下来没有球滚出屏幕（左边滚出去的最亏，人还得重裹）",
+  nohit: "一趟下来一次都没被打到（球可以挨打，人不行）",
+  noshell: "一趟下来没有球崩开（到期、丢气、滚远、撞墙三次都会崩）",
+  nodrown: "一趟下来没有球沉进水塘（砸进去才沉，滚过去不算）",
+  bigchain: "至少一次让一颗球卷进 3 只（卷得越多越好，3 只是门槛）",
+  shroom3: "一趟里触发的弹菇加起来 3 次（衰减制，第 5 次就弹不动了）",
+  ramp: "让一颗球从坡面上滚进营地（推上去的不算，要自己滚下来）",
 };
 
 const STAR_OF_STAGE = [
@@ -12243,12 +12332,143 @@ function drawBubble(g, x, y, text, alpha) {
    点负责"走了多远"，这里负责"走得怎么样"，两件事分开画才都读得清。
    ========================================================================== */
 
+/* ============================================================================
+   出征界面（phase === "portals"）
+   ----------------------------------------------------------------------------
+   病根：主界面点「出征」直接掉进第 N 屏 —— 玩家**没有"挑玩法"这一步**。
+   27 屏是一条线，深巢是另一条线，两条线在代码里都存在，但界面上只露一条，
+   于是"还有别的玩法"这件事只能靠公告说出来。
+
+   这里把它们摆成并排两扇门，每扇门一张小概念图：横着推球（苔原古道）
+   还是竖着往下钻（深巢），不用读文字就分得清。
+   从家园进来必走这一页（`?stage=` 调试口除外）—— 多两次点击，
+   换的是"我要去哪儿"这个决定重新回到玩家手上。
+   ========================================================================== */
+const GATE = {
+  w: 340, h: 336, gap: 40, y: 138,
+};
+const GATES = [
+  {
+    id: "trail",
+    name: "苔原古道",
+    sub: "27 屏 · 一屏一屏推过去",
+    desc: "带一只宠物出门，把滚进来的小家伙送回营地",
+    open: true,
+  },
+  {
+    id: "nest",
+    name: "深巢无尽",
+    sub: "越往下越深 · 地形每层都不一样",
+    desc: "没有终点，只问你敢下多深",
+    open: false,
+  },
+];
+
+/** 第 i 扇门的矩形。和命中判定共用 —— 两处各算一套坐标，改布局必然错开 */
+function gateRect(i) {
+  const total = GATES.length * GATE.w + (GATES.length - 1) * GATE.gap;
+  const x0 = (W - total) / 2;
+  return { x: x0 + i * (GATE.w + GATE.gap), y: GATE.y, w: GATE.w, h: GATE.h };
+}
+
+function gateHit(mx, my) {
+  for (let i = 0; i < GATES.length; i++) {
+    const r = gateRect(i);
+    if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) return i;
+  }
+  return -1;
+}
+
+function openGates() {
+  S.phase = "portals";
+  S.p = null;
+  /* 不重置 gateCur：从挑一屏退回来还应该停在刚才那扇门上。
+     只 clamp —— 门数变了（以后加门）也不至于指到空位。 */
+  S.gateCur = clamp(S.gateCur || 0, 0, GATES.length - 1);
+  S.hoverGate = -1;
+  S.pickAsk = -1;
+  S.hoverAsk = "";
+  S.starBits = loadStarBits();
+}
+
+/** 选一扇门。开着的进对应玩法，关着的说一句话（不静默吞点击）。 */
+function enterGate(i) {
+  const p = GATES[i];
+  if (!p) return;
+  if (!p.open) {
+    S.gateTip = { txt: p.name + " 还没通，先把古道走完", life: 2.4 };
+    return;
+  }
+  if (p.id === "trail") {
+    S.progress = Math.max(S.progress, 0);
+    openPick();
+  }
+}
+
 const PICK = {
-  x: 40, y: 102, w: 880, h: 380,
+  x: 40, y: 102, w: 880, h: 392,
   cols: 9,
   cw: 82, ch: 74, gap: 6, rowGap: 14,
   labelW: 46, labelGap: 10,
 };
+
+/* ---------- 触屏条件卡 ----------
+ * 尺寸 560×248 居中。**为什么居中不贴在格子旁边**：第 1 格和第 9 格都
+ * 顶在卡片边缘，贴边弹必然有一半出屏；居中是不会错的摆法。
+ * 高度是量出来的：标题 34 + 副行 26 + 分隔 24 + 三行靶 3×28 + 按钮区 66
+ * + 上下内边距，再往下压就会贴到按钮底。
+ */
+const ASK = { w: 560, h: 248 };
+
+function askRect() {
+  /* 中心往上提 14px：卡片底下的按钮区要离屏幕底部远一点，
+     不然拇指按「打这一屏」时手掌边缘会先碰到屏幕下沿 */
+  return { x: (W - ASK.w) / 2, y: (H - ASK.h) / 2 - 14, w: ASK.w, h: ASK.h };
+}
+
+/** 卡上的三个可点区。`card` 用来吃掉卡片内部的点击（别透到下面的格子上） */
+function askBtns() {
+  const r = askRect();
+  const bh = 40, by = r.y + 210;
+  return {
+    /* 左右对称：次按钮 128..248、主按钮 264..432（相对卡片左沿），
+       两侧各留 128，中间空 16 —— 改任何一个宽度都会破这个对称 */
+    close: { x: r.x + 128, y: by - bh / 2, w: 120, h: bh },
+    go:    { x: r.x + 264, y: by - bh / 2, w: 168, h: bh },
+    card:  { x: r.x, y: r.y, w: r.w, h: r.h },
+  };
+}
+
+function askHit(mx, my) {
+  const p = { x: mx, y: my };
+  const B = askBtns();
+  if (inRect(p, B.go)) return "go";
+  if (inRect(p, B.close)) return "close";
+  if (inRect(p, B.card)) return "card";
+  return "";
+}
+
+/** 五角星。`on` = 已拿到（实心金），否则空心灰描边 */
+function drawStar(g, cx, cy, R, on) {
+  const inner = R * 0.46;
+  g.beginPath();
+  for (let k = 0; k < 10; k++) {
+    const a = -Math.PI / 2 + (Math.PI * k) / 5;
+    const rd = k % 2 === 0 ? R : inner;
+    const x = cx + Math.cos(a) * rd, y = cy + Math.sin(a) * rd;
+    if (k === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.closePath();
+  if (on) {
+    g.fillStyle = "#F0A81E";
+    g.fill();
+  } else {
+    g.strokeStyle = "rgba(120,92,64,.38)";
+    g.lineWidth = 1.6;
+    g.stroke();
+  }
+}
+
 /** 每个产地 9 屏。名字是产地，不是主题键 —— 主题键有 12 套（含变体），
  *  按主题分组会切出 7 行，和"一产地一屏地打完"的实际路径对不上。 */
 const FACTIONS = [
@@ -12477,18 +12697,365 @@ function openPick() {
   S.door.leaveT = 0;
   S.hoverBtn = -1;
   S.hoverStage = -1;
+  S.pickAsk = -1;
+  S.hoverAsk = "";
   S.pickCur = clamp(S.stage, 0, LEVELS.length - 1);
+  /* 星靶完成位快照。挑一屏是**出门前**唯一能看见"这一屏还有哪颗靶没拿到"
+     的地方，所以必须在这里读一次最新的（打完一屏回来这张图就是旧的）。 */
+  S.starBits = loadStarBits();
 }
 
 /** 从挑一屏进关。选的这一屏如果比存档落后，progress 不会退 —— 只进不退。 */
 function pickStage(i) {
   if (i < 0 || i > maxOpen()) return;
+  S.pickAsk = -1;          // 进关前把卡片收掉，回来时不该还挂着上一屏的卡
+  S.hoverAsk = "";
   S.progress = Math.max(S.progress, i);
   saveProgress();
   beginRun(i);
 }
 
+/**
+ * 挑一屏的一次"点"。**鼠标 mousedown 与触屏 tap 共用这一个出口** ——
+ * 两个入口各写一份的话，改点击语义时必然只改一半（而"点一下是看条件
+ * 还是开打"正是这一版改的东西）。
+ */
+function pickTap(mx, my) {
+  if (S.pickAsk >= 0) {
+    const h = askHit(mx, my);
+    if (h === "go") pickStage(S.pickAsk);
+    else if (h === "close" || h === "") S.pickAsk = -1;
+    /* h === "card"：点在卡面空白处什么都不做 —— 卡片吃掉点击，
+       别让它透到下面的格子上去偷偷换屏 */
+    if (h !== "card") S.hoverAsk = "";
+    return;
+  }
+  const i = pickHit(mx, my);
+  if (i >= 0 && i <= maxOpen()) S.pickAsk = i;
+}
+
 const RANK_COLOR = { S: "#E8951A", A: "#4F9B24", B: "#3F82A2" };
+
+/** 夜空底。出征页和门口选人共用这一份 —— 两处各画一遍，
+    改配色时必然只改一处，玩家会在两个连续页面之间看到天色不一样。 */
+function drawNightSky(g, t, HZ) {
+  const sky = g.createLinearGradient(0, 0, 0, HZ + 10);
+  sky.addColorStop(0, "#0A1520");
+  sky.addColorStop(0.52, "#12232A");
+  sky.addColorStop(1, "#1A3029");
+  g.fillStyle = sky;
+  g.fillRect(0, 0, W, H);
+
+  // 星：用 hash 不抖。Math.random 每帧变，整片星空会闪成噪点
+  for (let i = 0; i < 54; i++) {
+    const x = hash(i * 7 + 1) * W;
+    const y = hash(i * 13 + 5) * 330;
+    const tw = Math.sin(t * 1.3 + i * 0.9) * 0.5 + 0.5;
+    g.fillStyle = "rgba(214,238,226," + (0.10 + 0.40 * tw).toFixed(3) + ")";
+    g.fillRect(x, y, 1.7, 1.7);
+  }
+
+  // 月亮
+  g.fillStyle = "rgba(226,240,214,.86)";
+  g.beginPath(); g.arc(816, 94, 29, 0, 6.283); g.fill();
+  g.fillStyle = "rgba(226,240,214,.045)";
+  g.beginPath(); g.arc(816, 94, 74, 0, 6.283); g.fill();
+
+  // 远树剪影
+  g.fillStyle = "#0E2820";
+  for (let i = 0; i < 12; i++) {
+    const x = i * 86 + (hash(i * 3) - 0.5) * 44;
+    const h = 88 + hash(i * 11) * 80;
+    const w = 38 + hash(i * 17) * 28;
+    g.beginPath();
+    g.moveTo(x, HZ + 6);
+    g.lineTo(x + w * 0.5, HZ + 6 - h);
+    g.lineTo(x + w, HZ + 6);
+    g.closePath();
+    g.fill();
+  }
+  g.fillStyle = "rgba(9,24,20,.50)";
+  g.fillRect(0, HZ - 10, W, 16);
+}
+
+/** 苔原古道的概念图：**横着推** —— 平台、坑、坡、营地，一屏长什么样 */
+function drawTrailArt(g, x, y, w, h) {
+  const sky = g.createLinearGradient(x, y, x, y + h);
+  sky.addColorStop(0, "#1B3A46");
+  sky.addColorStop(1, "#2A5E49");
+  g.fillStyle = sky;
+  g.fillRect(x, y, w, h);
+
+  const gy = y + h * 0.76;
+  g.fillStyle = "#2E5A3C";
+  g.fillRect(x, gy, w, h - (gy - y));
+  g.fillStyle = "#3C7050";
+  g.fillRect(x, gy, w, 3);
+
+  /* 平台：三个高度错开 —— 一眼看出"要往上推"，不是平地推球 */
+  const plats = [[0.16, 0.58, 0.20], [0.42, 0.44, 0.15], [0.64, 0.54, 0.13]];
+  for (const pl of plats) {
+    const rx = x + pl[0] * w, ry = y + pl[1] * h, rw = pl[2] * w;
+    g.fillStyle = "#7A5A3A";
+    g.fillRect(rx, ry, rw, 7);
+    g.fillStyle = "#5E9A48";
+    g.fillRect(rx, ry, rw, 3);
+  }
+
+  // 坑：火坑（橙红）与泥坑（褐）各一，这是"地形会咬人"的唯一线索
+  g.fillStyle = "#C4472F";
+  g.beginPath(); g.ellipse(x + 0.35 * w, gy + 5, 0.055 * w, 8, 0, 0, 6.283); g.fill();
+  g.fillStyle = "#6B4A2E";
+  g.beginPath(); g.ellipse(x + 0.55 * w, gy + 5, 0.05 * w, 7, 0, 0, 6.283); g.fill();
+
+  // 坡：从地面斜上第三个平台
+  g.fillStyle = "#8A6A44";
+  g.beginPath();
+  g.moveTo(x + 0.52 * w, gy);
+  g.lineTo(x + 0.63 * w, y + 0.54 * h + 7);
+  g.lineTo(x + 0.68 * w, y + 0.54 * h + 7);
+  g.lineTo(x + 0.59 * w, gy);
+  g.closePath();
+  g.fill();
+
+  // 营地：光圈 + 拱门
+  const cx2 = x + 0.87 * w, cyc = gy - 16;
+  g.fillStyle = "rgba(240,200,90,.15)";
+  g.beginPath(); g.arc(cx2, cyc, 28, 0, 6.283); g.fill();
+  g.strokeStyle = "#E8C878";
+  g.lineWidth = 3;
+  g.beginPath();
+  g.moveTo(cx2 - 12, cyc + 15);
+  g.lineTo(cx2 - 12, cyc - 2);
+  g.quadraticCurveTo(cx2, cyc - 16, cx2 + 12, cyc - 2);
+  g.lineTo(cx2 + 12, cyc + 15);
+  g.stroke();
+
+  // 宠物：圆头 + 身体 + 一只耳朵
+  const px2 = x + 0.10 * w, py2 = gy;
+  g.fillStyle = "#C99A62";
+  g.beginPath(); g.ellipse(px2, py2 - 8, 9, 9, 0, 0, 6.283); g.fill();
+  g.fillStyle = "#F0DDB8";
+  g.beginPath(); g.arc(px2, py2 - 21, 8, 0, 6.283); g.fill();
+  g.beginPath();
+  g.moveTo(px2 - 8, py2 - 27);
+  g.lineTo(px2 - 2, py2 - 21);
+  g.lineTo(px2 - 9, py2 - 17);
+  g.closePath();
+  g.fill();
+
+  // 空中三颗球：这条线的核心动作（把球推上去）
+  for (let i = 0; i < 3; i++) {
+    g.fillStyle = "rgba(255,240,210,.85)";
+    g.beginPath();
+    g.arc(x + (0.26 + i * 0.08) * w, y + (0.30 - i * 0.04) * h, 5 + i, 0, 6.283);
+    g.fill();
+  }
+}
+
+/** 深巢的概念图：**竖着往下** —— 层叠地形、越深越暗、底部是黑的 */
+function drawNestArt(g, x, y, w, h) {
+  const bg = g.createLinearGradient(x, y, x, y + h);
+  bg.addColorStop(0, "#241E2E");
+  bg.addColorStop(0.6, "#171221");
+  bg.addColorStop(1, "#0A0812");
+  g.fillStyle = bg;
+  g.fillRect(x, y, w, h);
+
+  /* 四层。每层比上一层暗 18% —— "越往下越深"这件事必须画出来，
+     不然这张图和苔原那张只差"横竖"一个区别，概念图就白画了。 */
+  for (let i = 0; i < 4; i++) {
+    const ly = y + 30 + i * 40;
+    const dim = 1 - i * 0.18;
+    g.fillStyle = "rgba(120,100,150," + (0.50 * dim).toFixed(3) + ")";
+    g.fillRect(x + 30, ly, w - 44, 2);
+
+    g.fillStyle = "rgba(150,130,180," + (0.55 * dim).toFixed(3) + ")";
+    g.fillRect(x + 52 + i * 16, ly - 8, 50, 5);
+
+    g.fillStyle = "rgba(200,80,60," + (0.78 * dim).toFixed(3) + ")";
+    g.beginPath(); g.arc(x + w - 62 - i * 8, ly + 4, 4, 0, 6.283); g.fill();
+
+    g.fillStyle = "rgba(210,200,230," + (0.44 * dim).toFixed(3) + ")";
+    g.font = "bold 9px 'Microsoft YaHei','PingFang SC',system-ui,sans-serif";
+    g.textAlign = "left";
+    g.fillText("L" + (i + 1), x + 14, ly + 1);
+  }
+
+  // 下潜箭头（放左侧，别压住平台）
+  g.strokeStyle = "rgba(240,200,90,.50)";
+  g.lineWidth = 2;
+  g.beginPath();
+  g.moveTo(x + 18, y + h - 34);
+  g.lineTo(x + 18, y + 12);
+  g.stroke();
+  g.beginPath();
+  g.moveTo(x + 12, y + 22);
+  g.lineTo(x + 18, y + 10);
+  g.lineTo(x + 24, y + 22);
+  g.stroke();
+
+  // 底部红点：再往下就是这个
+  g.fillStyle = "rgba(200,60,50,.42)";
+  g.beginPath(); g.arc(x + w * 0.62, y + h - 12, 14, 0, 6.283); g.fill();
+  g.fillStyle = "rgba(220,80,60,.70)";
+  g.beginPath(); g.arc(x + w * 0.62, y + h - 12, 5, 0, 6.283); g.fill();
+}
+
+/** 出征界面 */
+function drawGates(g) {
+  const FONT = "'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  const HZ = 470;
+  drawNightSky(g, S.t, HZ);
+  g.fillStyle = "#0C1F1A";
+  g.fillRect(0, HZ, W, H - HZ);
+
+  g.textBaseline = "middle";
+  g.textAlign = "left";
+  g.fillStyle = "#E6F2E4";
+  g.font = "bold 30px " + FONT;
+  g.fillText("出征", 88, 56);
+  g.fillStyle = "rgba(200,222,200,.60)";
+  g.font = "13.5px " + FONT;
+  g.fillText("挑一道门走 · 门里的打法不一样", 88, 90);
+
+  /* 这趟的手牌（通到哪 / 星靶多少）挂在标题下面**左侧**，不放右上角：
+     右上角是月亮（816,94 半径 74 的光晕）—— 数字放那儿会被曝光吃掉，
+     第一版就是这样，"星靶 32 / 81" 前半截全是白的，读不出来。 */
+  {
+    let done = 0;
+    for (let i = 0; i < LEVELS.length; i++) if (S.best[i]) done++;
+    let gotStar = 0;
+    if (S.starBits) {
+      for (let i = 0; i < S.starBits.length; i++)
+        for (const b of (S.starBits[i] || [])) if (b === 1) gotStar++;
+    }
+    g.font = "bold 13px " + FONT;
+    g.fillStyle = "#F0C060";
+    g.fillText("星靶 " + gotStar + " / " + STAR_OF_STAGE.length * 3, 88, 120);
+    g.fillStyle = "rgba(200,222,200,.62)";
+    g.font = "13px " + FONT;
+    g.fillText("·  已通 " + done + " / " + LEVELS.length + " 屏", 196, 120);
+  }
+
+  const focus = S.hoverGate >= 0 ? S.hoverGate : S.gateCur;
+
+  for (let i = 0; i < GATES.length; i++) {
+    const r = gateRect(i);
+    const p = GATES[i];
+    const on = i === focus && p.open;
+
+    // 卡底：深色玻璃
+    g.fillStyle = "rgba(18,34,32,.78)";
+    rr(g, r.x, r.y, r.w, r.h, 20);
+    g.fill();
+    g.strokeStyle = on ? "#F0A81E" : "rgba(160,200,180,.26)";
+    g.lineWidth = on ? 2.6 : 1.6;
+    rr(g, r.x, r.y, r.w, r.h, 20);
+    g.stroke();
+
+    // 概念图：圆角裁剪，只占卡片上半
+    const artH = 196;
+    g.save();
+    g.beginPath();
+    /* 只圆上面两个角：下面接着卡身，圆下角会露出一道缝 */
+    const k = 18;
+    g.moveTo(r.x + k, r.y);
+    g.lineTo(r.x + r.w - k, r.y);
+    g.quadraticCurveTo(r.x + r.w, r.y, r.x + r.w, r.y + k);
+    g.lineTo(r.x + r.w, r.y + artH);
+    g.lineTo(r.x, r.y + artH);
+    g.lineTo(r.x, r.y + k);
+    g.quadraticCurveTo(r.x, r.y, r.x + k, r.y);
+    g.closePath();
+    g.clip();
+    if (p.id === "trail") drawTrailArt(g, r.x, r.y, r.w, artH);
+    else drawNestArt(g, r.x, r.y, r.w, artH);
+    /* 没开放的门只**在图上**盖一层薄纱，不整张卡压暗 ——
+       整卡压暗后概念图变成一团黑，这张图就白画了；而文字压暗会让
+       "深巢无尽"四个字都读不出来，玩家不知道这扇门后面是什么。
+       第一版就是整卡 dim 0.62，截图里只剩一个黑框。 */
+    if (!p.open) {
+      g.fillStyle = "rgba(8,14,20,.30)";
+      g.fillRect(r.x, r.y, r.w, artH);
+    }
+    g.restore();
+
+    // 概念图底部压一条暗边，让标题区压得住（不然木色地面直接顶到字上）
+    const fade = g.createLinearGradient(0, r.y + artH - 46, 0, r.y + artH);
+    fade.addColorStop(0, "rgba(14,28,26,0)");
+    fade.addColorStop(1, "rgba(14,28,26,.92)");
+    g.fillStyle = fade;
+    g.fillRect(r.x, r.y + artH - 46, r.w, 46);
+
+    g.textAlign = "left";
+    g.fillStyle = "#F2F7EE";
+    g.font = "bold 21px " + FONT;
+    g.fillText(p.name, r.x + 24, r.y + 226);
+
+    g.fillStyle = "rgba(200,222,200,.62)";
+    g.font = "12.5px " + FONT;
+    g.fillText(p.sub, r.x + 24, r.y + 254);
+
+    g.fillStyle = "rgba(200,222,200,.48)";
+    g.font = "12px " + FONT;
+    g.fillText(fitText(g, p.desc, r.w - 48), r.x + 24, r.y + 280);
+
+    // 状态行
+    if (p.id === "trail") {
+      let done = 0;
+      for (let j = 0; j < LEVELS.length; j++) if (S.best[j]) done++;
+      /* 进度条 294 / 文字 320：原来 302/328 —— 字底压到卡沿（卡高 336），
+         截图里"推了 6 / 27 屏"整行贴着底边。 */
+      const bw = r.w - 48, bx = r.x + 24, by = r.y + 292;
+      g.fillStyle = "rgba(160,200,180,.20)";
+      rr(g, bx, by, bw, 8, 4);
+      g.fill();
+      g.fillStyle = "#7FC24A";
+      rr(g, bx, by, Math.max(4, bw * done / LEVELS.length), 8, 4);
+      g.fill();
+      g.fillStyle = "rgba(200,222,200,.72)";
+      g.font = "bold 12.5px " + FONT;
+      g.fillText("推了 " + done + " / " + LEVELS.length + " 屏", bx, by + 24);
+    } else {
+      /* 没开放的门也要把"门后面是什么"说清楚，否则这张卡只剩一个
+         "即将开放"的标签，玩家不会期待它 */
+      g.fillStyle = "rgba(240,200,90,.16)";
+      rr(g, r.x + 24, r.y + 298, 96, 26, 13);
+      g.fill();
+      g.fillStyle = "#F0C060";
+      g.font = "bold 12.5px " + FONT;
+      g.textAlign = "center";
+      g.fillText("即将开放", r.x + 72, r.y + 311);
+      g.textAlign = "left";
+      g.fillStyle = "rgba(200,222,200,.46)";
+      g.font = "12px " + FONT;
+      g.fillText("正在挖", r.x + 132, r.y + 311);
+    }
+  }
+
+  /* 提示条（点没开放的门时）。卡片底 474、底部提示 558，中间这 84px
+     刚好放一条 —— 放画面上方会被标题抢走注意力，放最底会和操作提示叠。 */
+  if (S.gateTip.life > 0) {
+    const a = clamp(S.gateTip.life / 0.4, 0, 1) * clamp((2.4 - S.gateTip.life) / 0.14, 0, 1);
+    g.globalAlpha = a;
+    g.font = "bold 14px " + FONT;
+    const tw2 = g.measureText(S.gateTip.txt).width;
+    const bw2 = tw2 + 44;
+    g.fillStyle = "rgba(240,200,90,.14)";
+    rr(g, W / 2 - bw2 / 2, 496, bw2, 32, 16);
+    g.fill();
+    g.textAlign = "center";
+    g.fillStyle = "#F0C060";
+    g.fillText(S.gateTip.txt, W / 2, 512);
+    g.globalAlpha = 1;
+  }
+
+  g.textAlign = "center";
+  g.fillStyle = "rgba(200,222,200,.46)";
+  g.font = "11.5px " + FONT;
+  g.fillText("点一道门进去   ·   方向键挑   ·   Enter 进   ·   ESC 回主界面", W / 2, H - 42);
+}
 
 function drawPick(g) {
   const cx = W / 2;
@@ -12532,7 +13099,20 @@ function drawPick(g) {
     }
     g.fillStyle = K.ink3;
     g.font = "12.5px " + FONT;
-    g.fillText("已通 " + done + " / " + LEVELS.length, tx, PICK.y + 32);
+    const doneTxt = "已通 " + done + " / " + LEVELS.length;
+    g.fillText(doneTxt, tx, PICK.y + 32);
+    /* 星靶总账挂在「已通」左边：抬头这一行本来就是「打得怎么样」的总账，
+       三星是同一笔账的另一栏，不该另起一行去抢地盘。
+       为什么挑一屏要有这个数：三星是**这一批 27 屏的**收集进度，
+       它唯一的家就是这张地图 —— 放图鉴里那是把「这一关怎么打得更好」
+       和「这是什么」混成一类（2026-10-26 用户点出来的）。 */
+    let gotStar = 0;
+    if (S.starBits) for (let i = 0; i < S.starBits.length; i++)
+      for (const b of (S.starBits[i] || [])) if (b === 1) gotStar++;
+    tx -= g.measureText(doneTxt).width + 14;
+    g.fillStyle = "#C97A10";
+    g.font = "bold 12.5px " + FONT;
+    g.fillText("星靶 " + gotStar + " / " + STAR_OF_STAGE.length * 3, tx, PICK.y + 32);
   }
 
   g.strokeStyle = "rgba(120,92,64,.24)";
@@ -12612,14 +13192,37 @@ function drawPick(g) {
     g.textAlign = "center";
     g.fillStyle = ink;
     g.font = (cleared || !locked ? "bold 14px " : "13px ") + FONT;
-    g.fillText(fitText(g, L.name, c.w - 12), c.x + c.w / 2, c.y + 40);
+    g.fillText(fitText(g, L.name, c.w - 12), c.x + c.w / 2, c.y + 34);
 
     // 底部：目标词。它才是"这一屏打法不一样"的唯一线索 ——
     // 27 屏里有 6 种目标，光看名字全是地形名，读不出来差别。
     const gd = GOALS[L.goal];
     g.font = "10px " + FONT;
     g.fillStyle = locked ? "rgba(74,53,36,.20)" : "rgba(120,92,64,.72)";
-    g.fillText(gd ? gd.name : "", c.x + c.w / 2, c.y + c.h - 15);
+    g.fillText(gd ? gd.name : "", c.x + c.w / 2, c.y + 50);
+
+    /* ---- 三颗靶（2026-10-26 从图鉴搬到这里）----
+     * 为什么必须挂在格子上：三星回答的是「这一屏我打得够不够好」，
+     * 和评级是同一句话的两种说法。品类共识是**挂在关卡节点上**，
+     * 收进图鉴等于让玩家为了看进度多穿一门。
+     * 实心金 = 拿到，空心灰 = 没有；锁着的格子整行压暗 ——
+     * 但轮廓仍然画：全隐藏的话，解锁前根本不知道这一屏有靶。 */
+    const row = STAR_OF_STAGE[i] || [];
+    const bits = (S.starBits && S.starBits[i]) || [];
+    for (let k = 0; k < row.length; k++) {
+      const sx = c.x + c.w / 2 + (k - 1) * 11;
+      const sy = c.y + 65.5;
+      if (bits[k] === 1) {
+        g.fillStyle = locked ? "rgba(240,168,30,.30)" : "#F0A81E";
+        starPath(g, sx, sy, 4.2);
+        g.fill();
+      } else {
+        g.strokeStyle = locked ? "rgba(120,92,64,.16)" : "rgba(120,92,64,.45)";
+        g.lineWidth = 1.2;
+        starPath(g, sx, sy, 4.2);
+        g.stroke();
+      }
+    }
   }
 
   // ---- 产地标签：画在每行左侧，和那一行的格子垂直居中 ----
@@ -12652,10 +13255,136 @@ function drawPick(g) {
     g.fillText("第 " + (cur + 1) + " 屏 " + L.name + " · " + (gd ? (gd.title || gd.name) : "") +
                (canGo ? "" : "　（还没走到）"), cx, cy - 16);
   }
+
+  /* ---- 三颗靶的原文（hover / 键盘光标指向的那一屏）----
+   * 格子里那三颗星只回答「拿没拿到」，不回答「怎么拿」。
+   * 条件原文必须**在点开打之前**能读到，所以挂在条形读条上：
+   * 鼠标悬停或方向键移过去就换，不占格子、也不改点击语义
+   * （点格子照样直接开打 —— 机器人基线一个字节没动）。 */
+  if (cur >= 0 && cur < LEVELS.length) {
+    const row = STAR_OF_STAGE[cur] || [];
+    const bits = (S.starBits && S.starBits[cur]) || [];
+    const canGo = cur <= open;
+    const parts = [];
+    for (let k = 0; k < row.length; k++) {
+      parts.push({ t: (bits[k] === 1 ? "✓ " : "— ") + STAR_CN[row[k]], got: bits[k] === 1 });
+    }
+    // 逐段上色：一个 fillText 只有一个颜色，而三颗靶的状态必须分开读
+    let total = 0;
+    for (const p of parts) total += g.measureText(p.t).width + 18;
+    let px = cx - total / 2 + 9;
+    g.font = "12px " + FONT;
+    g.textAlign = "left";
+    for (const p of parts) {
+      g.fillStyle = !canGo ? "rgba(74,53,36,.28)"
+                  : p.got ? "#4F9B24" : "rgba(120,92,64,.72)";
+      g.fillText(p.t, px, cy - 38);
+      px += g.measureText(p.t).width + 18;
+    }
+  }
+
   g.textAlign = "center";
   g.font = "11.5px " + FONT;
   g.fillStyle = "rgba(74,53,36,.50)";
-  g.fillText("点一屏开打   ·   方向键挑   ·   Enter 开打   ·   ESC 返回   ·   E 收工", cx, cy + 6);
+  /* 文案跟着点击语义走：桌面点格子现在也是"先看条件卡"。键盘 Enter 没变
+     （方向键已经把条件行读到光标那一屏了，再弹一次卡是多一步），
+     所以这里分开写「点击看条件 / Enter 直开」。 */
+  g.fillText("点一屏看条件   ·   方向键挑   ·   Enter 直开   ·   ESC 返回   ·   E 收工", cx, cy + 6);
+}
+
+/* ---------- 触屏条件卡（画在 drawPick 之上，整屏压暗） ----------
+ *
+ * 桌面用鼠标悬停就能在底部条件行读到三颗靶，手机没有悬停 ——
+ * 这张卡是触屏玩家在**进关之前**唯一能读到条件的地方。
+ */
+function drawAsk(g) {
+  const i = S.pickAsk;
+  if (i < 0 || i >= LEVELS.length) return;
+  const FONT = "'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  const K = hudSkin();
+  const r = askRect();
+  const L = LEVELS[i];
+  const gd = GOALS[L.goal];
+  const row = STAR_OF_STAGE[i] || [];
+  const bits = (S.starBits && S.starBits[i]) || [];
+  let got = 0;
+  for (let k = 0; k < row.length; k++) if (bits[k] === 1) got++;
+
+  g.fillStyle = "rgba(16,28,40,.46)";
+  g.fillRect(0, 0, W, H);
+  creamCard(g, r.x, r.y, r.w, r.h, 22);
+
+  g.textBaseline = "middle";
+  g.textAlign = "left";
+
+  g.fillStyle = K.ink;
+  g.font = "bold 19px " + FONT;
+  g.fillText("第 " + (i + 1) + " 屏 · " + L.name, r.x + 28, r.y + 34);
+
+  /* 右上三颗大星：和格子里那三颗小的同一套口径（金 = 拿到）。
+     卡片上放大一倍 —— 进关前最后一眼要回答的就是"还差几颗"。 */
+  for (let k = 0; k < 3; k++) {
+    drawStar(g, r.x + r.w - 32 - (2 - k) * 28, r.y + 33, 10, bits[k] === 1);
+  }
+
+  g.fillStyle = "rgba(74,53,36,.62)";
+  g.font = "12.5px " + FONT;
+  const sub = "目标：" + (gd ? (gd.title || gd.name) : "—")
+    + "　·　" + (got >= row.length
+      ? "三颗集满，奖励已领"
+      : "还差 " + (row.length - got) + " 颗 · 集满 碎片 +" + STAR_FULL_SHARDS
+        + " 材料 +" + STAR_FULL_LOGS);
+  g.fillText(sub, r.x + 28, r.y + 60);
+
+  g.strokeStyle = "rgba(120,92,64,.22)";
+  g.lineWidth = 1;
+  g.beginPath();
+  g.moveTo(r.x + 28, r.y + 84);
+  g.lineTo(r.x + r.w - 28, r.y + 84);
+  g.stroke();
+
+  /* 三行靶：状态符 + 名字 + 口径原文。
+     desc 用 11.5px 而不是正文 12.5 —— 最长的一条 32 字，12.5 会顶到卡片
+     右边沿；11.5 在 412px 里放得下 35 字，且仍比格子里的 10px 目标词大。 */
+  for (let k = 0; k < row.length; k++) {
+    const id = row[k];
+    const met = bits[k] === 1;
+    const y = r.y + 112 + k * 28;
+    g.textAlign = "left";
+    g.font = "bold 13px " + FONT;
+    g.fillStyle = met ? "#4F9B24" : "rgba(150,144,136,.95)";
+    g.fillText(met ? "✓" : "—", r.x + 28, y);
+    g.fillStyle = met ? "#3F7D24" : K.ink;
+    g.fillText(STAR_CN[id] || id, r.x + 52, y);
+    g.fillStyle = "rgba(74,53,36,.60)";
+    g.font = "11.5px " + FONT;
+    g.fillText(fitText(g, STAR_DESC[id] || "", r.w - 152), r.x + 124, y);
+  }
+
+  const B = askBtns();
+  const bh = B.go.h;
+  g.textAlign = "center";
+
+  const cHot = S.hoverAsk === "close";
+  g.fillStyle = cHot ? "#F6E6CC" : "#FFF8E8";
+  rr(g, B.close.x, B.close.y, B.close.w, bh, 20);
+  g.fill();
+  g.strokeStyle = "rgba(120,92,64,.40)";
+  g.lineWidth = 1.6;
+  rr(g, B.close.x, B.close.y, B.close.w, bh, 20);
+  g.stroke();
+  g.fillStyle = "rgba(74,53,36,.78)";
+  g.font = "bold 15px " + FONT;
+  g.fillText("再看看", B.close.x + B.close.w / 2, B.close.y + bh / 2);
+
+  const gHot = S.hoverAsk === "go";
+  g.fillStyle = gHot ? "#F0A81E" : "#E8961A";
+  rr(g, B.go.x, B.go.y, B.go.w, bh, 20);
+  g.fill();
+  g.fillStyle = "#FFFDF6";
+  g.font = "bold 16px " + FONT;
+  g.fillText(got >= row.length ? "再打一遍" : "打这一屏",
+             B.go.x + B.go.w / 2, B.go.y + bh / 2);
 }
 
 function drawSelect(g) {
@@ -12669,44 +13398,8 @@ function drawSelect(g) {
   // 读起来是"它站在门口发呆"。0.45 起开 → 撞上跑动中段，画面里"门为它让开"。
   const doorOpen = picked >= 0 ? Math.min(1, Math.max(0, (lv - 0.45) / 0.42)) : 0;
 
-  // ---------- 夜空 ----------
-  const sky = g.createLinearGradient(0, 0, 0, HZ + 10);
-  sky.addColorStop(0, "#0A1520");
-  sky.addColorStop(0.52, "#12232A");
-  sky.addColorStop(1, "#1A3029");
-  g.fillStyle = sky;
-  g.fillRect(0, 0, W, H);
-
-  // 星：用 hash 不抖。Math.random 每帧变，整片星空会闪成噪点
-  for (let i = 0; i < 54; i++) {
-    const x = hash(i * 7 + 1) * W;
-    const y = hash(i * 13 + 5) * 330;
-    const tw = Math.sin(T * 1.3 + i * 0.9) * 0.5 + 0.5;
-    g.fillStyle = "rgba(214,238,226," + (0.10 + 0.40 * tw).toFixed(3) + ")";
-    g.fillRect(x, y, 1.7, 1.7);
-  }
-
-  // 月亮
-  g.fillStyle = "rgba(226,240,214,.86)";
-  g.beginPath(); g.arc(816, 94, 29, 0, 6.283); g.fill();
-  g.fillStyle = "rgba(226,240,214,.045)";
-  g.beginPath(); g.arc(816, 94, 74, 0, 6.283); g.fill();
-
-  // ---------- 远树剪影 ----------
-  g.fillStyle = "#0E2820";
-  for (let i = 0; i < 12; i++) {
-    const x = i * 86 + (hash(i * 3) - 0.5) * 44;
-    const h = 88 + hash(i * 11) * 80;
-    const w = 38 + hash(i * 17) * 28;
-    g.beginPath();
-    g.moveTo(x, HZ + 6);
-    g.lineTo(x + w * 0.5, HZ + 6 - h);
-    g.lineTo(x + w, HZ + 6);
-    g.closePath();
-    g.fill();
-  }
-  g.fillStyle = "rgba(9,24,20,.50)";
-  g.fillRect(0, HZ - 10, W, 16);
+  /* 夜空 / 星 / 月 / 远树：与出征页共用 drawNightSky 一份 */
+  drawNightSky(g, T, HZ);
 
   // ---------- 地面 ----------
   const gr = g.createLinearGradient(0, HZ, 0, H);
@@ -13027,6 +13720,11 @@ function tick(dt) {
      hitStop 的 dt 折算之前累加，否则最后一击的顿帧会把评级弹入拖慢半拍。 */
   if (S.phase === "clear" || S.phase === "fail") S.settleT += dt;
   else S.settleT = 0;
+
+  /* 出征页提示条自己衰减。**独立于 S.say** —— 那句台词是画在玩家头顶的
+     气泡，只在 play 阶段走钟；出征页没有玩家对象，用 S.say 写进去
+     既看不见、也永远不会消失。 */
+  if (S.phase === "portals" && S.gateTip.life > 0) S.gateTip.life -= dt;
 
   if (S.hitStop > 0) {
     S.hitStop = Math.max(0, S.hitStop - dt);
@@ -14426,11 +15124,19 @@ function render() {
                       : "回车 / 点击  继续   ·   E  收工（回满力气）   ·   ESC 回选人",
                  cx, cardY + cardH + 22);
     }
+  } else if (S.phase === "portals") {
+    /* 出征页是**独立一屏**，不叠在门口上：这里要回答的是"去哪儿"，
+       还没到"带谁出门"那一步。叠在门口会让人以为已经出门了。 */
+    drawGates(g);
   } else {
     /* 门口场景 → 挑一屏是**叠在它上面**的，不是另起一屏。
      * 换背景会让人以为"我离开了门口"，而实际上选完一屏就是从这扇门走出去。 */
     drawSelect(g);
-    if (S.phase === "pick") drawPick(g);
+    if (S.phase === "pick") {
+      drawPick(g);
+      /* 条件卡画在格子图**之后**：它要盖住格子，而不是被格子盖住 */
+      if (S.pickAsk >= 0) drawAsk(g);
+    }
   }
 
   /* 后期合成：泛光 / 分离色调 / 颗粒 / 暗角。
@@ -14485,7 +15191,18 @@ function onCanvasMove(loc: any): void {
   // 测试跳关面板是模态的：它在的时候别让下面的 select / pick / 结算按钮跟着亮
   if (S.phase === "jump") { S.jumpHover = jumpHit(loc.x, loc.y); return; }
   if (S.phase === "select") S.hover = hitSelect(loc.x, loc.y);
-  if (S.phase === "pick") S.hoverStage = pickHit(loc.x, loc.y);
+  if (S.phase === "portals") S.hoverGate = gateHit(loc.x, loc.y);
+  if (S.phase === "pick") {
+    /* 卡片开着时鼠标不再摸格子：`hoverStage` 冻住，改去摸卡上的按钮。
+       两条 hover 走同一个字段的话，指针滑过卡片边缘时底部条件行会乱跳。 */
+    if (S.pickAsk >= 0) {
+      S.hoverAsk = askHit(loc.x, loc.y);
+      S.hoverBtn = -1;
+      return;
+    }
+    S.hoverStage = pickHit(loc.x, loc.y);
+    S.hoverAsk = "";
+  }
   // 结算面板：指着按钮时不推进倒计时 —— 他正在读，别替他做决定
   if (S.phase === "clear" || S.phase === "fail") {
     const B = settleBtns();
@@ -14504,11 +15221,17 @@ function onCanvasDown(loc: any): void {
     if (i >= 0) pickHero(i);
     return;
   }
+  if (S.phase === "portals") {
+    const i = gateHit(loc.x, loc.y);
+    if (i >= 0) enterGate(i);
+    return;
+  }
   /* 挑一屏：锁着的格子**点不动**，但点上去不弹提示 —— 格子上已经写着
-     "锁"了，再弹一句"这一屏还没走到"是把同一件事说两遍。 */
+     "锁"了，再弹一句"这一屏还没走到"是把同一件事说两遍。
+     解锁的格子点一下**只弹条件卡**（触屏唯一能读到靶条件的地方），
+     卡上再点「打这一屏」才进关。逻辑在 pickTap 里，触屏共用。 */
   if (S.phase === "pick") {
-    const i = pickHit(loc.x, loc.y);
-    if (i >= 0 && i <= maxOpen()) pickStage(i);
+    pickTap(loc.x, loc.y);
     return;
   }
   // 结算界面：只有真的点在按钮上才算数。
@@ -14520,6 +15243,23 @@ function onCanvasDown(loc: any): void {
     if (inRect(loc, B.cont)) { nextLevel(); return; }
   }
 }
+
+/* 触屏：接管**出征页与挑一屏**。
+ *
+ * 为什么必须显式接：这一页的交互全靠 mousedown / mousemove，手机上
+ * tap 是靠浏览器合成一对 mousedown + mouseup 才生效的（有延迟，而且
+ * hover 那条路根本不存在 —— 所以底部条件行在手机上从来没显示过）。
+ * 出征页是主界面的下一站，条件卡是给触屏做的，要是连"点一下"都走
+ * 合成事件，等于给触屏修了一半。
+ *
+ * 为什么只在这两个阶段 preventDefault：一旦无条件挡掉默认行为，
+ * 其他阶段（选人 / 打斗 / 结算）就连合成的 mousedown 都收不到，
+ * 整个游戏在手机上会彻底点不动 —— 本轮不扩大范围，只修坏掉的那两段。
+ */
+/* 触屏监听（cv.addEventListener("touchstart")）在这里被抽掉：
+   画布进了 Cocos 是离屏的、不接 DOM 事件，触点在 GroveBattle 里
+   已经转成 grovePointer 的 down/move，和鼠标同一条路。
+   原型的触屏语义（出征页 / 挑一屏的点击落点）由 grove.html 自己验。 */
 
 /* ---------- 启动 ---------- */
 
@@ -14698,7 +15438,7 @@ if (FROM_HOME) {
 /* ---------- Cocos 侧入口 ----------
    原型靠 URL 参数（?from=home&hero=N&stage=K）从 game.html 进来；
    Cocos 里没有 URL，改成显式传参。不传就按存档推。 */
-export function groveBoot(hero?: number, stage?: number): void {
+export function groveBoot(hero?: number, stage?: number, fromHome?: boolean): void {
   loadProgress();
   loadBest();
   resetRun();
@@ -14721,7 +15461,12 @@ export function groveBoot(hero?: number, stage?: number): void {
   let st = -1;
   for (let i = 0; i < LEVELS.length; i++) { if (!done.has(i)) { st = i; break; } }
 
-  if (typeof stage === "number" && stage >= 0 && stage < LEVELS.length) st = stage;
+  if (typeof stage === "number" && stage >= 0 && stage < LEVELS.length) { S.progress = st; beginRun(stage); return; }
+  /* 从主界面「出征」进来：**先到出征页挑门**，不直升第一个没通的屏。
+     Cocos 里没有 URL，所以 fromHome 只能显式传 —— 靠 `?from=home` 判断
+     在真机上恒为 false，出征页永远不会出现（原型里却会出现），
+     同一次点击两个结果。 */
+  if (fromHome) { S.progress = st >= 0 ? st : LEVELS.length; openGates(); return; }
   if (st < 0) { S.progress = LEVELS.length; openPick(); return; }
   S.progress = st;
   beginRun(st);
@@ -14763,6 +15508,12 @@ export const GROVE: any = {
   // 挑一屏：几何/命中/进出口全部导出，冒烟才能验"27 格都点得到、
   // 锁着的点不动、全通后进得去"
   openPick, pickStage, pickCell, pickHit, drawPick, allDone, maxOpen,
+  /* 触屏条件卡：drawAsk 给截图器，askHit/pickTap 给冒烟验"点一次只弹卡、
+     点卡上按钮才进关"这条语义（进关会改 S.phase，断言要能看到） */
+  drawAsk, askHit, askRect, askBtns, pickTap,
+  /* 出征页：drawGates 给截图器，gateHit/enterGate/openGates
+     给冒烟验"点开着的门进玩法、点没开的门不静默吞" */
+  drawGates, gateHit, gateRect, enterGate, openGates, GATES,
   PICK, FACTIONS, RANK_COLOR,
   /* 测试跳关（F2）。导出是为了**能自动验证**："27 格都点得到、
      点第 N 格真的进第 N 屏、跳关不写存档"这三条只能靠代码问，截图看不出来。

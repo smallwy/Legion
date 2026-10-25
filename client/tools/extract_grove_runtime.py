@@ -50,7 +50,7 @@ HEADER = '''/* ⚠ 自动生成，勿手改 —— 源：client/prototype/grove.
 
    导出：
      groveAttachCanvas(canvas)  绑定画布
-     groveBoot(hero?, stage?)   开一局（不传就按存档推）
+     groveBoot(hero?, stage?, fromHome?)   开一局（fromHome = 先到出征页挑门）
      groveTick(dt) / groveRender()
      groveSetExitHook(fn)       "收工 / ESC 退出"交给 Cocos 处理
      groveSetArt(key, img)      注入美术图（pet-cat / head-cat / ui-coin …）
@@ -61,7 +61,7 @@ HEADER = '''/* ⚠ 自动生成，勿手改 —— 源：client/prototype/grove.
 BOOT = '''/* ---------- Cocos 侧入口 ----------
    原型靠 URL 参数（?from=home&hero=N&stage=K）从 game.html 进来；
    Cocos 里没有 URL，改成显式传参。不传就按存档推。 */
-export function groveBoot(hero?: number, stage?: number): void {
+export function groveBoot(hero?: number, stage?: number, fromHome?: boolean): void {
   loadProgress();
   loadBest();
   resetRun();
@@ -84,7 +84,12 @@ export function groveBoot(hero?: number, stage?: number): void {
   let st = -1;
   for (let i = 0; i < LEVELS.length; i++) { if (!done.has(i)) { st = i; break; } }
 
-  if (typeof stage === "number" && stage >= 0 && stage < LEVELS.length) st = stage;
+  if (typeof stage === "number" && stage >= 0 && stage < LEVELS.length) { S.progress = st; beginRun(stage); return; }
+  /* 从主界面「出征」进来：**先到出征页挑门**，不直升第一个没通的屏。
+     Cocos 里没有 URL，所以 fromHome 只能显式传 —— 靠 `?from=home` 判断
+     在真机上恒为 false，出征页永远不会出现（原型里却会出现），
+     同一次点击两个结果。 */
+  if (fromHome) { S.progress = st >= 0 ? st : LEVELS.length; openGates(); return; }
   if (st < 0) { S.progress = LEVELS.length; openPick(); return; }
   S.progress = st;
   beginRun(st);
@@ -201,6 +206,23 @@ def main():
     if 'cv.addEventListener' in seg:
         raise SystemExit('鼠标监听没切干净：' + seg[:200])
     body = body[:i] + seg + body[j:]
+
+    # ④b 触屏监听同样在模块顶层，而且**紧跟在 mousedown 之后**，所以上面的
+    #     范围没盖住它 —— 漏掉的后果不是断言失败，是整个模块在 Cocos 里加载
+    #     阶段就抛 `Cannot read properties of null`（cv 那时还是 null），
+    #     表现就是黑屏。确认过 grove-runtime-check 会在这里停住。
+    #     Cocos 侧不需要它：画布是离屏的，触点由 GroveBattle 转成 grovePointer
+    #     的 down/move，和鼠标走同一条路。所以整段删掉，不给它开口子。
+    if 'cv.addEventListener("touchstart"' in body:
+        a = body.index('cv.addEventListener("touchstart"')
+        # 从这一点往后找 `}, { passive: false });` 结束
+        b = body.index('}, { passive: false });', a) + len('}, { passive: false });')
+        body = body[:a] + (
+            '/* 触屏监听（cv.addEventListener("touchstart")）在这里被抽掉：\n'
+            '   画布进了 Cocos 是离屏的、不接 DOM 事件，触点在 GroveBattle 里\n'
+            '   已经转成 grovePointer 的 down/move，和鼠标同一条路。\n'
+            '   原型的触屏语义（出征页 / 挑一屏的点击落点）由 grove.html 自己验。 */'
+        ) + body[b:]
 
     # ⑤ 纯 JS 里没有 `as` 断言。但 S.stumps 初始是 []，TS 会把它推成 never[]，
     #    循环体里每一处 s.hp / s.x 都报 TS2339 "does not exist on type 'never'"。

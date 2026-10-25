@@ -2485,9 +2485,67 @@ const NEST = {
   RAMP_P: (d) => Math.min(0.8, 0.3 + d * 0.04),
 };
 
-/* 主题分池：浅层偏亮、深层偏暗。纯皮肤，随便换。 */
-const NEST_THEME_LIGHT = ["tundra", "snow", "slope", "bouncy"];
-const NEST_THEME_DARK  = ["cliff", "well", "tower", "stairs"];
+/* ---- 深巢配色：三套"地底"语汇，按深度轮换 ----
+ *
+ * **为什么必须另起一套，不能沿用主线那 8 套再压暗**（2026-10-25 用户：
+ * 「深巢的场景肯定不能沿用之前的啊」）。那 8 套全是**地表**：亮色的天空、
+ * 云、远山、树线、草地。压暗之后玩家看到的不是"地底"，是"傍晚的森林" ——
+ * 同一款游戏换个时间而已。地底要成立，得换掉三件事：
+ *
+ *   ① **没有天空**。画面上缘必须是岩体，不能是亮色。
+ *   ② **光从下往上**。主线的光源在右上（斜阳），地底的光在脚下。
+ *   ③ **地面不是草**。是碎石、岩屑、被水冲过的砂。
+ *
+ * 木台（wood 系）刻意**保持暖色且不压暗**。它是落脚面，可读性优先于氛围；
+ * 而且"墨色岩壁之间一排暖木架"本来就是"井下的人工结构"，
+ * 是设定的一部分，不是妥协。
+ *
+ * 三套只差底光色和岩层色相：熔岩洞（橙红）/ 苔窟（菌绿）/ 晶洞（冷蓝）。
+ * 相邻层不会撞色（depth 递增取模）。 */
+const NEST_THEMES = [
+  { id: "ember",   rock: "#1C1410", rockLit: "#2E211A", ground: "#3B3630",
+    groundLit: "#4A443C", soil: "#322A24", soilDeep: "#1D1812",
+    wood: "#B0763E", woodDeep: "#7A4E2A", woodLit: "#E0B078",
+    glow: "#FF7A3C", haze: "#5A3A26" },
+  { id: "moss",    rock: "#1A211C", rockLit: "#28312A", ground: "#343530",
+    groundLit: "#41423B", soil: "#2A2B26", soilDeep: "#181915",
+    wood: "#A87240", woodDeep: "#6E4828", woodLit: "#D8AC74",
+    glow: "#7FE0A0", haze: "#3A5244" },
+  { id: "crystal", rock: "#171C26", rockLit: "#252C3A", ground: "#35373E",
+    groundLit: "#43454D", soil: "#2B2D34", soilDeep: "#171A20",
+    wood: "#AC7248", woodDeep: "#74492C", woodLit: "#DCB080",
+    glow: "#7FC8F0", haze: "#33445E" },
+];
+
+/** 第 depth 层的地底配色，摊平成和 THEMES 一样的字段名 ——
+ *  平台 / 地面 / 斜坡的绘制代码全部读 TH.xxx，摊平之后**一行都不用改**。
+ *  （这就是"换主题 = 换场景"能成立的原因：绘制侧只认字段名，不认题材。） */
+function nestTheme(depth) {
+  const d = Math.max(1, depth | 0);
+  const b = NEST_THEMES[(d - 1) % NEST_THEMES.length];
+  return {
+    sky1: b.rock, sky2: b.rockLit, cloud: b.rockLit,
+    hill1: b.rock, hill2: b.rockLit,
+    grass: b.ground, grass2: b.groundLit,
+    dirt: b.soil, dirt2: b.soilDeep,
+    wood: b.wood, wood2: b.woodDeep, wood3: b.woodLit,
+    accent: b.glow,
+    grassLight: b.groundLit, grassDark: b.soil,
+    hillFar: b.rock, hillNear: b.rockLit,
+    horizon: b.haze,
+    /* `soilDeep` 是深巢场景自己的字段（碎石/裂纹的暗色），主线没有；
+       `night` 主线用它切"夜晚"那一套亮度，深巢不走那条分支，但它必须存在 ——
+       漏一个字段的后果不是"颜色差一点"，是 `rgbaOf(undefined)` 直接抛错，
+       而抛错发生在 `drawForest` 之后：**背景画完、平台和 HUD 全没了**，
+       截图上看是"一张没有角色的风景图"，很容易被当成"还没画完"。 */
+    soilDeep: b.soilDeep,
+    night: false,
+    treeNear: b.rock, treeFar: b.rockLit,
+    trunkNear: b.soil, trunkFar: b.soilDeep,
+    shrub: b.soilDeep, shrubLit: b.soil,
+  };
+}
+
 const NEST_PIT_KINDS   = ["fire", "mud", "water"];
 
 /* ---- 构件库：从 27 屏真实几何里收集，一条都不新造 ----
@@ -2516,12 +2574,13 @@ function nestRand(seed) {
   };
 }
 
-/** 第 depth 层的主题。池子按深度换，索引带 depth 偏移 —— 相邻层不会同色。 */
-function nestThemeOf(depth, R) {
-  const pool = depth <= 5 ? NEST_THEME_LIGHT
-             : depth >= 16 ? NEST_THEME_DARK
-             : NEST_THEME_LIGHT.concat(NEST_THEME_DARK);
-  return pool[(depth + Math.floor(R() * pool.length)) % pool.length];
+/** 第 depth 层的主题**名**（写进 L.theme，记录用）。
+ *  上一版从主线 8 套里随机挑一套 —— 那是"换皮肤"，而深巢要的是"换地方"。
+ *  现在名字直接来自 NEST_THEMES，和 nestTheme() 同一个索引：
+ *  名字和配色**不可能对不上**（两处各算一次取模，早晚会差一层）。 */
+function nestThemeOf(depth) {
+  const d = Math.max(1, depth | 0);
+  return "nest-" + NEST_THEMES[(d - 1) % NEST_THEMES.length].id;
 }
 
 /** 把主线坐标的台子搬进 640 井里：**位置按比例缩，宽度原样保留**。
@@ -2574,7 +2633,19 @@ function nestBuildRaw(depth, seed) {
   const ri = (a, b) => Math.floor(rnd(a, b + 0.999));
   const pick = (arr) => arr[Math.floor(R() * arr.length)];
 
-  const theme = nestThemeOf(depth, R);
+  /* **这一行必须吃掉一次随机数**，哪怕主题名已经不需要它。
+   *
+   * 上一版 `nestThemeOf(depth, R)` 内部用 `R()` 抽主题；改成"主题由深度决定"
+   * 之后，这里少消耗一次 —— 后果不是"主题变了"，是**后面每一次 rnd()
+   * 都前移一位**，等于把 60 层地形整个重排了一遍。
+   * 实测代价：机器人通关率 15/18 → 10/18（地形漂移，而新序列没验证过）。
+   *
+   * 地形是"同一层每次长一样"这个玩法的载体（记住地形是无尽模式的乐趣），
+   * 它不该因为一次改配色而整体漂移。所以把这次消耗**显式保留**，
+   * 并命名成变量，免得以后被人当成无用代码删掉、再漂一次。 */
+  const themeSalt = R();
+  void themeSalt;
+  const theme = nestThemeOf(depth);
   /* 营地贴**井**右壁，不是贴画面右缘 —— 640 之后这两件事差 134px。
      写 WALL_R 的话营地会掉到井外，球永远推不到（而画面上营地还在那儿）。 */
   const campX = NEST.R - NEST.CAMP_W;
@@ -2815,8 +2886,19 @@ function nestBuildRaw(depth, seed) {
      目标一顶到上限，正解就变成亏本买卖。
      机器人实测就是这个死法：21 层目标 14 = 上限 14，三局收工在 1~2 收成。 */
   if (goal === "collect") {
-    const cap = pits.length ? foes * 2 : Math.round(foes * 1.4);
-    L.collect = Math.max(8, Math.min(22, Math.round(cap * 0.6)));
+    /* **只有火坑给 ×2。** 上一版写的是 `pits.length`，把水坑和泥坑也算成了
+       "收成翻倍的地方" —— cap 被抬高，目标跟着抬高，而水坑根本不给收成。
+       41 层（一行 water 坑、5 只敌人）算出来 cap=10、目标 8，
+       而这一层物理上最多只能收到 7 —— **目标超过上限，是无解，不是难**。 */
+    const cap = pits.some(q => q.kind === "fire") ? foes * 2 : Math.round(foes * 1.4);
+    /* 目标必须**严格小于 cap**，否则"每只单独进营地"都完成不了，
+       更别说一球卷多只。上一版下限写死 8：5 只敌人的层 cap 只有 7，
+       8 直接越过天花板。现在下限 4，且最后再 min(cap) 夹一次。 */
+    /* **cap - 1，不是 cap**。取满等于"每一只都必须单独进营地"，
+       而一球卷三只（3 只 → 4 收成）比单独送三次（6 收成）更省事才是正解；
+       目标一顶到上限，正解反而成了亏本买卖 —— 这是主线就定过的规矩。
+       层 51 / 60 就是被这条断言抓出来的（cap 4 目标也 4）。 */
+    L.collect = Math.max(3, Math.min(cap - 1, Math.round(cap * 0.6)));
   }
   if (goal === "chain") L.chain = Math.max(2, Math.min(4, Math.round(foes * 0.5)));
 
@@ -2897,7 +2979,12 @@ function nestSimpleLevel(depth) {
   L.id = "nest-" + depth;
   L.name = "第 " + depth + " 层";
   L.sub = "深巢 · 深度 " + depth;
-  L.theme = NEST_THEME_LIGHT[depth % NEST_THEME_LIGHT.length];
+  /* 主题名和配色必须来自**同一处**。上一版这里写的是
+     `NEST_THEME_LIGHT[depth % ...]`，而配色已经改成 nestTheme(depth) ——
+     两处各算一次，索引早晚会差一层。
+     更麻烦的是这条分支只在"20 次重抽全失败"时才走，冒烟和截图都碰不到它，
+     等它真被走到的时候是玩家卡在某一层、控制台抛 ReferenceError。 */
+  L.theme = nestThemeOf(depth);
   L.goal = "clear";
   /* 兜底版恒 4 只（3 小怪 + 1 BOSS），S 线照 nestBuildRaw 同一套公式算：
      52 + 4×3.4 ≈ 66 秒、0.70×4 ≈ 3 颗。写死别的数会让兜底层评级失真。 */
@@ -3140,7 +3227,10 @@ function loadLevel(i) {
      跳关面板、从主界面出发）都必然过 loadLevel，漏一条就变成
      "深巢的墙漏到主线，主线的墙漏到深巢"。 */
   applyWalls(!!L.nest);
-  TH = THEMES[L.theme] || THEMES.tundra;
+  /* 配色：深巢走**自己的**三套地底语汇，不再借用主线那 8 套地表主题。
+     主线靠 L.theme 查表，深巢靠深度取模 —— 两条路互不干扰，
+     所以"深巢换配色"不会顺手改掉任何一屏主线的观感。 */
+  TH = L.nest ? nestTheme(L.nest.depth) : (THEMES[L.theme] || THEMES.tundra);
   /* 场景族跟着主题走。**必须在这里重置** —— 忘了的话，
      上一个产地的形状会跟到下一个产地（第 9 屏还在画第 8 屏的岩柱）。 */
   SCAPE = SCAPE_OF_THEME[L.theme] || "hills";
@@ -4859,7 +4949,22 @@ function killByFall(f) {
   f.dead = true;
   /* 只给"算在 S.total 里"的敌人记账。BOSS 召唤的幼虫（larva）是运行时生成的，
      不在 total 里 —— 给它记账，结算会写出「11 / 9」这种读数。 */
-  if (!f.larva && S.killed < S.total) S.killed += 1;
+  if (!f.larva && S.killed < S.total) {
+    S.killed += 1;
+    /* **掉出屏幕也必须给收成**（2026-10-25）。
+     *
+     * 这条路径原来只记 killed 不记 food，后果是 collect 关的死局：
+     * 敌人被推下台 → 落进坑 → 落到屏幕外 → killed+1、food+0。
+     * 玩家看到的是"人全没了，收成还是 0"，HUD 上永远差那几口粮，
+     * 而场上已经没有可推的东西了 —— **不是难，是无解**。
+     *
+     * 主线手摆地形，敌人站位都避开了坑，这条路径几乎走不到，所以一直没暴露；
+     * 深巢是生成地形，坑和兵站各算各的，撞上就是必然。
+     *
+     * 只给 +1（最小单位），不给 holds 加成：掉下去是地形干的，
+     * 不是玩家的手艺，不该和"一球卷三只"同价。 */
+    S.food += 1;
+  }
 }
 
 function updateFoe(f, dt) {
@@ -7652,9 +7757,321 @@ function drawScape(g) {
   drawHills(g, 324, 46, TH.hillNear, 11, 134);
 }
 
+/** 深巢的场景：一口竖井的**背景**（岩体 / 层理 / 天花板 / 岩地）。
+ *
+ *  **为什么这层比井壁和暗罩都重要**：井壁只解决了"左右有边界"，
+ *  暗罩只解决了"整体偏暗"，可背景本身还是主线的天空 + 远山 + 树线 ——
+ *  于是玩家看到的是"傍晚的森林里立着两根石柱"。要读成地底，
+ *  画面必须回答三个问题：**上缘是什么（岩体，不是天）**、
+ *  **光从哪来（脚下，不是右上）**、**脚下踩的是什么（碎石，不是草）**。
+ *
+ *  这三条全部落在这一层里。它不参与任何物理，纯绘制，
+ *  所以改它不会让任何一层变得不可通关 —— 这也是先做它的原因。
+ */
+function drawNestScene(g) {
+  const d = (S.nest && S.nest.depth) || 1;
+  const rnd = nestRand(d * 4831 + 7);
+  /* 远处地面的起点。取 296 是为了和主线的草脊（276~322）落在同一档高度 ——
+     两边的**透视关系**要一致，否则换玩法时玩家会觉得镜头变了。 */
+  const HZ = 296;
+
+  /* ① 岩体底：**上暗下亮**，和主线正好相反。
+     主线是右上斜阳（天最亮、地面最暗），地底的光在脚下。
+     这一条反过来的明度梯度，比换任何颜色都更能说明"这里不是外面" ——
+     它作用在整屏上，玩家第一眼看到的就是它。 */
+  const bg = g.createLinearGradient(0, 0, 0, GROUND_Y + 20);
+  bg.addColorStop(0, TH.sky1);
+  bg.addColorStop(0.50, TH.sky2);
+  bg.addColorStop(1, TH.hill2);
+  g.fillStyle = bg;
+  g.fillRect(0, 0, W, H);
+
+  /* ② 层理：7 条横向岩层，带起伏、左右不等宽。
+     **不能画成贯通的横条** —— 满宽的直线会读成"条纹布"，
+     而岩石的层理是"一层压着一层、长度不齐"。
+     所以每条单独给起点/终点/起伏相位，全部由深度种子决定：
+     同一层每次进来长得一样（可记忆），换一层就换一套。 */
+  for (let i = 0; i < 7; i++) {
+    const y = 26 + i * 66 + rnd() * 20;
+    const h = 10 + rnd() * 22;
+    const x0 = rnd() < 0.5 ? 0 : rnd() * 180;
+    const x1 = W - (rnd() < 0.5 ? 0 : rnd() * 180);
+    if (x1 - x0 < 120) continue;
+    const dark = i % 2 === 0;
+    /* 深巢背景是暗的，第一版给的 .20 / .16 在截图里**完全看不见** ——
+       "有层理"和"没有层理"看起来一模一样。暗底上的层理得靠更狠的差：
+       暗线压到 .34，亮线用 rockLit（比背景亮一档）而不是半透明叠加。 */
+    g.fillStyle = dark ? "rgba(0,0,0,.34)" : rgbaOf(TH.hill2, 0.55);
+    g.beginPath();
+    const ph = rnd() * 6.28;
+    g.moveTo(x0, y);
+    for (let x = x0; x <= x1; x += 40) {
+      g.lineTo(x, y + Math.sin(x * 0.011 + ph) * 5);
+    }
+    for (let x = x1; x >= x0; x -= 40) {
+      g.lineTo(x, y + h + Math.sin(x * 0.013 + ph + 1.3) * 5);
+    }
+    g.closePath();
+    g.fill();
+  }
+
+  /* ③ 背景岩块：十几个大小不一的暗色多边形，只在上部（y<270）。
+     它们的职责是**打破"一整面墙色"**：只有渐变 + 层理时，
+     上半屏仍然是一块干净的色板，和主线的天空一样"平"。
+     加一层压暗的块状岩体，画面才有"身后还有石头"的厚度。 */
+  for (let i = 0; i < 14; i++) {
+    const cx = rnd() * W;
+    const cy = 20 + rnd() * 240;
+    const rw = 46 + rnd() * 130;
+    const rh = 26 + rnd() * 66;
+    g.fillStyle = "rgba(0,0,0," + (0.10 + rnd() * 0.16).toFixed(3) + ")";
+    g.beginPath();
+    const n = 5 + Math.floor(rnd() * 3);
+    for (let k = 0; k < n; k++) {
+      const a = (k / n) * 6.283;
+      const rr2 = 0.62 + rnd() * 0.46;
+      const px = cx + Math.cos(a) * rw * 0.5 * rr2;
+      const py = cy + Math.sin(a) * rh * 0.5 * rr2;
+      if (k === 0) g.moveTo(px, py); else g.lineTo(px, py);
+    }
+    g.closePath();
+    g.fill();
+  }
+
+  /* ④ 天花板：顶部 46px 的岩体 + 倒挂的钟乳石。
+     **这一层是"我在洞里"最直接的证据** —— 画面上缘不再是亮的天空，
+     而是一排从顶上垂下来的石头。没有它，上面那些层理看起来只是"深色的山"。 */
+  /* **必须比背景更暗**。第一版直接填 TH.sky1 —— 而背景顶部正是 sky1，
+     于是整排钟乳石是隐形的（截图里顶部干干净净，看不出有洞顶）。
+     地底的东西全在逆光里：背景是被远处地光照到的岩层，近处的洞顶是剪影。 */
+  g.fillStyle = hexDim(TH.sky1, 0.62);
+  g.beginPath();
+  g.moveTo(0, 0);
+  g.lineTo(W, 0);
+  for (let x = W; x >= 0; x -= 30) {
+    g.lineTo(x, 34 + Math.sin(x * 0.017) * 9);
+  }
+  g.closePath();
+  g.fill();
+
+  /* 钟乳石：长度 34~234，间隔 42~112。
+   *
+   * **上限 234 是算出来的**：最高的浮空台在 248 层，顶面 248 —— 垂到 234
+   * 时还留 14px，不会和"那个尖能不能站"的读图打架。
+   * 第一版只给到 132，截图里洞顶下面空出一大片什么都没有的区域，
+   * 整屏读作"上面暗、下面亮的一块布"。洞顶必须**伸进画面**才有压迫感，
+   * 这也是地底和地表的区别：地表的上方是开阔的天空，地底的上方是石头。 */
+  for (let x = 6; x < W; x += 42 + rnd() * 70) {
+    const len = 34 + Math.pow(rnd(), 0.7) * 200;
+    const hw = 7 + rnd() * 16;
+    const base = 34 + Math.sin(x * 0.017) * 9;
+    /* **尖端必须收圆**。第一版是两条二次曲线交在一个点上 —— 数学上"尖"，
+       视觉上是一排**针叶树**：截图里洞顶挂着一排松树剪影，底部长着一排，
+       连起来就是一片林子。钟乳石是水滴形的：上粗、中段鼓、尖端是圆头。
+       改法是在尖端补一段小圆弧，把两根曲线的交点让开 hw*0.14。 */
+    g.fillStyle = hexDim(TH.sky1, 0.62);
+    g.beginPath();
+    g.moveTo(x - hw, base - 6);
+    g.quadraticCurveTo(x - hw * 0.72, base + len * 0.52, x - hw * 0.16, base + len * 0.93);
+    g.quadraticCurveTo(x, base + len * 1.04, x + hw * 0.16, base + len * 0.93);
+    g.quadraticCurveTo(x + hw * 0.72, base + len * 0.52, x + hw, base - 6);
+    g.closePath();
+    g.fill();
+    /* 受光：只在**右上**一条窄面。地底的光从下往上打，但岩体的
+       "下方"是暗的、"上方"是更暗的 —— 真正被照亮的是朝下的尖端。
+       所以给尖端一点微光，而不是给整条描亮边。 */
+    /* 尖端受光：光在脚下，所以**钟乳石越靠近尖端越亮**（尖端离地最近）。
+       这是"光从下面来"在洞顶这一侧唯一的落点 —— 没有它，整排钟乳石
+       是背景里一块更深的东西，看不见形状。0.10 试过，看不出来；
+       0.22 配合渐隐才读得出"这根石头的下端被照亮了"。 */
+    if (len > 58) {
+      const tp = g.createLinearGradient(0, base + len * 0.48, 0, base + len);
+      tp.addColorStop(0, rgbaOf(TH.accent, 0));
+      tp.addColorStop(1, rgbaOf(TH.accent, 0.22));
+      g.fillStyle = tp;
+      g.beginPath();
+      g.moveTo(x - hw * 0.40, base + len * 0.48);
+      g.lineTo(x - hw * 0.13, base + len * 0.90);
+      g.lineTo(x + hw * 0.13, base + len * 0.90);
+      g.lineTo(x + hw * 0.40, base + len * 0.48);
+      g.closePath();
+      g.fill();
+    }
+  }
+
+  /* ⑤ 岩地：从 HZ 到画面底部。
+   *
+   * **明度梯度的方向和主线相反** —— 主线是"远亮近暗"（远处受天光），
+   * 地底是"远暗近亮"（远处背光，脚下被地缝的光照着）。
+   *
+   * 第一版照抄了主线的方向，出来是：画面上部深棕、中部忽然亮出一块灰褐、
+   * 底部又暗下去 —— 那条亮带横在屏幕中间，读作"一层雾"，把洞窟的纵深压平了。
+   * 换成远暗近亮之后，亮部落在角色和地面这一侧，
+   * 正好和 drawNestGlow 的地缝光叠在一起，读作"脚下有光"。
+   *
+   * 起点用 rockLit 和背景底部**同色**：两个色不同就是一道横缝，
+   * 而那条缝正好在 y=296 —— 画面上唯一一处"天与地"的分界，
+   * 它必须由形状（起伏）产生，不能由色差产生。 */
+  const gr = g.createLinearGradient(0, HZ, 0, H);
+  gr.addColorStop(0, TH.hill2);
+  gr.addColorStop(0.20, hexDim(TH.hill2, 0.88));
+  gr.addColorStop(0.62, TH.grass);
+  gr.addColorStop(1, TH.grassLight);
+  g.fillStyle = gr;
+  g.beginPath();
+  g.moveTo(0, H);
+  for (let x = 0; x <= W + 12; x += 12) {
+    g.lineTo(x, HZ + Math.sin(x * 0.008 + 1.1) * 7 + Math.sin(x * 0.031) * 3);
+  }
+  g.lineTo(W + 12, H);
+  g.closePath();
+  g.fill();
+
+  /* 地面与岩体的交界线：一条浅色细线（相当于主线的草脊受光边）。
+     作用一样 —— 把"两块色板拼接"变成"一处坡顶"。 */
+  g.strokeStyle = rgbaOf(TH.grassLight, 0.16);
+  g.lineWidth = 2;
+  g.beginPath();
+  for (let x = 0; x <= W + 12; x += 12) {
+    const y = HZ + Math.sin(x * 0.008 + 1.1) * 7 + Math.sin(x * 0.031) * 3 + 1.2;
+    if (x === 0) g.moveTo(x, y); else g.lineTo(x, y);
+  }
+  g.stroke();
+
+  /* ⑦ 石笋：3~5 根从地面长上来的岩柱。
+   *
+   * **加这一层的原因和主线种树完全一样**：主线的中景靠三层山 + 30 棵树 +
+   * 9 丛灌木撑着，随便砍掉就会变成"一整块布"。深巢第一版只有渐变 + 层理 +
+   * 碎石，截图上是**一大片灰绿的雾** —— 元素都在，但没有一个敢从背景里站出来。
+   *
+   * 石笋是地底唯一的"中景形状"：它从地面往上长，正好占据 y 300~556 这条
+   * 空带；而且它天然解释"光从下面来" —— 柱子越靠上越暗，根部被地缝照亮。
+   *
+   * **明度要压到低于地面**：它站在玩法区的后面，如果和地面一样亮，
+   * 玩家会把石笋和浮空台混起来（"那个尖的东西能不能站"）。
+   * 远处的石头必须退后，能站的地方才凸出来。 */
+  {
+    const n = 3 + Math.floor(rnd() * 2);
+    /* **石笋必须避开平台的 x 区间**。第一版没避，结果一根石笋正好顶着
+       350 层平台的底 —— 画面上读作"托着那块台子的柱子"，
+       空间关系当场就浊了（玩家会去找"哪根能站"）。
+       避让半径 60：石笋宽约 90~110，留 60 才能保证轮廓不和平台挨着。 */
+    const nearPlat = (x) => PLATS.some(q =>
+      q.kind !== "ground" && x > q.x - 40 && x < q.x + q.w + 40);
+    for (let i = 0; i < n; i++) {
+      let cx = 190 + (i + 0.5) * ((W - 380) / n) + (rnd() - 0.5) * 84;
+      for (let t = 0; t < 8 && nearPlat(cx); t++) cx += 46;
+      /* 高度 120~230：上限 230 时顶端落在 y≈326，
+         不会顶到 350 层平台（顶面 350）以下 —— 石笋一旦穿过平台，
+         玩家会把它当成"托着平台的那根柱子"，空间关系就浊了。 */
+      const hgt = 110 + rnd() * 90;
+      const hw0 = 30 + rnd() * 20;          // 根部半宽
+      const top = GROUND_Y - hgt;
+      const lean = (rnd() - 0.5) * 16;      // 顶端偏移，别全都笔直
+      /* 0.52：比地面暗一档（退得进背景），但比岩壁亮得多（看得见轮廓）。
+         0.46 出来是纯黑的锥体（读作"塔/墓碑"），0.66 又和地面糊在一起。 */
+      g.fillStyle = hexDim(TH.grass, 0.52);
+      g.beginPath();
+      g.moveTo(cx - hw0, GROUND_Y + 4);
+      g.lineTo(cx - hw0 * 0.70, GROUND_Y - hgt * 0.44);
+      g.quadraticCurveTo(cx + lean - hw0 * 0.34, top + hgt * 0.14,
+                         cx + lean - hw0 * 0.06, top + hgt * 0.02);
+      g.quadraticCurveTo(cx + lean + hw0 * 0.18, top - hgt * 0.02,
+                         cx + lean + hw0 * 0.30, top + hgt * 0.16);
+      g.lineTo(cx + hw0 * 0.76, GROUND_Y - hgt * 0.36);
+      g.lineTo(cx + hw0 * 0.94, GROUND_Y + 4);
+      g.closePath();
+      g.fill();
+      /* 暗面：左半边压暗（光在下方偏中间，柱子两侧都背光，
+         但左侧更远，所以更暗）。一条多边形就够，别做渐变 ——
+         这个尺寸的物体上渐变会读成"塑料"。 */
+      g.fillStyle = "rgba(0,0,0,.20)";
+      g.beginPath();
+      g.moveTo(cx - hw0, GROUND_Y + 4);
+      g.lineTo(cx - hw0 * 0.66, GROUND_Y - hgt * 0.42);
+      g.lineTo(cx + lean - hw0 * 0.16, top);
+      g.lineTo(cx + lean, top + hgt * 0.06);
+      g.lineTo(cx - hw0 * 0.10, GROUND_Y + 4);
+      g.closePath();
+      g.fill();
+      /* 根部受光：地缝的光从脚下扫上来，越往上越弱 */
+      const rt = g.createLinearGradient(0, GROUND_Y - hgt * 0.42, 0, GROUND_Y + 4);
+      rt.addColorStop(0, rgbaOf(TH.accent, 0));
+      rt.addColorStop(1, rgbaOf(TH.accent, 0.13));
+      g.fillStyle = rt;
+      g.beginPath();
+      g.moveTo(cx - hw0 * 0.86, GROUND_Y + 4);
+      g.lineTo(cx - hw0 * 0.62, GROUND_Y - hgt * 0.42);
+      g.lineTo(cx + hw0 * 0.70, GROUND_Y - hgt * 0.34);
+      g.lineTo(cx + hw0 * 0.90, GROUND_Y + 4);
+      g.closePath();
+      g.fill();
+    }
+  }
+
+  /* ⑥ 碎石：铺满岩地的一层小石子 + 几道裂纹。
+     **这一层的量必须给足**。主线靠 90 撮细草 + 26 块苔斑 + 22 片落叶
+     解决"一张绿色纸"；岩地如果只有渐变，就是"一张灰色纸"，一模一样的问题。
+     石子是深巢的"草" —— 它不承担造型，只承担"这块地有东西"。 */
+  for (let i = 0; i < 110; i++) {
+    const sx = hash(i * 13.7) * W;
+    const sy = HZ + 20 + Math.pow(hash(i * 7.9), 0.72) * 290;
+    if (sy > H) continue;
+    const k = clamp((sy - HZ) / 300, 0, 1);
+    const sr = 1.6 + k * 4.4;
+    const tone = hash(i * 3.1);
+    g.fillStyle = rgbaOf(tone > 0.5 ? TH.grassLight : TH.soilDeep,
+                         (0.16 + k * 0.30).toFixed(3));
+    g.beginPath();
+    g.ellipse(sx, sy, sr, sr * (0.52 + tone * 0.3),
+              hash(i * 2.1) * 3.14, 0, 6.283);
+    g.fill();
+  }
+  /* 裂纹：6 条，只在近处（远端裂纹会读成噪点） */
+  g.strokeStyle = rgbaOf(TH.soilDeep, 0.40);
+  g.lineWidth = 1.8;
+  for (let i = 0; i < 6; i++) {
+    const cx0 = 40 + hash(i * 17.3) * (W - 80);
+    const cy0 = HZ + 60 + hash(i * 9.1) * 200;
+    g.beginPath();
+    g.moveTo(cx0, cy0);
+    let px = cx0, py = cy0;
+    for (let k = 0; k < 4; k++) {
+      px += (hash(i * 5.7 + k) - 0.5) * 54;
+      py += 8 + hash(i * 3.9 + k) * 16;
+      g.lineTo(px, py);
+    }
+    g.stroke();
+  }
+
+  /* ⑧ 环境光：**从画面中部就开始铺**，不是只贴着地面。
+   *
+   * 这一层是整张图"糊不糊"的关键。深巢的洞顶、岩壁、背景全是同一族深色，
+   * 只画地面附近的光，中上部就是一整块平涂 —— 截图上是"一大片灰绿的雾"。
+   * 主线靠天空（亮）vs 山（中）vs 树（暗）三档明度撑起纵深；
+   * 深巢没有天空，能接下"最亮那一档"的只有**地底光升起来的那片弥散**。
+   *
+   * 所以它从 y=GROUND_Y-340 就开始（约画面上 1/3 处），alpha 0 → 0.10。
+   * 再高就会把洞顶也照亮，"下面有光"这件事就没了。 */
+  const amb = g.createLinearGradient(0, GROUND_Y - 340, 0, GROUND_Y + 30);
+  amb.addColorStop(0, rgbaOf(TH.accent, 0));
+  amb.addColorStop(0.62, rgbaOf(TH.accent, 0.035));
+  amb.addColorStop(1, rgbaOf(TH.accent, 0.11));
+  g.fillStyle = amb;
+  g.fillRect(0, GROUND_Y - 340, W, 372);
+}
+
 function drawForest(world) {
   const g = ctx;
   g.clearRect(0, 0, W, H);
+
+  /* 深巢走自己的场景，一行的地表语汇都不借用。
+     **为什么不是"在 drawForest 里到处加 if"**：这条函数有 450 行，
+     里面每一项都是地表物件（云、远山、光柱、树线、灌木、蘑菇、浮尘）。
+     散着加十几个 if，改动面覆盖整条函数，而主线要被回归一次 ——
+     收益是省下一个函数，代价是把唯一稳定的东西（27 屏的画面）也动了。
+     分流成两个函数之后，主线那 450 行**这一轮一个字都没改**。 */
+  if (S.nest) { drawNestScene(g); return; }
 
   drawSky(g);
 
@@ -9918,81 +10335,131 @@ function drawLevel() {
  */
 function drawNestWalls(g) {
   if (!S.nest) return;
+  const d = S.nest.depth || 1;
   const L = NEST.L, R = NEST.R;
-  /* 两个正弦叠加：周期 240（大起伏）+ 90（碎石感）。
-     幅度 ±14 是**看着参差、又不至于把地面边缘露出来**的临界值 ——
-     第一版给 ±9，配合 12px 的受光面，整条内缘读成一根直线，
-     看起来像两块 UI 遮罩贴在屏幕上，完全不像石头。
-     基准往井内收 18：±14 被这 18 吃掉，所以永远是岩壁压住地面边缘。 */
-  const wob = (y) => Math.sin(y * 0.026) * 9 + Math.sin(y * 0.069 + 1.7) * 5;
-  const inner = (y, side) => side < 0 ? L - 18 + wob(y) : R + 18 - wob(y + 260);
-  const vein = nestRand((S.nest.depth || 1) * 7717);
 
   for (const side of [-1, 1]) {
     const outX = side < 0 ? 0 : W;
+    const baseX = side < 0 ? L - 14 : R + 14;
+    const dir = side < 0 ? 1 : -1;          // 往井内的方向
+    const rnd = nestRand((d * 313 + (side < 0 ? 7 : 7177)) >>> 0);
 
-    /* ① 岩体主体 */
+    /* 轮廓：**每 34~80px 一段、每段一个水平偏移，段与段之间直线连接**。
+     *
+     * 上一版是 `sin(y*0.026)*9 + sin(y*0.069)*5` —— 两个正弦叠加，
+     * 数学上"参差"，视觉上是一条**平滑的波浪**。截图里读作两根竖立的
+     * 肠子：平滑曲线不会出现在岩石边缘，岩石只有折角。
+     * 所以这里换成分段折线，偏移量由深度种子决定（同一层每次一样）。
+     *
+     * 偏移范围 [-6, +14]：正值往井内伸，最多伸到 baseX+14 = L / R，
+     * 也就是**恰好压住地面边缘**、不会盖住地面本身。 */
+    const pts = [];
+    let yy = -12;
+    while (yy < H + 12) {
+      pts.push({ y: yy, off: -6 + rnd() * 20 });
+      yy += 34 + rnd() * 46;
+    }
+    const ix = (k) => baseX + dir * pts[k].off;
+    const ixAt = (y) => {
+      let k = 0;
+      while (k < pts.length - 1 && pts[k + 1].y < y) k++;
+      return ix(k);
+    };
+
+    /* ① 岩体：近黑。暗环境里近处的东西是剪影 —— 用 TH.dirt2 原色时
+       它和背景 sky1 只差 3% 明度，截图上一片糊，岩壁整个"消失"。 */
     g.beginPath();
-    g.moveTo(outX, 0);
-    for (let y = 0; y <= H; y += 8) g.lineTo(inner(y, side), y);
-    g.lineTo(outX, H);
+    g.moveTo(outX, -12);
+    for (let k = 0; k < pts.length; k++) g.lineTo(ix(k), pts[k].y);
+    g.lineTo(outX, H + 12);
     g.closePath();
-    g.fillStyle = TH.dirt2;
+    g.fillStyle = hexDim(TH.dirt2, 0.40);
     g.fill();
 
-    /* ② 内缘近侧压一层中间色，8px。这一条的作用是"厚度"：
-       只有两档色（岩体 / 背景）时，接缝读作剪纸；
-       加一档中间色，接缝读作"石头的侧面被光照到"。 */
-    g.beginPath();
-    for (let y = 0; y <= H; y += 8) {
-      const x = inner(y, side);
-      if (y === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    /* ② 块面：岩体内部 5 块大小不一的暗/亮多边形。
+       一整块纯黑读作"屏幕被切掉一条"，有块面才读作"石头堆下来的"。 */
+    for (let k = 0; k < 5; k++) {
+      const cy = 40 + rnd() * 470;
+      const mid = (outX + ixAt(cy)) / 2;
+      const rw = 26 + rnd() * 46;
+      const rh = 22 + rnd() * 44;
+      /* **暗块在暗背景上是隐形的**：第一版三分之二用 rgba(0,0,0,.14~.32)，
+         截图里完全看不见（黑上加黑），于是上半屏仍然是一块平涂。
+         现在反过来：多数用 rockLit 的受光面 —— 洞窟里能看见的石头
+         都是"被光照到的那一面"，看不见的是背光面，不是"更黑的石头"。 */
+      const bright = rnd() < 0.68;
+      g.fillStyle = bright
+        ? rgbaOf(TH.hill2, 0.30 + rnd() * 0.30)
+        : "rgba(0,0,0," + (0.16 + rnd() * 0.20).toFixed(3) + ")";
+      g.beginPath();
+      const n = 5;
+      for (let q = 0; q < n; q++) {
+        const a = (q / n) * 6.283 + rnd() * 0.5;
+        const e = 0.6 + rnd() * 0.5;
+        const px = mid + Math.cos(a) * rw * e;
+        const py = cy + Math.sin(a) * rh * e;
+        if (q === 0) g.moveTo(px, py); else g.lineTo(px, py);
+      }
+      g.closePath();
+      g.fill();
     }
-    g.strokeStyle = TH.dirt;
-    g.lineWidth = 8;
-    g.lineJoin = "round";
-    g.stroke();
 
-    /* ③ 层理：每 64px 一道水平的暗线，从内缘往画面外走 26~54px。
+    /* ③ 受光**面**：一条 18~34px 宽的竖直渐变带贴着内缘。
+     *
+     * **这里是这一版最关键的一次改动，也是前两版都栽在同一个地方。**
+     * 前两版都在内缘描一条线（先是 9px 实心 `TH.dirt`，后来是断续的 4~6px 线）。
+     * 线的问题是：它给整条轮廓**描了个边**，于是岩壁读作"一个被勾了边的形状"
+     * —— 在画面上就是两根竖立的肠子/柱子，而不是"一面朝我这边收进来的岩壁"。
+     * 真实岩石没有边线，只有**朝向不同的面**：靠井内那 20 多 px 被底光扫到，
+     * 往外立刻没入黑暗。
+     *
+     * 做法：一条横向渐变（内缘亮 → 外侧全透明），沿轮廓逐段画短带。
+     * 竖向再乘一个 0.35→1 的权重 —— 光在地面，越往上越照不到。 */
+    for (let k = 0; k < pts.length - 1; k++) {
+      const a = pts[k], b = pts[k + 1];
+      const kk = clamp((a.y - 40) / 480, 0, 1);
+      if (kk < 0.04) continue;
+      const w = 18 + kk * 16;
+      const x0 = ix(k), x1 = ix(k + 1);
+      const lit2 = g.createLinearGradient(x0, 0, x0 - dir * w, 0);
+      lit2.addColorStop(0, rgbaOf(TH.dirt, 0.30 * kk + 0.06));
+      lit2.addColorStop(1, rgbaOf(TH.dirt, 0));
+      g.fillStyle = lit2;
+      g.beginPath();
+      g.moveTo(x0, a.y);
+      g.lineTo(x1, b.y);
+      g.lineTo(x1 - dir * w, b.y);
+      g.lineTo(x0 - dir * w, a.y);
+      g.closePath();
+      g.fill();
+    }
+
+    /* ④ 层理：每 68px 一道水平的短暗线，从内缘往画面外走。
        石头的"层"是水平的、树的年轮是圆的 —— 这道线一加上，
        竖井的第一眼就成立，比任何高光都省。 */
-    for (let y = 40; y < H; y += 64) {
-      const x = inner(y, side);
-      const len = 26 + ((y * 37) % 28);
-      g.strokeStyle = "rgba(0,0,0,.22)";
+    for (let y = 46; y < H; y += 68) {
+      const x = ixAt(y);
+      const len = 22 + ((y * 37) % 30);
+      g.strokeStyle = "rgba(0,0,0,.30)";
       g.lineWidth = 2;
       g.beginPath();
-      g.moveTo(x - side * 2, y);
-      g.lineTo(x - side * len, y + ((y % 3) - 1) * 2);
+      g.moveTo(x - dir * 3, y);
+      g.lineTo(x - dir * len, y + ((y % 3) - 1) * 3);
       g.stroke();
     }
 
-    /* ④ 内缘分界线：一条贴边的暗线，把岩壁从**亮背景**（湖面 / 雪原）里
-       分离出来。第一版用的是 wood3 亮线，截图上是两根发光的柱子，
-       比背景还抢眼 —— 边界的职责是"分开"，不是"发光"。 */
-    g.beginPath();
-    for (let y = 0; y <= H; y += 8) {
-      const x = inner(y, side);
-      if (y === 0) g.moveTo(x, y); else g.lineTo(x, y);
-    }
-    g.strokeStyle = "rgba(0,0,0,.34)";
-    g.lineWidth = 2.5;
-    g.stroke();
-
-    /* ⑤ 矿脉：三道斜向短线。位置由**深度**决定 ——
+    /* ⑤ 矿脉：三道斜向短线，位置由**深度**决定 ——
        同一层每次进去都长在同一个地方（跟地形一样可记忆），
        换一层就换位置。这是"深度"这件事唯一的视觉刻度。 */
-    for (let i = 0; i < 3; i++) {
-      const y = 110 + vein() * 380;
-      const x = inner(y, side);
-      g.strokeStyle = TH.accent || "#FFE066";
-      g.globalAlpha = 0.30;
-      g.lineWidth = 2;
+    for (let k = 0; k < 3; k++) {
+      const y = 120 + rnd() * 340;
+      const x = ixAt(y);
+      g.strokeStyle = rgbaOf(TH.accent, 0.34);
+      g.lineWidth = 2.2;
       g.beginPath();
-      g.moveTo(x - side * 18, y);
-      g.lineTo(x - side * 4, y + 26);
+      g.moveTo(x - dir * 18, y);
+      g.lineTo(x - dir * 4, y + 26);
       g.stroke();
-      g.globalAlpha = 1;
     }
   }
 
@@ -10004,7 +10471,7 @@ function drawNestWalls(g) {
     for (let i = 0; i < 3; i++) {
       const x = bx + side * (2 + i * 13);
       const r = 9 + ((i * 7 + 3) % 6);
-      g.fillStyle = i % 2 ? TH.dirt : TH.dirt2;
+      g.fillStyle = i % 2 ? TH.dirt : hexDim(TH.dirt2, 0.62);
       g.beginPath();
       g.ellipse(x, GROUND_Y - r * 0.45, r, r * 0.8, 0, 0, 6.283);
       g.fill();
@@ -10052,6 +10519,74 @@ function drawNestDark(g) {
   grd.addColorStop(1, "rgba(5,7,18," + kEdge + ")");
   g.fillStyle = grd;
   g.fillRect(0, 0, W, H);
+}
+
+/** 深巢的**底光**：光源在脚下，不在天上。
+ *
+ *  这一层的职责不是照明（看不清的地方是该看不清的，那是暗罩的活），
+ *  是**告诉玩家光从哪来**。主线从头到尾一束右上方的斜阳，
+ *  深巢从头到尾一片从地面升起来的冷光/暖光 —— 同一个台子，
+ *  光一换方向，观感就从"山道"变成"地缝"。
+ *
+ *  **为什么用 `lighter` 而不是普通叠加**：普通叠加只是"盖一层半透明色"，
+ *  盖出来的地方会变白、变灰，读作"起雾"。光必须是**加法**：
+ *  亮的更亮，暗的保持不变。这是"发光"和"蒙版"的分界线。
+ *
+ *  位置由深度种子决定 —— 同一层的灯永远在同一个地方（可记忆），
+ *  换一层就换位置。同时要避开坑（坑里本来就有自己的光，叠两层会过曝）
+ *  和营地（营地门口的暖光是主线就有的语义，别混）。
+ */
+function drawNestGlow(g) {
+  if (!S.nest) return;
+  const d = S.nest.depth || 1;
+  const rnd = nestRand(d * 9173 + 41);
+  const st = curStage();
+
+  g.save();
+  g.globalCompositeOperation = "lighter";
+
+  /* ① 地面横向光带：整条地面往上 150px 的弥散。
+     有了它，下面那些亮缝才不是"地上的几块贴纸"，而是同一片光晕里的几处亮核。 */
+  const band = g.createLinearGradient(0, GROUND_Y - 150, 0, GROUND_Y + 4);
+  band.addColorStop(0, rgbaOf(TH.accent, 0));
+  band.addColorStop(0.55, rgbaOf(TH.accent, 0.055));
+  band.addColorStop(1, rgbaOf(TH.accent, 0.15));
+  g.fillStyle = band;
+  g.fillRect(0, GROUND_Y - 150, W, 156);
+
+  /* ② 地缝：地面上一排短横缝在发光。
+     **第一版是 3 个大椭圆光斑（r 96~150），截图上是"地上铺了两块橙色地毯"** ——
+     圆形光斑读作"某个东西在发光"，只有**线状**才读作"地裂开了、光从缝里上来"。
+     而且 3 个必然摆不均：它们要么挤在一起，要么两边各一个、中间空着。
+     改成一排（间距 78~120），整条地面都在微微透光 —— 数量解决均匀，
+     形状解决语义。 */
+  let x = NEST.L + 24;
+  let guard = 0;
+  while (x < NEST.R - 24 && guard++ < 40) {
+    const w = 22 + rnd() * 30;
+    const gap = 78 + rnd() * 42;
+    const onPit = (st.pits || []).some(q => x + w > q.x - 30 && x < q.x + q.w + 30);
+    const nearCamp = Math.abs(x + w / 2 - (st.camp.x + st.camp.w / 2)) < 70;
+    if (!onPit && !nearCamp) {
+      const cy = GROUND_Y - 2;
+      /* 缝本身：一条淡色短线 */
+      g.fillStyle = rgbaOf(TH.accent, 0.52);
+      g.beginPath();
+      g.ellipse(x + w / 2, cy, w * 0.5, 2.6, 0, 0, 6.283);
+      g.fill();
+      /* 缝上的光晕：小、扁、向上扬（贴地的光不会是一个正圆） */
+      const r = 30 + rnd() * 26;
+      const gr = g.createRadialGradient(x + w / 2, cy, 2, x + w / 2, cy, r);
+      gr.addColorStop(0, rgbaOf(TH.accent, 0.24));
+      gr.addColorStop(1, rgbaOf(TH.accent, 0));
+      g.fillStyle = gr;
+      g.beginPath();
+      g.ellipse(x + w / 2, cy - 2, r * 0.92, r * 0.58, 0, 0, 6.283);
+      g.fill();
+    }
+    x += w + gap;
+  }
+  g.restore();
 }
 
 /* 前景灌木：画面最底边一排压暗的剪影。
@@ -10299,6 +10834,10 @@ function drawForeground(g) {
        marsh  —— 高杆芦苇（线条，几乎没有体积）
      这一层是"镜头前"：它一变，整屏的**空间感**就变了 ——
      同一条地平线，前面是灌木 = 草地，前面是岩块 = 峡谷，前面是苇杆 = 湿地。 */
+  /* 深巢的前景是岩石，不是灌木。
+     SCAPE 由 L.theme 决定，而深巢的 L.theme 是 "nest-xxx"（查不到）→ 落 hills →
+     画出一排绿灌木。洞窟镜头前长灌木，比画错颜色更伤"这是地底"这件事。 */
+  if (S.nest) { drawFgRocks(g); return; }
   if (SCAPE === "cliffs") { drawFgRocks(g); return; }
   if (SCAPE === "marsh") { drawFgReeds(g); return; }
 
@@ -14844,6 +15383,9 @@ function render() {
      但不盖角色和球 —— 它们在这之后画，所以永远亮着。
      这一步的顺序就是设计本身：球是火，人是火把，其余地方是黑的。 */
   drawNestDark(g);
+  /* 底光在**暗罩之后**：光是最亮的东西，被自己的暗罩压一道就没意义了。
+     放在单位之前，所以球和人踩在光里 —— 而不是光糊在他们脸上。 */
+  drawNestGlow(g);
 
   if (S.phase === "jump") {
     /* 面板第一行就把整屏铺满了（见 drawJump），所以不用管下面画过什么。

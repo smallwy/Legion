@@ -68,6 +68,22 @@ for (let d = 1; d <= MAX_DEPTH; d++) {
     /* 地面段恒等于井（少一段就有"看着是地、其实是空的"的死亡区） */
     ok(L.plats[0].x === NL && L.plats[0].w === 640, `第 ${d} 层地面 = 井宽`);
     ok(L.spawn.x >= NL && L.spawn.x <= NR, `第 ${d} 层出生点在井内`);
+    /* ---- 主题名与收成目标（2026-10-25 两个"生成期才崩/才无解"的坑）---- */
+    /* ① 主题名必须来自深层配色表。
+       上一版兜底分支还写着 `NEST_THEME_LIGHT[...]`，而那个常量已经删了 ——
+       冒烟和截图都碰不到兜底分支，只有 nest-check 3609 项跑满时才会走到，
+       一走到就是 ReferenceError（玩家卡在某层、控制台报错、画面全黑）。 */
+    ok(typeof L.theme === "string" && L.theme.indexOf("nest-") === 0,
+       `第 ${d} 层主题名指向地底配色`, String(L.theme));
+    /* ② 收成目标必须**严格小于这一层物理上可得的上限**。
+       41 层踩过：一行 water 坑被当成"火坑"（cap 翻倍），5 只敌人的层
+       算出目标 8，而实际最多收 7 —— 目标超过上限，是死局不是难度。 */
+    if (L.goal === "collect") {
+      const foes = L.waves.reduce((n, w) => n + w.length, 0);
+      const fire = (L.pits || []).some(q => q.kind === "fire");
+      const cap = fire ? foes * 2 : Math.round(foes * 1.4);
+      ok(L.collect < cap, `第 ${d} 层收成目标低于可得上限`, `${L.collect} vs cap ${cap}`);
+    }
     ok(L.waves.length >= 2, `第 ${d} 层至少两波（小怪 + BOSS）`);
     ok(JSON.stringify(L.waves[L.waves.length - 1].map(f => f.foe)) === '["boss"]',
        `第 ${d} 层最后一波是 BOSS`);

@@ -157,10 +157,24 @@ for (let d = 1; d <= MAX_DEPTH; d++) {
 
 /* ---- 8. 构件库不是空的（空库 = 每层都退化成最简版） ---- */
 {
+  /* 现在是**按层号**索引（k=0 对应主线 462 / 深巢 446）。
+     深巢第 4 层（116）复用 k=2 的料（见 NEST_LIB.kitOf），所以只验 3 组。 */
   const lib = G.NEST_LIB;
-  ok(lib.ledges[462].length > 5, `构件库 462 层有料`, `${lib.ledges[462].length} 条`);
-  ok(lib.ledges[350].length > 5, `构件库 350 层有料`, `${lib.ledges[350].length} 条`);
-  ok(lib.ledges[248].length > 3, `构件库 248 层有料`, `${lib.ledges[248].length} 条`);
+  ok(lib.ledges[0].length > 5, `构件库 k=0（主线 462）有料`, `${lib.ledges[0].length} 条`);
+  ok(lib.ledges[1].length > 5, `构件库 k=1（主线 350）有料`, `${lib.ledges[1].length} 条`);
+  ok(lib.ledges[2].length > 3, `构件库 k=2（主线 248）有料`, `${lib.ledges[2].length} 条`);
+  /* 深巢层表本身：4 层、层距 110、最顶层不钻洞顶（洞顶岩体 y≈90） */
+  ok(G.NEST.LAYERS.length === 4, "深巢 4 层台", `${G.NEST.LAYERS.length} 层`);
+  ok(G.NEST.LAYERS.every((y, i) => i === 0
+      ? G.GROUND_Y - y === G.NEST.LAYER_GAP
+      : G.NEST.LAYERS[i - 1] - y === G.NEST.LAYER_GAP),
+    "深巢层距恒为 110", G.NEST.LAYERS.join(" / "));
+  ok(G.NEST.LAYERS[G.NEST.LAYERS.length - 1] > 95, "最顶层不钻洞顶（> 95）",
+    `最顶 ${G.NEST.LAYERS[G.NEST.LAYERS.length - 1]}`);
+  /* 跳跃可达：v²/2g = 780²/(2×2100) ≈ 145，层距 110 必须留 ≥ 20 余量 */
+  const jumpH = (780 * 780) / (2 * 2100);
+  ok(jumpH - G.NEST.LAYER_GAP > 20, "单跳能上一层且余量 > 20",
+    `跳高 ${jumpH.toFixed(1)} / 层距 ${G.NEST.LAYER_GAP}`);
 }
 
 console.log("");

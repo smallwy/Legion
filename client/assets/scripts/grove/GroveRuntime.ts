@@ -390,6 +390,42 @@ const FOES = {
   // 幼虫：BOSS 产出来的。它不打玩家 —— 它往 BOSS 身边爬，到了就被吃掉。
   // 这才是"繁殖"真正给玩家的压力：你得决定先去拦虫，还是继续打壳。
   larva: { name: "幼 虫", c1: "#CDE888", c2: "#EFFBB8", c3: "#7F9A44", w: 26, h: 22, vw: 30, vh: 24, spd: 104, kind: "walk", sc: 1 },
+
+  /* ==========================================================================
+     深巢四怪（2026-10-26）
+     --------------------------------------------------------------------------
+     主线四只的共同点：**都站在地上、都被推着走**。深巢四只每只都打破其中一条，
+     而它们各自咬住深巢的一个物理事实：
+
+       盲蛛  咬"窄"      追**震动**（球滚到哪它扑哪），不追人
+       石壳  咬"往下"    只会往低处滚，撞墙反弹，你得把它推上坡它才肯掉进缝
+       巢蛾  咬"暗"      **球碰不到它**，只能用光（球的火）照满 3 秒才掉下来
+       地脉虫 咬"岩壁"   住在墙里，每 4 秒探头 2 秒，缩回时无敌
+
+     这四条的写法和主线不一样的地方只有一处：**它们各自有一个"不能被直接推"
+     的条件**（盲蛛不追人、石壳不走路、巢蛾免疫碰撞、地脉虫有窗口）。
+     所以在这个游戏里，"怎么打"第一次需要看怪的脸色选，而不是"糊三下推走"。
+
+     尺寸口径（剪影五要素，见设计文档 §2.5）：
+       · 碰撞盒 w/h 与视觉 vw/vh 照旧分开
+       · 线宽 3px（主线 2.5，暗底要更实）、圆角 0（岩质生物没有柔角）
+       · 光源一律从**下方**：代码图形里每只都有一条底沿亮边
+     ========================================================================== */
+  /* 盲蛛：身体极小、腿极长 —— 涂黑也能认出是"八条腿的东西"。
+     碰撞按身体算（46 宽），腿是视觉溢出（76），否则它会"隔着空气撞到球"。 */
+  spider: { name: "盲 蛛", c1: "#6E5A7A", c2: "#9C86AC", c3: "#3A2B46",
+            w: 46, h: 26, vw: 76, vh: 32, spd: 62, kind: "walk", sc: 1, hunt: "shake" },
+  /* 石壳：圆钝无腿。spd 是"滚动后的水平初速"，不是行走速度 ——
+     kind="roll" 走的是重力分支，不读 spd 当步速（见 updateFoe）。 */
+  shell:  { name: "石 壳", c1: "#7A7468", c2: "#ACA69A", c3: "#423C33",
+            w: 50, h: 48, vw: 52, vh: 52, spd: 0, kind: "roll", sc: 1 },
+  /* 巢蛾：有翼、剪影上下不对称（上翅短、下翅长）。
+     `spd` 是空中漂移速度，比乌鸦慢 —— 它不急，急的是玩家。 */
+  moth:   { name: "巢 蛾", c1: "#C8B4E8", c2: "#EADFFF", c3: "#6E5C8C",
+            w: 30, h: 24, vw: 46, vh: 30, spd: 44, kind: "moth", sc: 1 },
+  /* 地脉虫：只露一个头。碰撞盒是"头"（38×40），身体是画出来的长条。 */
+  vein:   { name: "地脉虫", c1: "#B0764E", c2: "#E0A070", c3: "#54321C",
+            w: 38, h: 40, vw: 56, vh: 56, spd: 0, kind: "burrow", sc: 1 },
 };
 
 /* ============================================================================
@@ -2430,9 +2466,32 @@ const NEST = {
      生成发生在 enterNest 里，那时墙还没切过来，读全局会拿到主线值。 */
   get L() { return Math.round((W - this.W) / 2); },      // 160
   get R() { return this.L + this.W; },                   // 800
-  /* 三层的 y 与主线**同一套**三段台阶。改这里 = 造新物理几何，
-     C1/C2 的判定和所有机器人口径全部失效 —— 不许改。 */
-  LAYERS: [462, 350, 248],
+  /* ---- 深巢自己的台层表：4 层、层距 110 ----
+   *
+   * 上一版直接借用主线的 `462 / 350 / 248`，理由是"改它 = 造新物理几何"。
+   * 那是**当时**对的：借来的层 y 让深巢复用主线的台宽/台位分布，
+   * 一次就通。但它也是"深巢像主线换皮"的最后一条硬证据 ——
+   * 玩家在两款游戏里看到的台阶高度、层数完全一样（2026-10-26 用户：
+   * 「空间设计 玩法最好更加创新」）。
+   *
+   * 现在按设计文档 §2.3 摊成 **4 层、层距 110**：
+   *   556(地面) → 446 → 336 → 226 → 116
+   * 层距 110 / 球直径 46 = 2.4，球在层间通过时留得出余量（文档给的比例）。
+   *
+   * **主线一个字节都不动**：主线的台 y 写在 `LEVELS[].plats` 里，
+   * 是 27 屏手摆几何的一部分，机器人、星靶落点、`best[]` 全按它调过。
+   * 这张表只被 `nestBuildRaw` / `nestSimpleLevel` 读 —— 换掉它等于
+   * "只重排深巢的地形"，这正是 ACTIVE 表切换那一套能成立的原因。
+   *
+   * 最顶层取 116 而不是 6：洞顶岩体画到 y≈90、钟乳石最长下垂 234，
+   * 116 是"还看得见天、又已经贴到洞顶"的那一档。再往上就是钻岩层里了。
+   *
+   * **不许在这里加第 5 层。** 116 - 110 = 6 已经越过洞顶；
+   * 真要 5 层必须先把 GROUND_Y 或层距改小，那是另一轮的事。 */
+  LAYERS: [446, 336, 226, 116],
+  /* 层距，写给 `nestCheck` 与机器人当口径用（不从数组差值反推，
+     免得以后改成不等距时断言悄悄失效）。 */
+  LAYER_GAP: 110,
   CAMP_W: 82,
   /* 坑宽上限 140 是 27 屏里最宽的坑，机器人能跳过去；再宽就不是"跳得过去
      的障碍"而是"必须走台"的另一种关卡设计，不在这里做。 */
@@ -2440,7 +2499,7 @@ const NEST = {
   PIT_GAP: 120,        // C4：相邻坑缘间距下限
   SPAWN_CLEAR: 100,    // C6：出生点净空
   CAMP_CLEAR: 160,     // C2a：营地前净空（球滚进营地前不许有坑）
-  RAMP_W: 226,         // 94 落差下的 2.4H，峰值 ≤32°（主线注释里的那条规则）
+  RAMP_W: 246,         // 110 落差下 2.24H，峰值 ≤25°（层距从 94 加到 110，坡跟着加长）
   MAX_TRIES: 20,
   /* 坡是稀缺件：主线 27 屏只有 6 条，当"这一层有个坡"的事件用，
      不当标配（设计文档 §2：浅层 30%、深层 80%）。 */
@@ -2511,15 +2570,31 @@ function nestTheme(depth) {
 const NEST_PIT_KINDS   = ["fire", "mud", "water"];
 
 /* ---- 构件库：从 27 屏真实几何里收集，一条都不新造 ----
- * `ledges[462]` 里每一条都是某屏真实存在过、机器人跑通过的 (x,w)。 */
+ * **按"层号"索引，不按 y 索引。**
+ *
+ * 上一版用 y 当键（`ledges[462]`），因为那时深巢直接借用主线的三层 y。
+ * 现在深巢有了自己的层表（`NEST.LAYERS` = 446/336/226/116），
+ * 拿 y 当键的话库一条都对不上 —— 每层都退化成"没有候选台"，
+ * 于是每一层都被重抽 20 次然后落到兜底最简版（`nest-check` 会看到
+ * 重抽峰值直接顶到 20）。
+ *
+ * 所以统一成**层号 k**：k=0 是离地面最近的那层台（主线 462 / 深巢 446），
+ * k=1 主线的 350 / 深巢 336，**k=2 对应主线的 248，k=3 复用 k=2 的料**
+ * （248 是最顶层，宽度分布最接近"贴着洞顶那一层"）。
+ * 这样"台是从真实关卡里搬来的"这条性质不变，只是搬的时候换了高度。 */
 const NEST_LIB = (function () {
-  const lib = { ledges: { 462: [], 350: [], 248: [] } };
+  const MAIN_K = { 462: 0, 350: 1, 248: 2 };
+  const ledges = [[], [], []];
   for (const L of LEVELS) {
     for (const p of (L.plats || [])) {
-      if (p.kind === "ledge" && lib.ledges[p.y]) lib.ledges[p.y].push({ x: p.x, w: p.w });
+      if (p.kind !== "ledge") continue;
+      const k = MAIN_K[p.y];
+      if (k != null) ledges[k].push({ x: p.x, w: p.w });
     }
   }
-  return lib;
+  /* 库层号：深巢第 k 层去哪个库取料。k=3 没有对应料，复用最顶层。 */
+  const KIT = [0, 1, 2, 2];
+  return { ledges: ledges, kitOf: (k) => KIT[Math.min(k, KIT.length - 1)] };
 })();
 
 /** 确定性伪随机（mulberry32）。**不能用 Math.random** ——
@@ -2619,15 +2694,29 @@ function nestBuildRaw(depth, seed) {
   const plats = [{ x: NEST.L, y: GROUND_Y, w: NEST.W, h: 44, kind: "ground" }];
 
   /* ---- 台层：按深度开放层数，每层从库里抽 1~2 条 ----
-   * 抽中的片段保留它**自己原本的 x/w** —— 那是真实关卡里验证过的位置，
-   * 我只做"同层不重叠"这一道筛。 */
-  const layers = depth >= 16 ? NEST.LAYERS : depth >= 6 ? [462, 350] : [462];
-  for (const y of layers) {
-    const want = y === 462 ? ri(1, 2) : (R() < 0.55 ? 1 : 2);
+   * 抽中的片段保留它**自己原本的 w** —— 那是真实关卡里验证过的宽度，
+   * 我只做"同层不重叠"这一道筛。
+   *
+   * 层数从 2 层起（上一版是 1 层）：`NEST.LAYERS` 是 4 层表，浅层只开
+   * 底下 2 层就够"有个落脚面 + 有个高处"，一口气全开会让第 1 层就长成
+   * 满屏台 —— 而第 1 层是**第一次进深巢的那一屏**，它要回答的是
+   * "这里和主线不一样"，不是"这里很挤"。
+   *
+   *   depth 1–5   2 层（446 / 336）
+   *   depth 6–15  3 层（+ 226）
+   *   depth 16+   4 层（+ 116，贴着洞顶）
+   */
+  const topK = depth >= 16 ? NEST.LAYERS.length - 1 : depth >= 6 ? 2 : 1;
+  for (let k = 0; k <= topK; k++) {
+    const y = NEST.LAYERS[k];
+    /* 最底那层给 1~2 条（坡和地面兵站都靠它），上层一律 1~2 条但偏 1 条 ——
+       4 层全抽满 = 8 块台叠在 640 宽里，机器人会在层间反复落下去。 */
+    const want = k === 0 ? ri(1, 2) : (R() < 0.55 ? 1 : 2);
+    const kit = NEST_LIB.kitOf(k);
     const placed = [];
     let guard = 0;
     while (placed.length < want && guard++ < 40) {
-      const cand = pick(NEST_LIB.ledges[y]);
+      const cand = pick(NEST_LIB.ledges[kit]);
       if (!cand) break;
       /* 先搬进井里，再做"同层不重叠"的筛 —— 顺序反过来是在**主线坐标**
          上判重叠，搬完可能又叠上了（rel 把不同 x 压到相近位置）。 */
@@ -2656,16 +2745,33 @@ function nestBuildRaw(depth, seed) {
    * 于是"这层有个坡"这个事件基本不发生 —— 而那正是新鲜的来源之一。 */
   const ramps = [];
   if (depth >= 3 && R() < NEST.RAMP_P(depth)) {
-    const bases = plats.filter(p => p.y === 462 && p.kind === "ledge");
+    /* 坡顶接**最底下那层台**（`NEST.LAYERS[0]` = 446），不是写死的 462 ——
+       462 是主线的数，深巢换层表之后它一块台都对不上，坡就永远抽不出来
+       （而且不会报错，只是"这层没有坡"，肉眼完全看不出来）。 */
+    const baseY = NEST.LAYERS[0];
+    const bases = plats.filter(p => p.y === baseY && p.kind === "ledge");
+    /* 坡的上方不许有台：C5 判的是"坡身钻台底"。
+       层距从 154（230/248 那种疏排）压到 110 之后，同一段 x 上方
+       很可能压着 336 / 226 层的台 —— 坡照样能走（玩家头顶 406 高于
+       336 的台底），但**判据是按"坡的 x 区间全覆盖"算的**，过不去就重抽。
+       与其放宽 C5（那是主线的安全网），不如在候选阶段就筛掉。 */
+    const covered = (rx, rw) => plats.some(p =>
+      p.kind === "ledge" && p.y < baseY - 4 &&
+      p.x < rx + rw && p.x + p.w > rx);
+    const rampHi = NEST.R - 104;      // 右端要给第一道缝（96 宽）让出来
     const cands = [];
     for (const b of bases) {
       /* 坡必须整段落在井内：坡身出井 = 一半悬在岩壁里，读作"木头插进石头"，
-         而且球滑到坡底正好撞墙。上界用 NEST.R 而不是 campX ——
-         坡底落地后玩家还能往右推一段，不必留 20 空隙给营地。 */
+         而且球滑到坡底正好撞墙。上界不取 NEST.R：右端 96 是送走点裂缝，
+         坡伸进去就是"坡从缝上飞过去"（C7c 会红）。 */
       const rx = b.x + b.w, rx2 = rx + NEST.RAMP_W;
-      if (rx2 <= NEST.R) cands.push({ x: rx, w: NEST.RAMP_W, yL: 462, yR: GROUND_Y });
+      if (rx2 <= rampHi && !covered(rx, NEST.RAMP_W)) {
+        cands.push({ x: rx, w: NEST.RAMP_W, yL: baseY, yR: GROUND_Y });
+      }
       const lx = b.x - NEST.RAMP_W;
-      if (lx >= NEST.L) cands.push({ x: lx, w: NEST.RAMP_W, yL: GROUND_Y, yR: 462 });
+      if (lx >= NEST.L && !covered(lx, NEST.RAMP_W)) {
+        cands.push({ x: lx, w: NEST.RAMP_W, yL: GROUND_Y, yR: baseY });
+      }
     }
     /* 打乱一下再挑：永远取第一条的话，"有坡的层"坡都在同一个位置 */
     for (let i = cands.length - 1; i > 0; i--) {
@@ -2678,20 +2784,62 @@ function nestBuildRaw(depth, seed) {
     }
   }
 
-  /* ---- 坑：只挖在"出生点 → 营地"这段地面里，两端留净空 ----
-   * 这样 C2a（营地净空）和 C6（出生点净空）从生成方式上就成立，
-   * 不靠事后校验去兜 —— 校验是兜底，不是生成本身的设计。
-   * 坑要避开坡的整段（lo..hi）：坡底落进坑里读作"坑里长出一块木头"。 */
+  /* ---- 深巢**不挖坑**：地面的"破口"只留一种 —— 裂缝（2026-10-26）----
+   *
+   * 主线那三个坑（火 / 泥 / 水）各自对应一种"这一球我想要什么"：
+   * 火坑断连锁给双倍收成、泥坑把球裹厚、水坑沉球。
+   * 深巢第一版照抄了它们，代价是"地面语法和主线一模一样"——
+   * 玩家进深巢第一眼看到的仍然是中间一团火光、左边一摊泥。
+   *
+   * 更要命的是几何：坑和裂缝**都是地面破口**，两者一起把地面切成四五段，
+   * 而球是滚的、跳不过任何一段破口。站在"没有送走点的那一段"上的虫
+   * **永远送不走** —— C8 实测 60 层 × 10 种子命中 1456 次，
+   * 663 层重抽 20 次全失败。那不是难，是几何上无解。
+   *
+   * 所以深巢的地面只保留裂缝：**它自己就是送走点**，
+   * 球滚到哪儿都有去处，"一球卷多只"于是变成"往最近那道缝赶"，
+   * 而不是主线的"往右端一点一点挪"。这就是两个玩法该有的差别。 */
   const pits = [];
-  const nPit = Math.min(3, 1 + Math.floor(depth / 12));
-  let px = spawnX + NEST.SPAWN_CLEAR + rnd(30, 120);
-  for (let i = 0; i < nPit; i++) {
-    const w = rnd(NEST.PIT_MIN, NEST.PIT_MAX);
-    if (px + w > campX - NEST.CAMP_CLEAR) break;
-    const clashRamp = ramps.some(r => !(px + w + 40 <= r.x || px >= r.x + r.w + 40));
-    if (clashRamp) { px += w + NEST.PIT_GAP; continue; }
-    pits.push({ x: Math.round(px), y: GROUND_Y, w: Math.round(w), kind: pick(NEST_PIT_KINDS) });
-    px += w + NEST.PIT_GAP + rnd(10, 110);
+
+  /* ---- 裂缝：深巢的送走点（2026-10-26）----
+   *
+   * 主线只有一个营地、贴在右端，所以兽必须一路推回端点，600px 的规划
+   * 就是主线那一整局的乐趣。深巢反过来：**任意一道都算**，
+   * 同一只兽可能只需推 80px。这是"就地解决的取舍"和"长途搬运的规划"
+   * 的区别，也是这两个玩法不该长得一样的最硬一条。
+   *
+   * **两道，不是设计文档写的 3–5 道。** 640 的井里放不下三道：
+   * 地面可用跨度只有 476（出生净空 100 之后到右壁），
+   * 3 道 96 宽的缝之后只剩 188，分给 4 个间隙每个 47 ——
+   * 而"两道缝之间至少 90"是下限（一只虫宽 34~56 要站得进、
+   * 球的落点要分得开），47 会让中间那段地面变成纯装饰：
+   * 站不下人、也停不住球。实测 C7e 在 60 层里红了 1198 次，全是这条。
+   *
+   * 两道 96 之后：缝间 142、右缝到井壁 71，每只虫最多被推 120px
+   * —— 仍然是"就地解决"的量级，而主线的对应数字是 600。
+   * 要 3 道以上必须先放宽活动区（`NEST.W`），那是另一轮的取舍。
+   *
+   * 每道避开坡：坡从台滑到地面，缝压在坡上读作"坡从缝上飞过去"（C7c），
+   * 而且坡底落进缝里就读作"坡通向一个洞"。 */
+  const chasms = [];
+  {
+    const CW = 96;
+    const lo = spawnX + NEST.SPAWN_CLEAR;
+    const span = NEST.R - lo;
+    const nCh = 2;
+    for (let i = 0; i < nCh; i++) {
+      const mid = lo + span * (i + 0.5) / nCh;
+      let cx = Math.round(mid - CW / 2);
+      /* 压坡就往左让，最多让 2 次（92px）。让再多会撞上前一道缝（C7e），
+         而两道缝挨太近 = 中间那段地面站不住人。让不过去就交给 C7c 重抽。 */
+      for (let t = 0; t < 2; t++) {
+        const clash = ramps.some(r => !(cx + CW <= r.x || cx >= r.x + r.w));
+        if (!clash) break;
+        cx = Math.max(NEST.L + 8, cx - 46);
+      }
+      chasms.push({ x: cx, y: GROUND_Y, w: CW });
+    }
+    chasms.sort((a, b) => a.x - b.x);
   }
 
   /* ---- 兵站只认**地面与 462 台** ----
@@ -2703,15 +2851,16 @@ function nestBuildRaw(depth, seed) {
    * 主线里 350/248 也摆了 53 + 14 只，但主线是**手摆地形**，每个高台旁边
    * 都有能下去的路。深巢没有连通性校验（C1~C6 只验几何合法，不验"人能不能
    * 被运走"），所以只能把兵站压到"推一把就落地"的两层：
-   *   地面 556  → 直接推进营地
-   *   台 462    → 台沿一推就落地，坡也能把人送下去
-   * 350 / 248 台照旧生成 —— 它们的职责是**承接弹道**、拉开层次，不是站人。
+   *   地面 556       → 直接推进营地
+   *   台 446（k=0）  → 台沿一推就落地，坡也能把人送下去
+   * 336 / 226 / 116 照旧生成 —— 它们的职责是**承接弹道**、拉开层次，不是站人。
    *
    * 席位按 170px 一格拆开，抽中的是"一个人能站的地方"而不是"一整块台"：
    * 抽台的话 5 只虫子会挤在同一个 x 上互相重叠。 */
   const spots = [];
+  const seatLedgeY = NEST.LAYERS[0];
   for (const p of plats) {
-    if (p.y !== GROUND_Y && p.y !== 462) continue;
+    if (p.y !== GROUND_Y && p.y !== seatLedgeY) continue;
     /* 台宽不足 140 就不放人了（两侧各留 40，剩下的不够一只虫巡逻） */
     if (p.y !== GROUND_Y && p.w < 140) continue;
     /* 地面席位的右端必须收在**营地之前**。
@@ -2727,16 +2876,22 @@ function nestBuildRaw(depth, seed) {
       spots.push({ y: p.y, x: gx, x1: Math.min(gx + 70, hi) });
     }
   }
-  /* 地面席位要避开坑：站坑口上会自己掉下去 */
+  /* 地面席位要避开坑：站坑口上会自己掉下去。
+     **也要避开裂缝**（2026-10-26）：敌人不会掉进缝里（物理地面是完整的，
+     只有球会被 `ballTerrain` 判掉），所以它站在缝上不会消失 ——
+     但那一格正好是玩家的送走点，一只虫从头到尾站在原地挡着缝，
+     玩家读作"这缝是假的"。 */
   const groundSeats = spots.filter(s => s.y === GROUND_Y);
   for (const s of groundSeats) {
     const onPit = pits.some(p => s.x1 > p.x - 40 && s.x < p.x + p.w + 40);
-    if (onPit) spots.splice(spots.indexOf(s), 1);
+    const onChasm = chasms.some(c => s.x1 > c.x - 30 && s.x < c.x + c.w + 30);
+    if (onPit || onChasm) spots.splice(spots.indexOf(s), 1);
   }
   if (!spots.length) {
     for (let gx = NEST.L + 70; gx < campX - NEST.CAMP_CLEAR - 70; gx += 170) {
       const onPit = pits.some(p => gx > p.x - 50 && gx < p.x + p.w + 50);
-      if (!onPit) spots.push({ y: GROUND_Y, x: gx, x1: gx + 70 });
+      const onChasm = chasms.some(c => gx + 70 > c.x - 30 && gx < c.x + c.w + 30);
+      if (!onPit && !onChasm) spots.push({ y: GROUND_Y, x: gx, x1: gx + 70 });
     }
   }
   /* 一个席位只用一次 —— 两只虫站同一个 x 会叠成一只 */
@@ -2750,11 +2905,45 @@ function nestBuildRaw(depth, seed) {
      实测机器人稳定卡在 7/9 —— 不是地形死路，是**场上敌人比可站位还多**。
      密度曲线要服从"台的数量"，不能只看深度。 */
   const n1 = 2 + Math.min(3, Math.floor(depth / 8));
+  /* ---- 敌人类型按深度开池（2026-10-26，深巢四怪上线）----
+   *
+   * bug 在池子里留两个位（权重加倍）：它是**唯一"什么条件都不需要"的怪**，
+   * 每一层至少要有一只，否则玩家学不到"这层的规矩"就被特殊怪教做人。
+   * 四只特殊怪各咬一个物理事实，出场深度和它们咬的东西相关：
+   *   盲蛛（窄·追震动）1+   浅层就出现，因为"球把怪拽过来"这件事需要早教
+   *   石壳（往下·重力滚）5+
+   *   巢蛾（暗·只能用光）9+   —— 它要求玩家先有"球是光源"这个概念
+   *   地脉虫（岩壁·窗口）14+
+   * 深层池子自然变长，所以深层每层只多 0~1 只，密度靠 `n1` 控制不靠池子。 */
+  const foePool = ["bug", "bug", "spider"];
+  if (depth >= 5) foePool.push("shell");
+  if (depth >= 9) foePool.push("moth");
+  if (depth >= 14) foePool.push("vein");
   const w1 = [];
+  let hasMoth = false, hasVein = false;
   for (let i = 0; i < n1; i++) {
     const s = takeSeat();
     if (!s) break;
-    w1.push({ foe: "bug", x: Math.round(rnd(s.x, s.x1)), y: s.y });
+    let foe = foePool[Math.floor(R() * foePool.length)];
+    /* 每波最多一只蛾 / 一只脉虫：蛾要"用光"才掉，两只同时在场就变成
+       "先找光、再找光"的重复劳动；脉虫固定在原地，两只等于一道墙。 */
+    if ((foe === "moth" && hasMoth) || (foe === "vein" && hasVein)) foe = "bug";
+    if (foe === "moth") hasMoth = true;
+    if (foe === "vein") hasVein = true;
+    /* 蛾在空中：给 336 层上方 70px（它能被球光照到，也够不着玩家的头）。
+       取 `NEST.LAYERS[1] - 70` 而不是写死数字 —— 层表改过一次，
+       写死的高度会落在台的中间，蛾子看起来像卡在板子里。 */
+    if (foe === "moth") {
+      w1.push({ foe: "moth", x: Math.round(rnd(NEST.L + 90, NEST.R - 90)),
+                y: NEST.LAYERS[1] - 70 });
+      continue;
+    }
+    /* 脉虫贴地：它从地面/岩里长出来，不能站在悬空台上（底下没东西可长）。 */
+    if (foe === "vein") {
+      w1.push({ foe: "vein", x: Math.round(rnd(NEST.L + 60, NEST.R - 160)), y: GROUND_Y });
+      continue;
+    }
+    w1.push({ foe: foe, x: Math.round(rnd(s.x, s.x1)), y: s.y });
   }
   if (w1.length) waves.push(w1);
 
@@ -2766,6 +2955,12 @@ function nestBuildRaw(depth, seed) {
     const nCrow = depth >= 8 ? 1 : 0;
     for (let i = 0; i < nCrow; i++) {
       w2.push({ foe: "crow", x: Math.round(rnd(NEST.L + 120, campX - 160)), y: 300, fly: 1 });
+    }
+    /* 第二波给一只石壳（5+）：石壳是"地形怪"，和 boar 放同一波
+       会让这一波变成"两只都会冲"，所以单独挑一层台给它。 */
+    if (depth >= 5) {
+      const s2 = takeSeat();
+      if (s2) w2.push({ foe: "shell", x: Math.round(rnd(s2.x, s2.x1)), y: s2.y });
     }
     if (w2.length) waves.push(w2);
   }
@@ -2816,6 +3011,10 @@ function nestBuildRaw(depth, seed) {
     plats: plats,
     ramps: ramps,
     pits: pits,
+    /* 裂缝 = 深巢的送走点。`loadLevel` 会把它塞进全局 `CHASMS`，
+       `ballTerrain` / `predictBall` 走同一个数组 —— 主线那边这个数组
+       只有 `[CAMP]` 一项，所以两套玩法共用一条判定。 */
+    chasms: chasms,
     stumps: [],
     camp: { x: campX, y: GROUND_Y, w: NEST.CAMP_W },
     waves: waves,
@@ -2853,14 +3052,15 @@ function nestBuildRaw(depth, seed) {
        41 层（一行 water 坑、5 只敌人）算出来 cap=10、目标 8，
        而这一层物理上最多只能收到 7 —— **目标超过上限，是无解，不是难**。 */
     const cap = pits.some(q => q.kind === "fire") ? foes * 2 : Math.round(foes * 1.4);
-    /* 目标必须**严格小于 cap**，否则"每只单独进营地"都完成不了，
-       更别说一球卷多只。上一版下限写死 8：5 只敌人的层 cap 只有 7，
-       8 直接越过天花板。现在下限 4，且最后再 min(cap) 夹一次。 */
     /* **cap - 1，不是 cap**。取满等于"每一只都必须单独进营地"，
        而一球卷三只（3 只 → 4 收成）比单独送三次（6 收成）更省事才是正解；
        目标一顶到上限，正解反而成了亏本买卖 —— 这是主线就定过的规矩。
-       层 51 / 60 就是被这条断言抓出来的（cap 4 目标也 4）。 */
-    L.collect = Math.max(3, Math.min(cap - 1, Math.round(cap * 0.6)));
+       层 51 / 60 就是被这条断言抓出来的（cap 4 目标也 4）。
+       **下限的顺序也不能反**：先 `max(下限)` 再 `min(cap-1)`。
+       反过来的话 `max(3, min(2, 2))` = 3 = cap，照样越顶
+       —— 深巢不再挖坑之后 cap 从 `敌×2` 掉到 `敌×1.4`，
+       2 只敌人的层 cap 只有 3，下限 3 当场撞上去（第 7 层 3 条红）。 */
+    L.collect = Math.min(cap - 1, Math.max(2, Math.round(cap * 0.6)));
   }
   if (goal === "chain") L.chain = Math.max(2, Math.min(4, Math.round(foes * 0.5)));
 
@@ -2927,8 +3127,75 @@ function nestCheck(L) {
   for (const w of L.waves) {
     for (const f of w) {
       if (f.fly) continue;
+      /* 巢蛾本来就悬在半空（它没有落脚面，靠光打下来）——
+         这一条"不许悬空"对它是反的，跳过。 */
+      if (f.foe === "moth") continue;
       const on = surf.some(p => f.y >= p.y - 2 && f.y <= p.y + 4 && f.x >= p.x - 10 && f.x <= p.x + p.w + 10);
       if (!on) fails.push("敌人悬空");
+    }
+  }
+
+  /* ---- C7 裂缝（送走点）：深巢唯一的出口，错一条这层就打不通 ----
+   * 这几条的共同病根都是"缝画在那儿、球却过不去或掉不进去"：
+   *   ① 缝在井外 → 画不出来，球也滚不到（CAMP.x 是最右那道，最容易撞）
+   *   ② 总宽超 40% → 地面成筛子，走两步就掉，玩家来不及做任何决定
+   *   ③ 缝压在坡上 → "坡从缝上飞过去"，读作 bug，而且坡底落进缝里
+   *   ④ 缝互相之间不留 90 → 中间那段地面站不住人
+   * 敌人不掉进缝不在这里验：物理地面是完整的，只有球会被判掉。 */
+  const chs = L.chasms || [];
+  {
+    let total = 0;
+    for (const c of chs) {
+      total += c.w;
+      if (c.x < NEST.L - 2 || c.x + c.w > NEST.R + 2) fails.push("C7a 裂缝出井");
+      if (c.w < 60 || c.w > 140) fails.push("C7b 裂缝宽度越界");
+      for (const r of ramps) {
+        if (!(c.x + c.w <= r.x || c.x >= r.x + r.w)) fails.push("C7c 裂缝压在坡上");
+      }
+    }
+    if (total > Math.round(NEST.W * 0.45) + 2) fails.push("C7d 裂缝总宽超过 45%");
+    const cs = chs.slice().sort((a, b) => a.x - b.x);
+    for (let i = 1; i < cs.length; i++) {
+      if (cs[i].x - (cs[i - 1].x + cs[i - 1].w) < 90) fails.push("C7e 两道裂缝挨太近");
+    }
+    /* 深巢必须有裂缝：没有的话 `loadLevel` 会退回 `[L.camp]`，
+       而深巢已经没有营地视觉了 —— 球滚到右端凭空消失。 */
+    if (L.nest && !chs.length) fails.push("C7f 深巢没有送走点");
+  }
+
+  /* ---- C8 送得走：每只地面敌人的"地面段"里必须有至少一道裂缝 ----
+   *
+   * **这是"裂缝会切地面"这件事唯一正确的读法，判错方向就会把可玩的层判死。**
+   *
+   * 切段的东西只有**坑**：人踩进坑会掉下去，所以坑是真障碍。
+   * **裂缝不是障碍，是目的地** —— 它是一段的终点，不是切开地面的刀。
+   * 第一版把裂缝也算进"切段"里，于是"两道缝之间的那段地面"被算成
+   * 一个独立的段、而那段里当然没有缝（缝就是它的两端）——
+   * 60 层 × 10 种子瞬间 1196 次误报，全是假红。
+   *
+   * 台上（446 层）的敌人不在这一条里：台沿一推就落地，落到哪一段由地形
+   * 决定，而台下地面通常有好几段可选，机器人能绕。
+   * 这条只兜"它一开始就站在走不掉的地方"。 */
+  {
+    const cuts = [];
+    for (const p of pits) cuts.push([p.x, p.x + p.w]);
+    cuts.sort((a, b) => a[0] - b[0]);
+    /** x 落在哪一段自由地面（两端用井壁封口） */
+    const segOf = (x) => {
+      let lo = NEST.L, hi = NEST.R;
+      for (const c of cuts) {
+        if (x < c[0]) { hi = c[0]; break; }
+        lo = c[1];
+      }
+      return [lo, hi];
+    };
+    const segHasChasm = (lo, hi) => chs.some(c => c.x >= lo - 1 && c.x + c.w <= hi + 1);
+    for (const w of (L.waves || [])) {
+      for (const f of w) {
+        if (f.fly || f.y !== GROUND_Y) continue;
+        const sg = segOf(f.x);
+        if (!segHasChasm(sg[0], sg[1])) fails.push("C8 这段地面没有缝，人送不走");
+      }
     }
   }
   return { ok: fails.length === 0, fails: fails };
@@ -2955,14 +3222,26 @@ function nestSimpleLevel(depth) {
      台 26..620 会伸到岩壁里、坡 620..846 右半截悬空、营地 852 在井外）。 */
   L.plats = [
     { x: NEST.L, y: GROUND_Y, w: NEST.W, h: 44, kind: "ground" },
-    { x: NEST.L + 20, y: 462, w: 300, h: 20, kind: "ledge" },
+    /* 台宽 250（不是 300）：右边要给坡（246）和右端的送走点裂缝（96）让位。
+       180..430 台 + 430..676 坡 + 704..800 缝，四段首尾接上、互不重叠。 */
+    { x: NEST.L + 20, y: NEST.LAYERS[0], w: 250, h: 20, kind: "ledge" },
   ];
-  L.ramps = [{ x: NEST.L + 320, w: NEST.RAMP_W, yL: 462, yR: GROUND_Y }];
+  L.ramps = [{ x: NEST.L + 270, w: NEST.RAMP_W, yL: NEST.LAYERS[0], yR: GROUND_Y }];
   L.pits = [{ x: NEST.L + 260, y: GROUND_Y, w: 100, kind: "mud" }];
   L.camp = { x: NEST.R - NEST.CAMP_W, y: GROUND_Y, w: NEST.CAMP_W };
+  /* 兜底版也必须有裂缝 —— `loadLevel` 里 `L.chasms` 为空时会退回 `[L.camp]`，
+     那样兜底层就变成"还是有营地"的旧语义，而玩家看到的是没有营地视觉的
+     一片空地：球滚到右端凭空消失。宁可这层只有一个送走点，也要是缝。 */
+  L.chasms = [
+    /* 240..336：台（180..430）正下方的地面，坡（430..676）左侧。
+       放到 370 会压在坡身上（C7c 红）。 */
+    { x: NEST.L + 80, y: GROUND_Y, w: 96 },
+    { x: NEST.R - 96, y: GROUND_Y, w: 96 },
+  ];
   L.spawn = { x: NEST.L + 64, y: GROUND_Y };
   L.waves = [
-    [{ foe: "bug", x: NEST.L + 70, y: 462 }, { foe: "bug", x: NEST.L + 150, y: 462 },
+    [{ foe: "bug", x: NEST.L + 70, y: NEST.LAYERS[0] },
+     { foe: "bug", x: NEST.L + 150, y: NEST.LAYERS[0] },
      { foe: "bug", x: NEST.R - 200, y: GROUND_Y }],
     [{ foe: "boss", x: NEST.R - NEST.CAMP_W - 160, y: GROUND_Y,
        lv: Math.min(5, 1 + Math.floor(depth / 6)) }],
@@ -3102,6 +3381,23 @@ let PLATS = LEVELS[0].plats;
 let PITS = LEVELS[0].pits;
 let STUMPS = LEVELS[0].stumps || [];
 let CAMP = LEVELS[0].camp;
+/* ---- 送走点：**一个营地对 N 道裂缝**（2026-10-26）-----------------------
+ *
+ * 主线的送走点是**一个营地**（贴右墙，兽必须一路推回端点）。
+ * 深巢没有"回家"这个概念 —— 送走是"把它踹进地缝，它掉到下一层"。
+ * 于是送走点从 1 个变成 3 道，任意一道都算。
+ *
+ * 数据结构只差一件事：`CAMP` 是单点，`CHASMS` 是数组。
+ * **主线也走数组**（`[CAMP]`），这样 `ballTerrain` / `predictBall`
+ * 里不需要写 `if (S.nest)` 分支 —— 两份实现必然漂移，而这两个函数
+ * 是"预瞄线不能骗人"这条规矩的两端，一旦漂了玩家照着线推会扑空。
+ *
+ * 为什么不让营地真的消失：清场的判据是 `球滚进送走点 → killed += b.holds`，
+ * 而 `CAMP` 还被 KEEP_OUT（构图禁区）、石笋避让、`stat.banked`
+ * 三处读着。把它降级成"送走点之一"是零风险的改法；
+ * 删掉它等于同时改四处，而其中两处出错只会表现为"某层背景很挤"。
+ */
+let CHASMS = [LEVELS[0].camp];
 let WAVES = LEVELS[0].waves;
 let PLAYER_SPAWN = LEVELS[0].spawn;
 let RAMPS = [];
@@ -3200,6 +3496,11 @@ function loadLevel(i) {
   PITS = L.pits;
   STUMPS = L.stumps || [];
   CAMP = L.camp;
+  /* 送走点：有 `chasms` 就用它（深巢），没有就是"营地这一个"（主线）。
+     **必须是这一行**，漏了的话深巢会继续用主线的 CAMP（一个贴右墙的营地），
+     而球在深巢里滚到中间那道裂缝时会直接穿过去 —— 玩家看到的是
+     "裂缝画在那儿，球从上头滚过去"，比没有裂缝更糟。 */
+  CHASMS = (L.chasms && L.chasms.length) ? L.chasms : [L.camp];
   RAMPS = L.ramps || [];
   BOUNCERS = L.bouncers || [];
   PORTALS = L.portals || [];
@@ -3814,14 +4115,37 @@ function foeFromSpec(sp, fromSky) {
     // 躲过一次砸地才算数。
     cm: isBoss ? Math.min(4 + lv, 10) : 3,
     dead: false,
-    onGround: !sp.fly && !fromSky, ground: null,
+    onGround: def.kind !== "fly" && def.kind !== "moth" && !fromSky, ground: null,
+    /* ---- 深巢四怪的专属状态（2026-10-26）----
+     * 全部在这里给初值。**不许在 updateFoe / drawFoe 里判 `=== undefined`**：
+     * 那种写法在"某条路径忘了赋值"时会静默变成 0，而 0 在时间类字段上
+     * 等于"立刻触发"，读出来是"蛾子一进场就掉下来"这种没法归因的怪现象。 */
+    invuln: 0,                        // 无敌窗口（地脉虫缩回时）
+    /* 探头周期的相位：**不能在这里调 `rand()`**。
+     *
+     * 这里踩过一次（2026-10-26）：写成 `boreT: rand(0, 4)` 之后，
+     * **主线 27 屏的 ALL9 当场三条红**（第 9/15/18 屏）。
+     * 原因不是深巢的东西漏到主线，而是 `rand` 消耗的是 `S.rng` ——
+     * 主线的每一只敌人也走这个函数，每只多消耗一次随机数，
+     * 后面所有 `rand`/`S.rng` 的结果整体位移一位，机器人行为全变。
+     * 这是"同一个随机流不能顺手多用一个数"的第 N 次复发。
+     *
+     * 所以相位改成从 `ph` 派生（`ph` 本来就有，不新增消耗），在下面赋值。 */
+    boreT: 0, boreUp: 0,              // 地脉虫：探头周期（4 秒一轮，探头 2 秒）
+    lit: 0,                           // 巢蛾：累计被光照了多久
+    falling: false,                   // 巢蛾：被照掉、正在落地（落下来才能被推）
+    rollV: 0,                         // 石壳：自己的水平速度，不走 def.spd
+    /* 巢蛾在空中飘，不走 stepBody —— 它的 y 由 homeY 直接决定。
+       `fly` 这个字段只留给乌鸦（它有一段"贴向玩家 + 正弦下沉"的专用逻辑），
+       巢蛾走自己的分支，两者混用会让乌鸦那套 83% 可打窗口的调参白费。 */
+    moth: def.kind === "moth",
     /* 悬停基准高度。**必须夹在可打区间里** —— fly 的 y 是每帧用
        `homeY + 18 + sin` 直接赋值的（不走 stepBody，没有重力、不会掉下去），
        所以 homeY 一旦非法，这只鸦就永久挂在那个高度：不落地、不越界、
        也不会被"掉出屏幕"兜底收掉。它会一直占着"还有一只没送走"，
        整层清场判定永远不成立 → 240 秒超时。
        上限取 GROUND_Y - 80：再低就贴地了（视觉上像站在地上飞）。 */
-    fly: !!sp.fly, homeY: Math.min(sp.y, GROUND_Y - 80),
+    fly: def.kind === "fly", homeY: Math.min(sp.y, GROUND_Y - 80),
     stun: 0, hitT: 0, bob: rand(0, 6.28),
     /* 步态相位：**出生定死，永不推进**。
        `bob` 和它必须分成两个字段，混用是这个游戏最长寿的一个 bug：
@@ -3861,6 +4185,9 @@ function foeFromSpec(sp, fromSky) {
     dropT: fromSky ? 99 : 0,
     skyDrop: !!fromSky,
   };
+  /* 地脉虫的探头相位从 `ph` 派生（见上面 boreT 的注释：这里不能多消耗随机数）。
+     这样同一波的几只会错开探头 —— 同时探头的脉虫读作"一整排墙"。 */
+  f.boreT = (f.ph || 0) % 4;
   nudgeOutOfStumps(f);
   return f;
 }
@@ -3883,6 +4210,9 @@ function nudgeOutOfStumps(f: any): void {
      实测把 BOSS 挪开 77px 会让它的五发弹幕有 4 发直接撞进平台，
      扇形机制整个失效 —— 这类对象不该被一条防卡死的保险顺手改位置。 */
   if (f.isBoss) return;
+  /* 巢蛾同理：它在空中飘，木桩在它脚下几十像素的地方，
+     "推到桩外侧"会把一只空中的怪横着挪一格，读作瞬移。 */
+  if (f.moth) return;
   /* JSDoc 注解不是装饰：S.stumps 初始是 []，TS 会把它推成 never[]，
      循环体里每个 s.hp / s.x 都变成 "does not exist on type 'never'"。
      加一行 any[] 让类型检查闭嘴，同时这行在纯 JS 里也完全合法。 */
@@ -4981,9 +5311,112 @@ function updateFoe(f, dt) {
     return;
   }
 
+  /* ==========================================================================
+     深巢四怪的行为分支（2026-10-26）
+     --------------------------------------------------------------------------
+     顺序在 `fly` 之后、`larva` 之前。**每一支都要自己 `return`** ——
+     漏一个 return，这只怪会继续跑下面主线的 walk/charge 逻辑，
+     表现是"盲蛛突然按主线的速度走"这种很难归因的漂移。
+
+     共同前提：四只都不吃"推着走"这一套，各有各的入口条件。
+     ========================================================================== */
+
+  // ---- 巢蛾：**球碰不到它**，只能用光照 ----
+  if (f.moth) {
+    /* 光源只有两种：**球**（球本身就是火，主线已有设定）和**火坑 / 裂缝**。
+       半径：球 150、火坑 220、裂缝 200 —— 球是移动光源，给最小；
+       火坑和裂缝是固定光源，玩家可以"把蛾子赶到光里去"。
+       这一条是规格 §2.7「球从得分工具变成探照灯」的落点。 */
+    let lit = false;
+    for (const b of S.balls) {
+      if (b.dead) continue;
+      if (Math.hypot(b.x - f.x, (b.y - b.r) - f.y) < 150) { lit = true; break; }
+    }
+    if (!lit) {
+      for (const p of PITS) {
+        if (p.kind !== "fire") continue;
+        if (Math.abs(p.x + p.w * 0.5 - f.x) < 220 && Math.abs(p.y - f.y) < 240) { lit = true; break; }
+      }
+    }
+    if (!lit) {
+      for (const c of CHASMS) {
+        if (Math.abs(c.x + c.w * 0.5 - f.x) < 200) { lit = true; break; }
+      }
+    }
+    f.litOn = lit;
+    /* 亮起来是**加得慢、退得快**（3 秒满 / 0.6 秒退一半）：
+       加法太快它一进球光就掉，玩家不用做任何事；退得太慢的话
+       一次照亮就永久有效，蛾子也就不用躲了。 */
+    f.lit = lit ? Math.min(3.2, f.lit + dt) : Math.max(0, f.lit - dt * 1.7);
+    if (f.lit >= 3) {
+      /* 照满 3 秒：翅膀烧穿，掉下来。**掉下来之后走主线的 walk 分支**，
+         于是"糊三下推走"这套它照样吃 —— 玩家不需要学第二套送走方式。 */
+      f.moth = false;
+      f.kind = "walk";
+      f.onGround = false;
+      f.vy = 0;
+      f.lit = 0;
+      f.dazzled = 1;
+      addText(f.x, f.y - 34, "翅膀烧穿了!", "#FFE08A", 19);
+      for (let i = 0; i < 10; i++) addFrag(f.x, f.y, 5, i % 2 ? "#FFD86B" : "#C8B0F0");
+      S.shake = Math.max(S.shake, 4);
+      return;
+    }
+    /* 空中飘：缓慢横移 + 上下摆。**不走 stepBody**（没有重力），
+       所以 y 必须每帧由 homeY 算出来，和乌鸦那条一样 —— 只是它不追人。 */
+    f.x += Math.sin(S.t * 0.62 + f.ph) * 16 * dt;
+    f.x = clamp(f.x, WALL_L + f.w / 2, WALL_R - f.w / 2);
+    f.y = f.homeY + Math.sin(f.bob * 0.85 + f.ph) * 9;
+    f.face = Math.cos(S.t * 0.62 + f.ph) > 0 ? 1 : -1;
+    if (f.y > H + 100) killByFall(f);
+    return;
+  }
+
+  // ---- 石壳：只会往低处滚；撞墙反弹；**不能被裹成球** ----
+  if (f.kind === "roll") {
+    /* 它自己维持一个水平速度 `rollV`（不是 def.spd）：
+       坡上按坡度加速、平地上慢慢停、撞墙反向 ×0.72。
+       玩家把它推上坡 = 给它一段下坡路，它自己滚进裂缝。
+       **它永远不会朝玩家走** —— "石壳在追我"是这只怪绝对不能给人的印象。 */
+    const rp = rampAt(f.x);
+    if (rp) {
+      f.rollV -= GRAV * rp.slope * 0.30 * dt;
+    } else {
+      f.rollV *= Math.max(0, 1 - 1.1 * dt);
+    }
+    f.rollV = clamp(f.rollV, -720, 720);
+    f.vx = f.rollV;
+    f.face = f.rollV > 6 ? 1 : f.rollV < -6 ? -1 : f.face;
+    const was = f.x;
+    const g2 = stepBody(f, dt);
+    if (f.hitWall) { f.rollV *= -0.72; f.vx = f.rollV; }
+    /* 停在"同一层且几乎不动"超过 2.4 秒就不再是威胁（否则它只是块石头）。
+       这条不删，但也不做任何事 —— 保留是为了说明它**可以**停住。 */
+    if (Math.abs(f.x - was) < 0.4 && Math.abs(f.rollV) < 20) f.rollV *= 0.94;
+    if (f.y > H + 100) killByFall(f);
+    return;
+  }
+
+  // ---- 地脉虫：每 4 秒探头 2 秒，缩回时无敌 ----
+  if (f.kind === "burrow") {
+    /* 周期 4 秒：**探头 2.1 秒 / 缩回 1.9 秒**。
+       探头那 2 秒里它完全按主线的规矩来（能糊、能推），
+       缩回时 `invuln = 1`、`coatFoe` 直接返回 —— 玩家唯一要学的是"等"。 */
+    f.boreT += dt;
+    const t = f.boreT % 4;
+    const up = t < 2.1;
+    f.boreUp = up ? 1 : 0;
+    f.invuln = up ? 0 : 1;
+    f.vx = 0;
+    /* 缩回时把已经糊上的壳保住，但不加不减 —— 缩回反而不掉层，
+       否则"等窗口"会变成"等它清空我的进度"。 */
+    stepBody(f, dt);
+    if (f.y > H + 100) killByFall(f);
+    return;
+  }
+
   // ---- 幼虫：目标不是玩家，是 BOSS。爬到了就被吃掉，BOSS 补一层壳
-  if (f.larva) {
-    const boss = S.foes.find(q => q.isBoss && !q.dead);
+  if (f.larva) {    const boss = S.foes.find(q => q.isBoss && !q.dead);
     f.bornT = (f.bornT || 0) + dt;
     if (!boss || f.bornT > 14) {
       // 没有 BOSS 了 / 爬了 14 秒还没到 —— 自己散掉，别在场上堆着
@@ -5032,6 +5465,30 @@ function updateFoe(f, dt) {
       if (f.chargeT <= 0) { f.charging = 0.55; f.chargeT = rand(2.2, 3.6); }
       f.vx = f.face * f.def.spd * FK * 0.5;
     }
+  } else if (f.def.hunt === "shake") {
+    /* ---- 盲蛛：追**震动**，不追人 ----
+     *
+     * 深巢是窄井，盲蛛看不见（名字里的"盲"），它靠地面震动定位。
+     * 所以目标不是玩家，是**正在滚的球** —— 而且滚得越快它越"听得见"。
+     * 结果是一个新决策：以前"球推出去就不管了"，现在推出去会把盲蛛拽过来。
+     * 玩家可以拿一颗空球把盲蛛拖到裂缝边上。
+     *
+     * 没有球的时候才退化成追人（不然它会站死在原地，机器人跑不通）。 */
+    let tx = null, best = 1e9;
+    for (const b of S.balls) {
+      if (b.dead) continue;
+      /* d / (1 + |vx|/300)：静止的球按距离算，滚起来的球"折算距离"变短。
+         300 是巡航速度的量级（PUSH_BASE 620 的一半），滚得更快就到饱和。 */
+      const score = Math.abs(b.x - f.x) / (1 + Math.abs(b.vx || 0) / 300);
+      if (score < best) { best = score; tx = b.x; }
+    }
+    if (tx == null) {
+      const p = S.p;
+      if (p && !p.dead) tx = p.x;
+    }
+    if (tx != null && Math.abs(tx - f.x) > 10) f.dir = sign(tx - f.x);
+    f.face = f.dir;
+    f.vx = f.dir * f.def.spd * FK;
   } else {
     f.vx = f.dir * f.def.spd * FK;
     f.face = f.dir;
@@ -5540,6 +5997,18 @@ function updateShocks(dt) {
  */
 function coatFoe(f, n, intoBall) {
   if (f.dead || f.coat >= (f.cm || 3)) return;
+  /* 地脉虫缩回岩壁里的时候**打不中**（规格："缩回时无敌"）。
+     这一条必须写在最前面：后面的额度判定、上限判定都会改 `f.coat`，
+     写在中间的话"无敌期间被裹到 2 层"这种半生效状态是跑得出来的。 */
+  if (f.invuln > 0) {
+    /* 提示要节流 —— 每帧一条会把屏幕刷白（和 warnNoBall 同一个病）。
+       用 `_invHintAt` 记上次提示时间，0.6 秒一次。 */
+    if (S.t - (f._invHintAt || -9) > 0.6) {
+      f._invHintAt = S.t;
+      addText(f.x, f.y - f.h - 12, "缩回去了", "#8A7A9A", 15);
+    }
+    return;
+  }
   // BOSS 有抗性：0.5 秒内最多吃一层。
   // 0.28 秒是照着"音波喇叭 0.30 秒一发"配的，但除了音波还有溜溜球、飞刀、
   // 影分身的连发 —— 0.28 秒等于没拦，一梭子就是三四层。
@@ -5980,6 +6449,11 @@ function updateBalls(dt) {
     if (Math.abs(b.vx) > 60 || Math.abs(b.vy) > 60) {
       for (const f of S.foes) {
         if (f.dead || f.coat >= (f.cm || 3)) continue;
+        /* 巢蛾在空中，**球直接穿过去**（规格："球碰不到，只能用光"）。
+           这一条的代价要说清：玩家会先试一次"推球撞它"，撞不中会以为判定坏了。
+           所以 updateFoe 的 moth 分支里挂了 `litOn`，绘制侧会给它打一层
+           "被照亮"的描边 —— 玩家能看出"光在起作用、撞没用"。 */
+        if (f.moth) continue;
         const dx = Math.abs(b.x - f.x), dy = Math.abs((b.y - b.r) - (f.y - f.h / 2));
         /* 这里**不加**飞行单位的判定容差。
          * 试过 `+10`，但那是"隔空撞到"——玩家看到球还没碰到鸟它就变球了，
@@ -6008,6 +6482,22 @@ function updateBalls(dt) {
         // 冰壳是"一次性的弹药"：这一撞多吃几层，吃完全掉。
         // 不消耗的话，打三枪就能白嫖一整局，推球这件事就没有代价了。
         const frost = b.frost || 0;
+        /* ---- 石壳：**不裹壳，只吃冲量** ----
+         * 它是块圆石头，没有能"被糊住"的表面。撞上去的唯一结果是被推走，
+         * 推的方向和力道来自球 —— 于是"把它推上坡"变成一件要做两次的事
+         * （先撞一下给它速度，再看着它自己滚）。
+         * **必须 `continue`**：漏了它会被下面的 coatFoe 裹成球，
+         * 而石壳裹成球之后再滚进缝，玩家看到的是"石头变成球滚走了"。 */
+        if (f.kind === "roll") {
+          const dir = sign(b.vx || 1);
+          f.rollV = clamp(f.rollV + dir * Math.min(520, Math.abs(b.vx) * 0.55), -720, 720);
+          f.hitT = 0.18;
+          addText(f.x, f.y - f.h - 10, "滚!", "#C8C0A8", 16);
+          for (let i = 0; i < 7; i++) addFrag(b.x, f.y - f.h * 0.5, 5, "#A8A296");
+          hitStop(0.03);
+          b.vx *= 0.42;                 // 球自己被挡了一下：推石头是有代价的
+          continue;
+        }
         coatFoe(f, (b.mud ? 2 : 1) + frost, b);
         if (frost > 0) {
           b.frost = 0;
@@ -6354,8 +6844,16 @@ function predictBall(b, dir, pow) {
     }
     if (hitPit) break;
 
-    if (y >= GROUND_Y - 6 && x > CAMP.x && x < CAMP.x + CAMP.w) {
-      marks.push({ x, y: GROUND_Y - 40, kind: "camp" }); end = "camp"; break;
+    /* 送走点：主线是营地，深巢是任意一道裂缝 —— 走同一个数组。
+       `end = "camp"` 这个标记名不改：`marks` 下游（12252 那一段）按它画
+       "袋 / 落袋"的标记，深巢借用同一个标记，视觉上由 `drawChasms` 承担。 */
+    if (y >= GROUND_Y - 6) {
+      for (const ch of CHASMS) {
+        if (x > ch.x && x < ch.x + ch.w) {
+          marks.push({ x, y: GROUND_Y - 40, kind: "camp" }); end = "camp"; break;
+        }
+      }
+      if (end === "camp") break;
     }
 
     if (i % 4 === 0) pts.push({ x, y: y - r, ph: bounce > 0 ? 1 : 0 });
@@ -6435,8 +6933,24 @@ function ballTerrain(b, fallVy) {  // 火坑：烧掉，收成翻倍，但球没
     }
   }
 
-  // 营地：落袋为安，每个 +1 且额外 +1
-  if (b.y >= GROUND_Y - 6 && b.x > CAMP.x && b.x < CAMP.x + CAMP.w) {
+  /* ---- 送走点：主线 = 营地（落袋为安），深巢 = 裂缝（掉到下层）----
+   *
+   * 两边的**记账完全一样**（killed / food / bankHolds / 星靶 rampIn），
+   * 差的是动词和表现：
+   *   主线  球滚进营地 → 往上"回家"    → 暖黄、箱子落地、收成 +holds+1
+   *   深巢  球滚进地缝 → 往下"掉下去"  → 冷紫、掉落碎屑、同一次记账
+   *
+   * **为什么必须共用同一段记账**：清场的判据是 `S.killed`，
+   * 而 `checkGoal` 的第一条就是它。分成两段写，两段里必有一段的
+   * `+= b.holds` 早晚漏掉（这个项目在 killByFall 上已经踩过一次，
+   * 那次的表现是"人全没了，进度还差 3 只"，且没有任何报错）。 */
+  let sunk = null;
+  if (b.y >= GROUND_Y - 6) {
+    for (const ch of CHASMS) {
+      if (b.x > ch.x && b.x < ch.x + ch.w) { sunk = ch; break; }
+    }
+  }
+  if (sunk) {
     b.dead = true;
     S.stat.banked++;
     /* 星靶「坡道入营」：这颗球踩过坡面才进的营。推上去的不算。 */
@@ -6454,9 +6968,19 @@ function ballTerrain(b, fallVy) {  // 火坑：烧掉，收成翻倍，但球没
     const gain = b.holds + 1 + (b.boss ? 12 : 0);
     S.food += gain;
     S.killed += b.holds;
-    addText(b.x, CAMP.y - 80, "落袋 +" + gain, "#FFD86B", 22);
-    dropChest(CAMP.x - 18, CAMP.y - 36, b.holds);
-    for (let i = 0; i < 16; i++) addFrag(b.x, CAMP.y - 40, 7, "#FFD86B");
+    if (S.nest) {
+      /* 深巢：往下。碎屑必须朝**下**飞（营地那一版是朝上飞 + 暖黄），
+         这一条是"往下"这个动词在画面上的唯一落点。 */
+      addText(b.x, GROUND_Y - 76, "掉下去了 · " + gain, "#C8B0F0", 22);
+      for (let i = 0; i < 16; i++) {
+        addFrag(b.x + rand(-14, 14), GROUND_Y - 8, 7, i % 2 ? "#7A6AA0" : "#C8B0F0");
+      }
+      addDust(b.x, GROUND_Y + 6, 8, 1.2, "rgba(120,104,150,");
+    } else {
+      addText(b.x, CAMP.y - 80, "落袋 +" + gain, "#FFD86B", 22);
+      dropChest(CAMP.x - 18, CAMP.y - 36, b.holds);
+      for (let i = 0; i < 16; i++) addFrag(b.x, CAMP.y - 40, 7, "#FFD86B");
+    }
     S.shake = Math.max(S.shake, 6);
   }
 }
@@ -7818,46 +8342,68 @@ function drawNestScene(g) {
 
   /* 钟乳石：长度 34~234，间隔 42~112。
    *
-   * **上限 234 是算出来的**：最高的浮空台在 248 层，顶面 248 —— 垂到 234
-   * 时还留 14px，不会和"那个尖能不能站"的读图打架。
-   * 第一版只给到 132，截图里洞顶下面空出一大片什么都没有的区域，
+   * **上限 234 是算出来的**：上一版最高的浮空台在 248 层，顶面 248 —— 垂到 234
+   * 时还留 14px。第一版只给到 132，截图里洞顶下面空出一大片什么都没有的区域，
    * 整屏读作"上面暗、下面亮的一块布"。洞顶必须**伸进画面**才有压迫感，
-   * 这也是地底和地表的区别：地表的上方是开阔的天空，地底的上方是石头。 */
-  for (let x = 6; x < W; x += 42 + rnd() * 70) {
-    const len = 34 + Math.pow(rnd(), 0.7) * 200;
-    const hw = 7 + rnd() * 16;
-    const base = 34 + Math.sin(x * 0.017) * 9;
-    /* **尖端必须收圆**。第一版是两条二次曲线交在一个点上 —— 数学上"尖"，
-       视觉上是一排**针叶树**：截图里洞顶挂着一排松树剪影，底部长着一排，
-       连起来就是一片林子。钟乳石是水滴形的：上粗、中段鼓、尖端是圆头。
-       改法是在尖端补一段小圆弧，把两根曲线的交点让开 hw*0.14。 */
-    g.fillStyle = hexDim(TH.sky1, 0.62);
-    g.beginPath();
-    g.moveTo(x - hw, base - 6);
-    g.quadraticCurveTo(x - hw * 0.72, base + len * 0.52, x - hw * 0.16, base + len * 0.93);
-    g.quadraticCurveTo(x, base + len * 1.04, x + hw * 0.16, base + len * 0.93);
-    g.quadraticCurveTo(x + hw * 0.72, base + len * 0.52, x + hw, base - 6);
-    g.closePath();
-    g.fill();
-    /* 受光：只在**右上**一条窄面。地底的光从下往上打，但岩体的
-       "下方"是暗的、"上方"是更暗的 —— 真正被照亮的是朝下的尖端。
-       所以给尖端一点微光，而不是给整条描亮边。 */
-    /* 尖端受光：光在脚下，所以**钟乳石越靠近尖端越亮**（尖端离地最近）。
-       这是"光从下面来"在洞顶这一侧唯一的落点 —— 没有它，整排钟乳石
-       是背景里一块更深的东西，看不见形状。0.10 试过，看不出来；
-       0.22 配合渐隐才读得出"这根石头的下端被照亮了"。 */
-    if (len > 58) {
-      const tp = g.createLinearGradient(0, base + len * 0.48, 0, base + len);
-      tp.addColorStop(0, rgbaOf(TH.accent, 0));
-      tp.addColorStop(1, rgbaOf(TH.accent, 0.22));
-      g.fillStyle = tp;
+   * 这也是地底和地表的区别：地表的上方是开阔的天空，地底的上方是石头。
+   *
+   * ★ **2026-10-26：层表从主线三层换成深巢自己的 4 层（446/336/226/116）之后，
+   * 固定的 234 上限不再安全** —— 116 层平台的顶面就在 116，
+   * 一根 234 长的钟乳石会从上往下穿过 226 层和 116 层两块台，
+   * 画面上读作"石头插在台子上"，玩家会去找"那根能不能站"。
+   * 所以长度改成**按当前层自己的平台高度现算**：
+   * 垂到它正下方最近那块台的顶面再留 22px 就停。
+   * 不在任何平台上方的那些照旧可以长到 234 —— 悬空的石柱本来就是洞顶的常态。 */
+  {
+    /* 平台顶面（y 越小越高）。地面不算：钟乳石不可能垂到地面。 */
+    const ledges = /** @type {any[]} */ (PLATS).filter(q => q.kind !== "ground");
+    for (let x = 6; x < W; x += 42 + rnd() * 70) {
+      const hw = 7 + rnd() * 16;
+      const base = 34 + Math.sin(x * 0.017) * 9;
+      let len = 34 + Math.pow(rnd(), 0.7) * 200;
+      /* 正下方有台 → 长度夹到"台顶 - 46"。**用 clamp 不用 continue**：
+         continue 会跳过后面的 rnd()，整个画面的随机序列就跟着变，
+         同一个深度的两张截图对不上。
+         留 46 不是 22：玩家身高 40，站在台面上时头顶在 `台顶 - 40`。
+         只留 22 的话，站在 116 层（离洞顶最近的台）的玩家
+         **上半身会被钟乳石尖穿过去** —— 那是"角色卡在石头里"的观感。 */
+      for (const q of ledges) {
+        if (x + hw + 12 <= q.x || x - hw - 12 >= q.x + q.w) continue;
+        len = Math.min(len, q.y - base - 46);
+      }
+      len = Math.max(30, len);
+      /* **尖端必须收圆**。第一版是两条二次曲线交在一个点上 —— 数学上"尖"，
+         视觉上是一排**针叶树**：截图里洞顶挂着一排松树剪影，底部长着一排，
+         连起来就是一片林子。钟乳石是水滴形的：上粗、中段鼓、尖端是圆头。
+         改法是在尖端补一段小圆弧，把两根曲线的交点让开 hw*0.14。 */
+      g.fillStyle = hexDim(TH.sky1, 0.62);
       g.beginPath();
-      g.moveTo(x - hw * 0.40, base + len * 0.48);
-      g.lineTo(x - hw * 0.13, base + len * 0.90);
-      g.lineTo(x + hw * 0.13, base + len * 0.90);
-      g.lineTo(x + hw * 0.40, base + len * 0.48);
+      g.moveTo(x - hw, base - 6);
+      g.quadraticCurveTo(x - hw * 0.72, base + len * 0.52, x - hw * 0.16, base + len * 0.93);
+      g.quadraticCurveTo(x, base + len * 1.04, x + hw * 0.16, base + len * 0.93);
+      g.quadraticCurveTo(x + hw * 0.72, base + len * 0.52, x + hw, base - 6);
       g.closePath();
       g.fill();
+      /* 受光：只在**右上**一条窄面。地底的光从下往上打，但岩体的
+         "下方"是暗的、"上方"是更暗的 —— 真正被照亮的是朝下的尖端。
+         所以给尖端一点微光，而不是给整条描亮边。 */
+      /* 尖端受光：光在脚下，所以**钟乳石越靠近尖端越亮**（尖端离地最近）。
+         这是"光从下面来"在洞顶这一侧唯一的落点 —— 没有它，整排钟乳石
+         是背景里一块更深的东西，看不见形状。0.10 试过，看不出来；
+         0.22 配合渐隐才读得出"这根石头的下端被照亮了"。 */
+      if (len > 58) {
+        const tp = g.createLinearGradient(0, base + len * 0.48, 0, base + len);
+        tp.addColorStop(0, rgbaOf(TH.accent, 0));
+        tp.addColorStop(1, rgbaOf(TH.accent, 0.22));
+        g.fillStyle = tp;
+        g.beginPath();
+        g.moveTo(x - hw * 0.40, base + len * 0.48);
+        g.lineTo(x - hw * 0.13, base + len * 0.90);
+        g.lineTo(x + hw * 0.13, base + len * 0.90);
+        g.lineTo(x + hw * 0.40, base + len * 0.48);
+        g.closePath();
+        g.fill();
+      }
     }
   }
 
@@ -7923,10 +8469,13 @@ function drawNestScene(g) {
     for (let i = 0; i < n; i++) {
       let cx = 190 + (i + 0.5) * ((W - 380) / n) + (rnd() - 0.5) * 84;
       for (let t = 0; t < 8 && nearPlat(cx); t++) cx += 46;
-      /* 高度 120~230：上限 230 时顶端落在 y≈326，
-         不会顶到 350 层平台（顶面 350）以下 —— 石笋一旦穿过平台，
-         玩家会把它当成"托着平台的那根柱子"，空间关系就浊了。 */
-      const hgt = 110 + rnd() * 90;
+      /* 高度 110~200：上限 200 时顶端落在 y≈356。
+         2026-10-26 层表换成 446/336/226/116 之后，最近的台是 **446** 层
+         （不再是主线的 350）—— 石笋已经按 `nearPlat` 避开了所有平台的 x 区间，
+         所以高度只要不超过"底台到地面"这段（556-446 = 110）就不会和台子相交；
+         200 是"敢从背景里站出来、又还在玩法区下面"的那一档。
+         一旦石笋穿过平台，玩家会把它当成"托着平台的那根柱子"，空间关系就浊了。 */
+      const hgt = 110 + rnd() * 90;   // 110~200，见上：不超过"底台到地面"这段
       const hw0 = 30 + rnd() * 20;          // 根部半宽
       const top = GROUND_Y - hgt;
       const lean = (rnd() - 0.5) * 16;      // 顶端偏移，别全都笔直
@@ -10157,6 +10706,162 @@ function drawPortal(g, pt) {
   }
 }
 
+/** 深巢的裂缝 —— **这个玩法的送走点，也是"往下"这个动词唯一的实物**。
+ *
+ * 主线那边送走点是营地：暖黄、箱子落地、兽"回家"。深巢没有"家"，
+ * 送走是"把它踹进地缝，它掉到下一层"。所以画面上必须是一道**真的口子**：
+ *
+ *   · 地面在这里断掉（上沿参差，不是一条直线）
+ *   · 断面有厚度（左右两侧各露一截被撕开的土层，亮一档）
+ *   · 里面是黑的，但**底下有光**（光在脚下，这是深巢整套场景的规则）
+ *
+ * **为什么必须画，不能省**：上一版深巢压根没有营地视觉 —— 送走点是一个
+ * 看不见的矩形，球滚到那儿就消失。玩家读到的不是"我把它送走了"，
+ * 而是"我的球滚到右边不见了"。加上裂缝之后同一段判定就有了因果。
+ *
+ * 只用 `S.nest` 守门：主线还是营地（不画），一行主线的观感都不动。
+ */
+function drawChasms(g) {
+  if (!S.nest || !CHASMS.length) return;
+  const d = (S.nest.depth || 1) | 0;
+  for (let i = 0; i < CHASMS.length; i++) {
+    const c = CHASMS[i];
+    /* 每道缝的参差由**深度 + 序号**定死，不用 S.rng：
+       画面每帧重算一次，用玩法随机流会把整局的敌人 AI 打乱
+       （这个项目在 addDust 上踩过一次，代价是"150 秒清场"变超时）。 */
+    const R = nestRand((d * 6151 + i * 977 + 13) >>> 0);
+    /* ---- 可用空间只有 `GROUND_Y(556) → H(600)` 这 44px ----
+     *
+     * 第一版把缝画成"从 553 往下 104~150"的深梯形，画面上什么都没有：
+     * 只有 44px 落在屏幕内，剩下全被裁掉，读出来是"地面下面一块暗影"。
+     * 第二版给了对称梯形 + 矩形亮边，出来是**一个木槽**——因为轮廓太规整，
+     * 规整的几何在地表上只可能是人造物。
+     *
+     * 所以缝口必须是**参差折线**（每 13~24px 一个折点），并且左右不对称。
+     * 地表裂开这件事，形状本身就是语义，靠渐变和光都补不回来。 */
+    const topY = GROUND_Y - 2;
+    const botY = H + 40;
+
+    /* 上沿折线：左端固定在 c.x、右端固定在 c.x+c.w，
+       中间随机起伏 ±5 —— 两端必须落在缝的边界上，否则缝会"长出去"。 */
+    const lip = [{ x: c.x, y: topY }];
+    let lx = c.x + 13 + R() * 11;
+    while (lx < c.x + c.w - 16) {
+      lip.push({ x: lx, y: topY + (R() - 0.46) * 9 });
+      lx += 13 + R() * 11;
+    }
+    lip.push({ x: c.x + c.w, y: topY });
+
+    /* ① 缝体：沿折线下延，底口收窄且**左右不等**（对称的开口像箱子）。 */
+    const inL = c.x + c.w * (0.06 + R() * 0.10);
+    const inR = c.x + c.w * (0.84 + R() * 0.10);
+    g.fillStyle = "#000000";
+    g.beginPath();
+    g.moveTo(lip[0].x, lip[0].y);
+    for (let k = 1; k < lip.length; k++) g.lineTo(lip[k].x, lip[k].y);
+    g.lineTo(inR, botY);
+    g.lineTo(inL, botY);
+    g.closePath();
+    g.fill();
+
+    /* ② 内壁受光：光在脚下，越往下越亮。44px 里唯一能表达纵深的手段。 */
+    for (const side of [-1, 1]) {
+      const ox = side < 0 ? c.x : c.x + c.w;
+      const wallG = g.createLinearGradient(0, topY, 0, H);
+      wallG.addColorStop(0, rgbaOf(TH.accent, 0));
+      wallG.addColorStop(0.6, rgbaOf(TH.accent, 0.18));
+      wallG.addColorStop(1, rgbaOf(TH.accent, 0.36));
+      g.fillStyle = wallG;
+      g.beginPath();
+      g.moveTo(ox, topY);
+      g.lineTo(ox + side * -8, topY + 2);
+      g.lineTo(ox + side * -4, H);
+      g.lineTo(ox + side * -14, H);
+      g.closePath();
+      g.fill();
+    }
+
+    /* ③ 两侧地面**翘起来**。地表被顶开的直接证据 ——
+       一块斜掀的土板比任何"参差边缘"都强。 */
+    for (const side of [-1, 1]) {
+      const ox = side < 0 ? c.x : c.x + c.w;
+      const dirx = side < 0 ? -1 : 1;
+      const lift = 18 + R() * 9;
+      const wid = 26 + R() * 12;
+      g.fillStyle = "rgba(0,0,0,.40)";
+      g.beginPath();
+      g.moveTo(ox, topY);
+      g.lineTo(ox + dirx * wid * 0.70, topY + 6);
+      g.lineTo(ox + dirx * wid * 0.52, topY + 14);
+      g.lineTo(ox, topY + 8);
+      g.closePath();
+      g.fill();
+      const slab = g.createLinearGradient(0, topY - lift, 0, topY + 7);
+      slab.addColorStop(0, hexDim(TH.grassLight, 1.20));
+      slab.addColorStop(0.60, TH.grass);
+      slab.addColorStop(1, hexDim(TH.grass, 0.55));
+      g.fillStyle = slab;
+      g.beginPath();
+      g.moveTo(ox, topY + 6);
+      g.lineTo(ox + dirx * wid * 0.78, topY - lift * 0.58);
+      g.lineTo(ox + dirx * wid, topY - lift);
+      g.lineTo(ox + dirx * wid * 0.88, topY - lift + 6);
+      g.lineTo(ox + dirx * wid * 0.26, topY + 4);
+      g.closePath();
+      g.fill();
+      g.strokeStyle = rgbaOf(TH.accent, 0.50);
+      g.lineWidth = 1.5;
+      g.beginPath();
+      g.moveTo(ox, topY + 6);
+      g.lineTo(ox + dirx * wid * 0.78, topY - lift * 0.58);
+      g.lineTo(ox + dirx * wid, topY - lift);
+      g.stroke();
+    }
+
+    /* ④ 缝口亮边：**沿参差折线描**，不是画矩形。
+       这条线是"口子"和"黑影"的分界，但描成直线就会把参差变成"槽的边框"。 */
+    g.strokeStyle = rgbaOf(TH.accent, 0.44);
+    g.lineWidth = 1.7;
+    g.beginPath();
+    g.moveTo(lip[0].x, lip[0].y);
+    for (let k = 1; k < lip.length; k++) g.lineTo(lip[k].x, lip[k].y);
+    g.stroke();
+
+    /* ⑤ 崩出来的碎石：落在口沿上，不落进缝里（缝里是空的）。 */
+    for (let k = 0; k < 6; k++) {
+      const sx = c.x + 5 + R() * (c.w - 10);
+      const sy = topY - 3 - R() * 8;
+      const sr = 2 + R() * 3.6;
+      g.fillStyle = hexDim(TH.grass, 0.64 + R() * 0.22);
+      g.beginPath();
+      g.ellipse(sx, sy, sr, sr * 0.72, R() * 3.14, 0, 6.283);
+      g.fill();
+    }
+
+    /* ⑥ 缝底的光：圆心压在地面底边（H-6），缝延伸出画面、光留在能看见的一侧。 */
+    const gl = g.createRadialGradient(
+      c.x + c.w * 0.5, H - 6, 5,
+      c.x + c.w * 0.5, H - 6, c.w * 1.05);
+    gl.addColorStop(0, rgbaOf(TH.accent, 0.44));
+    gl.addColorStop(0.40, rgbaOf(TH.accent, 0.17));
+    gl.addColorStop(1, rgbaOf(TH.accent, 0));
+    g.fillStyle = gl;
+    g.globalCompositeOperation = "lighter";
+    g.fillRect(c.x - 26, H - 62, c.w + 52, 62);
+    g.globalCompositeOperation = "source-over";
+
+    /* ⑦ 缝里飘起来的尘光，"下面有空气在动"。 */
+    for (let k = 0; k < 4; k++) {
+      const px = c.x + c.w * (0.20 + R() * 0.58);
+      const py = topY + 9 + R() * 28;
+      g.fillStyle = rgbaOf(TH.accent, 0.24 + R() * 0.18);
+      g.beginPath();
+      g.arc(px, py, 0.9 + R() * 1.5, 0, 6.283);
+      g.fill();
+    }
+  }
+}
+
 function drawStump(g, s) {
   if (s.hp <= 0) {
     // 只剩个桩子印
@@ -10264,6 +10969,9 @@ function drawLevel() {
   // 材质带必须在地面之后、坑之前：坑是"地面被挖开"，理应盖住色带
   for (const gr of GROUNDS) drawGroundMat(g, gr);
   for (const pit of PITS) drawPit(g, pit);
+  /* 裂缝必须在**地面之后、台面之前**：它撕开的是地面本身，
+     先画会被地面盖住，后画会盖住落在缝上方的台面边缘。 */
+  drawChasms(g);
   for (const p of PLATS) if (p.kind !== "ground" && !isBroken(p)) drawPlat(g, p);
   /* 预告层必须在**所有台面之后**：它要压在台面顶上。
      放在角色之前，免得盖住 BOSS 抬手的手臂。 */
@@ -11798,6 +12506,440 @@ function drawBoar(g, f, bw, bh, t) {
   drawCuteEyes(g, bw * 0.20, -bh * 0.16, 5.0, 5.6, false);
 }
 
+/* ============================================================================
+   深巢四怪的代码图形（2026-10-26）
+   ----------------------------------------------------------------------------
+   四只都走"没有立绘就回退到代码图形"这条路，和主线四只同一套规矩。
+   造型上刻意共用三条规则，目的不是画得好看，是**涂黑也能分辨**：
+
+     · 线宽 3px（主线 2.5）—— 暗底上 2.5 会糊成一根毛
+     · 圆角 0 —— 岩质生物没有柔角，和主线虫子的圆润形成对立
+     · **底沿亮边**：光在脚下，每只的最下缘都有一条 accent 亮线
+
+   **尺寸一律读 `def.vw / vh`，不读碰撞盒 bw/bh。**
+   这是贴图那条路已经定死的规矩（见 drawFoe 里"画多大用 def.vw/vh"那段），
+   代码图形没理由例外。第一版全按碰撞盒画，结果巢蛾只有设计尺寸的 62%、
+   地脉虫 70% —— 并排图上一只直接看不见，两只读成了"锚"和"梯子"。
+   碰撞盒是机制，视觉尺寸是观感，两个数不能互相冒充。
+
+   剪影差异（涂黑也要能分开，这是这四只唯一的存在理由）：
+     盲蛛   横宽 76 / 高 32 —— 八条折腿，全场最宽最扁
+     石壳   正圆 52 —— 不规则岩块，没有任何一处同心圆弧
+     巢蛾   上窄下宽的不对称翅 —— 唯一有眼斑的，悬空
+     地脉虫 竖柱 + 大头 —— 唯一"顶端一个大团、下面是柱"的
+   ========================================================================== */
+
+/** 盲蛛：身体极小、八条腿外张。腿是两段折线（髋 → 膝 → 足），
+ *  膝盖朝上 —— 蜘蛛的腿就是这么长的，画成单段斜线会读成"八根毛"。 */
+function drawSpider(g, f, bw0, bh0, t) {
+  const d = f.def;
+  const bw = d.vw || bw0, bh = d.vh || bh0;
+  /* 腿要伸到视觉宽的两端，所以按 `bw*0.5` 是**脚的位置**，不是起点偏移 */
+  const legR = bw * 0.50;
+
+  g.strokeStyle = COL.outline;
+  g.lineWidth = 3;
+  g.lineCap = "round";
+  g.lineJoin = "round";
+  for (let i = 0; i < 4; i++) {
+    const k = i / 3;                                  // 0..1：从前到后
+    const baseX = bw * (0.13 - k * 0.26);
+    const spread = 0.55 + k * 0.45;                   // 后面的腿张得更开
+    /* 摆动相位错开：四条腿同相位会读成"整只在抖"，错开才读成"在爬" */
+    const sw = Math.sin(t * 7.5 + i * 1.7) * bh * 0.14;
+    for (const sd of [-1, 1]) {
+      const hipX = baseX, hipY = -bh * 0.08;
+      const kneeX = baseX + sd * legR * 0.62 * spread;
+      const kneeY = -bh * 0.60 - sw * sd;             // 膝在身体上方
+      const footX = baseX + sd * legR * spread;
+      const footY = bh * 0.42 + sw * sd;
+      g.beginPath();
+      g.moveTo(hipX, hipY);
+      g.lineTo(kneeX, kneeY);
+      g.lineTo(footX, footY);
+      g.stroke();
+      /* 关节：一个实心小圆点。**必须有** —— 没有关节点的两段折线
+         在 32px 尺寸下读不出"折"，只剩一条弯线。 */
+      g.fillStyle = d.c3;
+      g.beginPath(); g.arc(kneeX, kneeY, 2.2, 0, 6.283); g.fill();
+    }
+  }
+
+  /* 身体：后腹大、前头小，两个椭圆。整只最宽的地方是腿，不是身体。 */
+  g.fillStyle = d.c1;
+  g.beginPath(); g.ellipse(-bw * 0.06, bh * 0.08, bw * 0.20, bh * 0.40, 0, 0, 6.283); g.fill();
+  g.strokeStyle = COL.outline; g.lineWidth = 3; g.stroke();
+  g.fillStyle = d.c2;
+  g.beginPath(); g.ellipse(-bw * 0.06, bh * 0.02, bw * 0.11, bh * 0.18, 0, 0, 6.283); g.fill();
+
+  g.fillStyle = d.c1;
+  g.beginPath(); g.ellipse(bw * 0.12, -bh * 0.04, bw * 0.13, bh * 0.28, 0, 0, 6.283); g.fill();
+  g.strokeStyle = COL.outline; g.lineWidth = 3; g.stroke();
+
+  /* "盲"：四个浅浅的凹点，没有瞳孔、没有高光。
+     这是这只怪唯一的表情 —— 有眼睛就变成可爱，没有眼睛才读作"靠震动的"。
+     四个点是蜘蛛的八眼简化，位置固定（颜色比身体暗两档，压到刚好能看见）。 */
+  g.fillStyle = d.c3;
+  for (const [ex, ey] of [[0.10, -0.18], [0.19, -0.18], [0.09, -0.08], [0.20, -0.08]]) {
+    g.beginPath();
+    g.arc(bw * ex, bh * ey, 1.7, 0, 6.283);
+    g.fill();
+  }
+
+  /* 底沿亮边：光在脚下。**只在中段画**，两端各让 8% ——
+     满宽的一条线在每个敌人的脚下都有，读起来是"贴了一条胶带"。 */
+  g.strokeStyle = rgbaOf(d.c2, 0.7);
+  g.lineWidth = 2;
+  g.beginPath();
+  g.moveTo(-bw * 0.24, bh * 0.42);
+  g.lineTo(bw * 0.22, bh * 0.42);
+  g.stroke();
+}
+
+/** 石壳：一块被磨圆的**不规则**岩块，靠起伏的轮廓和断面读"石头"。
+ *
+ *  第一版是三段同心圆弧 + 螺旋裂纹 + 底部弧形高光 —— 三个都是圆的规律特征，
+ *  叠起来读作**钟表**（放大图上整个盘面连同指针都在）。
+ *  石头的视觉特征是"没有一条规则的线"，所以这一版：
+ *   · 轮廓用**固定表**给出 9 个半径系数（不许用 R()，会位移主线随机流）；
+ *   · 表面画**断面**（一块块的面，不是弧），像被敲掉几层；
+ *   · 裂纹是**分叉的折线**，不绕圆心；
+ *   · 底部高光拆成**两小段断点**，不是一条压满的弧。
+ *  滚动仍然靠整体 `rotate(spin)` —— 不规则轮廓转起来才看得见在滚，
+ *  正圆转起来本来就什么都看不出来（这是第一版靠裂纹补的原因）。
+ */
+function drawShell(g, f, bw0, bh0, t) {
+  const d = f.def;
+  const bw = d.vw || bw0, bh = d.vh || bh0;
+  const r = Math.min(bw, bh) * 0.5;
+  /* 转动相位取它滚过的距离 `f.x`：滚动和位移永远同步，不需要额外计时器。
+     `*0.028` 是"滚一圈 = 224px"，和半径 26 的周长 163px 同量级，
+     看起来刚好不打滑。 */
+  const spin = f.x * 0.028;
+
+  /* 9 个顶点的半径系数 —— 常量表。写死是为了**同一块石头每帧同一个形状**，
+     用随机数会让轮廓每帧抖一次，读成"在沸腾"。 */
+  const RF = [0.98, 1.04, 0.95, 1.00, 1.06, 0.96, 1.02, 0.93, 1.01];
+  const path = () => {
+    g.beginPath();
+    for (let i = 0; i < RF.length; i++) {
+      const a = -Math.PI / 2 + (i / RF.length) * 6.283;
+      const rr = r * RF[i];
+      const px = Math.cos(a) * rr, py = Math.sin(a) * rr;
+      if (i === 0) g.moveTo(px, py); else g.lineTo(px, py);
+    }
+    g.closePath();
+  };
+
+  g.save();
+  g.rotate(spin);
+
+  /* 石体：先铺底色，再用**断面**分亮暗。
+     断面用三角形而不是圆弧 —— 三角形是"敲下来的"，圆弧是"车出来的"。 */
+  g.fillStyle = d.c1;
+  path(); g.fill();
+  g.save();
+  path(); g.clip();
+  g.fillStyle = rgbaOf(d.c2, 0.22);
+  g.beginPath();
+  g.moveTo(-r * 0.10, -r * 1.1);
+  g.lineTo(r * 0.72, -r * 0.55);
+  g.lineTo(r * 0.30, r * 0.05);
+  g.lineTo(-r * 0.55, -r * 0.30);
+  g.closePath(); g.fill();
+  g.fillStyle = rgbaOf(d.c3, 0.30);
+  g.beginPath();
+  g.moveTo(r * 0.98, r * 0.30);
+  g.lineTo(r * 0.20, r * 1.12);
+  g.lineTo(-r * 0.22, r * 0.62);
+  g.lineTo(r * 0.30, r * 0.10);
+  g.closePath(); g.fill();
+  /* 底部压暗：它是踩在地上的，下缘必须沉，否则整块"飘" */
+  const dg = g.createLinearGradient(0, r * 0.20, 0, r);
+  dg.addColorStop(0, rgbaOf(d.c3, 0));
+  dg.addColorStop(1, rgbaOf(d.c3, 0.55));
+  g.fillStyle = dg;
+  g.fillRect(-r, r * 0.20, r * 2, r * 0.85);
+  g.restore();
+
+  /* 裂纹：一条分叉的主缝 + 一条短缝。**折线不是弧** ——
+     弧是表针，折线是裂缝。 */
+  g.strokeStyle = rgbaOf(d.c3, 0.92);
+  g.lineWidth = 1.9;
+  g.lineJoin = "miter";
+  g.beginPath();
+  g.moveTo(-r * 0.86, -r * 0.30);
+  g.lineTo(-r * 0.30, -r * 0.06);
+  g.lineTo(r * 0.02, -r * 0.34);
+  g.lineTo(r * 0.34, -r * 0.10);
+  g.stroke();
+  g.beginPath();
+  g.moveTo(-r * 0.30, -r * 0.06);
+  g.lineTo(-r * 0.16, r * 0.44);
+  g.stroke();
+  g.restore();
+
+  /* 轮廓：线宽 3.4、圆角连接 —— 岩块的边是钝的，但绝不能没有棱 */
+  g.strokeStyle = COL.outline;
+  g.lineWidth = 3.4;
+  g.lineJoin = "round";
+  path(); g.stroke();
+
+  /* 底沿亮边：**两小段断点**，不是一条压满的弧。
+     满弧 = 抛光表壳反光；断点 = 粗石面被脚下光擦到。 */
+  g.strokeStyle = rgbaOf(d.c2, 0.80);
+  g.lineWidth = 2.6;
+  g.lineCap = "round";
+  for (const off of [-0.20, 0.22]) {
+    g.beginPath();
+    g.arc(0, 0, r * 0.93, Math.PI * (0.5 + off) - 0.16, Math.PI * (0.5 + off) + 0.16);
+    g.stroke();
+  }
+}
+
+/** 巢蛾：**剪影上下不对称** —— 上翅短而尖，下翅长而宽圆。
+ *  对称的蝴蝶剪影和乌鸦分不开，不对称才一眼是"另一只"。
+ *
+ *  第一版读作"紫色小锚"：翅膀展幅只有 37px、下翅是细长条、没有花纹。
+ *  这一版补三样，每一样都是"蛾"这个词的视觉词根：
+ *   · 下翅**宽**（展到 bw*0.72）且后缘**扇贝形**（三个凸起）；
+ *   · 下翅上一枚**眼斑** —— 蝶蛾最独有的花纹，乌鸦和虫都没有；
+ *   · 触角**羽状**（主线一根曲线，这里带三根短羽枝）。
+ */
+function drawMoth(g, f, bw0, bh0, t) {
+  const d = f.def;
+  const bw = d.vw || bw0, bh = d.vh || bh0;
+  const flap = Math.sin(t * 9);
+  /* 被照亮时翅膀边缘发亮（`f.litOn` 由 updateFoe 每帧写）——
+     玩家能看出"光在起作用、撞没用"。这是蛾子唯一的教学手段。 */
+  const glow = f.litOn ? 0.85 : 0;
+  const burned = !!f.dazzled;
+  const wingC = burned ? "#5A4A6A" : d.c3;
+  const upC = burned ? "#6E5C80" : d.c1;
+  /* 拍翅：展幅在 0.86~1.0 之间呼吸（不是 0.6~1.0 —— 蛾的翅本来就不合拢） */
+  const span = 1 - Math.abs(flap) * 0.10;
+
+  /* ---- 下翅（长、宽、圆，后缘扇贝形）：先画，压在身体后面 ---- */
+  for (const sd of [-1, 1]) {
+    const tipX = sd * bw * 0.72 * span;
+    const botY = bh * (0.66 + flap * 0.07);
+    g.fillStyle = wingC;
+    g.beginPath();
+    g.moveTo(sd * bw * 0.06, -bh * 0.06);
+    g.quadraticCurveTo(tipX, -bh * 0.10, tipX * 0.94, bh * 0.24);
+    /* 后缘三个凸起：两个内凹的接缝，读作"翅缘是软的" */
+    g.quadraticCurveTo(sd * bw * 0.56, botY * 0.92, sd * bw * 0.44, botY * 0.80);
+    g.quadraticCurveTo(sd * bw * 0.40, botY * 1.02, sd * bw * 0.28, botY * 0.86);
+    g.quadraticCurveTo(sd * bw * 0.22, botY * 1.00, sd * bw * 0.10, botY * 0.62);
+    g.closePath();
+    g.fill();
+    g.strokeStyle = COL.outline; g.lineWidth = 2.8; g.stroke();
+
+    /* 眼斑：蛾的身份证。一个深色环 + 一个浅色心。 */
+    const ox = sd * bw * 0.40, oy = bh * 0.26;
+    g.fillStyle = rgbaOf(burned ? "#3A2E48" : d.c3, 0.95);
+    g.beginPath(); g.ellipse(ox, oy, bw * 0.10, bh * 0.14, 0, 0, 6.283); g.fill();
+    g.fillStyle = burned ? "#C8A050" : "#FFE9A8";
+    g.beginPath(); g.ellipse(ox, oy, bw * 0.045, bh * 0.065, 0, 0, 6.283); g.fill();
+  }
+
+  /* ---- 上翅（短、尖）：比下翅短一半以上，不对称是这只怪的剪影身份 ----
+     第一版展到 bw*0.60 却只有 bh*0.50 高，压在下翅上面几乎被吃掉；
+     加大到 bw*0.68 / bh*0.62，让"上窄下宽"这条剪影在 46px 宽时还立得住。 */
+  for (const sd of [-1, 1]) {
+    g.fillStyle = upC;
+    g.beginPath();
+    g.moveTo(sd * bw * 0.05, -bh * 0.10);
+    g.quadraticCurveTo(sd * bw * 0.68 * span, -bh * 0.62 - flap * bh * 0.10,
+                       sd * bw * 0.38 * span, -bh * 0.30);
+    g.quadraticCurveTo(sd * bw * 0.26, -bh * 0.30, sd * bw * 0.04, bh * 0.00);
+    g.closePath();
+    g.fill();
+    g.strokeStyle = COL.outline; g.lineWidth = 2.6; g.stroke();
+  }
+
+  /* 被照亮：翅缘光 + 一圈**渐变**光晕。
+     第一版是 `arc + rgbaOf(yellow, 0.10)` 的实心平涂 —— 硬边圆盘压在暗底上
+     读作"身后挂了一块脏抹布"，完全不像光。光必须往外衰减，
+     所以只留 `createRadialGradient`，从翅根 0.30 淡到边缘 0。 */
+  if (glow > 0) {
+    const hr = bw * 0.86;
+    const hg = g.createRadialGradient(0, bh * 0.06, hr * 0.10, 0, bh * 0.06, hr);
+    hg.addColorStop(0, rgbaOf("#FFE08A", 0.30));
+    hg.addColorStop(0.55, rgbaOf("#FFE08A", 0.10));
+    hg.addColorStop(1, rgbaOf("#FFE08A", 0));
+    g.fillStyle = hg;
+    g.beginPath(); g.arc(0, bh * 0.06, hr, 0, 6.283); g.fill();
+    g.strokeStyle = rgbaOf("#FFE08A", glow * 0.75);
+    g.lineWidth = 2.4;
+    g.lineCap = "round";
+    for (const sd of [-1, 1]) {
+      g.beginPath();
+      g.moveTo(sd * bw * 0.10, -bh * 0.02);
+      g.quadraticCurveTo(sd * bw * 0.76 * span, -bh * 0.08, sd * bw * 0.70 * span, bh * 0.26);
+      g.stroke();
+    }
+  }
+
+  /* ---- 身体：三节重叠，读"毛绒"（一根柱子读作"针"） ---- */
+  const bodyC = burned ? "#8A7A6A" : d.c2;
+  g.fillStyle = bodyC;
+  for (const [by, rx, ry] of [[-bh * 0.20, 0.11, 0.16], [bh * 0.04, 0.13, 0.18], [bh * 0.28, 0.10, 0.15]]) {
+    g.beginPath(); g.ellipse(0, by, bw * rx, bh * ry, 0, 0, 6.283); g.fill();
+  }
+  g.strokeStyle = COL.outline; g.lineWidth = 2.4;
+  g.beginPath(); g.ellipse(0, bh * 0.02, bw * 0.13, bh * 0.34, 0, 0, 6.283); g.stroke();
+
+  /* ---- 触角：羽状。羽枝是"蛾"和"蝶"的分界，也是和乌鸦呆毛的分界 ---- */
+  g.strokeStyle = COL.outline; g.lineWidth = 2;
+  g.lineCap = "round";
+  for (const sd of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(sd * bw * 0.04, -bh * 0.30);
+    g.quadraticCurveTo(sd * bw * 0.26, -bh * 0.66, sd * bw * 0.52, -bh * 0.62);
+    g.stroke();
+    for (let i = 1; i <= 3; i++) {
+      const u = i / 4;
+      const ax = sd * (bw * 0.04 + (bw * 0.48) * u);
+      const ay = -bh * (0.30 + 0.32 * u + 0.04 * Math.sin(u * 3.1));
+      g.beginPath();
+      g.moveTo(ax, ay);
+      g.lineTo(ax - sd * bw * 0.06, ay - bh * 0.07);
+      g.stroke();
+    }
+  }
+  /* 眼睛：两个亮点。它是四只里唯一"有眼睛"的 ——
+     因为它不靠眼睛干活（靠光），所以眼睛可以是装饰。 */
+  g.fillStyle = burned ? "#FFB443" : "#FFF6D0";
+  for (const sd of [-1, 1]) {
+    g.beginPath(); g.arc(sd * bw * 0.07, -bh * 0.22, 2.0, 0, 6.283); g.fill();
+  }
+}
+
+/** 地脉虫：住在岩壁/地里，**只露一个头**。
+ *  `f.boreUp` 每帧由 updateFoe 写（1 = 探头 / 0 = 缩回）。
+ *  缩回时身体退到地面线以下 —— 画面上"消失了"，而物理上它还在原地无敌。
+ *
+ *  第一版读作**木梯**：等距的 5 道横纹 + 一根直上直下的窄柱 + 顶上六根细线。
+ *  "等距横纹"是梯子的定义，不是体节的定义。这一版：
+ *   · 体节减到 3 道，**向下弯的弧**，间距不均（越往上越密，像被挤）；
+ *   · 柱子**下粗上细且中间鼓**（虫子的体腔），不是等宽直筒；
+ *   · 头做成**一个大团**：横宽 0.46bw，配两枚**厚弯颚**（张合），
+ *     不再是六根放射细线 —— 六根细线读作"花瓣"，两枚厚颚读作"嘴"。
+ */
+function drawVein(g, f, bw0, bh0, t) {
+  const d = f.def;
+  const bw = d.vw || bw0, bh = d.vh || bh0;
+  /* 探头动画：用 boreT 做个平滑过渡，直接切 0/1 会"闪"。
+     `boreUp` 立刻生效（判定必须立刻），绘制用 0.18 秒滑过去。 */
+  f._veinK = f._veinK == null ? (f.boreUp ? 1 : 0) : f._veinK;
+  f._veinK += ((f.boreUp ? 1 : 0) - f._veinK) * 0.22;
+  const k = f._veinK;
+  /* 伸出的高度：1 = 全露，0 = 只剩地平线上一小截。
+     上限从 `0.85bh` 收到 `0.64bh`：它的设定是"只露一个头"，
+     身体露 47px 就不再是"从地里探头"，而是一根立着的柱子。
+     露得短、头占比大，才读得出"钻出来"。 */
+  const outH = bh * (0.24 + k * 0.50);
+
+  const botY = bh * 0.62;                     // 埋进地里（正数 = 地面线以下）
+  /* 头顶。露出的总高 = 头 + 一小截颈，**身体不许露出太长** ——
+     它的设定是"只露一个头"，柱子露 45px 读作"立着的水管"。 */
+  const topY = botY - outH - bh * 0.22;
+  const headR = bw * 0.30;                    // 头半径（宽 0.60bw，比柱底 0.68bw 略窄）
+  const headCY = topY + headR;
+  const neckY = headCY + headR * 0.85;        // 头与身体的交界高度
+
+  /* ---- 一体轮廓：地面 → 上收成颈 → 鼓成头 → 顶上收圆 ----
+     三次迭代都错在同一处：**头和身体画成两个形状**。
+     第一版两块硬接 → 读作"木梯 + 花"；第二版扁板悬在柱子上 → "蘑菇/图钉"；
+     第三版收窄后还是"壶盖压柱子"，因为中间那条描边就是"盖子和柱子的分界"。
+     这一版把头和身体走**同一条路径、一次 fill 一次 stroke**：
+     中间没有任何线，头就是身体的顶端鼓起来的一块。
+     脖子收窄到 0.16bw，头再张开到 0.26bw —— 沙虫钻出地面的那个形状。 */
+  const wBot = bw * 0.34, wNeck = bw * 0.16;
+  g.fillStyle = d.c1;
+  g.beginPath();
+  g.moveTo(-wBot, botY);
+  g.quadraticCurveTo(-bw * 0.38, neckY + bh * 0.12, -wNeck, neckY);
+  g.quadraticCurveTo(-headR * 1.06, neckY - headR * 0.20, -headR * 0.70, headCY - headR * 0.58);
+  g.quadraticCurveTo(0, headCY - headR * 1.34, headR * 0.70, headCY - headR * 0.58);
+  g.quadraticCurveTo(headR * 1.06, neckY - headR * 0.20, wNeck, neckY);
+  g.quadraticCurveTo(bw * 0.38, neckY + bh * 0.12, wBot, botY);
+  g.closePath();
+  g.fill();
+  g.strokeStyle = COL.outline; g.lineWidth = 3; g.stroke();
+
+  /* 体节：3 道**向下弯**的弧，间距不均（0.18 / 0.46 / 0.70，越往上越密）。
+     直横线是梯子，下弯弧是"一圈圈肉"。只画在颈以下，不许爬到头上去。 */
+  g.strokeStyle = rgbaOf(d.c3, 0.60);
+  g.lineWidth = 1.8;
+  g.lineCap = "round";
+  for (const u of [0.18, 0.46, 0.70]) {
+    const yy = botY - (botY - neckY) * u;
+    const hw = wBot + (wNeck - wBot) * u + bw * 0.02;
+    g.beginPath();
+    g.moveTo(-hw, yy + bh * 0.02);
+    g.quadraticCurveTo(0, yy - bh * 0.09, hw, yy + bh * 0.02);
+    g.stroke();
+  }
+
+  /* 头顶亮弧：光从上擦过。**只在上缘一小段**，铺满就变成"伞盖受光面"。 */
+  g.strokeStyle = rgbaOf(d.c2, 0.85);
+  g.lineWidth = 2.2;
+  g.lineCap = "round";
+  g.beginPath();
+  g.moveTo(-headR * 0.62, headCY - headR * 0.66);
+  g.quadraticCurveTo(0, headCY - headR * 1.12, headR * 0.62, headCY - headR * 0.66);
+  g.stroke();
+
+  /* 两枚厚弯颚：从头**下缘**向外下方张开（像钳子撑开），不是向内合拢。
+     向内合的两条弧会在头的下缘拼成一个向上的月牙 —— 人眼一定读成**微笑**，
+     整只就变成一张笑脸。起点靠中、终点甩到头的左右外侧，才是"钳"。 */
+  g.strokeStyle = COL.outline;
+  g.lineWidth = 4.0;
+  g.lineCap = "round";
+  const open = 0.10 + k * 0.26;
+  const jy = headCY + headR * 0.42;
+  for (const sd of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(sd * headR * 0.28, jy);
+    g.quadraticCurveTo(sd * headR * 1.02, jy + bh * (0.12 + open * 0.35),
+                       sd * headR * 1.45, jy + bh * (0.02 + open));
+    g.stroke();
+  }
+  /* 口：两颚之间的深色小楔形，**偏下**。放正中会被两颚夹出"上弯的嘴"。 */
+  g.fillStyle = "rgba(0,0,0,0.66)";
+  g.beginPath();
+  g.moveTo(-headR * 0.26, jy - bh * 0.02);
+  g.lineTo(headR * 0.26, jy - bh * 0.02);
+  g.lineTo(0, jy + bh * (0.08 + open * 0.5));
+  g.closePath();
+  g.fill();
+
+  /* **不给眼睛**。四只里只有巢蛾有眼睛（它是装饰，因为它靠光不靠看）。
+     地脉虫一加眼睛就变成表情包 —— 试过，整只读成"番茄脸"。
+     盲蛛没眼睛也一眼是蜘蛛，虫子不需要眼。 */
+
+  /* 缩回时：露出的那一小截上方压一道暗边，读作"缩回洞里了" */
+  if (k < 0.55) {
+    g.fillStyle = "rgba(0,0,0," + (0.60 * (1 - k / 0.55)).toFixed(3) + ")";
+    g.beginPath();
+    g.ellipse(0, botY - bh * 0.06, bw * 0.40, bh * 0.16, 0, 0, 6.283);
+    g.fill();
+  }
+
+  /* 底沿亮边（光在脚下）：两小段断点，理由同石壳 */
+  g.strokeStyle = rgbaOf(d.c2, 0.60);
+  g.lineWidth = 2.4;
+  g.lineCap = "round";
+  for (const sd of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(sd * bw * 0.08, botY - 2);
+    g.lineTo(sd * bw * 0.28, botY - 2);
+    g.stroke();
+  }
+}
+
 function drawFoe(g, f) {
   if (f.isBoss) { drawBoss(g, f); return; }
   const d = f.def;
@@ -11810,8 +12952,14 @@ function drawFoe(g, f) {
      `f.bob` 只留给乌鸦悬停（下面 Math.sin(f.bob)*2.5）和 BOSS 呼吸。 */
   const t = S.t + (f.ph || 0);
 
+  /* 巢蛾也是悬空的（`def.kind === "moth"`，不是 "fly"）——
+     它跟乌鸦一样不该有地面影子、也该有同款悬停起伏。
+     这两个判定原来只认 `f.fly`，蛾子就在空中挂了条地面阴影，
+     而且一动不动地"贴"在那条线上。 */
+  const hovering = f.fly || d.kind === "moth";
+
   // 影子
-  if (!f.fly) {
+  if (!hovering) {
     g.globalAlpha = 0.16;
     g.fillStyle = "#16261C";
     g.beginPath();
@@ -11823,7 +12971,7 @@ function drawFoe(g, f) {
   const sx = 1 + squash * 0.18, sy = 1 - squash * 0.16;
 
   g.save();
-  g.translate(cx, cy + (f.fly ? Math.sin(f.bob) * 2.5 : 0));
+  g.translate(cx, cy + (hovering ? Math.sin(f.bob) * 2.5 : 0));
   g.scale(sx, sy);
   // 只画朝右的版本，靠镜像翻面 —— 三套造型各自处理左右会把代码写成三份
   g.save();
@@ -11845,9 +12993,19 @@ function drawFoe(g, f) {
 
      贴图是静态的，原来画法里"腿在动"的信息会丢；用 1.2px 的走路弹跳补回来
      （28 高的敌人上是 4%，够读出"在挪"，又不至于像在蹦）。 */
+  /* 贴图 key：**按 `def.kind` 分，不能按 `f.kind`** ——
+     巢蛾被照亮之后 `f.kind` 会从 "moth" 改成 "walk"（这样它才会掉下来、
+     才会被裹），但它的贴图仍然是巢蛾那张。按 f.kind 分的话，
+     它一落地就变成毛毛虫的贴图 —— 玩家会以为"打出了另一只怪"。
+     新怪（spider / shell / moth / vein）暂时没有立绘，`artOf` 返回 null，
+     自动回退到下面的代码图形分支。 */
   const foeKey = f.larva ? "larva"
-    : f.kind === "fly" ? "crow"
-    : f.kind === "charge" ? "boar" : "bug";
+    : d.kind === "fly" ? "crow"
+    : d.kind === "charge" ? "boar"
+    : d.kind === "walk" && d.hunt === "shake" ? "spider"
+    : d.kind === "roll" ? "shell"
+    : d.kind === "moth" ? "moth"
+    : d.kind === "burrow" ? "vein" : "bug";
   const foeImg = artOf("foe-" + foeKey);
   if (foeImg) {
     const ih = d.vh || bh, iw = ih * (foeImg.width / foeImg.height);
@@ -11948,6 +13106,11 @@ function drawFoe(g, f) {
   } else if (f.larva) drawLarva(g, f, bw, bh, t);
   else if (f.kind === "fly") drawCrow(g, f, bw, bh, t);
   else if (f.kind === "charge") drawBoar(g, f, bw, bh, t);
+  /* ---- 深巢四怪的分派也按 `def.kind`，理由同上（巢蛾落地后 f.kind 变 walk）---- */
+  else if (d.kind === "roll") drawShell(g, f, bw, bh, t);
+  else if (d.kind === "moth") drawMoth(g, f, bw, bh, t);
+  else if (d.kind === "burrow") drawVein(g, f, bw, bh, t);
+  else if (d.hunt === "shake") drawSpider(g, f, bw, bh, t);
   else drawWorm(g, f, bw, bh, t);
   g.restore();
   g.restore();
@@ -16535,6 +17698,10 @@ export function groveBoot(hero?: number, stage?: number, fromHome?: boolean): vo
 /* ---------- 调试导出 ---------- */
 export const GROVE: any = {
   S, HEROES, FOES, GOALS, LEVELS, THEMES,
+  /* 地面高度是深巢层表（`NEST.LAYERS`）与跳跃可达性断言的共同基准，
+     导出它是为了让 `nest-check` 能量"层距 110 vs 跳高 145 余量够不够"，
+     而不是在测试里抄一个 556 当常量（抄一次，改 GROUND_Y 时两边就漂了）。 */
+  GROUND_Y,
   resetRun, beginRun, tick, render,
   setupLevel, updatePlayer, updateFoe, updateShots, updateBalls,
   coatFoe, makeBallFrom, burstBall, spawnShot,
@@ -16621,6 +17788,10 @@ Object.defineProperty(GROVE, "PLATS", { get: () => PLATS });
 Object.defineProperty(GROVE, "PITS",  { get: () => PITS });
 Object.defineProperty(GROVE, "STUMPS", { get: () => STUMPS });
 Object.defineProperty(GROVE, "CAMP",  { get: () => CAMP });
+/* 送走点：主线是 `[CAMP]` 一项，深巢是多道裂缝。
+   **必须导出** —— "球滚进缝里到底算不算送走"只能靠代码问，
+   而这条错了的表现是"清场目标永远差几只"，截图上看不出来。 */
+Object.defineProperty(GROVE, "CHASMS", { get: () => CHASMS });
 Object.defineProperty(GROVE, "WAVES", { get: () => WAVES });
 Object.defineProperty(GROVE, "PLAYER_SPAWN", { get: () => PLAYER_SPAWN });
 Object.defineProperty(GROVE, "RAMPS", { get: () => RAMPS });

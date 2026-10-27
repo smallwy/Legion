@@ -45,8 +45,9 @@ HEADER = '''/* ⚠ 自动生成，勿手改 —— 源：client/prototype/grove.
    重新生成：python client/tools/extract_grove_runtime.py
 
    这是推球玩法的**引擎无关运行时**（物理 / 关卡 / 波次 / BOSS / 冰壳 / 球）。
-   绘制同样原样保留：一套 Canvas 2D 代码（960x600），由 GroveBattle 组件
-   喂一块离屏画布，再把画布贴成 Cocos 纹理。
+   绘制同样原样保留：一套 Canvas 2D 代码（960x600）。GroveBattle 开一块
+   960x600 的离屏 canvas 喂进来，再把这块 canvas 作为 **DOM 层**铺在 Cocos
+   画布上面 —— 不走 Cocos 渲染管线（为什么这么做见 GroveBattle 文件头）。
 
    导出：
      groveAttachCanvas(canvas)  绑定画布
@@ -78,7 +79,7 @@ export function groveBoot(hero?: number, stage?: number, fromHome?: boolean): vo
    * 全通时循环一次都不命中，`st` 保持初值 0 —— "27 屏打完"和"一关没打"
    * 在代码里长得一模一样，玩家每次进战斗都被塞回第一屏。
    * 这不是漏了一句提示，是**那个变量表达不了"没有下一关"**。
-   * 现在用 -1 表示"没有下一个"，落到挑一屏。 */
+   * 现在用 -1 表示"没有下一个"。 */
   const s: any = readHomeSave();
   const done = new Set(Array.isArray(s.cleared) ? s.cleared : []);
   let st = -1;
@@ -90,7 +91,12 @@ export function groveBoot(hero?: number, stage?: number, fromHome?: boolean): vo
      在真机上恒为 false，出征页永远不会出现（原型里却会出现），
      同一次点击两个结果。 */
   if (fromHome) { S.progress = st >= 0 ? st : LEVELS.length; openGates(); return; }
-  if (st < 0) { S.progress = LEVELS.length; openPick(); return; }
+  /* 全通之后落到哪。**这里原来写的是 `openPick()`** —— 挑一屏界面
+     2026-10-26 被删掉了，函数没了、调用方留着，一进战斗就 ReferenceError。
+     `grove.html` 里没有这行（它只在浏览器从 game.html 带参数进来时走），
+     所以原型和冒烟都验不到，只有 tsc 的 TS2304 指出来。
+     现在落出征页：27 扇门全开着，等价于原来"挑一屏"那个入口。 */
+  if (st < 0) { S.progress = LEVELS.length; openGates(); return; }
   S.progress = st;
   beginRun(st);
 }

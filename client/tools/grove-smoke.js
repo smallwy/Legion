@@ -285,9 +285,42 @@ console.log("\n=== 5a. 火坑：烧掉、收成 ×2、断连锁 ===");
   P.tick(1 / 60);
 
   ok(b.dead, "球被烧掉了");
-  eq(S.food, 6, "3 只 ×2 = 6 份收成");
+  /* 3 只 = 6（每只 2）+ 1（加注，见 holdBonus）—— 2026-10-27 之前是 6。
+     火坑**必须跟着加注一起涨**，否则 holds=5 时营地 12 > 火坑 10，
+     一个"球没了+断连锁"的高风险出口反而输给稳的出口。 */
+  eq(S.food, 7, "3 只 ×2 = 6 份 + 加注 1");
   eq(S.killed, 3, "算清掉 3 只");
   eq(S.balls.length, 0, "场上不再有球（连锁断了）");
+}
+
+console.log("\n=== 5a-2. 「加注」：第三只起收成超线性 ===");
+{
+  const sb = boot();
+  const P = sb.GROVE;
+  /* 唯一的真值是 `holdBonus` / `bankGain` 两个函数，这里逐个钉死数值。
+     **为什么必须钉死**：这套曲线的全部意义是"1~2 只不变、3 只以上爆发"。
+     如果哪天有人"顺手"把平方项改成从 2 只起算，27 屏的 collect 目标
+     （12/13/14）会集体变松，而那 27 个数字是手调的、没人会去复查。
+     钉在这里，改一处就红一处。 */
+  eq(P.holdBonus(1), 0, "1 只：没有加注");
+  eq(P.holdBonus(2), 0, "2 只：没有加注（**这条最关键**，2 只是常态）");
+  eq(P.holdBonus(3), 1, "3 只：加注 1");
+  eq(P.holdBonus(4), 3, "4 只：加注 3");
+  eq(P.holdBonus(5), 6, "5 只：加注 6");
+  eq(P.bankGain(1), 2, "营地 1 只 = 2（与旧版一致）");
+  eq(P.bankGain(2), 3, "营地 2 只 = 3（与旧版一致）");
+  eq(P.bankGain(3), 5, "营地 3 只 = 5（旧版 4）");
+  eq(P.bankGain(4), 8, "营地 4 只 = 8（旧版 5）");
+  eq(P.bankGain(5), 12, "营地 5 只 = 12（旧版 6）");
+  eq(P.bankGain(1, true), 14, "BOSS 单只仍带 +12");
+  /* 单调性：多装一只必须严格更赚，否则"加注"没有意义 */
+  ok(P.bankGain(5) > P.bankGain(4) && P.bankGain(4) > P.bankGain(3),
+     "营地收成随只数严格递增");
+  /* 火坑必须始终压过营地（它是高风险出口） */
+  const fire = (h) => h * 2 + P.holdBonus(h);
+  ok([3, 4, 5].every(h => fire(h) > P.bankGain(h)),
+     "火坑在 3~5 只时始终高于营地（风险溢价没被吃掉）",
+     `3:${fire(3)}>${P.bankGain(3)} 4:${fire(4)}>${P.bankGain(4)} 5:${fire(5)}>${P.bankGain(5)}`);
 }
 
 console.log("\n=== 5b. 泥坑：球裹泥、变重（撞人 +2 层）===");

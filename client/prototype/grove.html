@@ -1885,10 +1885,20 @@ const LEVELS = [
 
   /* ---------------- 14 ----------------
      全八关里落差最大的一屏：五段窄台，最窄 140。
-     没有一段够球横向滚两秒，打法是"推到边缘、让它往下砸"。 */
+     没有一段够球横向滚两秒，打法是"推到边缘、让它往下砸"。
+
+     ★ 2026-10-28：这一屏成了「上行」的样板。
+     在此之前它是 27 屏里唯一一屏**玩家和球都上不到最高处**的关卡：
+     156 层（26..200）离下面最近的一块台面（462 层 26..180）有 306px，
+     而玩家跳 123px、球根本不会跳 —— 顶层站着的那只虫是个永远打不到的摆设，
+     ALL9 机器人在这屏 0/9、240 秒超时，也就是"这一屏没有解法"。
+
+     一口风柱把这一整层接回关卡：**站在柱里起跳，风把你顶 331px**，
+     于是 地面 → 462 → 156 变成两步。球同样被吹上去（柱高 300 + 惯性 100 = 400），
+     正好落在 156 层的台面上。**"怎么上去"这件事第一次有了答案。** */
   {
-    id: "wither_cliff", name: "断崖路", sub: "五段窄台 · 落差四层",
-    note: "没有一寸长台。每一段都得推着球往下走，掉哪层算哪层",
+    id: "wither_cliff", name: "断崖路", sub: "一口风柱 · 直通最高层",
+    note: "只有风柱能上去。球被吹到顶层，从那儿推下来能一次压一整片",
     theme: "wither3",
     goal: "nohit", par: { time: 75, made: 10 },
     plats: [
@@ -1900,6 +1910,25 @@ const LEVELS = [
       { x: 460,    y: 248, w: 220, h: 20, kind: "ledge" },   // 460..680
       { x: WALL_L, y: 156, w: 174, h: 20, kind: "ledge" },   // 26..200 最高点
     ],
+    /* 风柱 x=100（55..145），和 462 层左段（26..180）上下对齐 ——
+       **必须对齐**：柱把人和球送到 462 的高度，落点若在板外，
+       那就成了"把你送到半空再摔下去"。而且第二次起跳也在同一个柱里，
+       一次错位，两段上升全废。
+
+       `dir: 1` = 侧风向右。加它不是装饰，是让这一屏**闭环**：
+       球被吹到 156 层之后如果竖着停在那儿，它就一直漏气、等玩家上来推，
+       而玩家上来要两步跳跃 —— 机器人一次都没走通（清场 4/9）。
+       有了侧风，球在上升途中就带着横向速度，落到 156 层后自己滚出 200 的
+       边缘摔回地面，**一圈不用人碰**。玩家要做的只剩"决定什么时候推进去"。 */
+    updrafts: [{ x: 100, w: 90, y: GROUND_Y, h: 300, dir: 1 }],
+    /* 248 层左端（460..680）的硬墙。它解决的是一个很具体的问题：
+       248 层是球唯一能横着走两趟的台面（220 宽），可球从右往左滚到 460
+       就掉下去了 —— 只走一趟。立一堵硬墙在 472（台面左端内侧 12px），
+       球撞上去**保速弹回**（不是墙的 ×0.62），于是能在 520 / 600 两只怪
+       身上各扫一次。玩家跳得过去（墙高 60 < 跳跃 123），球过不去。 */
+    reflects: [
+      { x1: 472, y1: 248, x2: 472, y2: 188, wall: true },
+    ],
     pits: [
       { x: 320, y: GROUND_Y, w: 100, kind: "mud"  },
       { x: 720, y: GROUND_Y, w: 90,  kind: "fire" },
@@ -1908,10 +1937,13 @@ const LEVELS = [
     camp: { x: 852, y: GROUND_Y, w: 82 },
     waves: [
       [
-        { foe: "bug",  x: 80,  y: 462 },
+        /* 这只**必须站在柱外**（柱 55..145）。留在 80 的话它整天站在风里 ——
+           物理上没影响（敌人不感知气流），但玩家看到的是"虫站在气流里没事"，
+           会以为气流是假的。放 168 让它的包围盒（160..176）整个离开柱右缘。 */
+        { foe: "bug",  x: 168, y: 462 },
         { foe: "bug",  x: 620, y: 462 },
         { foe: "bug",  x: 300, y: 350 },
-        { foe: "bug",  x: 100, y: 156 },
+        { foe: "bug",  x: 160, y: 156 },
       ],
       [
         { foe: "bug",  x: 800, y: 350 },
@@ -3855,6 +3887,72 @@ let PORTALS = [];
 let GROUNDS = [];
 let REFLECTS = [];
 
+/* ---- 上升气流柱（2026-10-28）----------------------------------------------
+ * 27 屏里"球往上"只有两个来源：弹菇（2 屏）和传送洞（3 屏）。其余 22 屏
+ * 的高度只对**玩家**有用 —— 球一旦被推下去就再也回不去，所以"层间"这件事
+ * 对球是单向的，只有下行没有上行。层间开口（井）把下行做出来了，
+ * 上行还欠着，这一层补的就是它。
+ *
+ * ## 为什么是"柱"不是"风口"
+ *
+ * 风口（踩一下弹起来）本质上就是弹菇，已经有了。柱的价值在于**它是空间，
+ * 不是机关**：球进柱之后持续上升，中途可以被侧风吹着横移，出柱顶才靠惯性。
+ * 于是"从哪儿进、以什么速度进"决定"从哪儿出"，玩家的操作第一次
+ * 能影响到**高度**而不只是横向落点。
+ *
+ * ## 数字全部由已有的重力反推
+ *
+ *   自由上升高度 = vy² / (2·GRAV) = 648² / 4200 ≈ 100px
+ *   柱高 300 → 一根柱子总共能把球送上去 400px = 4 层里最高那档（556-156）。
+ * 也就是说**柱高 + 惯性正好够到最高层**，不多不少。多给就飞出屏幕，
+ * 少给就到不了最后一层 —— 这两个上限都是硬的。
+ *
+ * ## 为什么必须衰减
+ *
+ * 球被吹上去、落回来、又进柱 —— 这是永动机。弹菇踩过同一个坑：
+ * 不衰减时球能在几朵菇之间弹满 20 秒，玩家永远等不到它停。
+ * 所以同一颗球第 n 次进柱，力 × 0.55^(n-1)：648 → 356 → 196 → 108。
+ * 第三次就上不了一层，球自己落回去滚走。
+ * **计数在玩家重新推球时清零**：气流是"推一下就坐一趟"的电梯，
+ * 不是自动扶梯 —— 不然玩家站在旁边就能白嫖。
+ * ------------------------------------------------------------------------- */
+let UPDRAFTS = [];
+
+/** 柱顶速度。648 → 惯性 100px（GRAV 2100） */
+const DRAFT_RISE = 648;
+/** 同一颗球每多进一次柱，力乘这个数 */
+const DRAFT_DECAY = 0.55;
+/** 侧风加速度 / 侧风目标速度。0 = 纯竖直
+ *
+ *  目标速度只能给 90。第一版给 250，结果是**球被自己的风横着吹出了柱子**
+ *  （柱宽 90，250px/s 在 0.18 秒内就走完 45px），托举中断在半空 ——
+ *  实测最高只到 304，离顶层还差 148，而柱子在画面上看起来一切正常。
+ *  90px/s 全程横移约 37px，出柱时仍在柱内，落地后还能以 90 的速度
+ *  自己滚出台面边缘。**风是"顺手推一下"，不是"横向发射"。** */
+const DRAFT_SIDE = 700;
+const DRAFT_PUSH = 90;
+
+/** 站在气流柱里起跳的高度。1180 → 1180²/4200 ≈ 331px。
+ *
+ *  **这个数只能这么算出来，不能调手感**：它要够"462 → 156"那一档（306px），
+ *  又必须小于"一楼直接到顶层"（556-156 = 400px）。331 落在两者之间，
+ *  于是气流柱的用法被几何定死了 —— **一次上一层，连跳两次到顶**。
+ *  给到 400 以上，玩家在楼下按一下就飞到最高处，中间三层全部作废；
+ *  给到 306 以下，那层永远上不去，球被吹上去也没人推得动它。 */
+const DRAFT_LIFT = 1180;
+
+/** 某个点上有没有气流柱。**玩家、球共用同一个判定** ——
+ *  两处各写一遍必然漂移，而这个漂移的表现是"球被吹上去了玩家上不去"，
+ *  玩家只会读作"这游戏坏了"。 */
+function draftAt(x, y) {
+  for (const u of UPDRAFTS) {
+    if (x < u.x - u.w / 2 || x > u.x + u.w / 2) continue;
+    if (y > u.y + 8 || y < u.y - u.h) continue;
+    return u;
+  }
+  return null;
+}
+
 /* ---- 赛道层（2026-10-24 第二批）--------------------------------------------
  * 前两件（材质 / 斜板）改的是"球怎么滚"，可 27 屏的核心动作还是同一个：
  * 往右推、落袋、完事。差别只在障碍物摆在哪。
@@ -4020,6 +4118,7 @@ function loadLevel(i) {
   RAMPS = L.ramps || [];
   BOUNCERS = L.bouncers || [];
   PORTALS = L.portals || [];
+  UPDRAFTS = L.updrafts || [];
   /* **必须是副本，不能是关卡数据的引用。**
      BOSS 的「泥潮」会往 GROUNDS 里 push 新段；
      直接引用的话那几个对象会写进 LEVELS，重开这一关泥沼还在，
@@ -4638,6 +4737,44 @@ function stepBody(b, dt) {
     }
   }
 
+  /* ---- 气流柱里的浮力（**只给玩家**，见下）----------------------------
+     气流对球是"托上去"，对玩家只给浮力，不主动推。
+     两个理由，都踩过：
+       · 主动推玩家 → 玩家被托在半空、左右走不出去，且**没有任何按键能逃**。
+         那读起来不是"风"，是"卡住了"。
+       · 机器人跑图会莫名其妙飘起来，ALL9 的落点全变。
+     浮力 = 重力 ×0.55 → 跳跃高度 123 → 166px。
+     层距 94~112，123 本来就够上一层；166 多出来的 43px 是**从台面边缘
+     起跳也能落回板面**的容错。再多就会一路飘上最高层，"断崖"就不成立了。 */
+  /* ---- 竖直硬墙：挡人，但挡不住跳跃 ----
+   * 硬墙的物理在 `reflectStep` 里**只对球生效**（那是镜面反射，人和墙之间
+   * 没有"反射"这回事）。所以人这一侧必须单独补一条横向阻挡 ——
+   * 不补的话，玩家会直接穿过一堵画得清清楚楚的石墙，
+   * 而"能穿过去的墙"会立刻把这一屏的其他墙也一起变成装饰。
+   *
+   * 判定和木桩逐字同构（只有 `l/r` 的来历不同）：站在墙顶上方不挡、
+   * 整个人在墙底下面不挡、横向重叠才挡。所以**跳过去是可以的**
+   * （墙高 60 < 跳跃 123），这也是设计的一部分：球被弹回、人翻过去。 */
+  for (const d of REFLECTS) {
+    if (!d.wall) continue;
+    const top = Math.min(d.y1, d.y2), bot = Math.max(d.y1, d.y2);
+    if (b.y <= top + 4) continue;           // 站在墙顶上方，不挡
+    if (b.y - b.h >= bot - 2) continue;     // 整个人在墙底下面
+    /* 横向判定必须和视觉同宽（±13）。视觉比判定宽，玩家会"看着还有缝却过不去"；
+       窄了则是"看着撞上了却穿过去"。这一条在木桩上已经吃过一次亏。 */
+    const l = d.x1 - 13, r = d.x1 + 13;
+    if (b.x + b.w / 2 > l && b.x - b.w / 2 < r) {
+      if (b.vx > 0) { b.x = l - b.w / 2; b.hitWall = 1; }
+      else if (b.vx < 0) { b.x = r + b.w / 2; b.hitWall = -1; }
+      b.vx = 0;
+    }
+  }
+
+  /* 玩家在气流柱里**不给浮力**，只有"借风跳"（见 updatePlayer 的跳跃段）。
+     试过给浮力（重力 ×0.55），实测跳高从 331 变成 464 —— 两个加成叠加，
+     玩家在楼下按一下就直接到顶层，中间三层全部作废（"断崖"不成立）。
+     风的两种效果只能留一种：**跳**比"飘"更可控，因为它有起跳点、
+     有落点、有次数，玩家算得出来。 */
   b.vy = Math.min(b.vy + GRAV * dt, MAXFALL);
   b.y += b.vy * dt;
 
@@ -5068,7 +5205,7 @@ function setupLevel() {
   S.failWhy = "";
   // 台词每关重置：first / big 是"这一关的第一次"，跨关累计就永远不说了
   S.say.txt = ""; S.say.t = 0; S.say.life = 0; S.say.fired = {};
-  S.stat = { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0, chests: 0, toured: 0, shroom: 0, rampIn: 0, slam: 0 };
+  S.stat = { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0, chests: 0, toured: 0, shroom: 0, rampIn: 0, slam: 0, draft: 0 };
   S.t = 0;
   S.shake = 0;
   S.flash = 0;
@@ -5824,7 +5961,12 @@ function updatePlayer(dt) {
   // ---- 跳（带土狼时间 + 输入缓冲，手感全靠这两个）
   if (S.press.jump) p.jumpBuf = 0.12;
   if (p.jumpBuf > 0 && p.coyote > 0 && p.dashT <= 0) {
-    p.vy = -H.jump;
+    /* **站在气流柱里起跳会被风托上去。**
+       这不是"手感加成"，是气流柱成不成立的最后一环：
+       球被吹到 156 层之后，得有个人在上面推它 —— 而玩家自己跳不上去，
+       那根柱子就只是在往一个没人去过的地方送货。
+       判定和球用同一个 `draftAt`，不许各写一份。 */
+    p.vy = -(draftAt(p.x, p.y) ? DRAFT_LIFT : H.jump);
     p.onGround = false;
     p.coyote = 0;
     p.jumpBuf = 0;
@@ -5954,6 +6096,12 @@ function updatePlayer(dt) {
         /* 玩家重新推它 = 这一球是新的。弹菇的衰减计数必须归零，
          * 否则这颗球弹满 6 次之后，之后路过任何菇都不会再被弹起来。 */
         b.bounceN = 0;
+        /* 气流的趟数同理，而且更严格：气流是"推一下坐一趟"的电梯，
+         * 不归零的话一颗球坐满三次就永远上不去了，
+         * 而玩家没有任何可见线索能推出"为什么这次没风了"。 */
+        b.draftN = 0;
+        b.draftIn = null;
+        b.draftOut = 0;
         // 球被顶瘪一下：沿运动方向压短、垂直方向鼓起来 ——
         // 这是"它真的被撞了"唯一不靠文字的表达。
         b.pushSquash = 0.30 + runUp * 0.14;
@@ -7395,8 +7543,49 @@ function updateBalls(dt) {
      * 一颗正在上升的球会被判成"砸下来"。
      *
      * 只在"真的落到某个面上"的那一刻赋值，语义只有一个：**这一帧砸实了**。 */
+    /* ---- 上升气流柱（设计注释见 UPDRAFTS 声明处）----------------------
+       必须排在重力**之前**：这里的做法是"把 vy 往 -rise 拉"，
+       重力随后每帧再加 GRAV·dt。反过来先加重力再拉，球会在柱里
+       呈现"上一帧被拉、这一帧被拉回去"的喘息感 —— 数值上只差一帧，
+       画面上是持续的小幅抖动，正是这一版最不能出的毛病。 */
+    if (UPDRAFTS.length && !b.stone) {
+      b.draftOut = Math.max(0, (b.draftOut || 0) - dt);
+      const d = draftAt(b.x, b.y);
+      if (d) {
+        if (b.draftIn !== d) {
+          /* 出柱后 0.35 秒内再进来不算新的一趟 —— 否则球在柱顶边缘
+             抖两下就把三次额度全用光，表现是"柱子用一次就废了"。 */
+          if (b.draftOut <= 0) b.draftN = (b.draftN || 0) + 1;
+          b.draftIn = d;
+        }
+        const k = Math.min(3, Math.max(0, (b.draftN || 1) - 1));
+        const rise = DRAFT_RISE * Math.pow(DRAFT_DECAY, k);
+        /* 第三趟只剩 196：已经托不动一层（层距 94 起步），
+           当作"风弱到托不住"，让球自己落回去。 */
+        if (rise >= 190) {
+          b.vy += (-rise - b.vy) * Math.min(1, 14 * dt);
+          if (d.dir) {
+            const dv = d.dir * DRAFT_PUSH - b.vx;
+            b.vx += Math.sign(dv) * Math.min(Math.abs(dv), DRAFT_SIDE * dt);
+          }
+          b.onGround = false;
+          b.ground = null;
+          S.stat.draft = (S.stat.draft || 0) + 1;
+        }
+      } else if (b.draftIn) {
+        b.draftIn = null;
+        b.draftOut = 0.35;
+      }
+    }
+
     b.landVy = 0;
-    b.vy = Math.min(b.vy + GRAV * dt, MAXFALL);
+    /* 柱里**不带重力**。这一条是实测出来的：带重力时 `vy` 的平衡点
+       不是 -648，而是 -648 + GRAV·dt/(14·dt) ≈ -498 —— 惯性只剩 59px，
+       球从柱顶 256 只升到 197，**永远差 40px 到不了 156 层**。
+       数值上只差 21%，表现出来是"球被吹上去、在台面下面一点停住然后掉回来"，
+       而那正是最容易让人误判成"柱子没作用"的形态。
+       去掉重力之后 `vy` 稳定收敛到 -648，惯性精确等于 vy²/2g = 100px。 */
+    b.vy = Math.min(b.vy + GRAV * (b.draftIn ? 0 : 1) * dt, MAXFALL);
     b.y += b.vy * dt;
     b.onGround = false;
     b.ground = null;
@@ -11879,6 +12068,10 @@ function drawTour(g, t, i) {
 
 
 function drawReflect(g, d) {
+  /* 竖直硬墙走另一套画法：物理是同一条线段（镜面反射），
+     但"从地里长出来的斜板"这个视觉对竖墙完全不成立 —— 竖墙是**立在半空的**，
+     照斜板画会在地上多出一块莫名其妙的底座。 */
+  if (d.wall) { drawStoneWall(g, d); return; }
   const dx = d.x2 - d.x1, dy = d.y2 - d.y1;
   const len = Math.hypot(dx, dy) || 1;
   const ux = dx / len, uy = dy / len;
@@ -11966,6 +12159,186 @@ function drawReflect(g, d) {
     g.beginPath(); g.arc(q.x, q.y, 5, 0, 6.283); g.fill();
     g.fillStyle = "#CFEFFA";
     g.beginPath(); g.arc(q.x - 0.8, q.y - 0.8, 2.2, 0, 6.283); g.fill();
+  }
+}
+
+
+/* ---------- 上升气流柱 ----------
+ *
+ * ## 视觉要回答的唯一问题：「这地方能把球送上去」为什么
+ *
+ * 一根淡青色半透明竖带**什么都不是** —— 玩家读到的是"雾""光柱""贴图"，
+ * 三种解释里没有一种是"风能托起球"。所以这一层必须同时给三件事：
+ *
+ *   ① 底部有**风口**：一块嵌在地上的石栅。有进口，才有"从这儿进去"的动作。
+ *   ② 柱里有**向上流动的条纹**：说明方向。静止的柱读作"装饰"，动起来才读作"流"。
+ *   ③ 柱身**越往上越淡**：说明它托不住自己。满强度的柱读作"另一堵墙"，
+ *      而墙是拦人的 —— 这里恰好相反。
+ *
+ * 条纹的相位用 `S.t*0.62` 而不是 `S.t`：0.62 让一条纹从底到顶约 1.6 秒，
+ * 和"球被吹上去的实际用时"（300px ÷ 648px/s ≈ 0.46s）不同频，
+ * 于是球穿过柱时不会和条纹一起走，看起来是"球比风快" —— 那是对的，
+ * 球是真的被吹起来的，不是贴在一条动画上。
+ */
+function drawUpdraft(g, u) {
+  const l = u.x - u.w / 2, r = u.x + u.w / 2;
+  const top = u.y - u.h, bot = u.y;
+
+  // ① 柱身：底浓顶淡
+  const grd = g.createLinearGradient(0, bot, 0, top);
+  grd.addColorStop(0, "rgba(118,226,214,.34)");
+  grd.addColorStop(0.5, "rgba(152,240,230,.17)");
+  grd.addColorStop(1, "rgba(196,252,246,0)");
+  g.fillStyle = grd;
+  g.fillRect(l, top, u.w, u.h);
+
+  /* ⓑ **风穿过台面的地方必须画出来。**
+     这一屏的柱子正下方压着 462 层的一块台面，柱身被板截成上下两段 ——
+     不解释的话读作"这根光柱断了"，或者更糟："风被木板挡住了，
+     所以我该上不去"。而恰恰相反：**球就是从这里穿上去的**。
+     在交叉处画一层横向溢出的雾 + 几道往上钻的短线，
+     读法立刻从"被挡住"变成"从缝里挤过去"。 */
+  for (const p of PLATS) {
+    if (p.kind === "ground" || isBroken(p)) continue;
+    if (p.x + p.w < l || p.x > r) continue;
+    if (p.y < top || p.y > bot + 4) continue;
+    const spill = (p.y - top) / Math.max(1, u.h);
+    const a = 0.30 * Math.sin(Math.PI * Math.min(1, spill + 0.15));
+    g.globalAlpha = 0.20 + a;
+    g.fillStyle = "#9BEDE2";
+    g.fillRect(l - 9, p.y - 5, u.w + 18, 7);
+    g.globalAlpha = 0.42 + a;
+    g.strokeStyle = "#D6FFF8";
+    g.lineWidth = 2;
+    for (let i = 0; i < 4; i++) {
+      const sx = l + 10 + i * (u.w - 20) / 3;
+      g.beginPath();
+      g.moveTo(sx, p.y - 2);
+      g.lineTo(sx + Math.sin(S.t * 4 + i) * 3, p.y - 20);
+      g.stroke();
+    }
+    g.globalAlpha = 1;
+  }
+
+  // ② 上升条纹（裁在柱内，不外溢）
+  /* **条纹必须是"线"不是"点"。**
+     第一版是 14px 的短划 + 2px 线宽，出图读作**下雪** —— 浅色背景上
+     一排小白点，唯一的解释就是雪。而这一层要回答的是"风往上走"，
+     雪恰好是反的（雪往下落）。
+     现在加长到 20~38px、加粗到 2.8，并让每条微微弯曲：**弯曲的长线 = 流**，
+     点是粒子、线才是流。 */
+  g.save();
+  g.beginPath(); g.rect(l, top, u.w, u.h); g.clip();
+  g.lineCap = "round";
+  for (let i = 0; i < 7; i++) {
+    const ph = (S.t * 0.62 + i / 7) % 1;       // 0 = 底部，1 = 顶部
+    const yy = bot - ph * u.h;
+    const xx = l + u.w * (0.14 + 0.72 * (((i * 5) % 7) / 6));
+    const k = Math.sin(ph * Math.PI);          // 两端淡、中间亮
+    const len = 20 + 18 * k;
+    g.globalAlpha = 0.10 + 0.52 * k;
+    g.strokeStyle = "#A9F2E8";
+    g.lineWidth = 2.8;
+    g.beginPath();
+    g.moveTo(xx, yy);
+    g.quadraticCurveTo(xx + Math.sin(S.t * 2.2 + i) * 5, yy - len * 0.55,
+                       xx + Math.sin(S.t * 2.2 + i) * 2, yy - len);
+    g.stroke();
+  }
+  g.restore();
+  g.globalAlpha = 1;
+
+  // ③ 边缘：一条极细的亮线，把"柱"从背景里摘出来，又不至于成为墙
+  g.strokeStyle = "rgba(196,252,244,.42)";
+  g.lineWidth = 1.6;
+  g.beginPath();
+  g.moveTo(l + 1, bot); g.lineTo(l + 1, top + 12);
+  g.moveTo(r - 1, bot); g.lineTo(r - 1, top + 12);
+  g.stroke();
+
+  /* 柱顶：两道横向的"出口"虚线。球是从这里飞出去的，
+     没有这一道，柱子的上边界就是"渐变到没有"，玩家不知道风到哪儿为止。 */
+  const p2 = 0.55 + 0.45 * Math.sin(S.t * 2.8);
+  g.strokeStyle = "rgba(206,255,248," + (0.24 + 0.30 * p2).toFixed(3) + ")";
+  g.lineWidth = 2;
+  g.setLineDash([7, 6]);
+  g.beginPath();
+  g.moveTo(l + 2, top + 3); g.lineTo(r - 2, top + 3);
+  g.stroke();
+  g.setLineDash([]);
+
+  // ④ 风口：嵌在地里的石栅。**它是"入口"，必须比柱身更实**
+  g.fillStyle = "#37434B";
+  g.fillRect(l - 7, bot - 5, u.w + 14, 9);
+  g.fillStyle = "#55636D";
+  g.fillRect(l - 7, bot - 5, u.w + 14, 3);
+  // 栅条：只画露在风口上面的那截，看起来是"从缝里出来的"
+  g.strokeStyle = "rgba(18,26,32,.55)";
+  g.lineWidth = 2.4;
+  for (let x = l + 6; x < r - 4; x += 13) {
+    g.beginPath(); g.moveTo(x, bot - 5); g.lineTo(x, bot + 4); g.stroke();
+  }
+}
+
+/* ---------- 竖直硬墙 ----------
+ * 反射板（REFLECTS）立起来就是硬墙：物理完全复用 `reflectStep`，
+ * 一条竖直的线段的镜面反射**就是**"撞上原速弹回"。
+ * 视觉必须和斜板拉开，否则玩家会以为"这块也能把我送上去"：
+ *   斜板 = 蓝金属 + 法线箭头（我用它送你）
+ *   硬墙 = 灰石砌 + 向外的三角（我只会把你打回来）
+ */
+function drawStoneWall(g, d) {
+  const cx = (d.x1 + d.x2) / 2;
+  const top = Math.min(d.y1, d.y2), bot = Math.max(d.y1, d.y2);
+  /* 宽 26 不是 18：18 在 960 宽的场里读作"一根管子"或"路灯"。
+     石墙要能被认成**砌起来的东西**，就至少要比球（直径 44）的一半宽。 */
+  const l = cx - 13, r = cx + 13, w = r - l, h = bot - top;
+
+  /* 配色必须跟场景走。第一版用的是冷灰（#4B575F / #A6B5BF），
+     在枯木坡的暖褐色调里直接读成"一根蓝色的管道" —— 材质不是靠
+     "看起来像石头"，是靠**和周围的色温一致**。 */
+  g.fillStyle = "rgba(14,26,34,.24)";
+  g.fillRect(l + 6, top + 6, w, h);
+
+  g.fillStyle = "#4A4038";
+  g.fillRect(l, top, w, h);
+  g.fillStyle = "#5F5348";
+  g.fillRect(l + 3, top, w - 9, h);
+
+  // 砖缝：错缝排列，两排之间的竖缝不许对齐，否则读成"条纹"
+  g.strokeStyle = "rgba(30,24,18,.5)";
+  g.lineWidth = 1.8;
+  let row = 0;
+  for (let y = top + 22; y < bot - 10; y += 22, row++) {
+    g.beginPath(); g.moveTo(l + 2, y); g.lineTo(r - 2, y); g.stroke();
+    const vx = l + (row % 2 ? 9 : 17);
+    g.beginPath(); g.moveTo(vx, y); g.lineTo(vx, Math.min(y + 22, bot - 6)); g.stroke();
+  }
+  // 左缘受光
+  g.fillStyle = "#B3A390";
+  g.fillRect(l + 2, top + 3, 3.5, h - 6);
+
+  // 压顶石 + 收口
+  g.fillStyle = "#8E8070";
+  g.fillRect(l - 5, top - 10, w + 10, 12);
+  g.fillStyle = "#C7B8A4";
+  g.fillRect(l - 5, top - 10, w + 10, 4);
+  g.fillStyle = "#2E2620";
+  g.fillRect(l - 3, bot - 4, w + 6, 4);
+
+  /* 向外的一对三角：这是"弹回来"的唯一提示。
+     不画它，玩家撞一次才知道；撞一次之后他会以为那是 bug（"墙怎么不减速"）。 */
+  const pulse = 0.55 + 0.45 * Math.sin(S.t * 3.1);
+  g.fillStyle = "rgba(214,240,255," + (0.30 + 0.42 * pulse).toFixed(3) + ")";
+  const my = (top + bot) / 2;
+  for (const dir of [-1, 1]) {
+    const bx = cx + dir * 13;
+    g.beginPath();
+    g.moveTo(bx, my);
+    g.lineTo(bx - dir * 8, my - 6);
+    g.lineTo(bx - dir * 8, my + 6);
+    g.closePath();
+    g.fill();
   }
 }
 
@@ -12353,6 +12726,9 @@ function drawLevel() {
      所以放在坑之后、弹菇之前。 */
   for (let i = 0; i < TOUR.length; i++) drawTour(g, TOUR[i], i);
   for (const b of BOUNCERS) drawBouncer(g, b);
+  /* 气流柱在**台面之后**：它是盖在台面上的一层空间，先画会被台面切断。
+     又在角色之前 —— 球要能从柱里穿过去给人看见。 */
+  for (const u of UPDRAFTS) drawUpdraft(g, u);
   for (const d of REFLECTS) drawReflect(g, d);
   for (const pt of PORTALS) drawPortal(g, pt);
   for (const s of S.stumps) drawStump(g, s);
@@ -20108,6 +20484,18 @@ Object.defineProperty(window.GROVE, "BOUNCERS", { get: () => BOUNCERS });
 Object.defineProperty(window.GROVE, "PORTALS", { get: () => PORTALS });
 Object.defineProperty(window.GROVE, "GROUNDS", { get: () => GROUNDS });
 Object.defineProperty(window.GROVE, "REFLECTS", { get: () => REFLECTS });
+Object.defineProperty(window.GROVE, "UPDRAFTS", { get: () => UPDRAFTS });
+/* 常量也必须走 `Object.defineProperty`。
+ *
+ * 写成 `window.GROVE.DRAFT_RISE = DRAFT_RISE` 的后果是**原型能跑、真机黑屏**：
+ * `extract_grove_runtime.py` 只把白名单里那几个 `window.GROVE.X = X;`
+ * 改写成 `GROVE.X = X;`，白名单外的原样留着，而 Cocos 里根本没有
+ * `window.GROVE` —— 加载即抛 "Cannot set properties of undefined"。
+ * `grove-runtime-check` 当场抓到了这一条（2026-10-28）。
+ * **给 GROVE 加新导出，一律用 defineProperty。** */
+Object.defineProperty(window.GROVE, "DRAFT_RISE", { value: DRAFT_RISE });
+Object.defineProperty(window.GROVE, "DRAFT_DECAY", { value: DRAFT_DECAY });
+Object.defineProperty(window.GROVE, "DRAFT_LIFT", { value: DRAFT_LIFT });
 Object.defineProperty(window.GROVE, "TOUR", { get: () => TOUR });
 /* 场景族必须导出：冒烟要断言"27 屏分成了几族、每族几屏"，
    以及"没有一族是空的"。不导出就只能靠截图目视，那不算检查。 */

@@ -31,6 +31,23 @@ function runBot(P, S, maxFrames) {
   }
 }
 
+/** 确定性随机。**不加这一段的话，这个工具的结论不能当回归线。**
+ *  `S.rng` 默认是 `Math.random`（见 grove.html 里 `rng: Math.random` 那行），
+ *  所以同一份代码连跑两次，通关层数会差 1~2 层 —— 实测 18 局里
+ *  一次 16/18、一次 14/18，全都不是代码变了，是这一局的暴击/躲闪换了骰子。
+ *  一个"±2 层"的指标测不出"少通了一层"这种回归，而这正是它唯一的用途。
+ *  种子按 (层, 角色) 定死：同一条用例永远掷同一组骰子。 */
+function seedRng(seed) {
+  let s = seed >>> 0;
+  return function () {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 const DEPTHS = process.argv.length > 2
   ? process.argv.slice(2).map(Number)
   : [1, 11, 21, 31, 41, 51];
@@ -44,6 +61,9 @@ for (const d of DEPTHS) {
   for (const h of HEROES) {
     const sb = boot();
     const P = sb.GROVE, S = P.S;
+    /* 骰子先钉死（见 seedRng 的注释）—— 必须在 enterNest 之前，
+       因为第一波敌人在 enterNest → beginRun → setupWave 里就刷了。 */
+    S.rng = seedRng(d * 7919 + h * 104729);
     /* **走真实入口**：enterNest 会生成地形、换表、写存档。
        绕过去直接 loadLevel 的话，"玩家点门那条路"永远没被跑过。 */
     P.enterNest(d);

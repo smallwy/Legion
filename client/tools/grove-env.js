@@ -11,7 +11,9 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-const HTML = path.join(__dirname, "..", "prototype", "grove.html");
+/* `PROTO=` 可以指定另一份原型 —— 用在"改完和改之前跑同一套断言"的场合
+   （`_nest-hash.js` 就是靠它证明地形没漂移）。不写就是仓库里那份。 */
+const HTML = process.env.PROTO || path.join(__dirname, "..", "prototype", "grove.html");
 
 function noop() {}
 

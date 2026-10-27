@@ -87,6 +87,52 @@ for (let d = 1; d <= MAX_DEPTH; d++) {
     ok(L.waves.length >= 2, `第 ${d} 层至少两波（小怪 + BOSS）`);
     ok(JSON.stringify(L.waves[L.waves.length - 1].map(f => f.foe)) === '["boss"]',
        `第 ${d} 层最后一波是 BOSS`);
+
+    /* ---- 雾巢（2026-10-27）：巢室 / 种类分散 / 菌光囊 ----
+     * 这三条都对应"玩起来才会发现、但发现时已经晚了"的事：
+     *   ① 巢室丢失 → HUD 上写着 undefined，且池子退回全局（怪物又都一样）
+     *   ② 一层只有一种怪 → 用户那句话原样复发
+     *   ③ 囊摆到缝口/出生点 → 要么一进场白捡，要么永远够不着
+     */
+    ok(L.brood && typeof L.brood.name === "string" && L.brood.name.length > 0,
+       `第 ${d} 层有巢室名`, String(L.brood && L.brood.id));
+    {
+      /* BOSS 不算：它每层都在，凑不进"多样性"。
+         只数小怪波（除最后一波）。 */
+      const kinds = new Set();
+      for (let wi = 0; wi < L.waves.length - 1; wi++) {
+        for (const f of L.waves[wi]) kinds.add(f.foe);
+      }
+      /* 2 只是浅层的下限（n1 = 2），轮转必须让它们不是同一种 ——
+         否则"第 1 层两只 bug"就是用户看到的全部。
+         只有一只小怪的层（席位不够）不参与这条：它连"重复"都谈不上。 */
+      const nSmall = L.waves.slice(0, -1).reduce((n, w) => n + w.length, 0);
+      ok(kinds.size >= Math.min(2, nSmall), `第 ${d} 层小怪至少 2 种剪影`,
+         [...kinds].join("/") + `（共 ${nSmall} 只）`);
+    }
+    {
+      const pods = L.pods || [];
+      ok(pods.length >= 2 && pods.length <= 3, `第 ${d} 层菌光囊 2~3 个`, `${pods.length} 个`);
+      const bad = [];
+      for (const p of pods) {
+        if (p.x < NL + 40 || p.x + p.w > NR - 40) bad.push("出井 " + p.x);
+        /* 裂缝/出生点只对**地面上的囊**成立：台上的囊在缝的正上方，
+           光不会串，玩家也不可能在台上"一进场就捡到"。 */
+        if (p.y === 556) {
+          for (const c of (L.chasms || [])) {
+            const gut = G.NEST_FOG.POD_CHASM;
+            if (p.x + p.w > c.x - gut && p.x < c.x + c.w + gut) bad.push("贴缝 " + p.x);
+          }
+          if (Math.abs(p.x + p.w / 2 - L.spawn.x) < 80) bad.push("压出生点 " + p.x);
+        }
+        /* 站在台面上时 y 必须是那块台的 y（否则囊浮在半空） */
+        const on = L.plats.some(q => p.y === q.y && p.x >= q.x - 2 && p.x + p.w <= q.x + q.w + 2);
+        if (!on) bad.push("悬空 " + p.x + "@" + p.y);
+      }
+      ok(bad.length === 0, `第 ${d} 层菌光囊位置合法`, bad.join(" / "));
+      /* 至少一个在地上：全在台上的话每层的囊都在同一个视平线上。 */
+      ok(pods.some(p => p.y === 556), `第 ${d} 层至少一个菌光囊在地面`);
+    }
   }
 }
 

@@ -4517,6 +4517,91 @@ console.log("\n=== 41. 出征页：两扇门 / 点开着的门进玩法 / 没开
      "从战斗退回来还停在刚才那扇门（不是每次都回到第一扇）");
 }
 
+/* ============================================================================
+   雾巢（2026-10-27）：迷雾 / 菌光囊 / 巢室
+   ----------------------------------------------------------------------------
+   截图能看出"黑不黑"，看不出这四件事：
+     · 主线有没有被雾污染（S.fog 必须恒为 null）
+     · 光照场是不是真的按距离衰减（脚下亮、井对面黑）
+     · 记忆是不是只增不减（转身就忘 = 地形记不住 = 无尽模式失去一半乐趣）
+     · 菌光囊炸开之后是不是**永久**光源（不是闪一下就没了）
+   最后一条尤其只能这样验：截图拍的是"那一刻"，永久性一帧都证明不了。
+   ========================================================================== */
+function checkNestFog() {
+  /* ---- A. 主线不许有雾 ---- */
+  {
+    const P = boot().GROVE;
+    P._start(2, 0);
+    ok(P.S.fog === null, "★ 主线没有雾（S.fog 恒 null）");
+    ok(P.S.pods.length === 0, "★ 主线没有菌光囊");
+    eq(P.fogSample(null, 400, 300), 1, "★ 无雾时光照恒为 1（绘制侧不会被误压暗）");
+  }
+
+  /* ---- B. 深巢进层：雾与囊都立起来 ---- */
+  const P = boot().GROVE;
+  P.enterNest(1);
+  const S = P.S;
+  ok(!!S.fog, "★ 进深巢立起光照栅格");
+  eq(S.pods.length, P.curStage().pods.length, "★ 菌光囊数量跟关卡一致");
+  ok(S.pods.every(q => !q.lit), "★ 新进一层：囊全是没炸的");
+  eq(S.fog.lit.length, S.fog.cols * S.fog.rows, "栅格长度 = cols × rows");
+  ok(S.fog.nz && S.fog.nz.length === S.fog.lit.length, "雾纹理与栅格同尺寸");
+
+  /* ---- C. 光照场：脚下亮、井对面黑 ---- */
+  for (let i = 0; i < 6; i++) P.tick(1 / 60);
+  const px = S.p.x, py = S.p.y - 34;
+  const near = P.fogSample(S.fog, px, py);
+  const farX = px < (P.WALL_L + P.WALL_R) / 2 ? P.WALL_R - 24 : P.WALL_L + 24;
+  const far = P.fogSample(S.fog, farX, 300);
+  ok(near > 0.6, "★ 玩家脚下是亮的", "lit " + near.toFixed(2));
+  ok(far < 0.05, "★ 井对面是黑的（灯照不到）", "lit " + far.toFixed(2));
+
+  /* ---- D. 记忆只增不减 ---- */
+  const before = S.fog.seenPct;
+  for (let i = 0; i < 90; i++) { S.p.x += 1.4; P.tick(1 / 60); }
+  const after = S.fog.seenPct;
+  ok(after > before, "★ 走一段之后「探明」变多", before.toFixed(3) + " → " + after.toFixed(3));
+  for (let i = 0; i < 30; i++) P.tick(1 / 60);
+  ok(S.fog.seenPct >= after - 1e-6, "★ 记忆不倒退（站住不动也不会忘）",
+     after.toFixed(3) + " → " + S.fog.seenPct.toFixed(3));
+
+  /* ---- E. 撞囊：收成 + 永久光源 ---- */
+  const pod = S.pods.find(q => !q.lit);
+  ok(!!pod, "这一层有没炸的囊可供测试");
+  if (pod) {
+    const food0 = S.food;
+    P.nestPodBurst(pod);
+    ok(pod.lit, "★ 囊炸开（lit = true）");
+    eq(S.food, food0 + P.NEST_FOG.POD_FOOD, "★ 爆囊给孢子收成");
+    /* 把玩家挪远，让"亮"只能来自囊本身 */
+    S.p.x = pod.x + pod.w / 2 < 480 ? 780 : 180;
+    for (let i = 0; i < 8; i++) P.tick(1 / 60);
+    const at = P.fogSample(S.fog, pod.x + pod.w / 2, pod.y - 14);
+    ok(at > 0.5, "★ 炸开的囊是**永久**光源（人走远了那里还是亮的）",
+       "lit " + at.toFixed(2));
+  }
+
+  /* ---- F. 雾档随深度收灯 ---- */
+  ok(P.nestFogTier(1).lamp > P.nestFogTier(24).lamp, "★ 越深灯越小");
+  ok(P.nestFogTier(24).seen > P.nestFogTier(1).seen, "★ 越深记忆越模糊");
+
+  /* ---- G. 巢室：每层有名字，且浅层也有两种以上剪影 ---- */
+  {
+    const seen = {};
+    let noBrood = 0;
+    for (let d = 1; d <= 12; d++) {
+      const L = P.nestLevel(d).level;
+      if (!L.brood || !L.brood.name) noBrood++;
+      seen[L.brood.id] = 1;
+    }
+    eq(noBrood, 0, "前 12 层都有巢室名");
+    ok(Object.keys(seen).length >= 2, "★ 前 12 层至少出现 2 种巢室（不是每层同一个窝）",
+       Object.keys(seen).join("/"));
+  }
+}
+
+checkNestFog();
+
 console.log("\n" + "=".repeat(56));
 if (fail) {
   console.log("通过 " + pass + " · 失败 " + fail);

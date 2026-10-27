@@ -2569,6 +2569,130 @@ function nestTheme(depth) {
 
 const NEST_PIT_KINDS   = ["fire", "mud", "water"];
 
+/* ============================================================================
+   3.4a-2 雾巢：迷雾 + 巢室生态（2026-10-27）
+   ----------------------------------------------------------------------------
+   用户两句话：「现在这个关卡的怪物都一样啊」「可以做一个下探的关卡
+   有迷雾啥的 探索性的 你发挥下想象 创造力」。
+
+   这两条其实是同一个病：**每一层抽的是同一个池子，而且一进场全亮着**。
+   池子一样 → 第 3 层和第 30 层站的是同一批虫子；全亮 → 玩家不需要
+   "摸过去看看那边是什么"。所以雾不是装饰，它是把这两条缝起来的东西：
+
+     · 看不见的地方，你连对面站的是什么都不知道（只看得见两点眼睛）
+     · 照亮它需要动作：走过去（随身灯），或者把球推过去（球就是火）
+     · 每层的巢室类型不同 → 池子本来就不同 → 照亮之后看到的也不一样
+
+   ⚠ **随机数**：雾 / 巢室 / 菌光囊全部走独立的 `RF` 流（seed 异或一个盐）。
+     在 `R()` 上多抽一次，后面 60 层地形会整体重排 ——
+     设计文档第五章记过这个坑，代价是机器人通关率 15/18 → 10/18。
+     `tools/_nest-hash.js` 是这条的守门人：改完哈希必须和基线一致。
+   ========================================================================== */
+const NEST_FOG = {
+  /* 格子 16px。为什么栅格化：光照是"每个点被照到多少"的场，
+     逐格算 O(1160)，逐像素算 O(29 万) —— 前者一帧都不到 0.1ms。
+     附带好处：40×29 的低分辨率掩码放大到 640×460 时，双线性插值天然把
+     边缘糊成雾的过渡，不需要额外做噪声撕裂。 */
+  cell: 16,
+  /* 雾只盖**井内**（160..800 / 96..556）。井外的岩壁保持可见 ——
+     它是画面的画框，糊掉之后玩家连"这是口井"都读不出来。 */
+  Y0: 96,
+  /* 三档。浅层先教"这里有雾"，深层才收灯：
+       1–5   未探 0.94 / 记忆 0.44 / 灯 240
+       6–15  未探 0.96 / 记忆 0.52 / 灯 200
+       16+   未探 0.97 / 记忆 0.60 / 灯 175
+
+     **深度这条轴上，真正变的是"记忆"和"灯"，不是"未探"。**
+     未探三档 0.94→0.97 几乎一样（那一档已经是"黑"了，再黑没地儿去）；
+     而记忆 0.44→0.60 是"走过的地方你还记得多少"，
+     灯 240→175 是"你能提前看多远" —— 这两条才是深层更难的原因。
+
+     第一版给的是 0.62/0.26，出手就是"整屏只是变暗了一点"——
+     测量过：走过的地方和没走过的在像素上只差 25 级亮度（20~58），
+     而人眼在暗底上要 ~40 级才读得出"这是两个不同的地方"。
+     所以未探必须压到接近全黑，记忆值要抬到"看得见轮廓但明显比脚下暗"。
+     `seen` 是"走过、但此刻没照着"的记忆值。它必须**明显低于**未探，
+     否则玩家分不清"这片我看过"和"这片我没去过"，雾就只是整屏变暗。 */
+  TIERS: [
+    { max: 5,  unseen: 0.94, seen: 0.44, lamp: 240, ball: 258 },
+    { max: 15, unseen: 0.96, seen: 0.52, lamp: 200, ball: 238 },
+    { max: 99, unseen: 0.97, seen: 0.60, lamp: 175, ball: 222 },
+  ],
+  /* 菌光囊：探索的落点。走上去或球撞上就炸开 → 永久点亮一片 + 孢子收成。
+     放在雾里而不是放在亮处，是因为"发现"必须先有"看不见"。 */
+  POD_W: 38, POD_H: 46, POD_R: 168, POD_FOOD: 2,
+  /* 离裂缝的最小净距。**生成器和 nest-check 必须读同一个数** ——
+     上一版生成用 44、断言用 50，于是每一层都在边界上红（实测 482 条），
+     而地形本身是对的，只是两处各写了一个魔数。 */
+  POD_CHASM: 50,
+};
+
+/** 第 depth 层的雾档。传进来的深度是 1 起的层号（`S.nest.depth`）。 */
+function nestFogTier(depth) {
+  const d = Math.max(1, depth | 0);
+  for (const t of NEST_FOG.TIERS) if (d <= t.max) return t;
+  return NEST_FOG.TIERS[NEST_FOG.TIERS.length - 1];
+}
+
+/* ---- 巢室生态：每层一个"这里住着什么" ----
+ *
+ * 光调怪物密度不够。上一版的池子是全局的（bug/bug/spider + 按深度解锁），
+ * 于是 1~4 层永远是"两只 bug"，玩家第 2 层就得出"深巢的怪都一样"。
+ *
+ * 巢室类型把"这一层的池子"和"这一层叫什么"绑在一起，两个作用：
+ *   ① 同一层的怪**成组出现**（蛛巢里全是细腿的，卵房里有蛾），
+ *      读起来是"进了一个窝"，而不是"随机刷了几只"
+ *   ② 玩家在 HUD 上看得见名字 → 有预期 → 第 7 层和第 8 层是"两个地方"
+ *
+ * `pool` 里的顺序不重要（生成时按波次内序号轮转，见 nestBuildRaw），
+ * `pods` 是这一类的菌光囊数量 —— 菌圃囊多，是因为它就是"长菌的地方"。
+ *
+ * **深度门槛写在 `nestBroodPool` 里，不写在表里**：同一张表要能被
+ * 浅层复用（浅层把 moth/vein 过滤掉，剩下的还是合法池子），
+ * 门槛散在表里的话，"菌圃在 3 层还剩下什么"就没法一眼看出来。 */
+const NEST_BROODS = [
+  { id: "web",     name: "蛛巢", pool: ["bug", "spider"],         pods: 2 },
+  { id: "shell",   name: "石室", pool: ["bug", "shell"],          pods: 2 },
+  { id: "nursery", name: "卵房", pool: ["bug", "spider"],         pods: 3 },
+  { id: "fungus",  name: "菌圃", pool: ["bug", "moth"],           pods: 3 },
+  { id: "vein",    name: "地脉", pool: ["bug", "vein", "shell"],  pods: 2 },
+];
+
+/** 一张巢室表在这一层**实际**能刷什么，以及它这一层够不够"有花样"。
+ *
+ *  门槛从原来的 5/9/14 降到 1/4/8。为什么要降：**解锁太晚是"怪物都一样"
+ *  的另一半原因** —— 石壳到第 5 层才出现，而多数人第 2~4 层就下了判断。
+ *  三只的排序按"规则好不好懂"来，不按"谁更酷"：
+ *    石壳 1 层   只有一条规则（只会往下滚），四只新怪里最好懂
+ *    巢蛾 4 层   要求玩家先明白"球是火"（雾一上来就把这条讲了）
+ *    脉虫 8 层   窗口怪（每 4 秒探头 2 秒），最晚
+ *
+ *  `usable` 返回去重后的种类数。**少于 2 的巢室会被跳过**（见 nestBuildRaw）：
+ *  第一层如果抽到"菌圃"，而蛾 4 层才开，这个巢室的池子就只剩 bug ——
+ *  名字写着菌圃、里面全是毛虫，那比不做巢室更糟。 */
+function nestBroodPool(brood, depth) {
+  const d = Math.max(1, depth | 0);
+  const ok = (k) => {
+    if (k === "bug" || k === "spider") return true;
+    if (k === "shell") return d >= 1;
+    if (k === "moth") return d >= 4;
+    if (k === "vein") return d >= 8;
+    return false;
+  };
+  const p = (brood && brood.pool ? brood.pool : []).filter(ok);
+  return p.length ? p : ["bug", "spider"];
+}
+
+/** 这一层能抽的巢室（池子里至少 2 种）。 */
+function nestBroodsAt(depth) {
+  const list = NEST_BROODS.filter(b => {
+    const u = {};
+    for (const k of nestBroodPool(b, depth)) u[k] = 1;
+    return Object.keys(u).length >= 2;
+  });
+  return list.length ? list : [NEST_BROODS[0]];
+}
+
 /* ---- 构件库：从 27 屏真实几何里收集，一条都不新造 ----
  * **按"层号"索引，不按 y 索引。**
  *
@@ -2653,6 +2777,18 @@ function nestMirror(L) {
   L.ramps.forEach(r => { const t = r.yL; r.yL = r.yR; r.yR = t; });
   L.camp = Object.assign({}, L.camp, { x: fx(L.camp.x, L.camp.w) });
   L.spawn = Object.assign({}, L.spawn, { x: W - L.spawn.x });
+  /* 裂缝也必须镜像（2026-10-27 补）。**这是一条真实的漏**：
+     `nestMirror` 从加进来那天起就只翻台/坑/坡/营地/出生点/敌人，
+     裂缝是 10-26 才有的，加的时候没回来补这一行。
+     后果不是"缝位置难看"，而是**坐标系分裂**：镜像层里营地翻了、
+     出生点翻了、敌人翻了，只有缝还在原来的 x 上 ——
+     所以"出生点到第一道缝 103px"这种由对称性保证的性质，在镜像层里全是假的。
+     雾巢的菌光囊要按"离缝多远"摆，第一个撞上的就是它。
+     镜像对**所有相对距离都是等距变换**，所以 C7c/C7e/C8 一条都不会变。 */
+  L.chasms = (L.chasms || []).map(c => Object.assign({}, c, { x: fx(c.x, c.w) }));
+  /* 菌光囊是 2026-10-27 加的，必须一起镜像 —— 漏了的话镜像层里
+     "营地到左边了、囊还全在右边"，前三层的探索落点会挤在同一个角。 */
+  L.pods = (L.pods || []).map(p => Object.assign({}, p, { x: fx(p.x, p.w) }));
   /* 敌人也镜像：不镜像的话，镜像层里敌人全挤在营地那头，
      第一波就贴脸 —— 那是"镜像"这个手段最容易带出来的副作用。 */
   L.waves = L.waves.map(w => w.map(f => {
@@ -2683,6 +2819,15 @@ function nestBuildRaw(depth, seed) {
   const themeSalt = R();
   void themeSalt;
   const theme = nestThemeOf(depth);
+  /* ---- 雾巢的独立随机流（2026-10-27）----
+   * 巢室、菌光囊全部从这里取，**一次都不许碰上面的 `R()`**。
+   * 理由见 NEST_FOG 顶部：多抽一次，60 层地形整体前移一位。 */
+  const RF = nestRand((seed ^ 0x9E3779B1) >>> 0);
+  /* 巢室只在**这一层真的有料**的那几张里抽（池子去重后 ≥ 2 种）。
+     不筛的话，第 1 层抽到"菌圃"而蛾要 4 层才开，那一层就叫着菌圃、
+     里面全是毛虫 —— 名字和内容对不上，比不做巢室更糟。 */
+  const broodList = nestBroodsAt(depth);
+  const brood = broodList[Math.floor(RF() * broodList.length)];
   /* 营地贴**井**右壁，不是贴画面右缘 —— 640 之后这两件事差 134px。
      写 WALL_R 的话营地会掉到井外，球永远推不到（而画面上营地还在那儿）。 */
   const campX = NEST.R - NEST.CAMP_W;
@@ -2842,6 +2987,78 @@ function nestBuildRaw(depth, seed) {
     chasms.sort((a, b) => a.x - b.x);
   }
 
+  /* ---- 菌光囊：雾里的探索落点（2026-10-27）----
+   *
+   * 雾如果只是"看不见"，探索就只剩成本没有收益 —— 玩家会一路沿着灯能照到
+   * 的地方走最短路线，雾就退化成一个滤镜。菌光囊给雾一个**目的地**：
+   * 打碎它，这片永久亮起来（这一层剩下的时间都亮），还掉孢子（收成）。
+   *
+   * 三条约束，每条都对应一种"摆错就出事"：
+   *   ① 离裂缝 ≥ 56：裂缝本身有光，贴上去等于摆在亮处，失去"发现"
+   *   ② 离出生点 ≥ 90：一进场就在脸前的不是探索，是捡
+   *   ③ 囊之间 ≥ 110：摆在一起就只探索了一次
+   * 位置来自 `RF`（独立流），所以放它不会动地形。 */
+  const pods = [];
+  {
+    /* 候选分两类：地面（要跳过裂缝/营地/出生点）和 446 台面。
+       **地面至少有 2 个候选段**：640 井减两道缝之后本来就很碎，
+       但一个都不给的话，三个囊会全部落在 446 台上 ——
+       每层的囊都在同一个高度、同一个视平线上，重复感立刻回来了。 */
+    const cands = [];
+    for (let x = NEST.L + 96; x <= NEST.R - 130; x += 26) {
+      /* 离缝 44 而不是 56：缝本身有光，囊贴上去读作"摆在亮处"；
+         但 640 井减两道缝之后地面本来就碎，56 会把所有地面候选吃光
+         （实测第 1 层一个都不剩，三个囊全落到 446 台上）。 */
+      const gut = NEST_FOG.POD_CHASM;
+      const onCh = chasms.some(c => x + NEST_FOG.POD_W > c.x - gut && x < c.x + c.w + gut);
+      const nearCamp = Math.abs(x + NEST_FOG.POD_W / 2 - (campX + NEST.CAMP_W / 2)) < 96;
+      const nearSpawn = Math.abs(x + NEST_FOG.POD_W / 2 - spawnX) < 90;
+      if (!onCh && !nearCamp && !nearSpawn) cands.push({ x: x, y: GROUND_Y });
+    }
+    /* 台上也是候选，取**下面两层**（446 / 336）。
+       只给 446 的时候，深层（4 层台、台子更碎）经常连第二个位置都排不出来 ——
+       实测 60 层 × 10 种子里有 22 层的囊数掉到 1 个。
+       336 那一层够得着（跳高 145 > 层距 110），而且"囊在上一层"本身
+       就给了玩家一个"要不要跳上去看看"的选择。 */
+    for (const p of plats) {
+      if ((p.y !== NEST.LAYERS[0] && p.y !== NEST.LAYERS[1]) || p.w < 120) continue;
+      for (let x = p.x + 34; x <= p.x + p.w - 34 - NEST_FOG.POD_W; x += 30) {
+        cands.push({ x: x, y: p.y });
+      }
+    }
+    for (let i = cands.length - 1; i > 0; i--) {
+      const j = Math.floor(RF() * (i + 1));
+      const t = cands[i]; cands[i] = cands[j]; cands[j] = t;
+    }
+    /* 间距只在**同一高度**上判（|dy| < 40）。地面和台上的囊可以 x 重叠 ——
+       它们在不同层，读起来是"上下各有光"，不是"挤在一起"。 */
+    const far = (c) => !pods.some(q =>
+      Math.abs(q.y - c.y) < 40 && Math.abs(q.x - c.x) < 96);
+    const want = Math.max(2, Math.min(3, brood.pods || 2));
+    /* 第一个**必须**是地面的那个（如果地面还有位置）。
+       结构上保证，而不是"取完再兜底换一个" —— 兜底换的位置常常不满足间距，
+       实测会换出一个贴着另一个囊的。 */
+    const g0 = cands.find(c => c.y === GROUND_Y);
+    if (g0) pods.push({ x: Math.round(g0.x), y: g0.y, w: NEST_FOG.POD_W, h: NEST_FOG.POD_H });
+    for (const c of cands) {
+      if (pods.length >= want) break;
+      if (!far(c)) continue;
+      pods.push({ x: Math.round(c.x), y: c.y, w: NEST_FOG.POD_W, h: NEST_FOG.POD_H });
+    }
+    /* 还不够就**放宽间距**再扫一遍（96 → 58）。
+       宁可两个囊近一点，也不要整层只剩一个 —— 雾巢的"探索"是靠
+       "还有别的地方没去"撑起来的，一个囊等于没有选择。 */
+    if (pods.length < want) {
+      const loose = (c) => !pods.some(q =>
+        Math.abs(q.y - c.y) < 40 && Math.abs(q.x - c.x) < 58);
+      for (const c of cands) {
+        if (pods.length >= want) break;
+        if (!loose(c)) continue;
+        pods.push({ x: Math.round(c.x), y: c.y, w: NEST_FOG.POD_W, h: NEST_FOG.POD_H });
+      }
+    }
+  }
+
   /* ---- 兵站只认**地面与 462 台** ----
    * 清场的动词是"把人推进营地"，不是"打死"。站在 350 / 248 台上的虫子
    * **推不下来**：球从地面滚不上去，玩家跳上去也只能打，不能把一只虫子
@@ -2905,26 +3122,40 @@ function nestBuildRaw(depth, seed) {
      实测机器人稳定卡在 7/9 —— 不是地形死路，是**场上敌人比可站位还多**。
      密度曲线要服从"台的数量"，不能只看深度。 */
   const n1 = 2 + Math.min(3, Math.floor(depth / 8));
-  /* ---- 敌人类型按深度开池（2026-10-26，深巢四怪上线）----
+  /* ---- 敌人类型按**巢室**开池（2026-10-27，雾巢轮重做）----
    *
-   * bug 在池子里留两个位（权重加倍）：它是**唯一"什么条件都不需要"的怪**，
-   * 每一层至少要有一只，否则玩家学不到"这层的规矩"就被特殊怪教做人。
-   * 四只特殊怪各咬一个物理事实，出场深度和它们咬的东西相关：
-   *   盲蛛（窄·追震动）1+   浅层就出现，因为"球把怪拽过来"这件事需要早教
-   *   石壳（往下·重力滚）5+
-   *   巢蛾（暗·只能用光）9+   —— 它要求玩家先有"球是光源"这个概念
-   *   地脉虫（岩壁·窗口）14+
-   * 深层池子自然变长，所以深层每层只多 0~1 只，密度靠 `n1` 控制不靠池子。 */
-  const foePool = ["bug", "bug", "spider"];
-  if (depth >= 5) foePool.push("shell");
-  if (depth >= 9) foePool.push("moth");
-  if (depth >= 14) foePool.push("vein");
+   * 上一版是一条全局池子：bug 两个位 + 按深度依次加 spider/shell/moth/vein。
+   * 后果是 1~4 层的池子只有 bug/bug/spider，抽出来的组合几乎永远是
+   * "两只 bug" —— 用户那句话「这个关卡的怪物都一样啊」说的就是这里。
+   *
+   * 现在池子来自这一层的**巢室**（NEST_BROODS），四只特殊怪各咬一个
+   * 物理事实的老规矩不变（盲蛛咬窄、石壳咬往下、巢蛾咬暗、地脉虫咬岩壁），
+   * 只是"这层住谁"变成了一个可见的选择，而不是深度的副产品。
+   *
+   * bug 仍然要留权重（push 一次 = 出现两次）：它是**唯一"什么条件都不需要"
+   * 的怪**，每层至少要有一只，否则玩家学不到"这层的规矩"就被特殊怪教做人。 */
+  const foePool = nestBroodPool(brood, depth).slice();
+  if (foePool.indexOf("bug") >= 0) foePool.push("bug");
   const w1 = [];
   let hasMoth = false, hasVein = false;
+  /* 池子里有几种不同的东西。前 `uniqN` 只**必须互不相同** ——
+     这是"剪影至少两种"的硬保证，只靠轮转做不到：池子是
+     ["bug","shell","bug"] 时，两次抽到 bug 仍然可能（roll 落在 0 和 2）。
+     修正**不额外抽随机数**（只是把已经抽到的那一只换成池里没用过的），
+     所以后面的目标/镜像不会漂移。 */
+  const uniqN = foePool.filter((k, i2, a) => a.indexOf(k) === i2).length;
   for (let i = 0; i < n1; i++) {
     const s = takeSeat();
     if (!s) break;
-    let foe = foePool[Math.floor(R() * foePool.length)];
+    const roll = R();
+    let foe = foePool[(Math.floor(roll * foePool.length) + i) % foePool.length];
+    if (i < uniqN) {
+      const used = w1.map(o => o.foe);
+      if (used.indexOf(foe) >= 0) {
+        const alt = foePool.filter(k => used.indexOf(k) < 0)[0];
+        if (alt) foe = alt;
+      }
+    }
     /* 每波最多一只蛾 / 一只脉虫：蛾要"用光"才掉，两只同时在场就变成
        "先找光、再找光"的重复劳动；脉虫固定在原地，两只等于一道墙。 */
     if ((foe === "moth" && hasMoth) || (foe === "vein" && hasVein)) foe = "bug";
@@ -3016,6 +3247,12 @@ function nestBuildRaw(depth, seed) {
        只有 `[CAMP]` 一项，所以两套玩法共用一条判定。 */
     chasms: chasms,
     stumps: [],
+    /* 菌光囊（雾巢）：跟着层走的几何，和台/坑一样属于地形。
+       镜像时一起翻（见 nestMirror），否则"营地翻到左边了，囊还在右边"
+       会让三层的囊全挤在同一个角落。 */
+    pods: pods,
+    /* 巢室：这一层"住着什么"。HUD 和开场大字读它，生成器读它的池子。 */
+    brood: { id: brood.id, name: brood.name },
     camp: { x: campX, y: GROUND_Y, w: NEST.CAMP_W },
     waves: waves,
     spawn: { x: spawnX, y: GROUND_Y },
@@ -3708,6 +3945,11 @@ const S = {
   stumps: [],
   // 木桩被打碎后留下的"果"，捡了加收成
   drops: [],
+  /* 雾巢（2026-10-27）：光照栅格 + 菌光囊。**主线恒为 null / []** ——
+     `drawNestFog` / `nestFogTick` 第一行就 return，主线的绘制与物理
+     一个字节都不受影响（这是"只在深巢开雾"唯一的保险）。 */
+  fog: null,
+  pods: [],
 
   shake: 0,
   flash: 0,
@@ -4263,6 +4505,13 @@ function setupLevel() {
   for (const wv of WAVES) S.total += wv.length;
   spawnWave(0);
   S.stumps = STUMPS.map(s => ({ x: s.x, y: s.y, w: s.w, h: s.h, hp: s.hp, shake: 0 }));
+  /* 雾与菌光囊是**关卡级状态**，和 stumps 同一条规矩：
+     从关卡数据拷一份，不写回 `L` 本身。直接引用的话，重打这一层时
+     上一把打碎的囊还是碎的 —— 而"雾巢"的核心就是每次都要重新摸一遍。
+     主线没有 `pods` 字段，这里自然得到 [] ，下面所有分支靠 `S.fog` 守门。 */
+  S.fog = S.nest ? nestFogInit() : null;
+  S.pods = (S.nest && curStage().pods ? curStage().pods : []).map(p =>
+    ({ x: p.x, y: p.y, w: p.w, h: p.h, lit: false, burstT: 0 }));
   S.drops = [];
   S.shots = [];
   S.balls = [];
@@ -4353,7 +4602,7 @@ function beginRun(i) {
     /* 深巢的层号是另一条轴，开场只报「深巢 · 第 N 层」（层名就是"第 N 层"，
        再拼屏名会变成"第 7 层 · 第 7 层"）。主线沿用「产地 第 N 屏 · 屏名」。 */
     if (S.nest) {
-      addText(W / 2, 150, "深巢 · 第 " + S.nest.depth + " 层", "#FFFFFF", 26, 1.6);
+      addText(W / 2, 150, (S.nest.brood || "深巢") + " · 第 " + S.nest.depth + " 层", "#FFFFFF", 26, 1.6);
     } else {
       const ch = chapterOfStage(S.stage);
       addText(W / 2, 150, ch.name + " 第 " + (S.stage - ch.from + 1) + " 屏 · " + SI.name,
@@ -10985,6 +11234,9 @@ function drawLevel() {
   for (const d of REFLECTS) drawReflect(g, d);
   for (const pt of PORTALS) drawPortal(g, pt);
   for (const s of S.stumps) drawStump(g, s);
+  /* 菌光囊站在地面/台面上，属于**地形层** ——
+     必须在角色之前，否则人会从囊的柄后面穿过去。 */
+  drawPods(g);
   drawNestWalls(g);
 }
 
@@ -11171,11 +11423,403 @@ function drawNestWalls(g) {
  *  才能推球；压到 0.7 以上时地面材质带（冰 / 泥）就分不出来了，
  *  而那是 N1 的物理机制，不是装饰。
  */
+/* ============================================================================
+   雾巢 · 一：光照栅格与迷雾（2026-10-27）
+   ----------------------------------------------------------------------------
+   为什么不是"再加一层暗罩"：`drawNestDark` 是以玩家为圆心的**一个圆**，
+   它只管"离你多远"，不管"你去过哪"。所以它永远不会让玩家产生
+   "那边我还没看过"的念头 —— 每次转头，那片黑都还是那片黑，形状一模一样。
+
+   雾要成立，必须有**记忆**：
+     · `lit`  这一帧被照到多少（玩家灯 / 球火 / 菌光囊 / 裂缝 / 蛾的微光）
+     · `seen` 这一层到现在为止照到过多少（只增不减）
+   两者分开，才画得出三种地方：看得清（lit 高）、走过记得（seen 高、lit 低）、
+   完全没去过（两个都 0）。三档而不是两档，是"探索"这件事能被读出来的前提。
+
+   为什么整块雾只画一次而不是逐格填：逐格 1160 个 fillRect 每帧都在变，
+   而且方块边缘会把岩洞读成"马赛克"。现在把掩码算进一张 40×29 的位图，
+   再放大 16 倍铺上去 —— 双线性插值顺手把边缘糊成了雾的过渡，
+   一共一次 drawImage。
+   ========================================================================== */
+function nestFogInit() {
+  const cell = NEST_FOG.cell;
+  const cols = Math.ceil(NEST.W / cell);
+  /* 盖到**画面底边**而不是地面顶（GROUND_Y）。地面那 44px 原来是露在外面的，
+     跟着地缝光一起在整条屏宽上发亮 —— 于是"没去过的地方"在脚下永远是亮的，
+     雾只有上半屏成立。 */
+  const rows = Math.ceil((H - NEST_FOG.Y0) / cell);
+  const n = cols * rows;
+  return {
+    cell: cell, x0: NEST.L, y0: NEST_FOG.Y0,
+    cols: cols, rows: rows,
+    lit: new Float32Array(n),
+    seen: new Float32Array(n),
+    /* 雾的纹理：每格一个固定的 0..1 值。
+       **必须固定**（按格号 + 深度算，不用随机数）—— 雾要是每帧抖，
+       读作"画面有噪点"；固定下来才读作"这团雾一直长这样"。 */
+    nz: (function () {
+      const a = new Float32Array(n);
+      for (let i = 0; i < n; i++) {
+        const v = Math.sin((i * 12.9898 + 4.1) * 0.7) * 43758.5453;
+        a[i] = v - Math.floor(v);
+      }
+      return a;
+    })(),
+    seenPct: 0,
+    /* 离屏位图惰性创建：359 项冒烟断言绝大多数不渲染，
+       顶层分配三张位图纯属浪费（和 postGet 同一条规矩）。 */
+    cv: null, cg: null, img: null,
+  };
+}
+
+/** 往光照场里加一个圆形光源。`k` 是强度（1 = 满亮，蛾那种只给 0.9）。 */
+function fogAddLight(F, x, y, r, k) {
+  if (!(r > 0)) return;
+  const c = F.cell;
+  const i0 = Math.max(0, Math.floor((x - r - F.x0) / c));
+  const i1 = Math.min(F.cols - 1, Math.floor((x + r - F.x0) / c));
+  const j0 = Math.max(0, Math.floor((y - r - F.y0) / c));
+  const j1 = Math.min(F.rows - 1, Math.floor((y + r - F.y0) / c));
+  if (i1 < i0 || j1 < j0) return;
+  const r2 = r * r;
+  for (let j = j0; j <= j1; j++) {
+    const dy = F.y0 + (j + 0.5) * c - y;
+    const row = j * F.cols;
+    for (let i = i0; i <= i1; i++) {
+      const dx = F.x0 + (i + 0.5) * c - x;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= r2) continue;
+      /* 线性衰减在边缘还剩 30% 亮度就断了（看得见一个硬边圆），
+         取 1.6 次幂：中心很快到顶、边缘拖得很长 —— 那才是光晕。 */
+      const v = Math.pow(1 - Math.sqrt(d2) / r, 1.6) * 1.35 * k;
+      const idx = row + i;
+      if (v > F.lit[idx]) F.lit[idx] = v > 1 ? 1 : v;
+    }
+  }
+}
+
+/** 某个世界坐标被照到多少（0..1）。井外恒为 1（岩壁不盖雾）。 */
+function fogSample(F, x, y) {
+  if (!F) return 1;
+  const i = Math.floor((x - F.x0) / F.cell);
+  const j = Math.floor((y - F.y0) / F.cell);
+  if (i < 0 || j < 0 || i >= F.cols || j >= F.rows) return 1;
+  return F.lit[j * F.cols + i];
+}
+
+/** 每帧重建光照场。**每帧清零重算**而不是做衰减累加：
+ *  累加会让"走过去又走回来"的光永久留在场上（记忆和光照混成一份），
+ *  而这两件事必须分开 —— `seen` 才是记忆。 */
+function nestFogTick(dt) {
+  const F = S.fog;
+  if (!S.nest || !F) return;
+  const tier = nestFogTier(S.nest.depth);
+  F.lit.fill(0);
+
+  /* ① 随身灯。半径带一点呼吸（±3%）：完全恒定的光圈读作"贴在屏幕上的蒙版"，
+     微微呼吸才像火。 */
+  if (S.p && !S.p.dead) {
+    const fl = 1 + Math.sin(S.t * 3.1) * 0.03;
+    fogAddLight(F, S.p.x, S.p.y - 34, tier.lamp * fl, 1);
+  }
+  /* ② 球。**球就是火把** —— 这是整套设计的支点：推一颗球出去，
+     照亮一条路，代价是这颗球（和装在里面的兽）滚远了。
+     `air` 越低光越弱，玩家读得到"这颗快瘪了"。 */
+  for (const b of S.balls) {
+    if (b.dead) continue;
+    const k = 0.55 + 0.45 * Math.min(1, b.air / 0.7);
+    fogAddLight(F, b.x, b.y - 10, tier.ball * k, 1);
+  }
+  /* ③ 菌光囊（已炸开的）。永久光源 —— 探索的回报就是这个：
+     你炸开过的角落，这一层剩下的时间永远亮着。 */
+  for (const p of S.pods) {
+    if (!p.lit) continue;
+    fogAddLight(F, p.x + p.w / 2, p.y - 18, NEST_FOG.POD_R, 0.95);
+  }
+  /* ④ 裂缝透上来的光。压得很低（90 / 0.8）—— 它的作用是"雾里有个
+     暖色的地方"，不能亮到让玩家从远处就看清整条缝的位置。 */
+  for (const c of CHASMS) {
+    if (c.w == null) continue;
+    fogAddLight(F, c.x + c.w / 2, GROUND_Y - 12, 90, 0.8);
+  }
+  /* ⑤ 会自己发光的东西：蛾（它本来就是"用光打"的怪，在雾里先亮起来
+     等于自己报了位置）、BOSS（不给它开个光，玩家会在雾里被砸而看不见）。 */
+  for (const f of S.foes) {
+    if (f.isBoss) fogAddLight(F, f.x, f.y - f.h / 2, 118, 0.85);
+    else if (f.def && f.def.kind === "moth") fogAddLight(F, f.x, f.y - f.h / 2, 88, 0.9);
+  }
+
+  /* 记忆只增不减。**层内不清零** —— 转身就忘掉地形的话，
+     玩家没法"记住这一层往哪走"，而记住地形正是无尽模式的乐趣。 */
+  let seenN = 0;
+  const lit = F.lit, seen = F.seen;
+  for (let i = 0; i < lit.length; i++) {
+    if (lit[i] > seen[i]) seen[i] = lit[i];
+    if (seen[i] > 0.18) seenN++;
+  }
+  F.seenPct = seenN / lit.length;
+
+  /* 雾里的怪只给眼睛（见 drawFoe）。这里一次性把每只怪所在位置的光照
+     算好存到 `f.fogLit` —— 绘制期每帧再算 60 次插值没必要。 */
+  for (const f of S.foes) {
+    f.fogLit = fogSample(F, f.x, f.y - f.h * 0.55);
+  }
+}
+
+/** 离屏位图（40×29）。只在深巢、只在第一次渲染时创建。 */
+function fogCanvas(F) {
+  if (F.cv) return F;
+  const c = document.createElement("canvas");
+  c.width = F.cols;
+  c.height = F.rows;
+  F.cv = c;
+  F.cg = c.getContext("2d");
+  F.img = F.cg.createImageData(F.cols, F.rows);
+  return F;
+}
+
+/** 把雾画上去。位置：`drawNestDark` 之后、`drawNestGlow` 之前。
+ *  顺序即语义：暗罩决定"离你多远"，雾决定"你去没去过"，
+ *  而底光最后画 —— 光能穿过雾，所以雾里仍然看得见脚下那一线暖色。 */
+function drawNestFog(g) {
+  const F = S.fog;
+  if (!S.nest || !F) return;
+  const tier = nestFogTier(S.nest.depth);
+  fogCanvas(F);
+  const d = F.img.data;
+  const lit = F.lit, seen = F.seen;
+  const n = F.cols * F.rows;
+  /* 雾色比岩壁更冷一点（5,7,15）。用 TH.soilDeep 的话，
+     熔岩洞那套暖色系会把雾画成"尘土"，而不是"没看见的地方"。 */
+  for (let i = 0; i < n; i++) {
+    let a = Math.max(tier.unseen * (1 - seen[i]), tier.seen * seen[i]) * (1 - lit[i]);
+    /* 纹理只**减**不加（0.70~1.00）。加上去的话有些格会比 base 更不透明，
+       而 base 已经是"几乎全黑"，加不动 —— 减出来的是薄处，读作雾的团块。 */
+    a *= 0.86 + 0.14 * F.nz[i];
+    d[i * 4] = 5; d[i * 4 + 1] = 7; d[i * 4 + 2] = 15;
+    d[i * 4 + 3] = (a * 255) | 0;
+  }
+  F.cg.putImageData(F.img, 0, 0);
+  const fh = H - F.y0;
+  g.save();
+  g.imageSmoothingEnabled = true;
+  g.drawImage(F.cv, F.x0, F.y0, NEST.W, fh);
+  /* 雾在动。三层很淡的椭圆亮雾横着飘（速度不同、相位不同），
+     不加这一层的话整片雾是死的 —— 静止的雾读作"画面蒙了块脏玻璃"。 */
+  g.globalCompositeOperation = "lighter";
+  for (let k = 0; k < 3; k++) {
+    const sp = 0.055 + k * 0.022;
+    const x = F.x0 - 160 + ((S.t * sp * 320 + k * 260) % (NEST.W + 320));
+    const y = 210 + Math.sin(S.t * 0.24 + k * 2.1) * 130 + k * 42;
+    const r = 170 + k * 30;
+    const rg = g.createRadialGradient(x, y, 4, x, y, r);
+    rg.addColorStop(0, "rgba(150,182,215,0.042)");
+    rg.addColorStop(1, "rgba(150,182,215,0)");
+    g.fillStyle = rg;
+    g.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+  g.restore();
+}
+
+/** 雾里的怪：只给一双眼睛。
+ *
+ *  这是"探索"真正的钩子 —— 你在雾边上看见两点冷光，但**不知道对面是什么**。
+ *  三条路都试过：
+ *    ① 干脆不画 → 那只怪像凭空冒出来一样扑你，等于偷袭
+ *    ② 画剪影 → 剪影就是答案，雾立刻失去意义
+ *    ③ 只给眼睛 → 既说"那儿有东西"，又不说"是什么"
+ *  所以颜色统一成青白：雾里连毛色都看不见，"颜色是线索"这件事在这里不成立。 */
+function drawFogEyes(g, f) {
+  const cx = f.x, cy = f.y - f.h * 0.62;
+  const t = S.t + (f.ph || 0);
+  /* 眨眼：每 3 秒左右闭一次。会闭的东西才是"活的" —— 一对恒亮的点
+     在暗底上读作两只发光蘑菇。 */
+  const blink = (Math.sin(t * 2.1) > 0.97) ? 0.12 : 1;
+  const gap = Math.max(7, (f.w || 30) * 0.26);
+  g.save();
+  /* 极淡的一团比周围更黑的身体记忆。**不是轮廓，是"那里有点东西"** ——
+     用怪的 c1 上色会让玩家从色相猜出种族。 */
+  g.globalAlpha = 0.13;
+  g.fillStyle = "#05070F";
+  g.beginPath();
+  g.ellipse(cx, f.y - f.h * 0.42, f.w * 0.46, f.h * 0.52, 0, 0, 6.283);
+  g.fill();
+  g.globalAlpha = 1;
+  for (const s of [-1, 1]) {
+    const ex = cx + s * gap, ey = cy + Math.sin(t * 0.9 + s) * 1.2;
+    const rg = g.createRadialGradient(ex, ey, 0.5, ex, ey, 8);
+    rg.addColorStop(0, "rgba(140,210,255," + (0.42 * blink).toFixed(3) + ")");
+    rg.addColorStop(1, "rgba(140,210,255,0)");
+    g.fillStyle = rg;
+    g.beginPath(); g.arc(ex, ey, 8, 0, 6.283); g.fill();
+    g.fillStyle = "rgba(206,240,255," + (0.90 * blink).toFixed(3) + ")";
+    g.beginPath(); g.ellipse(ex, ey, 2.0, 2.6, 0, 0, 6.283); g.fill();
+  }
+  g.restore();
+}
+
+/* ============================================================================
+   雾巢 · 二：菌光囊（探索的落点）
+   ----------------------------------------------------------------------------
+   雾如果只收成本不给东西，玩家会沿灯能照到的地方走最短路线 —— 雾退化成滤镜。
+   菌光囊是雾里的**目的地**：一团在暗处发着微光的囊，走过去（或把球推过去）
+   就炸开，这片永久亮起，还掉孢子（收成 +2）。
+
+   为什么用"走上去"而不是"按什么键"：这游戏没有交互键（只有跳/推/攻），
+   新增一个键就是新增一条教学。走上去是**已经存在的动作**。
+   ========================================================================== */
+function drawPods(g) {
+  if (!S.nest || !S.pods.length) return;
+  for (const p of S.pods) {
+    const cx = p.x + p.w / 2, by = p.y;
+    const alive = !p.lit;
+    /* 炸开的囊留一根断柄 + 几粒飘着的孢子。整株消失的话，
+       "这里我来过"这件事在画面上就没有证据了。 */
+    const glow = TH.accent;
+    g.save();
+    if (!alive) {
+      g.globalAlpha = 0.55;
+      g.strokeStyle = hexDim(TH.wood2, 0.85);   // 深巢主题的字段是 wood/wood2/wood3，没有 woodDeep
+      g.lineWidth = 4.2;
+      g.beginPath();
+      g.moveTo(cx - 2, by);
+      g.quadraticCurveTo(cx - 4, by - 14, cx + 2, by - 20);
+      g.stroke();
+      g.globalAlpha = 0.8;
+      for (let k = 0; k < 5; k++) {
+        const t = S.t * 0.7 + k * 1.9;
+        const sx = cx + Math.sin(t + k) * 16;
+        const sy = by - 22 - ((t * 12) % 40);
+        g.fillStyle = rgbaOf(glow, 0.20 + 0.18 * Math.sin(t * 2.2));
+        g.beginPath(); g.arc(sx, sy, 1.7, 0, 6.283); g.fill();
+      }
+      g.restore();
+      continue;
+    }
+    /* 柄：从地面长出来，上粗下细（菌柄的现实形状） */
+    g.fillStyle = hexDim(TH.wood2, 0.92);
+    g.beginPath();
+    g.moveTo(cx - 7, by);
+    g.quadraticCurveTo(cx - 4, by - 16, cx - 2, by - 26);
+    g.lineTo(cx + 2, by - 26);
+    g.quadraticCurveTo(cx + 4, by - 16, cx + 7, by);
+    g.closePath();
+    g.fill();
+    /* 三颗囊：一大两小，高的那颗最亮 —— 一坨同高的球读作"一束气球" */
+    const bulbs = [
+      { dx: 0, dy: -34, r: 13, k: 1 },
+      { dx: -13, dy: -22, r: 8.5, k: 0.82 },
+      { dx: 12, dy: -25, r: 9.5, k: 0.88 },
+    ];
+    const breathe = 0.86 + 0.14 * Math.sin(S.t * 1.9);
+    for (const b of bulbs) {
+      const bx = cx + b.dx, byy = by + b.dy, r = b.r * b.k;
+      const rg = g.createRadialGradient(bx - r * 0.3, byy - r * 0.35, r * 0.15, bx, byy, r);
+      rg.addColorStop(0, rgbaOf("#F2FFE8", 0.92 * breathe));
+      rg.addColorStop(0.42, rgbaOf(glow, 0.78 * breathe));
+      rg.addColorStop(1, hexDim(glow, 0.42));
+      g.fillStyle = rg;
+      g.beginPath(); g.arc(bx, byy, r, 0, 6.283); g.fill();
+      /* 囊里那几点孢子：让它读作"活的"，不是"三个球" */
+      g.fillStyle = "rgba(12,18,26,.52)";
+      for (let k = 0; k < 3; k++) {
+        const a = S.t * 0.6 + k * 2.1 + b.dx;
+        g.beginPath();
+        g.arc(bx + Math.cos(a) * r * 0.34, byy + Math.sin(a) * r * 0.30, 1.3, 0, 6.283);
+        g.fill();
+      }
+    }
+    g.restore();
+  }
+}
+
+/** 穿过雾的那一点光。**画在雾之后** —— 画在雾前面会被雾盖掉，
+ *  没人看得见，探索也就没有诱饵。
+ *
+ *  两类东西走这条通道：
+ *    · 菌光囊（未炸的 = 诱饵，已炸的 = 回报）
+ *    · **裂缝**（2026-10-27 补）。裂缝是这一层的目标，"看不见目标"不是探索，
+ *      是折磨 —— 玩家会站在雾里推着兽到处问"往哪推"。
+ *      给它的量刻意只有 0.09：够在雾里认出"那边有个暖色的地方"，
+ *      不够看清缝有多宽、在哪一站。
+ */
+function drawPodGlow(g) {
+  if (!S.nest) return;
+  g.save();
+  g.globalCompositeOperation = "lighter";
+  for (const c of CHASMS) {
+    if (c.w == null) continue;
+    const cx = c.x + c.w / 2, cy = GROUND_Y - 6;
+    const r = 78 + Math.sin(S.t * 1.3 + cx * 0.05) * 4;
+    const rg = g.createRadialGradient(cx, cy, 2, cx, cy, r);
+    rg.addColorStop(0, rgbaOf(TH.accent, 0.09));
+    rg.addColorStop(1, rgbaOf(TH.accent, 0));
+    g.fillStyle = rg;
+    g.fillRect(cx - r, cy - r, r * 2, r * 2);
+  }
+  if (!S.pods.length) { g.restore(); return; }
+  for (const p of S.pods) {
+    const cx = p.x + p.w / 2, cy = p.y - 22;
+    /* 炸开之后**光晕要收**（0.30 → 0.16）：它的职责是把这片"点亮"，
+       不是"在这里烧一堆火"。给 0.30 时整片地面被橙色糊住，
+       读作"地上着火了"，而地形反被冲淡 —— 而"地形被看清"才是回报。 */
+    const r = p.lit ? NEST_FOG.POD_R * 0.52 : 74;
+    const a = p.lit ? 0.16 : 0.19 + 0.05 * Math.sin(S.t * 2.3);
+    const rg = g.createRadialGradient(cx, cy, 2, cx, cy, r);
+    rg.addColorStop(0, rgbaOf(TH.accent, a));
+    rg.addColorStop(1, rgbaOf(TH.accent, 0));
+    g.fillStyle = rg;
+    g.fillRect(cx - r, cy - r, r * 2, r * 2);
+  }
+  g.restore();
+}
+
+/** 囊的碰撞：球撞上来或者人走上去。 */
+function updatePods(dt) {
+  if (!S.nest || !S.pods.length) return;
+  for (const p of S.pods) {
+    if (p.burstT > 0) p.burstT = Math.max(0, p.burstT - dt);
+    if (p.lit) continue;
+    const cx = p.x + p.w / 2, by = p.y;
+    let hit = false;
+    for (const b of S.balls) {
+      if (b.dead) continue;
+      if (Math.abs(b.x - cx) < p.w * 0.5 + 18 &&
+          b.y > by - p.h - 12 && b.y - 48 < by + 4) { hit = true; break; }
+    }
+    /* 人走过去就破：`p.y - p.h` 是囊顶，人的碰撞盒以脚为 y。 */
+    if (!hit && S.p && !S.p.dead) {
+      if (Math.abs(S.p.x - cx) < p.w * 0.5 + S.p.w * 0.4 &&
+          S.p.y > by - p.h - 4 && S.p.y - S.p.h < by + 4) hit = true;
+    }
+    if (hit) nestPodBurst(p);
+  }
+}
+
+function nestPodBurst(p) {
+  if (p.lit) return;
+  p.lit = true;
+  p.burstT = 0.6;
+  S.food += NEST_FOG.POD_FOOD;
+  S.stat.pods = (S.stat.pods || 0) + 1;
+  const cx = p.x + p.w / 2;
+  addText(cx, p.y - p.h - 8, "孢子 +" + NEST_FOG.POD_FOOD, "#C8F5DA", 15, 1.0);
+  addFrag(cx, p.y - 26, 12, TH.accent);
+  /* 轻微闪一下，不要用大闪 —— 那是 BOSS 砸地的语义。 */
+  S.flash = Math.max(S.flash, 0.10);
+}
+
 function drawNestDark(g) {
   if (!S.nest) return;
   const d = S.nest.depth || 1;
   const R = d <= 5 ? 470 : d <= 15 ? 380 : 300;
-  const kEdge = d <= 5 ? 0.42 : d <= 15 ? 0.50 : 0.56;
+  /* 有雾的时候暗罩让开一档（2026-10-27）。两者是**乘法**叠加：
+     0.56 的暗罩 × 0.88 的雾 = 0.95，那不是"看不清"，是全黑。
+     分工要说清楚：暗罩管"离你多远"，雾管"你去没去过" ——
+     既然雾已经接了后半句，暗罩就该退回它原本的那点氛围压暗。 */
+  const kEdge = S.fog
+    ? (d <= 5 ? 0.14 : d <= 15 ? 0.18 : 0.22)
+    : (d <= 5 ? 0.42 : d <= 15 ? 0.50 : 0.56);
   const cx = S.p && !S.p.dead ? S.p.x : W / 2;
   const cy = S.p && !S.p.dead ? S.p.y - 30 : H / 2 + 40;
 
@@ -12946,6 +13590,11 @@ function drawFoe(g, f) {
   const cx = f.x, cy = f.y - f.h / 2;
   const bw = f.w, bh = f.h;
   const squash = f.hitT > 0 ? f.hitT / 0.20 : 0;
+  /* 雾里的怪：只给一双眼睛（雾巢，2026-10-27）。
+     `f.fogLit` 由 `nestFogTick` 每帧写进来；没写过（主线、或者波的第一个
+     渲染帧在 tick 之前）一律当"亮着"处理 —— 反过来判的话，主线第 1 帧
+     会有一批怪只露眼睛，而主线根本没有雾。 */
+  if (S.nest && f.fogLit != null && f.fogLit < 0.14) { drawFogEyes(g, f); return; }
   /* 步态相位用 `f.ph`（出生定死的偏移），**不是 `f.bob`**。
      `f.bob` 会被 updateFoe 每秒 +3.2，写成 `S.t + f.bob` 之后整条曲线被提速
      4.2 倍 —— 野猪从设计的 2.2 步/秒变成 9.3 步/秒，人眼读作"在原地抽"。
@@ -13828,10 +14477,12 @@ function drawTrail(g) {
   /* 「产地 · 第 N 屏 + 关卡名」。**不写「N / 本章屏数」**（2026-10-26
      用户：「我不想暴露最大关卡 只显示当前进度即可」）—— 本章一共几屏
      是内部数字，报进度不报总数。
-     深巢：层号是另一条轴，只报「深巢 · 第 N 层」，不拼屏名
-     （层名本身就是"第 N 层"，拼起来是"第 7 层 第 7 层"）。 */
+     深巢：层号是另一条轴，只报「巢室 · 第 N 层」，不拼屏名
+     （层名本身就是"第 N 层"，拼起来是"第 7 层 第 7 层"）。
+     **巢室名必须写在这里**（2026-10-27）：玩家要能一眼看出"这层是卵房、
+     上上层的蛛巢"，否则五套巢室在他眼里只是"怪换了个花样"。 */
   const label = S.nest
-    ? "深巢 · 第 " + S.nest.depth + " 层"
+    ? (S.nest.brood || "深巢") + " · 第 " + S.nest.depth + " 层"
     : CH.name + " · 第 " + (S.stage - CH.from + 1) + " 屏   " + curStage().name;
 
   /* 波次：一关 2~3 波，最后一波是 BOSS。没有这一行，玩家不知道"还剩多久"。
@@ -14964,7 +15615,10 @@ function enterNest(depth) {
   const d = depth == null ? Math.max(1, readNestDepth()) : Math.max(1, Math.floor(depth));
   const r = nestLevel(d);
   ACTIVE = [r.level];
-  S.nest = { depth: d };
+  /* 巢室名带上：HUD 顶部和开场大字都读它（2026-10-27）。
+     放在 `S.nest` 上而不是每次去 ACTIVE 里翻 —— 结算/重打时 ACTIVE 会重建，
+     而"这一层叫什么"属于这一趟的背景，不该跟着重建而闪成 undefined。 */
+  S.nest = { depth: d, brood: (r.level.brood && r.level.brood.name) || "深巢" };
   S.stage = 0;
   writeNestDepth(d);
   beginRun(0);
@@ -15955,6 +16609,10 @@ function tick(dt) {
     for (const f of S.foes) updateFoe(f, dt);
     updateShots(dt);
     updateBalls(dt);
+    /* 雾与囊在球之后：球的位置这一帧才算完，雾照着旧位置算会差一帧，
+       表现是"球的亮圈永远比球慢半拍"—— 单看不明显，连续看很脏。 */
+    updatePods(dt);
+    nestFogTick(dt);
     updateShocks(dt);
     updateFoeShots(dt);
     leavePrints();
@@ -16508,9 +17166,15 @@ function render() {
      但不盖角色和球 —— 它们在这之后画，所以永远亮着。
      这一步的顺序就是设计本身：球是火，人是火把，其余地方是黑的。 */
   drawNestDark(g);
-  /* 底光在**暗罩之后**：光是最亮的东西，被自己的暗罩压一道就没意义了。
-     放在单位之前，所以球和人踩在光里 —— 而不是光糊在他们脸上。 */
+  /* 底光在雾**之前**（2026-10-27 调过）。第一版放在雾之后，理由是
+     "光能穿过雾"—— 实测那等于整条屏宽的地缝光把雾从下面照亮，
+     没去过的地面也在发亮，雾只剩上半屏成立。
+     现在光被雾衰减，真正穿透雾的只有菌光囊（`drawPodGlow` 在雾之后）——
+     而它才是那个该被看见的诱饵。 */
   drawNestGlow(g);
+  /* 雾：暗罩管"离你多远"，雾管"你去没去过"（含记忆）。 */
+  drawNestFog(g);
+  drawPodGlow(g);
 
   if (S.phase === "jump") {
     /* 面板第一行就把整屏铺满了（见 drawJump），所以不用管下面画过什么。
@@ -17742,6 +18406,10 @@ export const GROVE: any = {
      设计文档 §6 要求「depth 1..60 × 10 个种子 100% 过校验」，
      这条只能靠 tools/nest-check.js 直接问生成器。 */
   NEST, NEST_LIB, nestRand, nestThemeOf, nestBuildRaw, nestCheck, nestSimpleLevel, nestLevel,
+  /* 雾巢（2026-10-27）：断言要读**同一个**雾档/净距常量，不能在测试里抄数字 ——
+     抄一次，改雾的档位时两边就漂（POD_CHASM 已经踩过一次）。 */
+  NEST_FOG, NEST_BROODS, nestFogTier, nestBroodPool, nestBroodsAt,
+  nestFogInit, nestFogTick, updatePods, nestPodBurst, fogSample,
   /* 深巢入口三件：截图脚本要走**真实入口**（enterNest）而不是手工拼关卡 ——
      手工拼能拍出图，真机那条路却可能一直坏着。 */
   enterNest, exitNest, readNestDepth,

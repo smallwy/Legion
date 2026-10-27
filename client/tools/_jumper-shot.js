@@ -144,6 +144,18 @@ async function run() {
               " pounce=" + f.pounce.toFixed(2));
   P.render(); shot(canvas, "02-air");
 
+  /* ---- 2b. 正穿过台面：这一帧必须读作"从板底钻出来"，不是"嵌在木头里" ----
+     单向平台允许从下面穿上来（`prevY <= p.y + 2 && y >= p.y`），台面厚 20、
+     虫高 28 —— 穿过去的这一两帧必然"半截在板上、半截在板下"。
+     敌人默认画在所有地形之后，所以这一帧是**唯一**会穿模的时刻，
+     也正是用户看到"敌方和横木叠加"的那一刻（2026-10-27）。
+     `foeUnderPlat` 把它压到板后面，这里就是把那两帧钉下来。 */
+  guard = 0;
+  while (!(f.y > led.y && f.y < led.y + 20) && guard++ < 120) step(1);
+  console.log("  穿板? y=" + f.y.toFixed(0) + "（台面 " + led.y + ".." + (led.y + 20) +
+              "）遮挡=" + P.foeUnderPlat(f));
+  P.render(); shot(canvas, "02b-through");
+
   /* ---- 3. 落到上层：必须和玩家同层，玩家才打得回去 ---- */
   guard = 0;
   while (!f.onGround && guard++ < 200) step(1);

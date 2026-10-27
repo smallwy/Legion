@@ -4404,6 +4404,32 @@ window.addEventListener("blur", () => {
 const GRAV = 2100;
 const MAXFALL = 1250;
 
+/* ============================================================================
+   跳虫的四个数（2026-10-27）
+   ----------------------------------------------------------------------------
+   加跳虫不是为了"多一种怪"，是为了补一个结构性缺失：
+   在此之前 `f.vy` 在全文只被赋过一次值，而且是 0 —— 249 只敌人里没有一只
+   主动向上移动过一个像素。玩家跳上任何一块浮空台就绝对安全，
+   于是"高度"对敌人无效，对玩家自然也就无效。
+
+   四个数全部由**已有的重力**反推，不新造物理：
+   · JUMPER_VY 720 → 跳起高度 = vy²/(2·GRAV) = 720²/4200 ≈ 123px。
+     27 屏的台面只落在 156 / 248 / 350 / 462 四个高度，相邻层差 92~112px，
+     所以 123 是"越过最高那档（462→350 差 112）+ 11px 余量"。
+     再高就跳出画面，玩家读作"它飞起来了"。
+   · JUMPER_PUSH 210 → 滞空 2·720/2100 ≈ 0.69 秒，横移 0.69×210 ≈ 145px。
+     一道台面到斜上方那道台面的水平偏移就是这个量级。
+     少了它，虫子只会原地上下，一次都上不了台面。
+   · JUMPER_CD 2.2 → 两次扑击间隔。1.6 以下场上会变成"蛙群"，
+     玩家没有能站稳的窗口；2.2 秒才读得成"它喘口气"。
+   · JUMPER_LAND 0.28 → 落地硬直。**这条是公平性不是手感**：
+     没有它，虫子落在你身边的同一帧就能撞掉一滴血。
+   ========================================================================== */
+const JUMPER_VY = 720;
+const JUMPER_PUSH = 210;
+const JUMPER_CD = 2.2;
+const JUMPER_LAND = 0.28;
+
 /**
  * 走一步：水平位移 → 挡墙 → 挡木桩 → 重力 → 落地。
  * 返回落地的平台（null 表示还在空中）。
@@ -4620,6 +4646,29 @@ function foeFromSpec(sp, fromSky) {
     dropT: fromSky ? 99 : 0,
     skyDrop: !!fromSky,
   };
+  /* ---- 跳虫标记（2026-10-27）----
+     主线刺毛虫里约 1/3 会追人、会往上一层扑。
+
+     **标记从 `f.ph` 派生，这里绝不能调 rand()。**
+     每只敌人多消耗一个随机数会让 27 屏的 `S.rng` 流整体位移一位，
+     机器人行为全部改变（地脉虫 boreT 那次已经踩过，注释在对象字面量里）。
+     `f.ph` 是 [0, 2π) 上的均匀分布，取 2.09 就是稳定的 1/3。
+
+     深巢不开（`!S.nest`）：那边已经有四怪各自一套入口条件，
+     再叠一层主动追人会直接毁掉 nest-play 的 78% 基线。 */
+  /* 出现位置：**每块产地的第 4 屏起**（`S.stage >= 3`）。
+     前三屏是新手的教学段（先学会糊、再学会推、再学会躲），
+     那里放一只主动追人的怪，等于在教走路的时候先泼一盆水。
+     这条不是"躲测试"：把跳虫放到第 1 屏之后，主线前 3 屏的
+     清场基线（机器人 180 秒全清）当场就红 —— 那说明这个关卡
+     的余量薄到"多处理一只怪就清不完"，而教学段不该是这个味道。 */
+  f.jumper = (!S.nest && S.stage >= 3 && f.kind === "walk" && !f.larva && f.ph < 2.09) ? 1 : 0;
+  f.jumpCd = 0;      // 扑击冷却
+  f.crouch = 0;      // 起跳前蹲身（预告）剩余时间
+  f.pounce = 0;      // 滞空计时：这段时间里 vx 不许被重算
+  f.landT = 0;       // 落地硬直
+  f.pounceDir = 0;   // 这一次往哪边扑
+  f.wallT = 0;       // 撞桩/撞墙后强制背离的剩余时间（见 updateFoe 里的死锁注释）
   /* 地脉虫的探头相位从 `ph` 派生（见上面 boreT 的注释：这里不能多消耗随机数）。
      这样同一波的几只会错开探头 —— 同时探头的脉虫读作"一整排墙"。 */
   f.boreT = (f.ph || 0) % 4;
@@ -5961,20 +6010,109 @@ function updateFoe(f, dt) {
     if (tx != null && Math.abs(tx - f.x) > 10) f.dir = sign(tx - f.x);
     f.face = f.dir;
     f.vx = f.dir * f.def.spd * FK;
+  } else if (f.jumper) {
+    /* ---- 跳虫：全游戏**第一种会主动往上层移动的普通怪**（2026-10-27）----
+     *
+     * 三段状态机，顺序不能换：
+     *     crouch（蹲 0.30s）→ pounce（滞空）→ landT（硬直 0.28s）
+     *
+     * 每一段都是一个**可读的窗口**：
+     *   蹲     = "要来了"，玩家可以跑开或者提前糊它；
+     *   滞空   = "能躲"，它走的是固定抛物线，不是追踪弹；
+     *   硬直   = "该你打了"，落地的 0.28 秒它一动不动。
+     *
+     * 少了任何一段，它就变成"突然出现在脸上" —— 那不是难度，是暗算。
+     * ------------------------------------------------------------------ */
+    const p = S.p;
+    f.jumpCd = Math.max(0, f.jumpCd - dt);
+    f.landT = Math.max(0, f.landT - dt);
+
+    if (f.crouch > 0) {
+      f.crouch -= dt;
+      f.vx = 0;                                  // 蹲住不动，这一下必须看得出来
+      if (f.crouch <= 0) {
+        f.vy = -JUMPER_VY;
+        f.vx = f.pounceDir * JUMPER_PUSH;
+        f.pounce = 0.78;                         // 比实际滞空略长，落地会提前清掉
+        f.jumpCd = JUMPER_CD;
+      }
+    } else if (f.pounce > 0) {
+      /* 滞空中：**一帧都不许重算 vx**。
+         下面那条追人分支每帧会把 vx 写回 spd×1.15 ≈ 54，
+         210 掉到 54 之后虫子只会原地上下 —— 一次都上不了台面。 */
+      f.pounce -= dt;
+    } else if (f.landT > 0) {
+      f.vx = 0;                                  // 落地硬直：给玩家反击窗口
+    } else if (p && !p.dead) {
+      const dx = p.x - f.x;
+      /* 撞过桩/墙之后必须先背离 0.45 秒再回头追人。
+         **不这么做会和 stepBody 的木桩判定死锁**：桩把它顶到外侧 →
+         下一帧它又把朝向重写成"朝玩家"（也就是朝桩）→ 被顶回原地，
+         一步不动，看起来像卡在木头里发呆。`nudgeOutOfStumps` 的注释里
+         记的是**出生那一刻**的同一个坑，这里是移动中的版本 ——
+         区别是出生能一次推出去，移动中必须靠时间逃走。 */
+      if (f.wallT > 0) {
+        f.wallT -= dt;
+        f.vx = f.dir * f.def.spd * FK;
+      } else {
+        /* 8px 死区照抄 charge 那条：玩家贴身时 sign() 会逐帧翻转，读作抽搐 */
+        if (Math.abs(dx) > 8) f.face = sign(dx);
+        f.vx = f.face * f.def.spd * FK * 1.15;   // 比巡逻快一点，但远慢于玩家
+
+        /* 玩家在**下方**：走向最近的台面边缘，让重力把它带下去。
+           **这一条不是为了好看，是为了不制造射击死角。**
+           六把武器的弹道 vy 全是 0 或 -40（平飞或略上），没有一支能往下打 ——
+           所以玩家站在台面上打不到正下方的怪。怪一旦赖在死角里，
+           "清场"就永远不成立，整关卡死（实测第 3 屏剩 2 只、180 秒超时）。
+           原来"朝玩家走"要横穿半个台面（47px/s，一块 594 宽的台面要 6 秒）
+           才走到边缘掉下去，太慢；直接朝最近的边缘走，1 秒内就下去了。 */
+        if (f.onGround && f.ground && (p.y - f.y) > 40) {
+          const gl = f.x - f.ground.x, gr = f.ground.x + f.ground.w - f.x;
+          f.face = gl < gr ? -1 : 1;
+        }
+
+        /* 起跳条件：玩家在**上面**、水平够得着、自己站在地上、冷却好了。
+           用"高出 40px"而不是"差一层"，因为玩家可能正在跳 ——
+           要求高出 40 才扑，玩家跳过头的瞬间不会触发。 */
+        if (f.onGround && (f.y - p.y) > 40 && Math.abs(dx) < 240 && f.jumpCd <= 0) {
+          f.crouch = 0.30;
+          f.pounceDir = sign(dx) || f.face;
+        }
+      }
+    } else {
+      f.vx = f.dir * f.def.spd * FK;
+      f.face = f.dir;
+    }
   } else {
     f.vx = f.dir * f.def.spd * FK;
     f.face = f.dir;
   }
 
   f.vx = f.vx * (f.stun > 0 ? 0 : 1);
+  const wasAir = !f.onGround;
   const g = stepBody(f, dt);
+  /* 从空中落地 → 硬直。起跳那一帧 onGround 还是 true（stepBody 之后才清），
+     所以 wasAir 为 false，不会误触发。 */
+  if (f.jumper && wasAir && f.onGround) {
+    f.landT = JUMPER_LAND;
+    f.pounce = 0;
+    f.vx = 0;
+  }
 
   // 走到平台边缘就掉头 —— 不然敌人会自己跳崖，玩家一个都不用打
-  if (f.onGround && f.kind !== "charge") {
+  /* 跳虫不适用：它追人，玩家在下一层时它本来就该走下去跟着。
+     （掉进坑里算它的损失，但坑的位置是固定的、看得见的。） */
+  if (f.onGround && f.kind !== "charge" && !f.jumper) {
     const ahead = f.x + f.dir * (f.w / 2 + 10);
     if (!g || ahead < g.x + 4 || ahead > g.x + g.w - 4) f.dir = -f.dir;
   }
-  if (f.hitWall) f.dir = -f.hitWall;
+  if (f.hitWall) {
+    f.dir = -f.hitWall;
+    /* 跳虫撞墙要记住"刚才撞过"，否则下一帧又把朝向写回朝玩家（见上面死锁注释）。
+       0.45 秒是"走得开"的下限：巡逻速度 58×0.45 ≈ 26px，
+       够它脱离桩的碰撞盒 + 自身宽度。 */
+    if (f.jumper) f.wallT = 0.45;
+  }
 
   if (f.y > H + 100) killByFall(f);
 }
@@ -13841,7 +13979,29 @@ function drawFoe(g, f) {
     g.globalAlpha = 1;
   }
 
-  const sx = 1 + squash * 0.18, sy = 1 - squash * 0.16;
+  /* 跳虫蹲身时脚下的橙色脉冲环（2026-10-27）。
+     **这是预告里最容易被读到的一层。** 只有头顶那个三角的话，
+     玩家得盯着某一只虫才会发现它；脚下一亮，余光就能扫到 ——
+     而且"地上的圈在扩散"天然读作"有东西要离开地面"。
+     环从脚下向外扩、同时变淡，0.30 秒走完，正好和 crouch 同步。 */
+  if (f.jumper && f.crouch > 0) {
+    const k = 1 - clamp(f.crouch / 0.30, 0, 1);
+    g.globalAlpha = 0.62 * (1 - k);
+    g.strokeStyle = "#FFB347";
+    g.lineWidth = 2.4;
+    g.beginPath();
+    g.ellipse(cx, f.y, bw * (0.42 + k * 0.85), 4 + k * 5, 0, 0, 6.283);
+    g.stroke();
+    g.globalAlpha = 1;
+  }
+
+  /* 跳虫蹲身：**压扁是攻击预告，不是动画。**
+     玩家必须能在起跳前 0.3 秒看出"这只跟别的不一样了"。
+     给到高度 ×0.72、横向 ×1.18 —— 这是"明显变形但还认得出是同一只虫"的上限，
+     再夸张就变成另一个物种了。 */
+  const crouchK = (f.jumper && f.crouch > 0) ? clamp(f.crouch / 0.30, 0, 1) : 0;
+  const sx = (1 + squash * 0.18) * (1 + crouchK * 0.18);
+  const sy = (1 - squash * 0.16) * (1 - crouchK * 0.28);
 
   g.save();
   g.translate(cx, cy + (hovering ? Math.sin(f.bob) * 2.5 : 0));
@@ -14017,6 +14177,39 @@ function drawFoe(g, f) {
       g.fill();
       g.globalAlpha = 1;
     }
+  }
+
+  /* ---- 跳虫的身份标记（2026-10-27）----
+     头顶一个朝上的小三角。三条理由：
+
+     1. **不能靠换颜色**：有立绘的敌人是用 resources 注入的贴图画出来的，
+        代码里没有地方改色；改 `FOES.bug.c1` 会把全世界的刺毛虫一起改。
+     2. **不能靠描边**：`coat` 环已经占了身体那一圈，两者会糊成一片。
+     3. **形状就是说明书**：它唯一会做的额外动作就是往上跳，
+        朝上的三角不用任何文字解释。
+
+     蹲身时三角闪（20Hz 硬切，不是渐变）—— 渐变看起来像呼吸，硬切像警报。 */
+  if (f.jumper && !f.isBoss) {
+    /* 做成一个"感叹号"（三角 + 短杆）而不是孤立三角。
+       第一版只有三角、而且悬在头顶 9px 外，出图后读成了
+       "天上飘着的一个橙色图标"—— 它和这只虫没有视觉联系，
+       玩家不会想到"这只会扑我"。那条 2×6 的杆子就是为了把它钉在这只虫身上。 */
+    const vh = d.vh || bh;
+    const topY = f.y - vh;                          // 视觉体顶边
+    const mx = cx;                                  // 和脚下的脉冲环同心
+    const tipY = topY - 14;
+    /* 蹲身时闪（20Hz 硬切）。渐变读作呼吸，硬切才读作警报。 */
+    const blink = f.crouch > 0 ? (Math.sin(S.t * 42) > 0 ? 1 : 0.15) : 0.82;
+    g.globalAlpha = blink;
+    g.fillStyle = f.crouch > 0 ? "#FF6B3D" : "#D9822B";
+    g.fillRect(mx - 1, tipY + 8, 2, 6);
+    g.beginPath();
+    g.moveTo(mx, tipY);
+    g.lineTo(mx + 6, tipY + 9);
+    g.lineTo(mx - 6, tipY + 9);
+    g.closePath();
+    g.fill();
+    g.globalAlpha = 1;
   }
 }
 
@@ -19129,6 +19322,15 @@ Object.defineProperty(window.GROVE, "drawBossMarks", { get: () => drawBossMarks 
    而探针/测试里手写 1209 就是硬编码 —— 哪天基准一调，测试量的还是旧数。 */
 Object.defineProperty(window.GROVE, "PUSH_BASE", { get: () => PUSH_BASE });
 Object.defineProperty(window.GROVE, "PUSH_RUN", { get: () => PUSH_RUN });
+/* 跳虫的四个数。导出是为了让冒烟能验"跳得够不够高、横移够不够远"这两件事 ——
+   它们全都是**算出来才能知道对不对**的，截图只能看出"它在跳"。
+   跳高由 vy 和 GRAV 共同决定，而 GRAV 又同时被玩家、球、所有敌人共用，
+   所以在测试里抄一个 123 是危险的：GRAV 一改，那个数就悄悄错了。 */
+Object.defineProperty(window.GROVE, "JUMPER_VY", { get: () => JUMPER_VY });
+Object.defineProperty(window.GROVE, "JUMPER_PUSH", { get: () => JUMPER_PUSH });
+Object.defineProperty(window.GROVE, "JUMPER_CD", { get: () => JUMPER_CD });
+Object.defineProperty(window.GROVE, "JUMPER_LAND", { get: () => JUMPER_LAND });
+Object.defineProperty(window.GROVE, "GRAV", { get: () => GRAV });
 // 结算卡的几何：按钮/文字都按它排，冒烟断言要拿它判"按钮有没有掉出卡片"，
 // 写死 544 那种事干过一次 —— 卡片一加高，断言就变成在验一个不存在的尺寸。
 window.GROVE.CARD = { w: CARD_W, y: CARD_Y, h: CARD_H, btnY: BTN_Y, btnH: BTN_H, btnW: BTN_W };

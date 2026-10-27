@@ -4517,10 +4517,97 @@ function stepBody(b, dt) {
   return b.ground;
 }
 
+/** 预演一次扑击的真实落点：`true` 表示"这一跳真的能落到**更高的那层**"。
+ *
+ *  ## 为什么必须有这一步（2026-10-27 用户："有点地方不能跳，有的可以"）
+ *
+ *  起跳判据原来只有三个条件：玩家高出 40px、水平 240px 内、冷却好了。
+ *  **既没有上限，也不看落点**，于是两种白跳同时存在：
+ *
+ *   · 玩家在上面**两层**（层距 94/112，两层就是 206px）—— 虫照样蹲下起跳，
+ *     可跳高只有 123px，顶到板底、掉回原地。玩家看到"它跳了，但上不来"。
+ *   · 玩家在水平 240px 外 —— 也照跳，而滞空只能横移 107px，
+ *     落点在半空中，掉回原地。
+ *
+ *  表现就是用户说的那句：**能不能上去取决于玩家站在哪，而玩家推不出规则。**
+ *  同一只虫、同一块台面，你站左边它上得来、站右边它上不来 —— 这不是难度，
+ *  是"没有规则"。
+ *
+ *  ## 改完之后玩家能自己算出来的规则
+ *
+ *  **它只在"这一跳真的能落到更高的那层"时才蹲。**
+ *  所以每一次蹲身都兑现，不会再有白跳；够不着的时候它不装样子，
+ *  而是沿着板底朝你走过来 —— 走到够得着的地方再起跳。
+ *  "它从哪上来"于是变成玩家能预判、也能用站位去**引导**的东西。
+ *
+ *  ## 判据必须和 stepBody 同源
+ *
+ *  单向平台的判据是 `prevY <= p.y + 2 && y >= p.y`；木桩是实心墙。
+ *  这里逐帧复刻这两条，就是为了不出现"算着能上、实际掉回去" ——
+ *  那比不跳更伤，因为它让玩家学会不信任预告。
+ *  **预演不许有副作用**：全程只读，不改 f 的任何字段，也不消耗随机数。
+ */
+function pounceLands(f, dir) {
+  const dt = 1 / 60;
+  const vx = dir * JUMPER_PUSH;
+  const startY = f.y;
+  let x = f.x, y = f.y, vy = -JUMPER_VY;
+
+  for (let i = 0; i < 60; i++) {
+    const prevY = y;
+    x += vx * dt;
+    if (x - f.w / 2 < WALL_L) x = WALL_L + f.w / 2;
+    if (x + f.w / 2 > WALL_R) x = WALL_R - f.w / 2;
+
+    /* 木桩实心：横向被吃掉之后，这一跳的落点就跟着变了，
+       与其算一个假的落点，不如直接判定"上不去"。 */
+    for (const s of S.stumps) {
+      if (s.hp <= 0) continue;
+      const top = s.y - s.h;
+      if (y <= top + 4) continue;
+      if (y - f.h >= s.y - 2) continue;
+      if (x + f.w / 2 > s.x - s.w / 2 && x - f.w / 2 < s.x + s.w / 2) return false;
+    }
+
+    vy = Math.min(vy + GRAV * dt, MAXFALL);
+    y += vy * dt;
+
+    /* ---- 只查"这一跳会不会真的落到更高的那层" ----
+     *
+     * **单向平台允许从板底穿上去**（`stepBody` 里 `prevY <= p.y + 2 && y >= p.y`），
+     * 玩家自己就是这么跳的 —— 所以虫穿板**不是 bug，是同一条语法**。
+     * 我曾经试过让虫"绕到板外侧再跳"来避免穿模，结果是：它要绕到板外
+     * 约 70px 才不穿（脚到板底要 0.126s、横移 26px，再加上半个身位），
+     * 而绕出去之后朝向会被"朝玩家"覆盖回去，在板沿上来回震荡 13px，
+     * 7 屏里 6 屏永远上不来。**为了躲两帧穿模，把机制直接搞死，不值。**
+     * 穿模用遮挡解决（`platOverFoe` + 板顶暗影），那才是单向平台的标准画法。
+     *
+     * 这里只留真正该管的事：落点必须在**更高**的层，否则别跳。
+     * 3px 容差：脚正好擦过板顶的那一帧不算"落到板上"以外的情况。
+     */
+    if (vy >= 0) {
+      let best = null;
+      for (const p of PLATS) {
+        if (isBroken(p)) continue;
+        if (x + f.w / 2 < p.x || x - f.w / 2 > p.x + p.w) continue;
+        if (prevY <= p.y + 2 && y >= p.y) { if (best == null || p.y < best) best = p.y; }
+      }
+      if (best != null) {
+        /* 至少上去半层才算"上去了"。同层落地（rise = 0）是原地跳，
+           玩家眼里和"没跳"没区别，不如不跳。 */
+        return (startY - best) >= 60;
+      }
+    }
+
+    if (y > H + 100) return false;
+  }
+  return false;
+}
+
+
 /* ============================================================================
    6. 建局
    ========================================================================== */
-
 function curStage() { return ACTIVE[S.stage] || ACTIVE[0] || LEVELS[0]; }
 function curGoal() { return GOALS[curStage().goal]; }
 
@@ -6071,12 +6158,25 @@ function updateFoe(f, dt) {
           f.face = gl < gr ? -1 : 1;
         }
 
-        /* 起跳条件：玩家在**上面**、水平够得着、自己站在地上、冷却好了。
-           用"高出 40px"而不是"差一层"，因为玩家可能正在跳 ——
-           要求高出 40 才扑，玩家跳过头的瞬间不会触发。 */
+        /* 起跳条件：玩家在**上面**、水平够得着、自己站在地上、冷却好了、
+           **而且这一跳真的能落到上面那层**（pounceLands）。
+           最后一条是补的，它修的就是"有的地方不能跳、有的可以"：
+           原来只有"玩家高出 40px"一条，既没有上限也不看落点，
+           于是玩家在上面**两层**（206px）它也蹲下起跳 —— 跳高只有 123px，
+           顶到板底掉回去；玩家在 240px 外它也跳，可滞空只能横移 107px，落空。
+           玩家看到的就是"它有时候上得来、有时候上不来"，而规则推不出来。
+           现在规则只有一条：**它只在真的能落到更高那层时才蹲。** */
         if (f.onGround && (f.y - p.y) > 40 && Math.abs(dx) < 240 && f.jumpCd <= 0) {
-          f.crouch = 0.30;
-          f.pounceDir = sign(dx) || f.face;
+          const pd = sign(dx) || f.face;
+          if (pounceLands(f, pd)) {
+            f.crouch = 0.30;
+            f.pounceDir = pd;
+          } else {
+            /* 上不去：不装样子蹲一下，但也别每帧重算 60 步预演。
+               0.2 秒是"玩家挪一步"的粒度 —— 他移到能上去的位置后，
+               虫子最迟五分之一秒就反应过来。 */
+            f.jumpCd = 0.20;
+          }
         }
       }
     } else {
@@ -11565,6 +11665,43 @@ function drawPrints(g) {
   }
 }
 
+/** 这只敌人此刻正穿在**哪一块**浮空台里（没有就返回 null）。
+ *
+ *  **为什么需要这个判定**（2026-10-27 用户指出"敌方和横木都叠加了"）：
+ *  浮空台是**单向**的 —— `stepBody` 里 `prevY <= p.y + 2 && y >= p.y`，
+ *  从下面跳上去能穿过板。板厚 20px，刺毛虫高 28px，所以穿过去的那几帧
+ *  必然是"半截身子在板上、半截在板下"。
+ *  而敌人统一画在所有地形**之后**，于是那几帧读作"虫子嵌在木头里"。
+ *  这不是谁画错了，是**单向平台必须有的那一层遮挡没做**。
+ *
+ *  但只做遮挡还不够：虫高 28 > 板厚 20，压在板后面会被**整只吃掉**
+ *  （出图实测：只剩 4px 黄边 + 一个悬空的箭头），读作"虫凭空消失"，
+ *  比嵌在木头里更糟。所以配套要在板顶画一道跟着它走的暗影
+ *  （见 drawLevel 里那段），那才是"下面有东西顶着"的线索。
+ *
+ *  判据用**视觉框**（vw/vh）而不是碰撞盒（w/h）：穿模是眼睛的问题，
+ *  不是碰撞的问题 —— 野猪碰撞 56 宽、画 76 宽，按碰撞盒判会漏掉 10px 的边缘。
+ *  BOSS 排除：天降（skyDrop）是"砸穿"不是"钻过"，被板子遮住反而说不清。
+ */
+function platOverFoe(f) {
+  if (f.isBoss) return null;
+  const fw = f.def.vw || f.def.w || 34;
+  const fy = f.y - (f.def.vh || f.def.h || 28);   // 视觉框顶端
+  const fb = f.y;                                 // 脚
+  for (const p of PLATS) {
+    if (p.kind === "ground" || isBroken(p)) continue;
+    const pt = p.y, pb = p.y + (p.h || 22);
+    /* 站在板顶（或者已经跳到板上面）时**不算**重叠 ——
+       脚正好等于 p.y 是"站在上面"，这时候必须画在前面。 */
+    if (fb <= pt || fy >= pb) continue;
+    if (f.x + fw / 2 < p.x || f.x - fw / 2 > p.x + p.w) continue;
+    return p;
+  }
+  return null;
+}
+
+function foeUnderPlat(f) { return platOverFoe(f) !== null; }
+
 function drawLevel() {
   const g = ctx;
   // 顺序有讲究，三层各管一件事：
@@ -11583,7 +11720,34 @@ function drawLevel() {
   /* 裂缝必须在**地面之后、台面之前**：它撕开的是地面本身，
      先画会被地面盖住，后画会盖住落在缝上方的台面边缘。 */
   drawChasms(g);
+  /* 正穿过台面的敌人：画在**浮空台之前**，让板子盖住它（见 foeUnderPlat 注释）。
+     位置卡在"裂缝之后、台面之前"：裂缝撕的是地面、台面盖的是敌人，
+     两者各管一层，挪哪边都会有一层错位。 */
+  for (const f of S.foes) if (foeUnderPlat(f)) drawFoe(g, f);
   for (const p of PLATS) if (p.kind !== "ground" && !isBroken(p)) drawPlat(g, p);
+  /* 板底下有东西正往上顶时，在板**顶面**画一道跟着它走的暗影。
+   *
+   *  **没有这一层，虫会被板整只吃掉**：虫高 28、板厚 20，压到板后面只剩
+   *  几像素的边，出图读作"虫凭空消失"，等它冒出来就是"突然出现在脸上"。
+   *  有了暗影，那几帧读作"下面有东西顶着" —— 它同时是**出来的预告**，
+   *  和蹲身、滞空是同一套语言（都是"要来了"，只是这次从板底下）。
+   *
+   *  暗影画在板顶而不是板下，因为它要回答的问题是"它从哪儿出来"；
+   *  画在板下就被板自己挡住了，等于没画。 */
+  for (const f of S.foes) {
+    const p = platOverFoe(f);
+    if (!p) continue;
+    const ph = p.h || 22;
+    const fy = f.y - (f.def.vh || f.def.h || 28);
+    const k = clamp((p.y + ph - fy) / ph, 0, 1);   // 0 = 刚进板底，1 = 顶到板面
+    const cx = clamp(f.x, p.x + 12, p.x + p.w - 12);
+    g.globalAlpha = 0.12 + 0.20 * k;
+    g.fillStyle = "#241A10";
+    g.beginPath();
+    g.ellipse(cx, p.y + 2, 15 + 7 * k, 3.2 + 1.8 * k, 0, 0, 6.283);
+    g.fill();
+    g.globalAlpha = 1;
+  }
   /* 预告层必须在**所有台面之后**：它要压在台面顶上。
      放在角色之前，免得盖住 BOSS 抬手的手臂。 */
   drawBossMarks(g);
@@ -17903,7 +18067,12 @@ function render() {
 
     // 按 y 排序：后面的先画，前面的盖住后面的
     const units = [];
-    for (const f of S.foes) units.push({ y: f.y, d: () => drawFoe(g, f) });
+    /* 和台面重叠的敌人在 drawLevel 里已经画过了（要压在板后面），这里跳过，
+       不然一只虫会被画两遍 —— 板后一份、板前一份，读作残影。 */
+    for (const f of S.foes) {
+      if (foeUnderPlat(f)) continue;
+      units.push({ y: f.y, d: () => drawFoe(g, f) });
+    }
     for (const b of S.balls) units.push({ y: b.y, d: () => drawBall(g, b) });
     if (S.p && !S.p.dead) units.push({ y: S.p.y, d: () => {
       const p = S.p, H = HEROES[p.hero];
@@ -19134,6 +19303,10 @@ window.GROVE = {
   GROUND_Y,
   resetRun, beginRun, tick, render,
   setupLevel, updatePlayer, updateFoe, updateShots, updateBalls,
+  /* `pounceLands` 必须导出：它是"跳虫这一跳到底上不上得去"的唯一判据，
+     而这件事**截图看不出来** —— 图里只能看到它蹲了或者没蹲，
+     看不出"蹲了是不是真能上去"。冒烟要用它逐层对账（预演 vs 实跑）。 */
+  pounceLands, foeUnderPlat,
   coatFoe, makeBallFrom, burstBall, spawnShot,
   spawnWave, foeFromSpec, updateShocks, hurtPlayer, leavePrints,
   dropChest, dropFrom, DROP_KINDS,

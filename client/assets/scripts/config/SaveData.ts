@@ -189,18 +189,38 @@ export interface SaveState {
      */
     dailyBase: Record<string, number>;
     /**
-     * 已购的改造件 id。**这是全游戏唯一的"永久变强"凭证。**
+     * 改造件的**层数**。`{ hotpit: 2 }` = 这件买到第 2 层。
+     *
+     * **这是全游戏唯一的"永久变强"凭证。**
      *
      * 为什么必须有这个字段：审计发现 `RECIPES` 只有干粮（消耗品）和
      * 收集篮（一次性），`MEALS` 三条也全是消耗品 —— 没有任何一条产出
      * 能让玩家变强，于是第 1 小时和第 10 小时能力完全相同。
      * 经济是循环，不是螺旋。评级 S/A/B 也只是记录，不给任何东西。
      *
+     * **2026-10-27 从 `string[]` 改成层数表。** 原来的 `perks: ['hotpit']`
+     * 只能表达"有/没有"，而"买了第 2 层"这件事没有地方写 ——
+     * 于是四件改造件买完就再也没有任何可买的东西，长线又断了。
+     * 加成幅度 = `perkLvOf(id)`，**不存在 `perks` 数组了**（两份必然漂移）。
+     * 旧存档由 `loadPerkLv` 从 `perks` 数组迁移成 lv=1。
+     *
      * **真值只有这一份。** 战斗侧（`grove.html`）只读不写 ——
      * 同一件事存两份必然漂移（MEMORY 第 2 条教训）。
      * id 必须和 `grove.html` 的 `PERK_IDS` 逐字相等，冒烟有断言。
      */
-    perks: string[];
+    perkLv: Record<string, number>;
+    /**
+     * 巢币。深巢独家货币（2026-10-27）。
+     *
+     * 为什么不复用 `coins`（吧唧）：吧唧来自派遣，兑换的是干粮/收集篮这类
+     * **日常消耗**；巢币来自下潜深度，兑换的是**永久变强**（改造件层数）。
+     * 两个币如果共用一条钱包，玩家在派遣界面看到余额变多会以为派遣赚了，
+     * 而实际上那是他昨晚下了 20 层换来的 —— 钱的来源决定它的意义。
+     *
+     * 发放口径：**只按"新到达的最深层"结算差额**（`writeNestDepth` 只增不减），
+     * 所以在第 5 层反复刷不出币，必须比历史最深处更深才有。
+     */
+    nestCoins: number;
     /**
      * 星靶完成位：27 屏 × 3 靶的 0/1。**只增不减**（和 `best` 同一个口径）。
      *
@@ -262,7 +282,8 @@ export const DEFAULT_SAVE: SaveState = {
     dailyClaimed: [],
     dailyChests: [],
     dailyBase: {},
-    perks: [],
+    perkLv: {},
+    nestCoins: 0,
     star: starBitsOf(null),
     lastReward: '',
 };
@@ -280,7 +301,7 @@ function freshSave(): SaveState {
         star: starBitsOf(null),
         dispatch: null,
         claimed: [],
-        perks: DEFAULT_SAVE.perks.slice(),
+        perkLv: { ...DEFAULT_SAVE.perkLv },
         energyAt: Date.now(),
     };
 }
@@ -360,14 +381,39 @@ const clampNum = (v: unknown, def: number, lo: number, hi: number): number => {
  * 仍然必须过滤：非字符串、超长、重复、超量。
  * 存档是唯一的外部输入，手改 localStorage 就能塞进任意内容。
  */
-function loadPerks(v: unknown): string[] {
-    if (!Array.isArray(v)) return [];
-    const out: string[] = [];
-    for (const x of v) {
-        if (typeof x !== 'string' || !x || x.length > 32) continue;
-        if (out.indexOf(x) >= 0) continue;
-        out.push(x);
-        if (out.length >= 16) break;
+/** 改造件最高几层。**上限放这里而不是 HomeBiz**：`loadPerkLv` 要 clamp，
+ *  而 SaveData 不能反过来 import HomeBiz（循环依赖，会炸在模块初始化）。
+ *  HomeBiz 的 `PERKS` 价格表从这里读这个数，两边不可能不同步。 */
+export const PERK_MAX_LV = 3;
+
+/**
+ * 改造件层数：只留合法 id、1..PERK_MAX_LV。
+ *
+ * **旧档迁移在这里，不在 UI 层。** 2026-10-27 之前存档是 `perks: string[]`
+ * （有/没有），现在是 `perkLv: {id: n}`。老玩家买过的四件必须变成 lv=1 ——
+ * 在 `buyPerk` 里补迁移的话，一个从没点过商店的老玩家读档时
+ * `perkLvOf` 全返回 0，他花 180 果买的东西当场消失。
+ *
+ * 新形状优先、旧形状兜底：两个都在时以新为准（新是真相，旧是残留）。
+ */
+function loadPerkLv(v: unknown, legacy: unknown): Record<string, number> {
+    const out: Record<string, number> = {};
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+        const o = v as Record<string, unknown>;
+        for (const k of Object.keys(o)) {
+            if (!k || k.length > 32) continue;
+            const n = Math.floor(Number(o[k]));
+            if (!isFinite(n) || n <= 0) continue;
+            out[k] = Math.min(n, PERK_MAX_LV);
+        }
+        return out;
+    }
+    /* 旧形状：数组里的每一项都等于"买了第 1 层" */
+    if (Array.isArray(legacy)) {
+        for (const x of legacy) {
+            if (typeof x !== 'string' || !x || x.length > 32) continue;
+            out[x] = 1;
+        }
     }
     return out;
 }
@@ -393,6 +439,11 @@ export function loadSave(): SaveState {
     }
     if (!o || typeof o !== 'object') return freshSave();
 
+    /* 旧档的 `perks: string[]` 已经不在 `SaveState` 上了，但盘上还留着 ——
+       从原始对象里捞一次交给 `loadPerkLv` 迁移。写成 `o.perks` 过不了类型
+       （字段已删），而为了迁移把字段加回接口就等于把两份真相又请回来。 */
+    const legacyPerks = (o as Record<string, unknown>).perks;
+
     return {
         cleared: Math.floor(clampNum(o.cleared, DEFAULT_SAVE.cleared, 0, LEVEL_COUNT)),
         apples: Math.floor(clampNum(o.apples, DEFAULT_SAVE.apples, 0, 9_999_999)),
@@ -406,7 +457,8 @@ export function loadSave(): SaveState {
         dispatch: loadDispatch(o.dispatch),
         settings: loadPrefs(o.settings),
         best: loadBest(o.best),
-        perks: loadPerks(o.perks),
+        perkLv: loadPerkLv(o.perkLv, legacyPerks),
+        nestCoins: Math.floor(clampNum(o.nestCoins, DEFAULT_SAVE.nestCoins, 0, 9_999_999)),
         energy: Math.floor(clampNum(o.energy, DEFAULT_SAVE.energy, 0, 100)),
         energyAt: typeof o.energyAt === 'number' && isFinite(o.energyAt) && o.energyAt > 0 ? o.energyAt : Date.now(),
         feeds: Math.floor(clampNum(o.feeds, 0, 0, 999_999)),

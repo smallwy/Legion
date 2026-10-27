@@ -11,6 +11,9 @@
 import { PETS, unlockedPets } from './Roster';
 import { STAGE_COUNT } from './Stages';
 import type { SaveState } from './SaveData';
+/* 只取这一个常量（不带值依赖）：层数上限必须和 `loadPerkLv` 的 clamp 读同一个数，
+   否则存档能存到 4 层而商店只认到 3 层 —— 第 4 层白买。 */
+import { PERK_MAX_LV } from './SaveData';
 
 /** 5 点一颗心，和主界面规格里「连摸 5 次亲密度 +1」一致 */
 export const PATS_PER_HEART = 5;
@@ -134,6 +137,26 @@ export interface PerkDef {
      * 碎片管的是"你得等一次派遣"。三个约束各管一件事，互不冲突。
      */
     shards: number;
+    /**
+     * 第 2、3 层各要多少**巢币**（2026-10-27）。
+     *
+     * 为什么第 1 层仍然用果/材/碎片、往上才用巢币：
+     * 果子和材料是**打主线**赚的，巢币是**下深巢**赚的。如果四件的第 1 层
+     * 也要巢币，那主线玩家永远买不到第一件（深巢是后置内容）；
+     * 如果第 2 层还要果子，那"下得越深越强"这条链就不成立 ——
+     * 他只需要反复刷第 1 屏。两种资源的**来源不同**，所以分别管不同层。
+     *
+     * 长度 = `PERK_MAX_LV - 1`（3 层 → 2 个价格）。冒烟断言这个长度。
+     */
+    lvCoins: number[];
+    /**
+     * 每一层的效果原文，索引 = 层数 - 1。
+     *
+     * 为什么不用一个公式现算：`bounty` 是 3 → 28 → 36 → 44（第 1 层是
+     * **跳变**不是等差），任何公式都写不出这串数，而玩家必须能在卡上
+     * 看到"下一层是多少"才愿意花 60 巢币。描述和数据放一起，改一处就够。
+     */
+    lvDesc: string[];
 }
 
 /**
@@ -146,47 +169,89 @@ export const PERKS: ReadonlyArray<PerkDef> = [
        火坑 = 每只 2，落袋 = 每只 1 + 球钱 1。装 1 只时两者都是 2 分，
        所以火坑在旧规则下**没有溢价**（这是读代码得出的，不是估的）。
        x3 之后装 1 只就有 3 分，火坑第一次成为一个"流派"。 */
-    { id: 'hotpit', name: '火坑炽热', desc: '火坑每只 2 分 → 3 分', apples: 180, logs: 4, shards: 2 },
+    { id: 'hotpit', name: '火坑炽热', desc: '火坑每只 2 分 → 3 分', apples: 180, logs: 4, shards: 2,
+      lvCoins: [60, 120],
+      lvDesc: ['火坑每只 2 分 → 3 分', '火坑每只 4 分', '火坑每只 5 分'] },
     /* 资源型：直接解"球不够"。对额度关最有用，对无限球关完全无用 ——
        所以它不是"更强的选择"，是"特定屏更强的选择"。
        四件必须**不可比**，否则玩家永远只买一件。 */
-    { id: 'wideball', name: '加宽球路', desc: '每屏球额度 +1', apples: 180, logs: 4, shards: 2 },
+    { id: 'wideball', name: '加宽球路', desc: '每屏球额度 +1', apples: 180, logs: 4, shards: 2,
+      lvCoins: [60, 120],
+      lvDesc: ['每屏球额度 +1', '每屏球额度 +2', '每屏球额度 +3'] },
     /* 续航型：一趟 5 屏 → 6 屏。不提升任何单屏能力，只延长"贪"的长度。
        它的价值随玩家水平上升 —— 打得越好越值，这是唯一的"成长型"改造件。 */
-    { id: 'thrift', name: '精打细算', desc: '每屏掉饱 20 → 15（一趟多走一屏）', apples: 180, logs: 4, shards: 2 },
+    { id: 'thrift', name: '精打细算', desc: '每屏掉饱 20 → 15（一趟多走一屏）', apples: 180, logs: 4, shards: 2,
+      lvCoins: [60, 120],
+      lvDesc: ['每屏掉饱 20 → 15（一趟多走一屏）', '每屏掉饱 → 12', '每屏掉饱 → 10'] },
     /* 结算型：清场奖励 3 → 28。对"清场"目标直接有用，
        对"限球""连锁"这类本来就不清场的屏几乎无用。 */
-    { id: 'bounty', name: '悬赏清场', desc: '清场奖励 3 分 → 28 分', apples: 180, logs: 4, shards: 2 },
+    { id: 'bounty', name: '悬赏清场', desc: '清场奖励 3 分 → 28 分', apples: 180, logs: 4, shards: 2,
+      lvCoins: [50, 100],
+      lvDesc: ['清场奖励 3 分 → 28 分', '清场奖励 → 36 分', '清场奖励 → 44 分'] },
 ];
 
 export function perkDef(id: string): PerkDef | null {
     return PERKS.find((p) => p.id === id) || null;
 }
 
-export function perkOwned(s: SaveState, id: string): boolean {
-    return Array.isArray(s.perks) && s.perks.indexOf(id) >= 0;
+/** 这件现在几层（0 = 没买）。**唯一的读法** —— 战斗侧、商店、冒烟都走这里。 */
+export function perkLvOf(s: SaveState, id: string): number {
+    const t = s && s.perkLv;
+    if (!t || typeof t !== 'object') return 0;
+    const n = Math.floor(Number((t as Record<string, number>)[id]));
+    if (!isFinite(n) || n <= 0) return 0;
+    return Math.min(n, PERK_MAX_LV);
 }
 
+export function perkOwned(s: SaveState, id: string): boolean {
+    return perkLvOf(s, id) >= 1;
+}
+
+/**
+ * 买改造件的**下一层**。
+ *
+ * 第 1 层用果子/材料/碎片（打主线赚的），第 2 层起用巢币（下深巢赚的）——
+ * 两种资源的来源不同，所以各自管不同层，玩家不会"只刷一处就把四件点满"。
+ *
+ * `say` 里必须带上"下一层变成什么"（`lvDesc[lv]`）：玩家花 60 巢币
+ * 的时候，卡上写的是第 1 层效果、钱扣的是第 2 层的价 —— 不告诉他
+ * 买到的是什么，这笔钱就是盲买。
+ */
 export function buyPerk(prev: SaveState, id: string): ActResult {
     const def = perkDef(id);
     if (!def) return { ok: false, say: '没有这个改造件' };
-    if (perkOwned(prev, id)) return { ok: false, say: `已经装过「${def.name}」了` };
-    if (prev.apples < def.apples) {
-        return { ok: false, say: `果子不够 · 还差 ${def.apples - prev.apples}` };
-    }
-    if (prev.logs < def.logs) {
-        return { ok: false, say: `材料不够 · 还差 ${def.logs - prev.logs}` };
-    }
-    if ((prev.shards || 0) < def.shards) {
-        return { ok: false, say: `图纸碎片不够 · 还差 ${def.shards - (prev.shards || 0)} · 派宠物去采` };
-    }
+    const lv = perkLvOf(prev, id);
+    if (lv >= PERK_MAX_LV) return { ok: false, say: `「${def.name}」已经满 ${PERK_MAX_LV} 层了` };
+
     const next = clone(prev);
-    next.apples -= def.apples;
-    next.logs -= def.logs;
-    next.shards = (prev.shards || 0) - def.shards;
-    next.perks = Array.isArray(prev.perks) ? prev.perks.slice() : [];
-    next.perks.push(id);
-    return { ok: true, next, say: `装上「${def.name}」· ${def.desc}` };
+    if (!next.perkLv || typeof next.perkLv !== 'object') next.perkLv = {};
+    next.perkLv[id] = lv + 1;
+    const to = def.lvDesc[Math.min(lv, def.lvDesc.length - 1)] || def.desc;
+
+    if (lv === 0) {
+        if (prev.apples < def.apples) {
+            return { ok: false, say: `果子不够 · 还差 ${def.apples - prev.apples}` };
+        }
+        if (prev.logs < def.logs) {
+            return { ok: false, say: `材料不够 · 还差 ${def.logs - prev.logs}` };
+        }
+        if ((prev.shards || 0) < def.shards) {
+            return { ok: false, say: `图纸碎片不够 · 还差 ${def.shards - (prev.shards || 0)} · 派宠物去采` };
+        }
+        next.apples -= def.apples;
+        next.logs -= def.logs;
+        next.shards = (prev.shards || 0) - def.shards;
+        return { ok: true, next, say: `装上「${def.name}」· ${to}` };
+    }
+
+    /* 第 2 层起：巢币。价格表在 PerkDef 上，长度 = PERK_MAX_LV - 1。 */
+    const price = def.lvCoins[lv - 1] || def.lvCoins[def.lvCoins.length - 1] || 0;
+    const have = Math.max(0, Math.floor(Number(prev.nestCoins) || 0));
+    if (have < price) {
+        return { ok: false, say: `巢币不够 · 还差 ${price - have} · 往下潜才赚得到` };
+    }
+    next.nestCoins = have - price;
+    return { ok: true, next, say: `「${def.name}」升到 ${lv + 1} 层 · ${to}` };
 }
 
 /**
@@ -282,9 +347,10 @@ function clone(s: SaveState): SaveState {
         settings: { ...s.settings },
         dispatch: s.dispatch ? { ...s.dispatch } : null,
         claimed: s.claimed.slice(),
-        /* 旧存档没有 perks 字段（本批才加）。深拷贝时兜底成空数组，
-           否则 `next.perks.push()` 会在 undefined 上炸。 */
-        perks: Array.isArray(s.perks) ? s.perks.slice() : [],
+        /* 改造件层数表必须**深拷贝**：浅拷贝会让 `buyPerk` 的升级直接写进
+           原存档（`next.perkLv[id] = lv+1` 改的是同一个对象），
+           于是"点了取消"也扣了钱。 */
+        perkLv: { ...(s.perkLv || {}) },
         tripGoals: Array.isArray(s.tripGoals) ? s.tripGoals.slice() : [],
         dailyPick: Array.isArray(s.dailyPick) ? s.dailyPick.slice() : [],
         dailyClaimed: Array.isArray(s.dailyClaimed) ? s.dailyClaimed.slice() : [],
@@ -488,6 +554,14 @@ export interface RunPayout {
      * 不传 / 0 = 老调用方行为完全不变（那时候还没有"本趟目标"）。
      */
     shards?: number;
+    /**
+     * 巢币（2026-10-27）。**只有深巢会给出非 0 值。**
+     *
+     * 它和 `coins`（吧唧）分开的理由见 `SaveState.nestCoins`：
+     * 一个来自派遣、一个来自下潜深度，来源决定它该买什么。
+     * 缺省 0 = 主线那一趟行为完全不变。
+     */
+    nestCoins?: number;
 }
 
 /** 战斗收工时带回家的那一份。收工吃倍率后的果子；中途退出只按已经攒下的算 */
@@ -531,6 +605,16 @@ export function payoutFromRun(input: {
     starShards?: number;
     /** 星靶这一趟新达成的材料。和 starShards 一起并进 `logs` */
     starLogs?: number;
+    /**
+     * 巢币。深巢结算时由战斗侧按"新到达的最深层差额"算好传进来，
+     * 主线调用方不传（= 0，行为完全不变）。
+     *
+     * 为什么差额在战斗侧算而不在这里：需要 `readNestDepth()`（历史最深），
+     * 那个数存在战斗侧自己的键里（`pawpack.nest.v1`），主界面拿不到。
+     * 而"只按新纪录发"这条规则必须和写入深度在同一处，否则会漏掉
+     * 「下到 20 层但历史已是 22 层」这种回打 —— 那是 0 币，不是 53 币。
+     */
+    nestCoins?: number;
 }): RunPayout {
     const banked = input.kind === 'esc'
         ? Math.round((input.tripLoot || 0) + (input.food || 0))
@@ -545,6 +629,7 @@ export function payoutFromRun(input: {
         coins: stages >= 2 ? 1 : 0,
         shards: Math.max(0, Math.round(input.goalShards || 0))
             + Math.max(0, Math.round(input.starShards || 0)),
+        nestCoins: Math.max(0, Math.round(input.nestCoins || 0)),
     };
 }
 
@@ -554,11 +639,14 @@ export function applyRunReward(prev: SaveState, payout: RunPayout): SaveState {
     next.logs += payout.logs;
     next.coins += payout.coins;
     next.shards = (next.shards || 0) + (payout.shards || 0);
+    next.nestCoins = Math.max(0, Math.floor(Number(next.nestCoins) || 0))
+        + Math.max(0, Math.floor(Number(payout.nestCoins) || 0));
     next.runs += 1;
     const bits = [`果子 +${payout.apples}`];
     if (payout.logs > 0) bits.push(`材料 +${payout.logs}`);
     if (payout.coins > 0) bits.push(`吧唧 +${payout.coins}`);
     if ((payout.shards || 0) > 0) bits.push(`碎片 +${payout.shards}`);
+    if ((payout.nestCoins || 0) > 0) bits.push(`巢币 +${payout.nestCoins}`);
     next.lastReward = `这一趟带回 ${bits.join(' · ')}`;
     return next;
 }
@@ -863,7 +951,7 @@ export const STORY: ReadonlyArray<StoryDef> = [
     },
     {
         id: 'perk1', name: '装上第一件改造件', desc: '工坊 · 改造，这是唯一能永久变强的东西',
-        done: (s) => (Array.isArray(s.perks) ? s.perks.length : 0) >= 1,
+        done: (s) => PERKS.some((p) => perkLvOf(s, p.id) >= 1),
         reward: { shards: 2, apples: 20 },
     },
     {

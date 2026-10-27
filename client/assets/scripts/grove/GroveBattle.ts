@@ -168,11 +168,20 @@ export class GroveBattle extends Component {
 
     onLoad(): void {
         if (typeof document === 'undefined' || !document.createElement || !document.body) {
+            /* **必须炸，不能 return。**（2026-10-27）
+             *
+             * 原来是 console.error + return：真机上进战斗是一整块黑屏，
+             * 日志在打包后的控制台里根本没人看，现象等于"点了没反应"。
+             * 这一层画不出来不是"降级"，是**这个平台完全没有画面** ——
+             * 静默降级的代价是把「没实现」伪装成「坏了」。
+             *
+             * 为什么不在屏幕上弹一行字：弹字要 Canvas + RenderRoot2D + 相机可见层，
+             * 而这套东西正好就是当初黑屏事故的两条硬约束（见文件头）。
+             * 为了显示一句"不支持"去踩一遍那个坑，不如让引擎把栈打出来。 */
             console.error(
-                '[GroveBattle] 当前平台没有 DOM（原生/小游戏）。\n' +
-                '推球目前只接了 Web 路径，请在浏览器预览里玩。',
+                '[GroveBattle] 当前平台没有 DOM（原生/小游戏）。推球目前只接了 Web 路径。',
             );
-            return;
+            throw new Error('[GroveBattle] 平台无 DOM：推球玩法尚未移植到原生渲染管线');
         }
 
         // 场景里一个相机都没有的话，渲染器每帧会刷 "no camera"。
@@ -612,6 +621,11 @@ export class GroveBattle extends Component {
            那个快照早被后面的屏覆盖了 —— 边打边判、按屏累计是唯一解。 */
         const starShards = Math.max(0, Math.round((s as unknown as { starShards?: number }).starShards || 0));
         const starLogs = Math.max(0, Math.round((s as unknown as { starLogs?: number }).starLogs || 0));
+        /* ★ 巢币（2026-10-27）。**战斗侧已经按"新到达的最深层差额"算好了**
+           （`enterNest` 里，必须在 `writeNestDepth` 之前算，否则差额恒 0）。
+           这里只把这一趟攒下的数带走 —— 重算一遍就会和"历史最深"分叉，
+           而那两个数一旦分叉，玩家会遇到"下到 20 层却给了 5 层的币"。 */
+        const nestCoins = Math.max(0, Math.round((trip as { nestCoins?: number }).nestCoins || 0));
         const payout = payoutFromRun({
             kind,
             lastLoot: home.lastLoot || 0,
@@ -627,6 +641,8 @@ export class GroveBattle extends Component {
             /* 星靶奖励。同上，同一个出口。 */
             starShards,
             starLogs,
+            /* 巢币。只有深巢有（主线那一趟 `trip.nestCoins` 不存在 = 0）。 */
+            nestCoins,
         });
         const next = applyRunReward(loadSave(), payout);
         /* 目标一次性：结算完清空，下一趟重新抽。

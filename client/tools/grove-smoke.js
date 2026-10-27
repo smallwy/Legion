@@ -113,9 +113,23 @@ function boot() {
   const html = fs.readFileSync(HTML, "utf8");
   const code = html.match(/<script>([\s\S]*)<\/script>/)[1];
   const main = mkCanvas(960, 600);
+  /* 内存 localStorage 桩。**这个桩漏过一次，代价很大**（2026-10-27）：
+     没有它的时候，`writeNestDepth` / `readNestDepth` 内部都是
+     `try { localStorage... } catch {}` —— 于是"写不进去"和"写进去了"
+     返回值完全一样（0），断言全绿，而功能一个都没通。
+     `grove-env.js` 里早就有这个桩并写了同样的警告，这份 boot 是独立
+     实现的，当时漏抄了。**两份 boot 必须同源**，这一行就是证据。 */
+  const mem = {};
+  const ls = {
+    getItem: (k) => (k in mem ? mem[k] : null),
+    setItem: (k, v) => { mem[k] = String(v); },
+    removeItem: (k) => { delete mem[k]; },
+    clear: () => { for (const k of Object.keys(mem)) delete mem[k]; },
+  };
   const sb = {
     console, Math, Date, JSON, String, Number, Array, Object, Boolean,
     isNaN, isFinite, Set, Map, Infinity, NaN, undefined,
+    localStorage: ls,
     document: {
       getElementById: () => main,
       createElement: () => mkCanvas(1, 1),
@@ -4599,6 +4613,207 @@ function checkNestFog() {
        Object.keys(seen).join("/"));
   }
 }
+
+/* ============================================================================
+   词条 + 巢币 + 改造件层数（2026-10-27）
+   ----------------------------------------------------------------------------
+   这一段验的全是"截图看不出来"的事：
+
+     · 词条到底有没有落到参数上（推力/裹层/掉饱/灯/球寿命各一条）
+     · 主线有没有被词条污染（S.nest 为 null 时六条必须全部失效）
+     · 「窄喉」那种**空词条**会不会再混进来（它对深巢零作用，因为
+       深巢 ballLimit 恒为 null）—— 这条最容易复发，肉眼绝对看不出来
+     · 巢币是不是按"新纪录差额"发（不是每趟按深度发，否则能刷）
+     · 钱不够时看板**不许落账**（钱没扣、词条却跳过的经典 bug）
+
+   最后一条尤其重要：`skipModAt` 和 `spendNestCoins` 是两步，
+   写成"先落账再扣钱"的话，扣款失败会静默变成白送。
+   ========================================================================== */
+function checkNestMods() {
+  /* ---- A. 主线零污染 ---- */
+  {
+    const P = boot().GROVE;
+    P._start(2, 0);
+    const base = P.pushPowerNow();
+    const belly = P.bellyCost();
+    ok(!P.modOn("heavy"), "★ 主线没有词条(heavy)");
+    ok(!P.modOn("hunger"), "★ 主线没有词条(hunger)");
+    eq(P.S.nestSkip.length, 0, "主线不持有跳过名单");
+    ok(base > 0, "主线推球力度正常", String(base));
+    eq(belly, 20, "主线掉饱 20（没被饥肠乘 1.5）");
+  }
+
+  const P = boot().GROVE;
+
+  /* ---- B. 词条按深度累积，且不跳档 ---- */
+  const want = [[1, 0], [4, 0], [5, 1], [10, 2], [15, 3], [20, 4], [25, 5], [30, 6], [60, 6]];
+  let bad = [];
+  for (const [d, n] of want) {
+    P.enterNest(d);
+    const got = P.nestModsAt(d).length;
+    if (got !== n) bad.push(`深${d}=${got}(期望${n})`);
+  }
+  ok(bad.length === 0, "★ 词条数量随深度累积（5/10/15/20/25/30 各解锁一条，封顶 6）",
+     bad.join(" "));
+  eq(P.NEST_MODS.length, 6, "词条表 6 条");
+
+  /* ---- C. 六条**全部**落到参数上（一条都不许是空词条）---- */
+  /* 「窄喉」的教训：它对深巢零作用，因为深巢 `ballLimit` 恒为 null。
+     所以这里不是"看词条表里写了什么"，是逐条去问**真正的那个数**。 */
+  {
+    /* 推力 */
+    P.enterNest(4);
+    const p4 = P.pushPowerNow();
+    P.enterNest(5);
+    const p5 = P.pushPowerNow();
+    ok(p5 < p4 * 0.95, "★ 沉石：深 5 推力明显下降", p4.toFixed(1) + " → " + p5.toFixed(1));
+
+    /* 裹层（厚甲） */
+    P.enterNest(4);
+    const c4 = (P.S.foes.find((f) => !f.isBoss) || {}).cm;
+    P.enterNest(12);
+    const c12 = (P.S.foes.find((f) => !f.isBoss) || {}).cm;
+    ok(c4 === 3 && c12 === 4, "★ 厚甲：深 12 普通怪多糊一层", `cm ${c4} → ${c12}`);
+
+    /* 掉饱 */
+    P.enterNest(15);
+    const b15 = P.bellyCost();
+    P.enterNest(20);
+    const b20 = P.bellyCost();
+    ok(b20 > b15, "★ 饥肠：深 20 掉饱变多", b15 + " → " + b20);
+
+    /* 雾 */
+    P.enterNest(24);
+    const f24 = P.nestFogTier(24).lamp;
+    P.enterNest(25);
+    const f25 = P.nestFogTier(25).lamp;
+    ok(f25 < f24, "★ 重雾：深 25 灯更小", f24 + " → " + f25);
+
+    /* 球寿命 */
+    P.enterNest(29);
+    const l29 = P.ballLife();
+    P.enterNest(30);
+    const l30 = P.ballLife();
+    ok(l30 < l29, "★ 空心：深 30 球寿命变短", l29.toFixed(2) + " → " + l30.toFixed(2));
+
+    /* 预瞄线：blind 只关轨迹，不关"↓ 能下去"的提示 —— 用一个无害的断言盯住它 */
+    P.enterNest(14);
+    const a14 = P.modOn("blind");
+    P.enterNest(15);
+    ok(!a14 && P.modOn("blind"), "★ 盲眼：深 15 起生效");
+  }
+
+  /* ---- D. 空词条哨兵：词条 id 必须在深巢真的能读到 ----
+     「窄喉」当年的错法是把效果挂在一个深巢永远走不到的分支上。
+     这里把每条词条的 id 和它该改的那个量绑起来点名验收，
+     以后再加词条，忘了挂生效点会在这里红。 */
+  {
+    const ids = P.NEST_MODS.map((m) => m.id).sort().join(",");
+    eq(ids, "blind,gloom,heavy,hollow,hunger,thick", "词条 id 集合没变（新增要同步这份清单）");
+    ok(P.NEST_MODS.every((m) => m.skip > 0), "每条词条都有跳过价（0 会让看板变成免费商店）");
+    ok(P.NEST_MODS.every((m) => m.depth >= 5 && m.depth <= 30), "解锁深度都在 5..30");
+  }
+
+  /* ---- E. 跳过名单 ---- */
+  {
+    P.enterNest(20);
+    P.S.nestSkip = ["hunger"];
+    const after = P.nestModsAt(20).map((m) => m.id);
+    ok(after.indexOf("hunger") < 0, "★ 跳过名单生效（hunger 不在了）", after.join("/"));
+    ok(after.length === 3, "跳过一条后剩三条", String(after.length));
+    P.exitNest();
+    eq(P.S.nestSkip.length, 0, "★ 离开深巢清空跳过名单（下一趟要重新买）");
+  }
+
+  /* ---- F. 巢币按新纪录差额发 ---- */
+  {
+    const Q = boot().GROVE;
+    eq(Q.nestCoinAt(0), 0, "0 层 0 枚");
+    ok(Q.nestCoinAt(20) > Q.nestCoinAt(10) * 2, "★ 巢币超线性（深 20 明显多于深 10 的两倍）",
+       Q.nestCoinAt(10) + " / " + Q.nestCoinAt(20));
+
+    Q.writeNestDepth(0);
+    Q.enterNest(10);
+    const g1 = Q.S.trip.nestCoins;
+    eq(g1, Q.nestCoinAt(10), "★ 首次到第 10 层：给满 10 层的差额");
+    /* 同一深度再下一次：**0 枚**（这就是"不许刷"的判据） */
+    Q.exitNest();
+    Q.enterNest(10);
+    eq(Q.S.trip.nestCoins, 0, "★ 重复下到同一深度：0 枚（刷不出币）");
+    Q.exitNest();
+    Q.enterNest(20);
+    eq(Q.S.trip.nestCoins, Q.nestCoinAt(20) - Q.nestCoinAt(10),
+       "★ 从 10 深到 20：只给差额");
+  }
+
+  /* ---- G. 看板 ---- */
+  {
+    const R = boot().GROVE;
+    R.writeNestDepth(23);
+    R.openGates();
+    eq(R.modBoardOpen(), false, "看板默认关着");
+    R.openModBoard();
+    const rows = R.modBoardRows();
+    eq(rows.next, 24, "看板报的起始深度 = 历史最深 + 1");
+    eq(rows.rows.length, 4, "★ 深 23 的看板列 4 条（5/10/15/20）");
+    ok(rows.rows.every((r) => r.btn.w > 0 && r.btn.h > 0), "每行都有跳过按钮的矩形");
+    /* `R.H` 不在导出表里（画布尺寸没必要暴露给冒烟），直接用 600。 */
+    ok(rows.go.y + rows.go.h < 600, "「出发」按钮在画面内", String(rows.go.y + rows.go.h));
+    /* 命中：按钮中心必须真的命中自己 */
+    const b = rows.rows[0].btn;
+    eq(R.modBoardHit(b.x + b.w / 2, b.y + b.h / 2).kind, "skip", "点按钮中心命中跳过");
+    eq(R.modBoardHit(rows.go.x + 4, rows.go.y + 4).kind, "go", "点左上角命中出发");
+    R.closeModBoard();
+    eq(R.modBoardOpen(), false, "关闭后 open = false");
+  }
+
+  /* ---- H. 买"跳过"的两条硬约束 ----
+     ① 钱不够时**不许落账**（先扣钱再落账，顺序不能反）
+     ② 钱够时**真的扣掉**，且只扣一次
+     这两条在截图上一模一样（按钮都画出来了），只能拿代码问。 */
+  {
+    /* 沙箱的 localStorage 从 `boot()` 返回的上下文里拿 —— 塞一份带巢币的存档 */
+    const sb = boot();
+    sb.localStorage.setItem("pawpack.save.v1", JSON.stringify({ nestCoins: 100 }));
+    const M = sb.GROVE;
+    M.writeNestDepth(23);
+    M.openGates();
+    M.openModBoard();
+
+    const rows = M.modBoardRows();
+    ok(rows.rows.length > 0, "看板有行可点");
+    const price = rows.rows[0].mod.skip;
+
+    /* ① 先花光再看：故意把价格设成买不起的量 */
+    sb.localStorage.setItem("pawpack.save.v1", JSON.stringify({ nestCoins: 1 }));
+    const before = M.S.nestSkip.length;
+    M.skipModAt(0);
+    eq(M.S.nestSkip.length, before, "★ 巢币不够时**不落账**（钱没扣、词条也没跳过）");
+    /* 提示必须报出**具体差多少**，不是一句"钱不够"。
+       而且这句要短到塞得进底栏（"巢币 xxx" 到 "出发" 按钮之间只剩 ~124px）：
+       上一版写「还差 N 枚 · 再往下潜就能赚到」，后半截压在黄按钮底下，
+       截图里读作"再往下潜就[出发]"。带"·"就意味着又要挂解释，直接判死。 */
+    ok(M.S.modBoard.say.indexOf("还差 " + (price - 1) + " 枚") >= 0,
+       "★ 巢币不够时报出还差多少", M.S.modBoard.say);
+    ok(M.S.modBoard.say.indexOf("·") < 0,
+       "★ 差额提示不带「怎么赚」的解释（底栏放不下，会撞出发按钮）", M.S.modBoard.say);
+    eq(M.readNestCoins(), 1, "★ 失败时巢币一分没动");
+
+    /* ② 钱够：扣款 + 落账，且余额对得上 */
+    sb.localStorage.setItem("pawpack.save.v1", JSON.stringify({ nestCoins: price + 7 }));
+    M.skipModAt(0);
+    eq(M.S.nestSkip.length, before + 1, "★ 钱够时落账（名单多一条）");
+    eq(M.readNestCoins(), 7, "★ 钱够时精确扣掉 " + price);
+    eq(M.nestModsAt(24).length, rows.rows.length - 1, "★ 跳过之后生效的词条少一条");
+
+    /* ③ 同一条不能再买第二次（否则会白扣钱） */
+    const coinsNow = M.readNestCoins();
+    M.skipModAt(0);
+    eq(M.readNestCoins(), coinsNow, "★ 已关过的条目再点不扣钱");
+  }
+}
+
+checkNestMods();
 
 checkNestFog();
 

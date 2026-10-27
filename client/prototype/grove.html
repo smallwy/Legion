@@ -2668,8 +2668,98 @@ const NEST_FOG = {
 /** 第 depth 层的雾档。传进来的深度是 1 起的层号（`S.nest.depth`）。 */
 function nestFogTier(depth) {
   const d = Math.max(1, depth | 0);
-  for (const t of NEST_FOG.TIERS) if (d <= t.max) return t;
-  return NEST_FOG.TIERS[NEST_FOG.TIERS.length - 1];
+  let t = null;
+  for (const x of NEST_FOG.TIERS) if (d <= x.max) { t = x; break; }
+  if (!t) t = NEST_FOG.TIERS[NEST_FOG.TIERS.length - 1];
+  if (!modOn("gloom")) return t;
+  /* 「重雾」（深 25）在**当前档上再压**，而不是"按更深的档算"。
+   *
+   * 第一版写成 `q = d + 10` 再查表，结果这条词条**完全无效** ——
+   * 三档的上限是 5 / 15 / 99，16 层以后已经全部落在最后一档，
+   * 加 10 层还是最后一档（实测 d20 和 d25 的灯都是 175）。
+   * 而它偏偏在 25 层才解锁，也就是**永远不起作用**。
+   * 档位表是用来描述"深度段"的，不能拿它表达"在同一段里再难一档"。
+   */
+  return {
+    max: t.max,
+    unseen: Math.min(1, t.unseen + 0.02),
+    seen: Math.min(1, t.seen + 0.06),
+    lamp: Math.round(t.lamp * 0.8),
+    ball: Math.round(t.ball * 0.9),
+  };
+}
+
+/* ---- 词条：每 5 层改一条**规则**（2026-10-27）----
+ *
+ * 60 层如果是 60 次"地形换个样"，第 20 层和第 5 层的差别只是
+ * "这个窝我好像见过"。词条改的是**规矩**：推力、额度、视野、肚子、球寿命 ——
+ * 玩家在深 15 学会的打法，深 16 要重新想一遍。
+ *
+ * **只碰运行时参数，不碰生成器。** 这是硬约束：
+ * `nestBuildRaw` 里多抽一个随机数，60 层地形会整体漂移，而
+ * `tools/_nest-hash.js` 的地形哈希是"这一层在哪"的唯一证据。
+ * 所以设计文档里「敌人翻倍」那条**没有照抄** —— 它必须改波次生成。
+ * 六条全部落在"生成之后才读的运行时参数"上，地形与波次哈希一个字都不动。
+ *
+ * **一条词条只改一处。** 每个效果都挂在那个参数的唯一出口上：
+ *   沉石 → `pushPowerNow()`（推球和预瞄线共用它，所以线不会骗人）
+ *   窄喉 → `ballBudget()`        盲眼 → `drawAim()`
+ *   饥肠 → `bellyCost()`         重雾 → `nestFogTier()`
+ *   空心 → `ballLife()`
+ *
+ * `skip` 是**这一趟**花多少巢币让它不生效。为什么是"这一趟"而不是永久：
+ * 永久关掉等于把深层买回浅层的难度，词条就不再是"贪的代价"。
+ */
+const NEST_MODS = [
+  { id: "heavy",  depth: 5,  name: "沉石", desc: "推球力度 −15%",    skip: 40 },
+  /* 「窄喉」（球额度 −2）第一版在这里，**但它对深巢完全无效** ——
+     深巢的目标只有 collect / clear，`ballLimit` 恒为 null（限球是主线
+     那几屏的专属目标），`ballBudget()` 判到 null 直接返回 Infinity，
+     `−2` 根本没机会执行。实测：60 层 × 10 种子，球额度**全部是 ∞**。
+     换成「厚甲」：敌人多糊一层才变球。它对**每一层**都生效，
+     而且是真的玩法变化（要贴得更久、喷得更多次，风险更高），不是拖时间。 */
+  { id: "thick",  depth: 10, name: "厚甲", desc: "敌人多糊一层才变球", skip: 50 },
+  { id: "blind",  depth: 15, name: "盲眼", desc: "预瞄线不显示",     skip: 60 },
+  { id: "hunger", depth: 20, name: "饥肠", desc: "每层掉饱 ×1.5",    skip: 70 },
+  { id: "gloom",  depth: 25, name: "重雾", desc: "灯更小、记忆更糊", skip: 80 },
+  { id: "hollow", depth: 30, name: "空心", desc: "球滚过的路短 30%", skip: 90 },
+];
+
+/** 第 depth 层会生效的词条（**不含**这一趟花币跳过的）。
+ *  纯函数：只读 `S.nest.skip`，不改任何东西 —— 冒烟能直接喂深度验。 */
+function nestModsAt(depth) {
+  const d = Math.max(1, depth | 0);
+  const skip = S.nestSkip || [];
+  const out = [];
+  for (const m of NEST_MODS) {
+    if (d >= m.depth && skip.indexOf(m.id) < 0) out.push(m);
+  }
+  return out;
+}
+
+/* ---- 巢币：深巢唯一的经济产出 ----
+ *
+ * 为什么是**超线性**（`2d + d²/30`）而不是"每层固定 2 枚"：
+ * 线性的话，"深 20 打一趟"和"深 10 打两趟"收益完全一样，而后者明显更省力
+ * （浅层词条少、地形熟）。超线性才让"再深一层"这件事有溢价 ——
+ * 而溢价正是"贪"的动机。实测：深 10 = 23 枚，深 20 = 53 枚，深 30 = 90 枚。
+ *
+ * 为什么按**新到达的最深层差额**发（而不是每趟按当前层数发）：
+ * 否则玩家在第 5 层反复重开就能无限刷 —— 这和后巢币时代的"通胀 6.5×"
+ * 是同一个病。差额口径下，深 5 刷十趟给的币还是 0。
+ */
+function nestCoinAt(d) {
+  const x = Math.max(0, d | 0);
+  return x * 2 + Math.floor((x * x) / 30);
+}
+
+/** 某条词条此刻在不在生效。**主线恒 false**（S.nest 为 null），
+ *  所以主线不需要为词条写一行判断。 */
+function modOn(id) {
+  const mods = S.nest && S.nest.mods;
+  if (!mods || !mods.length) return false;
+  for (let i = 0; i < mods.length; i++) if (mods[i].id === id) return true;
+  return false;
 }
 
 /* ---- 巢室生态：每层一个"这里住着什么" ----
@@ -3886,11 +3976,23 @@ function rampAt(x) {
 
 /** 四件改造件。id 必须和 `HomeBiz.ts` 的 `PERKS` 逐字相等（冒烟有断言）。 */
 const PERK_IDS = ["hotpit", "wideball", "thrift", "bounty"];
+/* 层数上限。**必须和 `SaveData.ts` 的 `PERK_MAX_LV` 相等**（冒烟断言）——
+   两边各写一个数，存档能存到 4 层而战斗只认 3 层，第 4 层白买。 */
+const PERK_MAX_LV = 3;
 
-/** 已购的改造件，只读。key 存在且为 true 表示已拥有。 */
+/** 已购的改造件，只读。值是**层数**（1..PERK_MAX_LV），没买就是 key 不存在。 */
 let PERKS = Object.create(null);
 
-function perkOn(id) { return PERKS[id] === true; }
+/** 这件现在几层（0 = 没买）。**战斗侧唯一的读法。**
+ *
+ *  2026-10-27 之前这里是布尔，于是四件买完就再没东西可买 ——
+ *  "全游戏唯一的永久变强出口"只够支撑 4 次消费，长线又断了。
+ *  改成层数之后，加成幅度由各自的调用点按 `perkLv(id)` 算。 */
+function perkLv(id) {
+  const n = PERKS[id];
+  return typeof n === "number" && n > 0 ? n : 0;
+}
+function perkOn(id) { return perkLv(id) > 0; }
 
 /** 从主界面存档读改造件。**只读** —— 见上面第 1 条约束。 */
 function loadPerks() {
@@ -3899,13 +4001,57 @@ function loadPerks() {
     const raw = localStorage.getItem("pawpack.save.v1");
     if (!raw) return;
     const home = JSON.parse(raw) || {};
-    const arr = Array.isArray(home.perks) ? home.perks : [];
-    for (const id of arr) if (PERK_IDS.indexOf(id) >= 0) PERKS[id] = true;
+    /* 2026-10-27 起存档是 `perkLv: {id: n}`。旧档的 `perks: string[]`
+       在这里迁移成 n = 1 —— **不迁移的话，老玩家花 180 果买的东西，
+       升级后开战当场变成没买**（perkLv 全 0，而 perkOn 判 `> 0`）。 */
+    const lv = home.perkLv;
+    if (lv && typeof lv === "object" && !Array.isArray(lv)) {
+      for (const id of PERK_IDS) {
+        const n = Math.floor(Number(lv[id]));
+        if (isFinite(n) && n > 0) PERKS[id] = Math.min(n, PERK_MAX_LV);
+      }
+    } else {
+      const arr = Array.isArray(home.perks) ? home.perks : [];
+      for (const id of arr) if (PERK_IDS.indexOf(id) >= 0) PERKS[id] = 1;
+    }
   } catch (e) { PERKS = Object.create(null); }
 }
 
 /* 进游戏读一次。主界面买完改造件后回到战斗会重新加载本页，所以不需要监听。 */
 loadPerks();
+
+/* ---------- 巢币：战斗侧唯一的存档写入口（和 `recordStar` 同一类） ----------
+ * 为什么战斗侧可以写：词条看板开在出征页（属于战斗原型），玩家在那里
+ * 花币买"这一趟不生效"，钱必须当场扣。`loadSave` 每次都重读盘，
+ * 所以主界面不会拿到过期值 —— 前提是**读-改-写整份 JSON**，
+ * 不能在内存里留一份副本然后整份覆盖（那会把主界面这一趟的果子抹掉）。
+ */
+function readNestCoins() {
+  try {
+    const raw = localStorage.getItem("pawpack.save.v1");
+    if (!raw) return 0;
+    const o = JSON.parse(raw) || {};
+    const n = Math.floor(Number(o.nestCoins));
+    return isFinite(n) && n > 0 ? n : 0;
+  } catch (e) { return 0; }
+}
+
+/** 扣 n 枚。**扣成功才返回 true** —— 调用方必须据此决定要不要落账，
+ *  否则会出现"钱没扣、词条却跳过了"。 */
+function spendNestCoins(n) {
+  const cost = Math.max(0, Math.floor(n) || 0);
+  if (cost <= 0) return true;
+  try {
+    const raw = localStorage.getItem("pawpack.save.v1");
+    if (!raw) return false;
+    const o = JSON.parse(raw) || {};
+    const have = Math.max(0, Math.floor(Number(o.nestCoins)) || 0);
+    if (have < cost) return false;
+    o.nestCoins = have - cost;
+    localStorage.setItem("pawpack.save.v1", JSON.stringify(o));
+    return true;
+  } catch (e) { return false; }
+}
 
 const S = {
   /* select(选人) | pick(挑一屏) | play | clear | fail
@@ -4017,7 +4163,16 @@ const S = {
    *         这是"贪"的收益，而代价是 belly —— 不用给失败惩罚（设计禁区）。
    *   stages 这一趟推过了几关（重打同一关不算）
    */
-  trip: { loot: 0, multi: 1, stages: 0, rankLogs: 0 },
+  trip: { loot: 0, multi: 1, stages: 0, rankLogs: 0, nestCoins: 0 },
+  /* 这一趟花巢币跳过（不生效）的词条 id。
+     **必须放顶层而不是 S.nest 上**：词条看板是在出征页打开的，
+     那一刻 `S.nest` 还是 null（还没下潜），账记在层内就写不进去。
+     它是"这一趟"的账 —— `exitNest` 清空，重下一趟要重新买。 */
+  nestSkip: [],
+  /* 词条看板的状态。**默认是关的**，而且 `open` 而不是"对象存在与否"——
+     用对象存在性表示开关的话，每次关闭都要 delete，读代码的人会分不清
+     "null 是没建过还是关掉了"。 */
+  modBoard: { open: false, hover: -1, say: "", sayT: 0 },
   /* ---------- 星靶（2026-10-25） ----------
    * 每屏 3 个挑战条件（配置见文件末尾 STAR_OF_STAGE，与 StarTargets.ts 同源）。
    * 三个字段各管一件事，不能合并：
@@ -4365,7 +4520,7 @@ function ballBudget() {
   if (st.ballLimit == null) return Infinity;
   /* `wideball` 加的是**可用额度**，不改 `st.ballLimit` 本身。
      改字段的话，`par.made` 的评级口径会跟着漂 —— 那是关卡数据，不是玩家资产。 */
-  const cap = st.ballLimit + (perkOn("wideball") ? 1 : 0);
+  const cap = st.ballLimit + perkLv("wideball");
   return Math.max(0, cap - S.stat.made);
 }
 
@@ -4393,7 +4548,7 @@ function foeFromSpec(sp, fromSky) {
     // 原来写 3+lv，实测第 2 关 BOSS **2 秒就被糊成球**（玩家站在 100px 外
     // 一直喷，抗性 0.28s 根本拦不住），比小怪还短命 —— BOSS 至少得让玩家
     // 躲过一次砸地才算数。
-    cm: isBoss ? Math.min(4 + lv, 10) : 3,
+    cm: isBoss ? Math.min(4 + lv, 10) : (3 + (modOn("thick") ? 1 : 0)),
     dead: false,
     onGround: def.kind !== "fly" && def.kind !== "moth" && !fromSky, ground: null,
     /* ---- 深巢四怪的专属状态（2026-10-26）----
@@ -4641,6 +4796,13 @@ function beginRun(i) {
        再拼屏名会变成"第 7 层 · 第 7 层"）。主线沿用「产地 第 N 屏 · 屏名」。 */
     if (S.nest) {
       addText(W / 2, 150, (S.nest.brood || "深巢") + " · 第 " + S.nest.depth + " 层", "#FFFFFF", 26, 1.6);
+      /* 这一层**新解锁**的词条单独报一次（2026-10-27）。
+         不报的话，深 15 玩家的第一反应是"我的 Shift 坏了"——
+         规则变了必须说出来，这是词条和数值惩罚的区别。 */
+      if (S.nest.fresh && S.nest.fresh.length) {
+        const t = S.nest.fresh.map(function (m) { return m.name + " · " + m.desc; }).join("　　");
+        addText(W / 2, 184, "词条生效　" + t, "#FFD86B", 16, 2.4);
+      }
     } else {
       const ch = chapterOfStage(S.stage);
       addText(W / 2, 150, ch.name + " 第 " + (S.stage - ch.from + 1) + " 屏 · " + SI.name,
@@ -4742,7 +4904,11 @@ function bellyWord() {
 function pushPowerNow() {
   const p = S.p;
   const runUp = p ? Math.min(1, (p.runD || 0) / 380) : 0;
-  return PUSH_BASE * (1 + PUSH_RUN * runUp) * bellyPower();
+  /* 「沉石」（深 5）唯一挂载点。**必须挂在这个函数上而不是推球处** ——
+     预瞄线也读它，写死在推球那边的话，线会按旧力度画，
+     玩家照着线推会扑空（第 7 屏就是靠"线骗不骗人"立起来的）。 */
+  const mod = modOn("heavy") ? 0.85 : 1;
+  return PUSH_BASE * (1 + PUSH_RUN * runUp) * bellyPower() * mod;
 }
 
 const BELLY_PER_CLEAR = 20;
@@ -4753,8 +4919,23 @@ const BELLY_PER_CLEAR = 20;
  * 掉饱被读的地方有两处 —— 真扣（通关时）和预览（`nextBellyHint` 的
  * "下一屏之后是几档"）。两处各写一次三元，就会出现"预览说还有半饱、
  * 打完发现已经饿了"的分叉。函数只有一个返回值，两处不可能不一样。 */
+/** 一颗球能滚多久。「空心」（深 30）砍 30%。
+ *  包成函数是因为 `PUSH_LIFE` 有**两处**读（关卡里超时爆球、扔出去后的
+ *  自由滚落），只改一处会变成"显示上说散了、实际还在滚"。 */
+function ballLife() {
+  return PUSH_LIFE * (modOn("hollow") ? 0.7 : 1);
+}
+
+/** 精打细算的四档掉饱。第 1 层 15 是原来那个数（一趟多走一屏），
+ *  往上每层再省一点 —— 但不能省到 5 以下，否则"肚子"这个系统就没了。 */
+const THRIFT_BELLY = [BELLY_PER_CLEAR, 15, 12, 10];
+
 function bellyCost() {
-  return perkOn("thrift") ? 15 : BELLY_PER_CLEAR;
+  const base = THRIFT_BELLY[perkLv("thrift")] || BELLY_PER_CLEAR;
+  /* 「饥肠」（深 20）。乘在**这里**而不是扣血处：预览
+     （`nextBellyHint` 算"下一屏之后是几档"）也读这个函数，
+     两处各乘一次就会变成"预览说还半饱、打完已经饿了"。 */
+  return Math.round(base * (modOn("hunger") ? 1.5 : 1));
 }
 
 /** 结算卡「继续」副标题上的力气变化。**三态，不是两态。**
@@ -4823,7 +5004,11 @@ function goHome(allClear) {
   S.home.lastStages = S.trip.stages;
   S.home.runs++;
   S.belly = 100;                         // 回家吃饭
-  S.trip = { loot: 0, multi: 1, stages: 0 };
+  /* 一趟结束就换一本新账。**字段必须和 `S` 的初值一字不差** ——
+     这里少写一个，收工之后那个字段就是 undefined，下一趟从 NaN 起算。
+     `rankLogs` / `nestCoins` 就是 2026-10-27 这么漏掉的：读点上靠
+     `|| 0` 兜住了，所以没炸，但类型检查一眼就指出来了（TS2739）。 */
+  S.trip = { loot: 0, multi: 1, stages: 0, rankLogs: 0, nestCoins: 0 };
   /* 星靶累计跟着一趟走：收工 = 这一趟的账结清。不重置的话，
      下一趟的结算卡会把上一趟攒的碎片也算进去。 */
   S.starShards = 0;
@@ -6470,7 +6655,7 @@ function updateBalls(dt) {
     // 但彻底堵死"无限滚"。自造但没推过的球不受这条约束 —— 玩家还能走上去推它。
     if (b.pushed) {
       b.relT = (b.relT || 0) + dt;
-      if (b.relT > PUSH_LIFE) { burstBall(b, "滚远了…"); continue; }
+      if (b.relT > ballLife()) { burstBall(b, "滚远了…"); continue; }
     }
 
     // ---- 不减速。
@@ -6968,7 +7153,7 @@ function predictBall(b, dir, pow) {
     // 推出后 1.6 秒必散 —— 和 updateBalls 的寿命同一条。
     // 不画这一段，玩家就会以为线尾那段还算数，等于骗人。
     relT += AIM_DT;
-    if (relT > PUSH_LIFE) {
+    if (relT > ballLife()) {
       marks.push({ x, y: y - r, kind: "expire" });
       end = "expire";
       break;
@@ -7174,7 +7359,8 @@ function ballTerrain(b, fallVy) {  // 火坑：烧掉，收成翻倍，但球没
       S.stat.burned++;
       /* `hotpit` 只改普通敌人的系数。BOSS 的 14 不动 —— 那一个数是按
          "打掉 BOSS ≈ 打掉 7 只" 定的，乘 1.5 会让 BOSS 变成唯一正解。 */
-      const per = b.boss ? 14 : (perkOn("hotpit") ? 3 : 2);
+      /* 火坑每只 2 + 层数（lv0=2 / lv1=3 / lv2=4 / lv3=5） */
+      const per = b.boss ? 14 : (2 + perkLv("hotpit"));
       const gain = b.holds * per;
       S.food += gain;
       S.killed += b.holds;
@@ -14120,7 +14306,10 @@ function drawAim(g) {
   // 轨迹默认**不画**。用户原话："球滚动的轨迹不用显示出来了"。
   // 常驻的预测线会把画面变成一张工程图，而且看久了玩家就不再看球本身。
   // 想算的时候按住 Shift —— 它退回到"可选辅助"的位置。
-  if (!S.aim) return;
+  /* 「盲眼」（深 15）：Shift 不再给线。**只关轨迹，不关上面那个
+     "↓ 能下去"的箭头** —— 那个是地形提示不是预测，关掉等于让人
+     在台面上反复试跳。 */
+  if (!S.aim || modOn("blind")) return;
 
   for (const b of S.balls) {
     if (b.dead) continue;
@@ -14519,8 +14708,22 @@ function drawTrail(g) {
      （层名本身就是"第 N 层"，拼起来是"第 7 层 第 7 层"）。
      **巢室名必须写在这里**（2026-10-27）：玩家要能一眼看出"这层是卵房、
      上上层的蛛巢"，否则五套巢室在他眼里只是"怪换了个花样"。 */
+  /* 词条也挂在 HUD 上（只报前两条 + 余量）。
+     完整列表在出征页的词条看板上 —— 但下了三层以后玩家已经想不起
+     "现在到底有哪些规矩"，而这一行是他**不用切界面**就能看到的唯一一处。 */
+  const modsTag = (S.nest && S.nest.mods && S.nest.mods.length)
+    ? (function () {
+        const names = S.nest.mods.map(function (m) { return m.name; });
+        /* 分隔符必须是**顿号**，不能是空格（2026-10-27 截图救回）：
+           12px 下一个空格只有 3px，"沉石 厚甲"渲出来是"沉石厚甲"，
+           读成一条叫"沉石厚甲"的词条。顿号是中文里的并列符，
+           也压得住"菌圃 · 第 26 层"那一层用"·"分隔的口径。 */
+        return "  ·  " + names.slice(0, 2).join("、")
+             + (names.length > 2 ? " +" + (names.length - 2) : "");
+      })()
+    : "";
   const label = S.nest
-    ? (S.nest.brood || "深巢") + " · 第 " + S.nest.depth + " 层"
+    ? (S.nest.brood || "深巢") + " · 第 " + S.nest.depth + " 层" + modsTag
     : CH.name + " · 第 " + (S.stage - CH.from + 1) + " 屏   " + curStage().name;
 
   /* 波次：一关 2~3 波，最后一波是 BOSS。没有这一行，玩家不知道"还剩多久"。
@@ -15620,7 +15823,14 @@ function enterGate(i) {
   if (p.id === "trail") {
     beginRun(clamp(S.progress, 0, LEVELS.length - 1));
   } else if (p.id === "nest") {
-    enterNest();
+    /* 已经解锁了词条 → 先让他看一眼再下潜。
+       没解锁（历史最深 < 5）就**直接进** —— 第 1 次玩的人不该
+       在"出发前"先被一张看不懂的表格拦住。 */
+    if (NEST_MODS.some(function (m) { return readNestDepth() + 1 >= m.depth; })) {
+      openModBoard();
+    } else {
+      enterNest();
+    }
   }
 }
 
@@ -15650,22 +15860,53 @@ function writeNestDepth(d) {
 
 /** 下潜到第 depth 层。不传 = 接着存档里的最深处（没有记录就从第 1 层）。 */
 function enterNest(depth) {
+  /* 「还是同一趟吗」必须在函数**最开头**问。
+     下面第 24 行就会 `S.nest = {...}` 覆盖掉它 —— 第一版把这一句写在
+     覆盖之后，于是 `sameTrip` 恒为 true：新开一趟时上一趟挣的巢币
+     会跟过来，结算卡上报一个这一趟根本没挣过的数字。 */
+  const sameTrip = !!S.nest;
   const d = depth == null ? Math.max(1, readNestDepth()) : Math.max(1, Math.floor(depth));
   const r = nestLevel(d);
   ACTIVE = [r.level];
   /* 巢室名带上：HUD 顶部和开场大字都读它（2026-10-27）。
      放在 `S.nest` 上而不是每次去 ACTIVE 里翻 —— 结算/重打时 ACTIVE 会重建，
      而"这一层叫什么"属于这一趟的背景，不该跟着重建而闪成 undefined。 */
-  S.nest = { depth: d, brood: (r.level.brood && r.level.brood.name) || "深巢" };
+  /* 跳过名单在**顶层** `S.nestSkip`（看板在出征页就要能写），
+     这里只把当层的词条算出来 —— 下潜到下一层不会把刚才花币关掉的又打开，
+     因为名单根本没被重建过。 */
+  S.nest = {
+    depth: d,
+    brood: (r.level.brood && r.level.brood.name) || "深巢",
+    mods: [],
+    /* 这一层**新出现**的词条。开场大字用它报一次 ——
+       "深 15 起没有预瞄线"如果不说，玩家的第一反应是"我的 Shift 坏了"。 */
+    fresh: [],
+  };
+  S.nest.mods = nestModsAt(d);
+  {
+    const prev = new Set(nestModsAt(d - 1).map(function (m) { return m.id; }));
+    S.nest.fresh = S.nest.mods.filter(function (m) { return !prev.has(m.id); });
+  }
   S.stage = 0;
+  /* 币的差额**必须在 `writeNestDepth` 之前算**：那个函数是"只增不减"，
+     写完再读 `readNestDepth()` 拿到的已经是新纪录，差额永远 0 ——
+     "只增不减"和"按差额发"撞在一起时，先算后写是唯一顺序。 */
+  const coinGain = nestCoinAt(d) - nestCoinAt(readNestDepth());
   writeNestDepth(d);
   beginRun(0);
+  /* 放在 `beginRun` **之后**：它会把 `S.trip` 整个换成新对象，
+     提前写进去的那一枚会被当场丢掉。 */
+  if (!sameTrip) S.trip.nestCoins = 0;
+  if (coinGain > 0) S.trip.nestCoins = (S.trip.nestCoins || 0) + coinGain;
 }
 
 /** 离开深巢（回出征页 / 回家）：表换回主线，nest 状态清空。
  *  **必须清**：不清的话下一次进主线会拿深巢的那一层当第 0 屏打。 */
 function exitNest() {
   S.nest = null;
+  /* 这一趟的跳过名单到此为止。不清的话，下一趟下潜会白拿上一趟花钱买的
+     两个"不生效" —— 而玩家已经忘了自己买过，只会觉得"这次怎么这么简单"。 */
+  S.nestSkip = [];
   ACTIVE = LEVELS;
   S.stage = 0;
   /* 墙也立刻还原，不等下一次 loadLevel。
@@ -16173,6 +16414,246 @@ function drawGateCard(g, p, r, focused, withDetail, FONT) {
   g.stroke();
 }
 
+/* ---------------------------------------------------------------------------
+   词条看板（出征页，2026-10-27）
+
+   它是深巢**唯一的决策点**。没有它，词条就只是"越深越难"的另一种说法 ——
+   而"有选择"正是这个项目五个入口最缺的东西（审计原话）。
+   打开时机：点深巢门时，如果已经解锁了词条，先弹这个，不直接下潜。
+
+   为什么跳过是"这一趟"而不是永久：永久关掉等于把深层买回浅层的难度，
+   词条就不再是"贪的代价"，深巢又变回"一路往下没有变化"。
+   --------------------------------------------------------------------------- */
+
+/* 版面是**按"最多 6 行"反推的**，不是拍脑袋：6 × 50 = 300 的行区，
+   上下再各留标题/底栏 70 —— 所以面板高 486。
+   第一版给的是 h = 428，6 行排到 478，而底栏的"巢币"和「出发」按钮
+   正好落在 452~496 —— **压在第 5、6 行上**（截图里"巢币 240"叠在
+   "空心"那一行上）。行区高度必须由词条表的最大条数决定，
+   以后加第 7 条词条，这里要跟着加 50。 */
+const MOD_BOARD = {
+  x: 148, y: 56, w: 664, h: 486,
+  listTop: 152, rowH: 50,
+  btnW: 112, btnH: 34,
+};
+
+function modBoardOpen() { return !!(S.modBoard && S.modBoard.open); }
+
+/** 下一次下潜的起点深度 = 历史最深 + 1。
+ *  用 `readNestDepth()` 而不是"当前层"：看板开在出征页，那时没有当前层。 */
+function modBoardNextDepth() {
+  return Math.max(1, readNestDepth() + 1);
+}
+
+/** 看板上的行（只列**已解锁**的词条；没到深度不占版面）。
+ *  几何只有这一份 —— 绘制和命中共用，两处各算一套必然错开。 */
+function modBoardRows() {
+  const next = modBoardNextDepth();
+  const skip = S.nestSkip || [];
+  const B = MOD_BOARD;
+  const rows = [];
+  let y = B.listTop;
+  for (const m of NEST_MODS) {
+    if (next < m.depth) continue;
+    rows.push({
+      mod: m,
+      off: skip.indexOf(m.id) >= 0,
+      y: y,
+      btn: { x: B.x + B.w - 26 - B.btnW, y: y + 6, w: B.btnW, h: B.btnH },
+    });
+    y += B.rowH;
+  }
+  const go = { x: W / 2 - 92, y: B.y + B.h - 62, w: 184, h: 44 };
+  const close = { x: B.x + B.w - 44, y: B.y + 16, w: 28, h: 28 };
+  return { next: next, rows: rows, go: go, close: close, bottom: y };
+}
+
+function openModBoard() {
+  S.modBoard = { open: true, hover: -1, say: "", sayT: 0 };
+}
+
+function closeModBoard() {
+  if (S.modBoard) S.modBoard.open = false;
+}
+
+/** 花巢币让某条词条这一趟不生效。
+ *  **先扣钱再落账**：反过来的话，扣款失败（存档写不进去）会留下
+ *  "钱没扣、词条却跳过了"的记录，玩家等于白捡一次。 */
+function skipModAt(i) {
+  const R = modBoardRows();
+  const row = R.rows[i];
+  if (!row || row.off) return;
+  const m = row.mod;
+  if (!spendNestCoins(m.skip)) {
+    /* 文案里**不再重复"巢币"**：它紧挨着左下的"巢币 12"，
+       写成"巢币 12  巢币不够 · 还差 28"看着像两笔钱。
+       **也不带"怎么赚"那半句**（2026-10-27 截图救回）：底栏从"巢币"
+       到"出发"按钮之间只有 124px，「还差 28 枚 · 再往下潜就能赚到」
+       的后半截正好钻到黄按钮底下，读作"再往下潜就[出发]"。
+       怎么赚这件事改成写在面板副标题里 —— 那行是常驻的，
+       比一个 2.2 秒就消失的提示更适合放规则。 */
+    S.modBoard.say = "还差 " + Math.max(0, m.skip - readNestCoins()) + " 枚";
+    S.modBoard.sayT = 2.2;
+    return;
+  }
+  if (!Array.isArray(S.nestSkip)) S.nestSkip = [];
+  S.nestSkip.push(m.id);
+  S.modBoard.say = "「" + m.name + "」这一趟不生效";
+  S.modBoard.sayT = 2.0;
+}
+
+function drawModBoard(g) {
+  if (!modBoardOpen()) return;
+  const FONT = "'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
+  const B = MOD_BOARD;
+  const R = modBoardRows();
+
+  g.save();
+  g.fillStyle = "rgba(10,14,20,.74)";
+  g.fillRect(0, 0, W, H);
+
+  rr(g, B.x, B.y, B.w, B.h, 20);
+  g.fillStyle = "rgba(26,32,42,.98)";
+  g.fill();
+  g.strokeStyle = "rgba(255,255,255,.12)";
+  g.lineWidth = 1;
+  rr(g, B.x, B.y, B.w, B.h, 20);
+  g.stroke();
+
+  g.textAlign = "left";
+  g.textBaseline = "alphabetic";
+  g.fillStyle = "#F2F6EA";
+  g.font = "bold 20px " + FONT;
+  g.fillText("下潜之前 · 词条", B.x + 30, B.y + 44);
+
+  /* 副标题要同时说清三件事：什么时候开始生效 / 巢币从哪来 / 巢币能干什么。
+     "怎么赚"必须留在这里 —— 底栏那句"还差 N 枚"只有 124px 宽，
+     塞不下解释，而规则放在 2.2 秒的提示里等于没写。 */
+  g.fillStyle = "rgba(176,192,208,.82)";
+  g.font = "13px " + FONT;
+  g.fillText("从第 " + R.next + " 层起一直生效，越深越多。巢币只按新潜到的深度发放，花它跳过一条。",
+             B.x + 30, B.y + 70);
+
+  /* 关闭叉：右上角一个 ×。**必须有显式的出口** —— 只靠"点遮罩关闭"
+     在触屏上等于关不掉（触屏那条路不会派发遮罩点击）。 */
+  const c = R.close;
+  g.strokeStyle = "rgba(200,212,224,.55)";
+  g.lineWidth = 2;
+  g.beginPath();
+  g.moveTo(c.x + 8, c.y + 8); g.lineTo(c.x + c.w - 8, c.y + c.h - 8);
+  g.moveTo(c.x + c.w - 8, c.y + 8); g.lineTo(c.x + 8, c.y + c.h - 8);
+  g.stroke();
+
+  if (!R.rows.length) {
+    g.fillStyle = "rgba(180,196,212,.7)";
+    g.font = "14px " + FONT;
+    g.fillText("还没下到第 5 层，暂时没有词条。", B.x + 30, B.listTop + 26);
+  }
+
+  for (let i = 0; i < R.rows.length; i++) {
+    const row = R.rows[i];
+    const m = row.mod;
+    const hot = S.modBoard.hover === i;
+    const cy = row.y + MOD_BOARD.rowH / 2;
+
+    if (hot && !row.off) {
+      rr(g, B.x + 18, row.y + 2, B.w - 36, MOD_BOARD.rowH - 6, 10);
+      g.fillStyle = "rgba(255,255,255,.05)";
+      g.fill();
+    }
+
+    g.textAlign = "left";
+    g.fillStyle = row.off ? "rgba(150,164,178,.45)" : (hot ? "#FFE9B0" : "#E8EFF6");
+    g.font = "bold 16px " + FONT;
+    g.fillText(m.name, B.x + 34, cy + 6);
+
+    g.fillStyle = row.off ? "rgba(140,154,168,.38)" : "rgba(176,192,208,.78)";
+    g.font = "13px " + FONT;
+    g.fillText(m.desc, B.x + 110, cy + 6);
+
+    /* 深度角标：告诉他"这条是什么时候开始跟着你的" */
+    g.textAlign = "right";
+    g.fillStyle = row.off ? "rgba(140,154,168,.32)" : "rgba(150,168,186,.55)";
+    g.font = "12px " + FONT;
+    g.fillText("第 " + m.depth + " 层", row.btn.x - 16, cy + 5);
+
+    const b = row.btn;
+    if (row.off) {
+      rr(g, b.x, b.y, b.w, b.h, b.h / 2);
+      g.strokeStyle = "rgba(150,164,178,.28)";
+      g.lineWidth = 1;
+      rr(g, b.x, b.y, b.w, b.h, b.h / 2);
+      g.stroke();
+      g.textAlign = "center";
+      g.fillStyle = "rgba(150,164,178,.55)";
+      g.font = "13px " + FONT;
+      g.fillText("这一趟已关", b.x + b.w / 2, b.y + b.h / 2 + 5);
+    } else {
+      rr(g, b.x, b.y, b.w, b.h, b.h / 2);
+      g.fillStyle = hot ? "rgba(255,206,86,.20)" : "rgba(255,255,255,.07)";
+      g.fill();
+      g.strokeStyle = hot ? "rgba(255,206,86,.85)" : "rgba(255,255,255,.22)";
+      g.lineWidth = 1.4;
+      rr(g, b.x, b.y, b.w, b.h, b.h / 2);
+      g.stroke();
+      g.textAlign = "center";
+      g.fillStyle = hot ? "#FFCE56" : "rgba(232,239,246,.86)";
+      g.font = "bold 13px " + FONT;
+      g.fillText("跳过 · " + m.skip, b.x + b.w / 2, b.y + b.h / 2 + 5);
+    }
+  }
+
+  /* 底部：余额 + 出发 */
+  const coins = readNestCoins();
+  g.textAlign = "left";
+  g.fillStyle = "rgba(255,206,86,.9)";
+  g.font = "bold 14px " + FONT;
+  g.fillText("巢币 " + coins, B.x + 30, R.go.y + 28);
+
+  if (S.modBoard.say && S.modBoard.sayT > 0) {
+    /* 兜底测宽：底栏这一行从「巢币 xxx」到「出发」按钮只剩百来像素，
+       文案一长就被黄按钮吃掉半截（"再往下潜就"那种）。放不下就整体
+       缩到 12px（用户定的字号下限），还放不下就不画 —— 画一条读不全的
+       字比不画更糟，它会让人以为按钮文字串了行。 */
+    const x0 = B.x + 104;
+    const maxW = R.go.x - 12 - x0;
+    if (maxW > 40) {
+      let txt = S.modBoard.say;
+      g.font = "13px " + FONT;
+      let w = g.measureText(txt).width;
+      if (w > maxW) { g.font = "12px " + FONT; w = g.measureText(txt).width; }
+      if (w <= maxW) {
+        g.fillStyle = "rgba(255,233,176,.92)";
+        g.fillText(txt, x0, R.go.y + 28);
+      }
+    }
+  }
+
+  const go = R.go;
+  rr(g, go.x, go.y, go.w, go.h, go.h / 2);
+  g.fillStyle = "#FFCE56";
+  g.fill();
+  g.textAlign = "center";
+  g.fillStyle = "#4A2E06";
+  g.font = "bold 16px " + FONT;
+  g.fillText("出发", go.x + go.w / 2, go.y + go.h / 2 + 6);
+
+  g.restore();
+}
+
+/** 看板命中。**返回** 'skip' / 'go' / 'close' / ''。 */
+function modBoardHit(mx, my) {
+  if (!modBoardOpen()) return { kind: "", i: -1 };
+  const R = modBoardRows();
+  const inB = (b) => mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
+  if (inB(R.close)) return { kind: "close", i: -1 };
+  if (inB(R.go)) return { kind: "go", i: -1 };
+  for (let i = 0; i < R.rows.length; i++) {
+    if (inB(R.rows[i].btn)) return { kind: "skip", i: i };
+  }
+  return { kind: "", i: -1 };
+}
+
 function drawGates(g) {
   const FONT = "'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
   const HZ = 470;
@@ -16603,6 +17084,7 @@ function tick(dt) {
      气泡，只在 play 阶段走钟；出征页没有玩家对象，用 S.say 写进去
      既看不见、也永远不会消失。 */
   if (S.phase === "portals" && S.gateTip.life > 0) S.gateTip.life -= dt;
+  if (S.modBoard && S.modBoard.sayT > 0) S.modBoard.sayT -= dt;
 
   if (S.hitStop > 0) {
     S.hitStop = Math.max(0, S.hitStop - dt);
@@ -16711,7 +17193,9 @@ function tick(dt) {
         /* 清场奖励 3 → 3+25（`bounty`）。
            3 这个数太小了：一屏收成实测 31~64，3 分等于 5%，
            玩家根本感觉不到"把场上清干净"有额外好处。 */
-        S.food += perkOn("bounty") ? 28 : 3;
+        /* 悬赏清场：3 → 28 → 36 → 44。第 1 层是**跳变**不是等差
+           （清场本来就是"全清才有奖励"，给 4 分没人会为它改打法）。 */
+        S.food += [3, 28, 36, 44][perkLv("bounty")] || 3;
         /* 记账顺手把"谁刚到家"接住。**返回值不能丢** ——
          * 丢了的话，解锁这件事就只剩 recordClear 内部那条 3.6 秒的 DOM 提示
          * （而且还只在 ?from=home 时才弹）。结算卡要靠这份数据画横幅。 */
@@ -17981,9 +18465,13 @@ function render() {
           g.textBaseline = "alphabetic";
           g.fillStyle = K.cream ? "rgba(74,53,36,.62)" : "rgba(255,255,255,.62)";
           g.font = "bold 13px " + FONT;
+          /* 第三件从「最深第 N 层」换成「巢币 +K」（2026-10-27）。
+             理由：最深层在出征页的门上已经报过，而巢币是**这一趟才挣到的**，
+             出了这张卡就没有第二处能看见它 —— 玩家会不知道那 30 枚哪来的。
+             宽度也刚好：原来那一串是最长的，「巢币 +K」比它短。 */
+          const coinGain = Math.max(0, Math.round(S.trip.nestCoins || 0));
           g.fillText("送走 " + S.killed + " 只　·　收成 " +
-                     Math.round(S.trip.loot) + " 果　·　最深 第 " +
-                     Math.max(readNestDepth(), S.nest.depth) + " 层",
+                     Math.round(S.trip.loot) + " 果　·　巢币 +" + coinGain,
                      cx, cardY + 367);
         }
       }
@@ -18045,8 +18533,19 @@ function render() {
         /* 深巢的"下一关"是**下一层**。这里读 `LEVELS[S.stage + 1]` 会取到
            主线第 2 屏的屏名 —— 深巢的 `S.stage` 永远是 0，于是每层都写着
            "雪原 · …"。两条轴不能混进同一句话。 */
+        /* 下一层如果有**新词条**，这一行优先报它。
+           倍率和掉饱回答的是"变难多少"，词条回答的是"规矩变了" ——
+           玩家按下去立刻要面对后者，而它只在这一屏说一次。 */
         const sub = S.nest
-          ? "第 " + (S.nest.depth + 1) + " 层 · ×" + nextMulti.toFixed(2) + " · " + nextBellyHint()
+          ? (function () {
+              const nx = S.nest.depth + 1;
+              const prevIds = nestModsAt(nx - 1).map(function (m) { return m.id; });
+              const fresh = nestModsAt(nx).filter(function (m) { return prevIds.indexOf(m.id) < 0; });
+              if (fresh.length) {
+                return "第 " + nx + " 层 · 新词条 " + fresh.map(function (m) { return m.name; }).join("、");
+              }
+              return "第 " + nx + " 层 · ×" + nextMulti.toFixed(2) + " · " + nextBellyHint();
+            })()
           : LEVELS[S.stage + 1].name + " · ×" + nextMulti.toFixed(2) + " · " + nextBellyHint();
         drawBtn(B.cont, hiCont, "继续深入", sub, true);
       } else if (ok && last) {
@@ -18077,6 +18576,9 @@ function render() {
     /* 出征页是**独立一屏**，不叠在门口上：这里要回答的是"去哪儿"，
        还没到"带谁出门"那一步。叠在门口会让人以为已经出门了。 */
     drawGates(g);
+    /* 词条看板叠在门之上（模态）。**必须画在 drawGates 之后**：
+       它是"下潜前的最后一道确认"，被门压在下面就读成装饰。 */
+    drawModBoard(g);
   } else {
     /* 其余阶段（select / play / clear / fail / jump）全部叠在门口场景上。
      * 挑一屏 2026-10-26 删除：它原本是叠在这里的第二层。 */
@@ -18136,7 +18638,14 @@ cv.addEventListener("mousemove", (ev) => {
   // 测试跳关面板是模态的：它在的时候别让下面的 select / 结算按钮跟着亮
   if (S.phase === "jump") { S.jumpHover = jumpHit(loc.x, loc.y); return; }
   if (S.phase === "select") S.hover = hitSelect(loc.x, loc.y);
-  if (S.phase === "portals") S.hoverGate = gateHit(loc.x, loc.y);
+  if (S.phase === "portals") {
+    if (modBoardOpen()) {
+      const h = modBoardHit(loc.x, loc.y);
+      S.modBoard.hover = h.kind === "skip" ? h.i : -1;
+      return;
+    }
+    S.hoverGate = gateHit(loc.x, loc.y);
+  }
   // 结算面板：指着按钮时不推进倒计时 —— 他正在读，别替他做决定
   if (S.phase === "clear" || S.phase === "fail") {
     const B = settleBtns();
@@ -18157,6 +18666,15 @@ cv.addEventListener("mousedown", (ev) => {
     return;
   }
   if (S.phase === "portals") {
+    /* 看板开着时，它吃掉所有点击 —— 否则会穿透到下面的门，
+       出现"点跳过结果进去了"这种最坏的错。 */
+    if (modBoardOpen()) {
+      const h = modBoardHit(loc.x, loc.y);
+      if (h.kind === "close") closeModBoard();
+      else if (h.kind === "go") { closeModBoard(); enterNest(); }
+      else if (h.kind === "skip") skipModAt(h.i);
+      return;
+    }
     gateTap(loc.x, loc.y);
     return;
   }
@@ -18437,11 +18955,24 @@ window.GROVE = {
   /* 饱食的两个真值：每屏掉多少、下一屏的力气变化怎么说。
      导出是为了让冒烟验真身，不是验副本。 */
   BELLY_PER_CLEAR, nextBellyHint, bellyCost,
-  /* 改造件。真值在主界面存档（`pawpack.save.v1`.perks），这里是只读副本；
-     `_setPerks` 只给测试用 —— "买了之后战斗侧真的变了"只能这样验，
-     光看 `perkOn()` 的返回值证明不了任何事。 */
-  PERK_IDS, perkOn, loadPerks,
-  _setPerks: (o) => { PERKS = Object.create(null); for (const k in o) if (o[k]) PERKS[k] = true; },
+  /* 改造件。真值在主界面存档（`pawpack.save.v1`），这里是只读副本。
+     **别在这里再列一遍 `PERK_IDS` / `perkOn`** —— 对象字面量里同名的键
+     只有最后一个生效，多写一遍不报错，只会让人以为"这里也导出了"。
+     层数那套（PERK_MAX_LV / perkLv）和它们一起在下面那块。 */
+  loadPerks,
+  /* 调试/测试注入改造件。**两种写法都收**：
+       { hotpit: true }  → 1 层（2026-10-27 之前所有测试和截图脚本都这么写，
+                            不收的话几十条断言会一起红，而它们验的是别的事）
+       { hotpit: 2 }     → 2 层（新的层数口径） */
+  _setPerks: (o) => {
+    PERKS = Object.create(null);
+    for (const k in o) {
+      const v = o[k];
+      if (v === true) { PERKS[k] = 1; continue; }
+      const n = Math.floor(Number(v));
+      if (isFinite(n) && n > 0) PERKS[k] = Math.min(n, PERK_MAX_LV);
+    }
+  },
   recordClear, readHomeSave, FROM_HOME,
   /* 星靶：判定 / 配靶表 / 落盘全导出。冒烟要能直接问
      "第 5 屏挂的是哪三个靶""recordStar 是不是只增不减""集满给多少"——
@@ -18467,7 +18998,22 @@ window.GROVE = {
   nestFogInit, nestFogTick, updatePods, nestPodBurst, fogSample,
   /* 深巢入口三件：截图脚本要走**真实入口**（enterNest）而不是手工拼关卡 ——
      手工拼能拍出图，真机那条路却可能一直坏着。 */
-  enterNest, exitNest, readNestDepth,
+  enterNest, exitNest, readNestDepth, writeNestDepth,
+  /* 词条 + 巢币（2026-10-27）。冒烟要能直接验：
+     "第 N 层生效哪几条""关掉之后还剩几条""币按新纪录差额发" ——
+     这三条截图完全看不出来，只能拿代码问。 */
+  NEST_MODS, nestModsAt, modOn, nestCoinAt,
+  /* 词条看板。冒烟要验：列出来的行数 = 已解锁条数、点"跳过"真的扣钱、
+     钱不够时**不落账**（这条只能拿代码问，截图上看起来一模一样）。
+     截图脚本还要 openModBoard + drawModBoard 才能把面板拍出来。 */
+  MOD_BOARD, openModBoard, closeModBoard, modBoardOpen, modBoardRows,
+  modBoardHit, skipModAt, drawModBoard, readNestCoins, spendNestCoins,
+  /* 改造件层数。`PERK_IDS` 只说明"有哪四件"，层数上限和读法必须一起导出，
+     否则冒烟只能验"名字对不对"，验不了"买到第 2 层真的变强了"。 */
+  PERK_IDS, PERK_MAX_LV, perkLv, perkOn,
+  /* 球寿命的出口。「空心」挂在它上面，而 PUSH_LIFE 有两处读 ——
+     不导出的话，冒烟只能验"词条在表里"，验不了"球真的散得更早"。 */
+  ballLife,
   FACTIONS,
   /* 测试跳关（F2）。导出是为了**能自动验证**："27 格都点得到、
      点第 N 格真的进第 N 屏、跳关不写存档"这三条只能靠代码问，截图看不出来。

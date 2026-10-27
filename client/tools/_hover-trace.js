@@ -46,6 +46,10 @@ function trace(kind, mode) {
   const f = P.foeFromSpec({ foe: kind, x: 480, y: 300, lv: 1 }, false);
   f.vx = 0; f.vy = 0; f.stun = 0;
   if (kind === "moth") { f.homeY = 300; }
+  /* **相位写死**：bob / ph 出生时是 rand()，两次 trace 各自随机的话
+     红绿两条线会错开半个周期，看图的人会以为"形状变了"。
+     固定之后两条线重叠在一起，唯一的差别就是那一层 2.5px —— 这才看得清。 */
+  f.bob = 0.7; f.ph = 1.1;
   S.foes.push(f);
 
   const ys = [];

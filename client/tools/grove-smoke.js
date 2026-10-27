@@ -472,6 +472,23 @@ console.log("\n=== 10a. 机制闭环：无限血下必须能清场 ===");
   console.log("  " + r);
   if (S.log.length) console.log("  " + S.log.filter(l => l.startsWith("upd")).slice(-10).join("\n  "));
 
+  /* 清不掉的时候必须能读出"剩的是谁、它为什么不动"。
+     只报 alive=2 等于什么都没说 —— 而"卡住"在这套物理里有四种完全不同的成因
+     （被桩顶住 / 贴在墙边 / 永远在空中 / 追着一个已经不存在的东西）。 */
+  if (S.phase !== "clear") {
+    for (const f of S.foes) {
+      console.log("    剩: " + f.def.name +
+        " jumper=" + f.jumper + " larva=" + (f.larva ? 1 : 0) +
+        " x=" + f.x.toFixed(0) + " y=" + f.y.toFixed(0) + " vx=" + (f.vx || 0).toFixed(0) +
+        " coat=" + f.coat + " dir=" + f.dir + " face=" + f.face +
+        " onG=" + (f.onGround ? 1 : 0) + " wallT=" + (f.wallT || 0).toFixed(2) +
+        " crouch=" + (f.crouch || 0).toFixed(2) + " pounce=" + (f.pounce || 0).toFixed(2) +
+        " landT=" + (f.landT || 0).toFixed(2) + " jumpCd=" + (f.jumpCd || 0).toFixed(2) +
+        " bornT=" + (f.bornT || 0).toFixed(1) +
+        " ground=" + (f.ground ? f.ground.kind + "@" + f.ground.y.toFixed(0) : "null"));
+    }
+  }
+
   ok(S.phase === "clear", "无限血下能把整片空地清空", "phase=" + S.phase + " alive=" + S.foes.length);
   ok(S.food >= 8, "收成要上双位数（说明球真的被结算了，不是全崩开）", "food=" + S.food);
   ok(S.t < 150, "清场用时不超过 150 秒", "t=" + S.t.toFixed(1));
@@ -501,7 +518,13 @@ function runBot(P, S, maxFrames) {
     if (process.env.TRACE && frames % 300 === 0) {
       console.log("    t=" + (frames / 60).toFixed(0) +
         " p=(" + S.p.x.toFixed(0) + "," + S.p.y.toFixed(0) + ") hp=" + S.p.hp +
-        " | " + S.foes.map(f => f.def.name + "@" + f.x.toFixed(0) + "," + f.y.toFixed(0) + "c" + f.coat).join("  ") +
+        /* `J` 后缀 = 跳虫（会追人、会往上层扑）。打在名字后面而不是末尾，
+           是为了让"剩下哪几只、它们是不是跳虫"能一眼读出来 ——
+           跳虫卡住和普通虫卡住是两种完全不同的病。 */
+        " | " + S.foes.map(f => f.def.name + (f.jumper ? "J" : "") +
+          "@" + f.x.toFixed(0) + "," + f.y.toFixed(0) +
+          "c" + f.coat + (f.onGround ? "g" : "a") +
+          (f.landT > 0 ? "L" : "") + (f.crouch > 0 ? "C" : "") + (f.wallT > 0 ? "W" : "")).join("  ") +
         " | balls=" + S.balls.map(b => b.x.toFixed(0) + "," + b.y.toFixed(0) + " v" + b.vx.toFixed(0) + " a" + b.air.toFixed(2)).join("  "));
     }
   }

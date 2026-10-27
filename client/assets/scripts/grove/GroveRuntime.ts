@@ -1891,8 +1891,8 @@ const LEVELS = [
      两朵菇。地面 → 462 → 248 一条完整的上升链。
      **副标题原来写「三朵菇」，数据里只有 2 朵** —— 玩家数菇数就会发现对不上。 */
   {
-    id: "wither_shrooms", name: "弹菇田", sub: "两朵菇 · 连弹上三层",
-    note: "地面那朵把球弹上 462，462 那朵再弹到 248。想上顶得连弹两次",
+    id: "wither_shrooms", name: "弹菇田", sub: "两朵菇往上送 · 一口井往下砸",
+    note: "弹菇把球一路顶到 248，248 中间凿了个洞 —— 球滚回来会自己掉下去，砸穿 350 落到 462。上行靠菇，下行靠井",
     theme: "wither3",
     goal: "bank", bank: 4, par: { time: 85, made: 10 },
     plats: [
@@ -1900,6 +1900,39 @@ const LEVELS = [
       { x: 120,    y: 462, w: 660, h: 20, kind: "ledge" },   // 120..780
       { x: 260,    y: 350, w: 380, h: 20, kind: "ledge" },   // 260..640
       { x: 340,    y: 248, w: 260, h: 20, kind: "ledge" },   // 340..600
+    ],
+    /* ★ 井（2026-10-27「层间开口」的样板屏）。
+     *
+     * ## 为什么是这一屏
+     *
+     * 前 26 屏里，"层与层"从来没有关系：462 是一块地，350 是一块地，
+     * 玩家在 350 推球，地面发生什么都跟他无关。这一屏原本有**上半条回路**
+     * ——弹菇 200 把球顶到 462、弹菇 520 把球顶到 248 —— 却没有下半条：
+     * 球上去了只能从台面边缘滚下去，落点由地形决定，玩家没得选。
+     *
+     * 井补的就是这一截：**菇是电梯，井是滑梯**。
+     * 完整的球在 462 → 菇 520 顶到 248 → 248 滚到 600 末端落下 → 350 → 滚进洞
+     * → 砸穿 350 落到 462 的 460 → 撞上菇 520 再被顶上去。**一条能跑圈的线。**
+     *
+     * ## 为什么只凿 350 一层（这条是踩出来的，不是想出来的）
+     *
+     * 第一版在 248 也凿了 410..510。结果 248 层被切成 340..410 / 510..600 两截，
+     * **左段成了孤岛**：球只能从右边（510..600）进来，永远到不了左段，
+     * 左段上的怪一个也清不掉 —— ALL9 当场一条红「营地真的能送到（地形通着）」，
+     * 落袋 2 / 目标 4。
+     *
+     * 根子是这条：**洞的价值就是"打断球道"，洞的代价也是"打断球道"。**
+     * 只有"球掉下去之后还有地方去"的位置，凿洞才是收益；
+     * 凿在某一段的正中间、把那一段切成两半，就是拿掉了一段球道。
+     * 248 层是这一屏唯一一条从 340 通到 600 的完整跑道，不能切。
+     *
+     * ## 数字
+     *   350 层洞 400..520（120 宽）—— 球从 248 的 600 落下，落点在 520 以西，
+     *   往右滚会从 640 末端掉走（不走洞），往左滚才会进洞。**两条路都由玩家选。**
+     *   落差 350 → 462 = 112 → vy ≈ 686 → 碾压半径 35
+     */
+    holes: [
+      { x: 460, y: 350, w: 120 },   // 400..520
     ],
     // 弹菇不摆在"落点 → 营地"那条路上，否则球被弹起来飞过营地，落袋关变死关。
     // 200 在地面（弹 229 越过 462），520 站在 462（再弹越过 248）。
@@ -1920,9 +1953,15 @@ const LEVELS = [
         { foe: "bug",  x: 200, y: 462 },
         { foe: "bug",  x: 360, y: 462 },
         { foe: "bug",  x: 640, y: 462 },
-        { foe: "bug",  x: 400, y: 350 },
+        { foe: "bug",  x: 340, y: 350 },
       ],
       [
+        /* 480 是**洞口**（400..520）。这只站上去就会掉到 462 —— 留着原坐标，
+         * 因为它掉的这一下正好把"这儿有个洞"演给玩家看：不用文字解释，
+         * 一只怪自己掉下去，玩家立刻知道脚下是空的。
+         *
+         * 落点在 462 层 480，也正是球从同一个洞砸下来的落点（vx≈0 时 460）——
+         * **它掉下去的地方，就是下一颗球砸到的地方**。 */
         { foe: "bug",  x: 480, y: 350 },
         { foe: "bug",  x: 400, y: 248 },
         { foe: "boar", x: 560, y: 248 },
@@ -3822,6 +3861,82 @@ let BROKEN = [];            // 已被打碎的浮台（存 PLATS 里的对象引
 /** 这块台面是不是碎了。**空数组时直接 false**，26 屏的普通怪不用付这个开销。 */
 function isBroken(p) { return BROKEN.length > 0 && BROKEN.indexOf(p) >= 0; }
 
+/* ============================================================================
+   层间开口（2026-10-27，用户："层间开口 + 球下坠碾怪，整套的地基"）
+   ==========================================================================
+
+   ## 为什么"板子短一截"和"板上有个洞"不是同一件事
+
+   27 屏里本来就到处是竖直通道 —— 但那些通道是**台面分离**的副产品：
+   左段到此为止、右段从别处开始，中间空出来的那一块，玩家的读法是
+   「这块板就到这儿」，不是「这儿有个洞，可以下去」。
+
+   这个区别不是美术问题，是**动词的来源**：
+     · 台面分离 → 球只能从"末端"滚出去，方向是被地形决定的，玩家只有一个选项
+     · 板上开洞 → 球走到哪一段都可能掉下去，**掉不掉是玩家自己算出来的**
+   只有后者才让"下坠"成为一件可以主动做的事。
+
+   ## 声明式描述，一次切割
+
+   关卡里只写一行 `holes: [{ x, w }]`，`cutPlats()` 把跨过它的台面切开。
+   不手改 27 屏的 `plats` 数组，理由有两条：
+     ① 手改是"改结果"，下次谁再调这条球道的长度，洞会静默消失；
+     ② 一行能读出来"这屏有一个 96 宽、中心在 340 的洞"，
+        翻 `plats` 只能看到两段长度，得自己减出洞在哪。
+
+   **地面不许开洞**：地面没了，营地、出生点、球的全套物理全塌 ——
+   和「断台不打 ground」是同一条护栏。
+   ------------------------------------------------------------------------- */
+let HOLES = [];              // 当前关的洞：{ x, w, y }（y = 洞口所在台面的顶面）
+/** 切开后不足这么宽的碎段直接扔掉 —— 那块木头跟着掉下去了。
+ *  留着它会变成一块 12px 的落脚点，球走到那儿会"卡一下"，读作故障。 */
+const HOLE_MIN_SEG = 24;
+
+/** 这一端是不是洞口。
+ *
+ *  台面端头本来会画一个**大年轮**（"这是一根被锯断的圆木"）——
+ *  那是"这条板到此为止"的信号，跟"这里被砸穿了一个洞"**是两种完全不同的信息**。
+ *  第一版在洞口端头盖了一块暗色锯齿，出图读作"有人在板头钉了个木方块" ——
+ *  因为圆角 + 年轮的外轮廓还在，任何覆盖都只能读成贴纸。
+ *  正确做法是**不画年轮**，改画毛茬（见 drawPlat 末尾）。
+ *
+ *  `y` 必须一起比：同一屏 350 和 248 两层可能各有一个洞。 */
+function holeEndAt(x, y) {
+  for (const h of HOLES) {
+    if (h.y !== y) continue;
+    if (Math.abs(x - (h.x - h.w / 2)) < 0.6 || Math.abs(x - (h.x + h.w / 2)) < 0.6) return true;
+  }
+  return false;
+}
+
+/** 把跨过洞的台面切开。返回新数组，**不修改入参**（LEVELS 是常量数据）。
+ *
+ *  `h.y` 是**必填**的：同一屏的 462 / 350 / 248 三层可能各开一个洞，
+ *  不写 y 就只能按 x 匹配，那样"248 层的洞"会把 462 层的板也切一刀。
+ *  井正是靠"同一 x、不同 y、各写一条"拼出来的。 */
+function cutPlats(plats, holes) {
+  const out = [];
+  for (const p of plats) {
+    if (p.kind === "ground" || !holes.length) { out.push(p); continue; }
+    let segs = [p];
+    for (const h of holes) {
+      if (h.y != null && p.y !== h.y) continue;   // 不是这一层
+      const hl = h.x - h.w / 2, hr = h.x + h.w / 2;
+      const next = [];
+      for (const s of segs) {
+        if (hr <= s.x || hl >= s.x + s.w) { next.push(s); continue; }   // 没碰到
+        const lw = hl - s.x, rw = s.x + s.w - hr;
+        if (lw >= HOLE_MIN_SEG) next.push(Object.assign({}, s, { w: lw }));
+        if (rw >= HOLE_MIN_SEG) next.push(Object.assign({}, s, { x: hr, w: rw }));
+        /* 两侧都不够长 → 这块板整个没了。不 push 任何东西。 */
+      }
+      segs = next;
+    }
+    for (const s of segs) out.push(s);
+  }
+  return out;
+}
+
 /** BOSS 流派：按场景族。三个产地三套打法，见上面的长注释。 */
 const BOSS_STYLE = {
   /* 三条动作里，**产卵（spawn）谁都不能关**。
@@ -3853,7 +3968,10 @@ function loadLevel(i) {
   /* 场景族跟着主题走。**必须在这里重置** —— 忘了的话，
      上一个产地的形状会跟到下一个产地（第 9 屏还在画第 8 屏的岩柱）。 */
   SCAPE = SCAPE_OF_THEME[L.theme] || "hills";
-  PLATS = L.plats;
+  /* 层间开口：有 holes 就切一份**副本**出来。
+     `LEVELS` 是常量数据，就地改的话重进这一关会越切越碎。 */
+  HOLES = L.holes || [];
+  PLATS = HOLES.length ? cutPlats(L.plats, HOLES) : L.plats;
   PITS = L.pits;
   STUMPS = L.stumps || [];
   CAMP = L.camp;
@@ -4400,6 +4518,35 @@ window.addEventListener("blur", () => {
 const GRAV = 2100;
 const MAXFALL = 1250;
 
+/* ---- 碾压（2026-10-27）----------------------------------------------------
+ * 球从高处砸下来，把身下的人直接压死。这是**第三个击杀动词**：
+ *   糊（撞三下 → 裹成球，装人、滚得大）  /  烧（推进火坑，双份收成）
+ *   /  **砸**（从高层掉下来，一次压一片，但球不长大）
+ *
+ * ## 为什么这条是整个"层间关系"的地基
+ *
+ * 没有它，27 屏的四层只是"四块互不相干的平地"：玩家在 350 层推球，
+ * 地面发生什么都跟他无关，高度只意味着"走位方便"。
+ * 有了它，高度 = **杀伤力** —— 掉得越深砸得越宽。上层立刻变成弹药库。
+ *
+ * ## 数字是怎么来的（实测落差 vs 速度，GRAV 2100 / MAXFALL 1250）
+ *   462 → 地面（落差  94）→ vy ≈ 628
+ *   350 → 地面（落差 206）→ vy ≈ 930
+ *   248 → 地面（落差 308）→ vy ≈ 1137
+ * 门槛 560 卡在"462 掉到地面"之下 68 —— 所以**任何一整层的落差都能砸**，
+ * 而平地滚动的球（vy≈0）和小跳（vy < 400）永远碰不到门槛。
+ *
+ * 弹菇把球弹到 980 再落回来也会触发，这是**故意保留**的：
+ * 弹菇本来就是个"把球送到高处"的装置，不认它才是违反直觉。
+ */
+const SLAM_VY = 560;        // 下坠速度门槛（px/s）
+const SLAM_REACH = 26;      // 基础碾压半径（球心 ±）
+const SLAM_GROW = 0.075;    // 每多 1px/s 增宽多少
+/** 一次最多碾几只。**这是护栏不是平衡**：井底排 6 只时，
+ *  一颗从 248 掉下来的球会把 6 只全压死，那一屏就变成"一个动作通关"。
+ *  玩家读到的是"这游戏没有第二关"，而不是"我打得漂亮"。 */
+const SLAM_CAP = 3;
+
 /* ============================================================================
    跳虫的四个数（2026-10-27）
    ----------------------------------------------------------------------------
@@ -4884,7 +5031,7 @@ function setupLevel() {
   S.failWhy = "";
   // 台词每关重置：first / big 是"这一关的第一次"，跨关累计就永远不说了
   S.say.txt = ""; S.say.t = 0; S.say.life = 0; S.say.fired = {};
-  S.stat = { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0, chests: 0, toured: 0, shroom: 0, rampIn: 0 };
+  S.stat = { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0, chests: 0, toured: 0, shroom: 0, rampIn: 0, slam: 0 };
   S.t = 0;
   S.shake = 0;
   S.flash = 0;
@@ -7201,6 +7348,17 @@ function updateBalls(dt) {
     // 重力 + 落地
     const prevY = b.y;
     b._fallVy = b.vy;
+    /* `landVy` = **这一帧落地时的下坠速度**，别的时刻恒为 0。
+     *
+     * 为什么不能用 `b.vy` 判碾压：落地那一下 `b.vy` 立刻被清成 0（见下面
+     * `b.vy = 0`），而碾压判定排在落地之后 —— 门槛永远过不了，整条机制
+     * 静默失效，而冒烟全绿、截图看不出任何异常。
+     * 为什么也不能用 `b._fallVy`：它是**这一帧开始前**的速度，落地那一帧
+     * 少了 GRAV·dt 这一段加速；而且弹菇把球顶起来时它还是正的，
+     * 一颗正在上升的球会被判成"砸下来"。
+     *
+     * 只在"真的落到某个面上"的那一刻赋值，语义只有一个：**这一帧砸实了**。 */
+    b.landVy = 0;
     b.vy = Math.min(b.vy + GRAV * dt, MAXFALL);
     b.y += b.vy * dt;
     b.onGround = false;
@@ -7218,6 +7376,7 @@ function updateBalls(dt) {
         /* 落地反馈：之前这里只有物理（vy 清零），视觉上是"球悬浮到位"。
            尘土量按**这帧之前的下落速度**给 —— 轻放不扬灰，砸下来才有。 */
         if (b._fallVy > 130) addDust(b.x, best.y - 2, Math.min(7, 2 + b._fallVy / 90), Math.min(1.5, b._fallVy / 380));
+        b.landVy = b.vy;      // 碾压缩放用：**清零之前**的真实下坠速度
         b.y = best.y; b.vy = 0; b.onGround = true; b.ground = best;
       }
     }
@@ -7310,6 +7469,68 @@ function updateBalls(dt) {
       }
     }
 
+    /* ---- 碾压：高度就是武器 ------------------------------------------------
+     *
+     * ## 为什么它必须独立成一段，而不是塞进下面的"撞敌人"
+     *
+     * 下面的撞击判定第一句就是 `dx > b.r + f.w / 2` —— 用的是**球半径**。
+     * 碾压的水平范围是 `reach`，最深的时候 69px，是球半径的两倍多。
+     * 塞进去的话，远一点的那几只先被半径判定 continue 掉，
+     * "砸得越深范围越宽"这条规则**永远碰不到第二只**。
+     *
+     * ## 竖直用扫掠，不用当前帧
+     *
+     * 一帧球底要走 19px（vy 1137 ÷ 60），而虫高约 30。
+     * 只看当前帧的话，快到落点那一帧球底可能已经越过虫身 3px，
+     * 表现是"明明砸在它头上却穿过去了" —— 而且是**偶尔**穿，
+     * 玩家只会觉得判定时好时坏。所以拿 [prevBot, bot] 这个区间去比。
+     *
+     * ## 触发点死锁在"落地那一帧"（`landVy`）
+     *
+     * 一开始用 `b.vy` 判 —— 落地时它已被清成 0，门槛永远过不了，机制静默失效。
+     * 改成"下落中每一帧都判"又走向另一个极端：一颗球能沿路连碾一串，
+     * `SLAM_CAP` 形同虚设。`landVy` 一帧非零、语义唯一，两个坑都绕开了。
+     *
+     * ## `coat >= 2` 才不碾（不是 `coat > 0`）
+     *
+     * 球砸下来前会在空中先蹭到那只怪一下（撞击判定比碾压宽松，`r + f.h/2`），
+     * 于是落地时它已经是 coat=1。要求 `coat === 0` 的话，
+     * **所有站在井底的怪都会被这一下蹭掉资格** —— 实测就是"球砸下去什么都没发生"。
+     * 所以门槛放在 2：蹭一层不算玩家的投入，糊到快变球才算。
+     */
+    /* 触发速度：下坠途中用 `b.vy`，落地那一帧用 `landVy`（那时 vy 已清零）。
+       只认其中一个都不行 —— 见下面 `landVy` 的注释。
+       `slamDone` 是"这一落已经结算过了"的闸：不加的话一颗球会沿路连碾一串，
+       `SLAM_CAP` 就形同虚设。落地后重新放开，下一落重新算。 */
+    const vfall = Math.max(b.vy, b.landVy || 0);
+    if (vfall >= SLAM_VY && !b.slamDone) {
+      const reach = SLAM_REACH + (vfall - SLAM_VY) * SLAM_GROW;
+      const bot = b.y - b.r;
+      const prevBot = bot - vfall * dt;
+      let n = 0;
+      for (const f of S.foes) {
+        if (n >= SLAM_CAP) break;
+        if (f.dead || f.moth || f.isBoss) continue;
+        if (f.coat >= 2) continue;
+        if (Math.abs(b.x - f.x) > reach + f.w / 2) continue;
+        if (prevBot > f.y + 6 || bot < f.y - f.h - 6) continue;
+        n++;
+        S.stat.slam = (S.stat.slam || 0) + 1;   // 验收要能读到这一局真的碾了几只
+        killByFall(f);            // 记账和"敌人掉出屏幕"完全一致：killed+1、food+1
+        for (let i = 0; i < 9; i++) {
+          addFrag(f.x + rand(-14, 14), f.y - f.h * 0.55, 5, "#8FBF66");
+        }
+        addDust(f.x, f.y, 6, 1.4);
+        addText(f.x, f.y - f.h - 12, n > 1 ? "碾 " + n + "!" : "碾!", "#FFE9A8", 19);
+        hitStop(0.045);
+        S.shake = Math.max(S.shake, 10);
+        S.flash = Math.max(S.flash, 0.07);
+      }
+      if (n > 0) b.slamDone = true;
+    }
+    /* 落地 / 在地面滚动时放开闸门，下一落重新结算。 */
+    if (b.onGround) b.slamDone = false;
+
     // 撞敌人：不满 3 层的糊一层（泥球糊两层），已经 2 层的被一撞就卷进球里
     if (Math.abs(b.vx) > 60 || Math.abs(b.vy) > 60) {
       for (const f of S.foes) {
@@ -7331,7 +7552,16 @@ function updateBalls(dt) {
         // BOSS 把球弹回来 —— 玩家可以站在旁边连续推同一颗球砸它，
         // 不用每次重新糊一颗。限球关才打得动。
         if (f.isBoss) {
-          coatFoe(f, (b.mud ? 2 : 1) + (b.frost || 0), null);
+          /* 从高处砸下来的球对 BOSS 连糊两层。
+             "把球送到高层再砸"在 BOSS 战里同样成立 —— 否则碾压只是清小怪的
+             技巧，到了收尾关就凭空消失，玩家会以为那是 bug。 */
+          const slamBonus = (b.landVy || b.vy) >= SLAM_VY ? 1 : 0;
+          if (slamBonus) {
+            addText(f.x, f.y - f.h - 18, "重砸!", "#FFE9A8", 20);
+            S.shake = Math.max(S.shake, 12);
+            S.flash = Math.max(S.flash, 0.08);
+          }
+          coatFoe(f, (b.mud ? 2 : 1) + (b.frost || 0) + slamBonus, null);
           if (b.frost > 0) { b.frost = 0; addText(b.x, b.y - b.r * 2 - 8, "冰壳碎了", "#BFE8FF", 15); }
           const dr = b.x < f.x ? -1 : 1;
           b.x = f.x + dr * (f.w / 2 + b.r + 2);
@@ -10139,6 +10369,51 @@ function drawBrokenPlat(g, p) {
   }
 }
 
+/* ---- 层间开口的断口 --------------------------------------------------------
+ *
+ * ## 为什么必须画，而且必须画成"参差"
+ *
+ * 洞在物理上只是"台面短了一截" —— 和"这块板本来就到这儿"**一模一样**。
+ * 不画断口，玩家看到的是两条独立的板，读作"这屏地形就是这么设计的"；
+ * 画了断口，才读作"这里被凿开一个口子，我能下去"。
+ * **同一个几何，画法不同，动词就不存在。**
+ *
+ * 所以这里的折点和 `drawBrokenPlat` **逐字同一套**（"直线是被人锯断，
+ * 参差才是被砸断"）—— 玩家在 BOSS 砸台那一屏已经学过这个语言，不用再学一次。
+ *
+ * ## 洞宽的下限是 84，不是"看起来够"
+ *
+ * 大队球半径 36（直径 72）。洞只有 60 宽时，球的落点区间会被两侧的板
+ * 各吃掉半颗球，表现是"大球滚过去不掉、小球掉"——**同一屏里规则不一致**，
+ * 玩家只会觉得随机。84 = 72 + 12 的余量，冒烟里有断言守着。
+ */
+function drawHoles(g) {
+  if (!HOLES.length) return;
+  /* 断口本身由 `drawPlat` 负责（它知道端头该画什么，见 `holeEndAt`）——
+     在外面盖一块色块只会读成"钉在板头的木方块"。
+     这里只补一件 `drawPlat` 不知道的事：**这个洞有多深**。
+     三道越往下越淡的短竖线，读作"往下通"，而不是"这里有一块空隙"。
+     没有它，玩家知道板断了，但不知道断了之后能掉到哪儿去。 */
+  for (const h of HOLES) {
+    const l = h.x - h.w / 2, r = h.x + h.w / 2;
+    g.strokeStyle = "rgba(28,44,32,.20)";
+    g.lineWidth = 2;
+    g.lineCap = "round";
+    for (let i = 0; i < 3; i++) {
+      const x = h.x + (i - 1) * (h.w * 0.26);
+      const y0 = h.y + 26 + i * 3;
+      g.globalAlpha = 0.55 - i * 0.12;
+      g.beginPath();
+      g.moveTo(x, y0);
+      g.lineTo(x, y0 + 16 - i * 3);
+      g.stroke();
+    }
+    g.globalAlpha = 1;
+    void l; void r;
+  }
+}
+
+
 /* ============================================================
  * BOSS 的预告层（断台 / 泥潮）
  *
@@ -10502,9 +10777,12 @@ function drawPlat(g, p) {
      故意比木身略鼓一点：鼓出来才看得出"这是被锯断的断面"。 */
   const capTone = hexMix(TH.wood3, "#FFEDC4", 0.42);
   const ringTone = hexMix(TH.wood2, "#3E2410", 0.28);
+  /* 洞口那一端**不画年轮**（见 holeEndAt 的注释），改画毛茬。 */
+  const holeL = holeEndAt(p.x, p.y);
+  const holeR = holeEndAt(p.x + p.w, p.y);
   const capEnds = [];
-  if (openL) capEnds.push([p.x + 5.5, 1]);
-  if (openR) capEnds.push([p.x + p.w - 5.5, -1]);
+  if (openL && !holeL) capEnds.push([p.x + 5.5, 1]);
+  if (openR && !holeR) capEnds.push([p.x + p.w - 5.5, -1]);
   for (const [ex] of capEnds) {
     for (let L = 0; L < 2; L++) {
       const cy = p.y + L * LH + LH / 2;
@@ -10570,6 +10848,32 @@ function drawPlat(g, p) {
      左右各内缩 2px，避开端头那个大年轮（雪不该盖住断面）。 */
   if (TH.snow && S.snowDepth > 0.04) {
     snowLine(g, p.x + 3, p.w - 6, p.y + 1, S.snowDepth);
+  }
+
+  /* ⑤ 洞口端：**毛茬**（见 holeEndAt）。
+   *
+   * 年轮读作"被锯断的圆木断面" = 这条板到此为止；
+   * 毛茬读作"被砸断的木纤维" = 这里被凿穿了一个洞。
+   * 三根长短不一的木刺向洞里伸 —— 一根太规矩，五根太碎。
+   * 长度用 `hash` 定死，**不能每帧随机**：随机的话这一帧长 6px、下一帧长 14px，
+   * 静止的洞口会自己抖，读作"在呼吸"。 */
+  for (const [ex, dir] of [[p.x, -1], [p.x + p.w, 1]]) {
+    if (!(dir < 0 ? holeL : holeR)) continue;
+    for (let i = 0; i < 3; i++) {
+      const o = hash(ex * 0.31 + i * 17);
+      const len = 5 + o * 10;
+      const y0 = p.y + 3 + i * (TK - 9) / 2;
+      g.beginPath();
+      g.moveTo(ex, y0);
+      g.lineTo(ex + dir * len, y0 + 1.5 + o * 2.5);
+      g.lineTo(ex, y0 + 5.5);
+      g.closePath();
+      g.fillStyle = hexMix(TH.wood3, "#FFE9BE", 0.35);
+      g.fill();
+      g.strokeStyle = "rgba(60,32,14,.45)";
+      g.lineWidth = 1;
+      g.stroke();
+    }
   }
 }
 
@@ -11978,6 +12282,8 @@ function drawLevel() {
      两者各管一层，挪哪边都会有一层错位。 */
   for (const f of S.foes) if (foeUnderPlat(f)) drawFoe(g, f);
   for (const p of PLATS) if (p.kind !== "ground" && !isBroken(p)) drawPlat(g, p);
+  /* 断口压在台面之上：它画的就是"这块板的边" —— 画在下面会被板自己盖掉。 */
+  drawHoles(g);
   /* 板底下有东西正往上顶时，在板**顶面**画一道跟着它走的暗影。
    *
    *  **没有这一层，虫会被板整只吃掉**：虫高 28、板厚 20，压到板后面只剩
@@ -19792,6 +20098,23 @@ Object.defineProperty(GROVE, "drawFgPebble", { get: () => drawFgPebble });
    "泥潮真的改了材质"。这些不导出就只能截图目视。 */
 Object.defineProperty(GROVE, "BOSS_STYLE", { get: () => BOSS_STYLE });
 Object.defineProperty(GROVE, "BROKEN", { get: () => BROKEN });
+/* 洞必须是 **getter**：`loadLevel` 每次换关都重新赋值，快照会让测试永远读到
+   第一屏的那一组（深巢的 `WALL_L` 已经踩过这个坑）。 */
+Object.defineProperty(GROVE, "HOLES", { get: () => HOLES });
+/** 切割后的分段。测试拿它验"洞两侧各留了多长"，比读 HOLES 更直接 ——
+ *  洞声明得再漂亮，板被切成 8px 的碎渣一样不能玩。 */
+Object.defineProperty(GROVE, "cutPlats", { value: cutPlats });
+/* 碾压的四个数字也导出去：`_slam-check` 要拿**同一份**门槛/半径算期望值。
+   在测试里抄一遍 560 / 26 / 0.075，下次调参两边就漂 ——
+   「碰撞盒是机制、视觉尺寸是观感」那次的教训是同源的：一个数只能有一个出处。 */
+Object.defineProperty(GROVE, "SLAM_VY",    { get: () => SLAM_VY });
+Object.defineProperty(GROVE, "SLAM_REACH", { get: () => SLAM_REACH });
+Object.defineProperty(GROVE, "SLAM_GROW",  { get: () => SLAM_GROW });
+Object.defineProperty(GROVE, "SLAM_CAP",   { get: () => SLAM_CAP });
+Object.defineProperty(GROVE, "HOLE_MIN_SEG", { get: () => HOLE_MIN_SEG });
+/* 关卡表给验收脚本遍历用（"27 屏所有洞都合规"必须真遍历，不能只看第 15 屏）。 */
+Object.defineProperty(GROVE, "LEVELS", { get: () => LEVELS });
+Object.defineProperty(GROVE, "ACTIVE", { get: () => ACTIVE });
 Object.defineProperty(GROVE, "isBroken", { get: () => isBroken });
 Object.defineProperty(GROVE, "crackPlat", { get: () => crackPlat });
 Object.defineProperty(GROVE, "mudRise", { get: () => mudRise });

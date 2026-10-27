@@ -142,4 +142,42 @@ console.log("\n=== 「加注」视觉验收 ===");
   console.log("  深巢对照：x2（绿）vs x4（金）");
 }
 
+/* ---- 图 3：石球 —— 从"能滚的球"变成"能踩的砖" ----
+ *  验三件：① 颜色读不读得出"石头"（不是灰版球）；
+ *          ② 气圈有没有去掉（留着就是骗人，它不漏气了）；
+ *          ③ 玩家站上去的画面成不成立（脚踩在球顶、不是陷进去）。 */
+{
+  const { P, canvas } = boot();
+  P._start(0);
+  const S = P.S;
+  S.shots.length = 0; S.balls.length = 0; S.texts.length = 0;
+  P.CHASMS.length = 0;
+  const gy = P.GROUND_Y;
+
+  const b1 = ballWith(P, S, 2, 300, gy);
+  b1.y = gy; b1.vx = 0; b1.pushed = true;
+  const b2 = ballWith(P, S, 1, 620, gy);
+  b2.y = gy; b2.vx = 0; b2.pushed = true;
+  S.foes.length = 0;
+  S.balls = S.balls.filter(b => !b.dead);
+
+  P.hardenBall(b1);          // 左边：石球（里面装着 2 只）
+  /* 右边那颗留成普通球做对照 —— 一眼看出"灰的"和"绿的"不是同一件事 */
+
+  /* 玩家站在石球上 */
+  const p = S.p;
+  p.x = process.env.NOPLAYER ? 900 : b1.x;
+  p.y = b1.y - b1.r;
+  p.vx = 0; p.vy = 0;
+  p.onGround = true;
+  p.ground = { x: b1.x - b1.r * 0.62, y: b1.y - b1.r, w: b1.r * 1.24, kind: "ball", ball: b1 };
+  p.hp = 999;
+
+  for (let i = 0; i < 3; i++) P.tick(1 / 60);
+  P.render();
+  shot(canvas, "_stone-scene");
+  console.log("  左：石球 holds=" + b1.holds + " stone=" + !!b1.stone +
+    " air=" + b1.air.toFixed(2) + "   右：普通球 stone=" + !!b2.stone);
+}
+
 console.log("");

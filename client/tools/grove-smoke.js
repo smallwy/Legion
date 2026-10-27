@@ -323,6 +323,82 @@ console.log("\n=== 5a-2. 「加注」：第三只起收成超线性 ===");
      `3:${fire(3)}>${P.bankGain(3)} 4:${fire(4)}>${P.bankGain(4)} 5:${fire(5)}>${P.bankGain(5)}`);
 }
 
+console.log("\n=== 5a-3. 石球：停住就是一块砖 ===");
+{
+  /* 只放**三条致命项**进来，其余在 `tools/_stone-check.js`。
+     选这三条的标准：坏了就是"玩家辛苦造的球凭空没了"或"人能凭空消失"，
+     属于一眼看不出、但要等玩家报 bug 的那种。 */
+  const sb = boot();
+  const P = sb.GROVE, S = P.S;
+  P._start(0);
+  S.foes.length = 0;
+  S.texts.length = 0;
+  P.CHASMS.length = 0;          // 挪开营地，否则球滚过去会被正常吃掉
+
+  const mk = (x, holds) => {
+    const f = P.foeFromSpec({ foe: "bug", x: x + 200, y: P.GROUND_Y, lv: 1 }, false);
+    P.makeBallFrom(f, 0, 0);
+    const b = S.balls[S.balls.length - 1];
+    b.x = x; b.y = P.GROUND_Y;
+    b.vx = 0; b.vy = 0; b.holds = holds;
+    b.packed = new Array(holds).fill(f.def);
+    b.pushed = true; b.onGround = true;
+    return b;
+  };
+
+  /* ① 按 ↓ 压住 → 立刻变石球 */
+  const b1 = mk(300, 2);
+  const p = S.p;
+  p.x = b1.x - b1.r - p.w / 2 - 1;
+  p.y = P.GROUND_Y;
+  p.onGround = true; p.face = 1; p.runD = 0;
+  S.keys.down = true;
+  P.tick(1 / 60);
+  S.keys.down = false;
+  ok(b1.stone, "按 ↓ 贴着球 → 变石球");
+  /* **必须把玩家挪开**：他贴着球站着，下一帧就会被"贴近就推"判成推球，
+     石球立刻活过来（这正是设计）。但我们要验的是"没人动它就是一块砖"。 */
+  p.x = 700; p.onGround = true;
+
+  /* ② 石球不漏气、不会自己崩（后者验的是 `b.t > 45` 那条兜底有没有豁免） */
+  const air0 = b1.air;
+  for (let i = 0; i < 60 * 6; i++) P.tick(1 / 60);
+  ok(!b1.dead && Math.abs(b1.air - air0) < 1e-6, "石球不漏气、不自己崩",
+     air0.toFixed(2) + " → " + b1.air.toFixed(2));
+
+  /* ③ 推起来就活过来，而且**不回气**（回气的话石球会变成刷气手段） */
+  const p2 = S.p;
+  p2.x = b1.x - b1.r - p2.w / 2 - 1;
+  p2.y = P.GROUND_Y;
+  p2.onGround = true; p2.face = 1;
+  P.tick(1 / 60);
+  ok(!b1.stone && b1.vx > 0, "推一下石球又滚起来", "vx=" + b1.vx.toFixed(0));
+  ok(b1.air <= air0 + 1e-6, "推起来不回气（否则石球=刷气机）",
+     air0.toFixed(2) + " → " + b1.air.toFixed(4));
+
+  /* ④ 超上限爆最老那颗，人必须回到场上 */
+  const sb2 = boot();
+  const P2 = sb2.GROVE, S2 = P2.S;
+  P2._start(0);
+  S2.foes.length = 0; S2.texts.length = 0;
+  P2.CHASMS.length = 0;
+  const made = [];
+  for (let i = 0; i < 3; i++) {
+    const f = P2.foeFromSpec({ foe: "bug", x: 320 + i * 150, y: P2.GROUND_Y, lv: 1 }, false);
+    P2.makeBallFrom(f, 0, 0);
+    const b = S2.balls[S2.balls.length - 1];
+    b.x = 320 + i * 150; b.y = P2.GROUND_Y; b.vx = 0; b.onGround = true;
+    made.push(b);
+  }
+  const foes0 = S2.foes.length;
+  for (const b of made) P2.hardenBall(b);
+  ok(S2.balls.filter(x => x.stone && !x.dead).length === P2.STONE_MAX,
+     "同时最多 " + P2.STONE_MAX + " 颗石球");
+  ok(made[0].dead, "超上限时爆的是**最老**那颗（不是刚摆好的）");
+  ok(S2.foes.length > foes0, "里面的人被吐回场上（没有凭空消失）",
+     foes0 + " → " + S2.foes.length);
+}
+
 console.log("\n=== 5b. 泥坑：球裹泥、变重（撞人 +2 层）===");
 {
   const sb = boot();

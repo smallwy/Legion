@@ -192,6 +192,39 @@ const PUSH_RUN = 0.95;
  *  读作"球推不动"。4.6 秒足够滚穿一整屏再回来。 */
 const PUSH_LIFE = 4.6;
 
+/* ---- 石球（2026-10-27）：停下来就是一块砖 -------------------------------
+   玩家原话：「球停留在平台可以跳上去，这个建议做。」
+
+   这条和"气"曾经被认为是冲突的（球会漏光崩开，怎么能变成永久地形），
+   想通之后才发现刚好相反：**气管的是"滚动的寿命"，硬化管的是"停下来"**。
+   一颗球要么在滚（漏气、会崩、是弹药），要么停住（不漏气、不崩、是砖）。
+   两者不是同一件事，不该抢同一条规则。
+
+   判定用"静止"而不是"撞到某个位置"：
+     · 撞墙 ×0.62 衰减，墙角上几脚之后必然掉到 90 以下 —— 死角自己会出现；
+     · 满力推（1209）撞 6 次才慢下来，那时 `ballLife()` 早过了，会滚到爆。
+       **于是"轻踢才停得住、猛推一定滚到爆"** —— 和既有的"推出去=一次性"
+       是同一个味道，不用额外加规则。
+
+   上限 2 颗：不加的话玩家会把整屏的球都摆成楼梯。上限是硬约束，
+   不是建议 —— 第 3 颗硬化时最老的那颗会崩开（人吐回场上，绝不凭空消失）。
+   -------------------------------------------------------------------------- */
+const STONE_HOLD = 0.5;   // 满足条件后还要撑多久。0.5 秒比一次呼吸短，玩家不会等
+const STONE_MAX = 2;      // 同时存在的石球上限
+/* **两个速度阈值，各管一件事 —— 用一个数会出人命。**
+ *
+ * `STONE_STOP`（撞墙时用）：撞墙后该怎么处理。620（PUSH_BASE）→ 384（第一脚）
+ *   → 238（第二脚），所以 260 意味着"第二脚撞完就该停了"。放 90 的话永远等不到
+ *   （减到 90 要撞 5 次、约 7 秒，而 `ballLife()` 只有 4.6 秒），**窗口是空的**。
+ *
+ * `STONE_V`（硬化时用）：贴墙之后"真的停下来了"的判据。放得很低，因为
+ *   **"减速"和"停下"不是一回事**：球在墙边撞怪、撞木桩都会减速（×0.42~0.62），
+ *   用 260 判就会在装人的过程中把球变成砖 —— 实测 ALL9 第 12 屏
+ *   「单球最多装 2 只、目标 3 只」、第 15 屏「落袋 3 / 目标 4」当场打红。
+ *   撞墙时 `STONE_STOP` 已经把 `vx` 归零，所以这里 40 只是排除"还在挪"的球。 */
+const STONE_STOP = 260;
+const STONE_V = 40;
+
 const HEROES = [
   {
     id: "cat", name: "尖耳猫", tag: "溜溜球",
@@ -4459,6 +4492,27 @@ function stepBody(b, dt) {
         }
       }
     }
+    /* 石球顶面也是落脚点（2026-10-27）。
+       **只给玩家**：`b.hero !== undefined`。给敌人的话，敌人会开始站在球上，
+       那一屏的站位分布整体改变 —— ALL9 的清场基线是拿敌人站位调的，
+       一只怪站高 20px 就可能让机器人的推球路线全废。石球是给玩家用的台阶，
+       让敌人也吃它属于"顺手加的副作用"，不该混进这次改动。
+
+       横向判定用 `r * 0.62` 而不是 `r`：球面是圆的，踩着边缘会滑。
+       用满宽的话，玩家脚离圆心 0.9r 也算"站住了"，画面上人会悬在球外面。 */
+    if (b.hero !== undefined) {
+      for (const ball of S.balls) {
+        if (!ball.stone || ball.dead) continue;
+        const top = ball.y - ball.r;
+        const hw = ball.r * 0.62;
+        if (b.x + b.w / 2 < ball.x - hw || b.x - b.w / 2 > ball.x + hw) continue;
+        if (prevY <= top + 2 && b.y >= top) {
+          if (!best || top < best.y) {
+            best = { x: ball.x - hw, y: top, w: hw * 2, kind: "ball", ball };
+          }
+        }
+      }
+    }
     // 斜坡：坡面也是落脚面。上一版只有球认坡、人不认，
     // 结果玩家走上去直接穿到地面 —— 看得见坡、踩不上去，地图就成了假的。
     if (!dropping) {
@@ -5675,13 +5729,38 @@ function updatePlayer(dt) {
   const pushPow = pushPowerNow();
   for (const b of S.balls) {
     if (b.dead) continue;
+    /* 站在石球上不许把它推走 —— 否则玩家一抬脚就踩空，
+       而且这个判定本来就**几乎踩线**：`b.y < p.y + 20` 在 p.y = b.y - r、
+       r ≥ 22.8 时已经接近为假，靠不住的边界不能拿来做功能。 */
+    if (b.stone && p.ground && p.ground.ball === b) continue;
     // 判定窗口 = 两个圆刚好相切再加 2px。上一版是 -4 ——
     // 人得先"陷进球里 4px"才算推，而人和球之间没有碰撞体，
     // 于是高速冲过去的那一帧常常整个跳过窗口：看起来就是"从球里穿过去了"。
     if (Math.abs(b.x - p.x) < b.r + p.w / 2 + 2 &&
         b.y > p.y - p.h - b.r * 2 && b.y < p.y + 20) {
       const pushDir = (b.x - p.x) !== 0 ? sign(b.x - p.x) : p.face;
+      /* ---- 按 ↓ 把球压住，变石球（2026-10-27）----
+         为什么不是"滚到墙角就自动变砖"：**这个游戏里的球永远不会停**。
+         撞墙 ×0.62 有 `MIN_BOUNCE = 120` 兜底（那是为了"球贴墙慢慢蹭时
+         眼睛还看得到在弹"），所以低速撞墙之后仍然有 120px/s。
+         试过让它停下来（低速撞墙 `vx = 0`），ALL9 立刻两条红：
+         第 12 屏「单球最多装 2 只、目标 3 只」、第 15 屏「落袋 3 / 目标 4」——
+         球少滚一段就少撞几只，**清场能力是拿"球一直在滚"算出来的**。
+         所以"停住"必须由一个**玩家动作**产生，不能由物理自己发生。
+         ↓ 键本来就是"从台面下穿"，压在球上是同一个动作的另一种用法；
+         机器人不按 ↓，所以这条对 27 屏基线完全免疫。 */
+      if (S.keys.down && b.onGround && !b.stone) {
+        hardenBall(b);
+        continue;
+      }
       if (Math.abs(b.vx) < 140) {
+        /* 推一下就"活过来"：石球恢复成普通球，重新开始漏气。
+           **气不给补** —— 补了就变成"存球回血"，石球会变成刷气手段。 */
+        if (b.stone) {
+          b.stone = 0;
+          b.stillT = 0;
+          addText(b.x, b.y - b.r * 2 - 16, "又滚起来了", "#CFC7B2", 16);
+        }
         b.vx = pushDir * pushPow;
         b.vy = Math.min(b.vy, -40);
         // 推出去 = 一次性。见 updateBalls 里 "推出后必消失" 那条。
@@ -6875,8 +6954,10 @@ function updateBalls(dt) {
     if (b.pushSquash > 0) b.pushSquash = Math.max(0, b.pushSquash - dt * 1.9);
 
     // 寿命上限已由"气"接管（air <= 0 就崩），这里只留一个兜底，
-    // 防止极端情况下球卡在某个角上永远不死
-    if (b.t > 45) { burstBall(b); continue; }
+    // 防止极端情况下球卡在某个角上永远不死。
+    // **石球豁免**：它的寿命由玩家决定（推起来就活，不推就是一块砖）。
+    // 不豁免的话，深巢一层打 240 秒，玩家存着的垫脚会在第 45 秒当着他面炸开。
+    if (b.t > 45 && !b.stone) { burstBall(b); continue; }
 
     /* 掉出世界：**不该发生**，但一旦发生绝不能让人凭空消失。
      * 原来只有一行 `b.dead = true` —— 球没了，装在里面的人也没了，
@@ -6901,6 +6982,44 @@ function updateBalls(dt) {
       for (const f of respawnPacked(b, 1, WALL_L + 46)) S.foes.push(f);
       continue;
     }
+
+    /* ---- 石球：停住就是一块砖（见 hardenBall 上方那段设计注释）----
+       **三个条件缺一不可，每一个都是被打红之后补的**：
+
+       · `b.pushed` —— 刚造出来的球本来就是静止的（vx=0、onGround），
+         少了它玩家一造球它就变砖，连推都推不走。实测当场把清场、bounty、
+         无限血三条基线全打红。
+
+       · `atWall` —— **只认"贴着墙停住"**。第一版只判 `|vx| < 260`，
+         结果球在装人的时候被撞减速（撞一下 ×0.42~0.7），速度掉到 260 以下
+         就被判成停住了 —— 攒到第 2 只就变砖，直接把刚做的「加注」毁掉。
+         ALL9 第 12 屏「单球能装够目标只数 最大 2 vs 目标 3」就是它。
+         **"减速"和"停下"不是一回事，判据必须落到几何上（贴墙）而不是速度上。**
+
+       · `b.onGround` —— 空中的球贴墙不算（它只是路过墙角）。 */
+    if (!b.stone) {
+      const atWall = (b.x - b.r < WALL_L + 6) || (b.x + b.r > WALL_R - 6);
+      /* **判据是"位置不再变"，不是"速度小"。**
+         第四版了。前三版都在速度上做文章，全部被 ALL9 打回：
+           ① 只判 `|vx| < 260` → 刚造出来的球也静止 → 一造出来就变砖，三条基线全红
+           ② 加 `b.pushed` → 球装人时被撞减速到 260 以下 → 攒到 2 只就变砖
+              （第 12 屏「目标 3 只」、第 15 屏「落袋 4」）
+           ③ 加 `atWall` + `|vx| < 40` → 球在墙边撞木桩减速到 40 以下 → 同样变砖
+         根子在于**"减速"和"停下"不是一回事**，而墙边恰恰是两个都会发生的地方。
+         速度是连续量，任何阈值都有一条可以误踩的边；位移是事件的直接结果 ——
+         撞墙时 `STONE_STOP` 已经把 `vx` 归零，位置就真的不动了。
+         所以这里比较**这一帧和上一帧的 x**：`< 0.25px` 才算停
+         （0.25 ≈ 15px/s，一帧 0.25px 肉眼看不见）。 */
+      const still = b._sx !== undefined && Math.abs(b.x - b._sx) < 0.25;
+      b._sx = b.x;
+      if (b.pushed && b.onGround && atWall && still) {
+        b.stillT = (b.stillT || 0) + dt;
+        if (b.stillT >= STONE_HOLD) { hardenBall(b); continue; }
+      } else {
+        b.stillT = 0;
+      }
+    }
+    if (b.stone) { b.vx = 0; continue; }
 
     // ---- 漏气：这一版的核心压力
     // 滚动时慢慢漏，停着漏得更快。于是"攒 3 只再推"不是免费的：
@@ -7020,6 +7139,14 @@ function updateBalls(dt) {
       const impact = Math.abs(b.vx);
       const MIN_BOUNCE = 120;
       b.x = left ? WALL_L + b.r : WALL_R - b.r;
+      /* ---- 低速撞墙不反弹，就地停住（2026-10-27，为石球服务）----
+         原来这里无条件 ×0.62 + MIN_BOUNCE 兜底，也就是**球永远不会停在墙边**。
+         于是"滚到墙角停住变成一块砖"这件事在物理上根本不可能发生 ——
+         石球机制写了半天，实测触发 0 次。
+         现在：推出去过、且已经很慢的球撞墙就直接 `vx = 0`，贴着墙停住，
+         0.5 秒后由 `hardenBall` 硬化。玩家看到的是"滚到墙角，定住了"。
+         **不计数 `wallHits`** —— 那是"撞散"的闸（>=3 爆球），
+         停住的球没撞散，不该被它算进去。 */
       b.vx = -b.vx * 0.62;
       if (Math.abs(b.vx) < MIN_BOUNCE) b.vx = (left ? 1 : -1) * MIN_BOUNCE;
       S.shake = Math.max(S.shake, 5);
@@ -7313,6 +7440,9 @@ function updateBalls(dt) {
        * 比"人白推一趟"更符合玩家对这一侧的理解。 */
       if (b.x + b.r > WALL_R) {
         b.x = WALL_R - b.r;
+        /* 低速撞右端也停住（2026-10-27）：地面车道这里原来只有 ×0.62，
+           球会贴着右墙一直弹到漏气崩开 —— 玩家看到的是"球在墙角抽搐"。
+           和台面那条走同一个门槛，石球才有可能出现在地面上。 */
         if (b.vx > 0) b.vx = -b.vx * 0.62;
       }
     } else {
@@ -7820,6 +7950,39 @@ function respawnPacked(b, coat, atX) {
     });
   }
   return out;
+}
+
+/** 把一颗停住的球硬化成「石球」：不再漏气、不再崩、可以踩。
+ *
+ *  三个必须做对的地方：
+ *   1. `b.pushed = false` —— 否则"推出去 4.6 秒必散"那条会继续数，
+ *      石球会在第 5 秒当着玩家的面炸开，而玩家刚把它踩在脚下。
+ *   2. 超上限时爆的是**最老**的那颗（`S.balls` 里排在最前），不是新的那颗。
+ *      爆新的等于"你刚摆好就没了"，玩家读作 bug；爆老的读作规则。
+ *   3. 爆开必须走 `burstBall`（它内部 `respawnPacked` 把里面的人吐回场上）。
+ *      自己写 `b.dead = true` 会让人凭空消失 → `killed` 不涨 → 这一屏不可通关。
+ *      这个坑在 `killByFall` 上已经踩过一次，注释在 updateBalls 里。 */
+function hardenBall(b) {
+  b.stone = 1;
+  b.vx = 0;
+  b.vy = 0;
+  b.stillT = 0;
+  b.pushed = false;
+  b.relT = 0;
+  b.pushSquash = 0;
+  S.stat.stoned = (S.stat.stoned || 0) + 1;
+  addText(b.x, b.y - b.r * 2 - 18, "定住了", "#BDB49E", 17);
+  for (let i = 0; i < 10; i++) addFrag(b.x, b.y - b.r, 5, i % 2 ? "#9C9482" : "#CFC7B2");
+  S.shake = Math.max(S.shake, 2);
+
+  const stones = S.balls.filter(x => x.stone && !x.dead);
+  if (stones.length > STONE_MAX) {
+    const old = stones.find(x => x !== b);
+    if (old) {
+      addText(old.x, old.y - old.r * 2 - 18, "撑不住了…", "#FF9E8E", 17);
+      burstBall(old);
+    }
+  }
 }
 
 function burstBall(b, why) {
@@ -14508,12 +14671,17 @@ function drawBall(g, b) {
 
   // 外发光：球是场上唯一"可交互"的东西，必须一眼从敌人里挑出来。
   // 刺毛虫本身也是绿圆球（#8FC96A），只靠颜色分不开 —— 靠光晕和体量。
-  g.globalAlpha = 0.22 + Math.sin(S.t * 7) * 0.09;
-  g.fillStyle = b.mud ? "#B08A52" : "#D8F98C";
-  g.beginPath();
-  g.arc(cx, cy, r * 1.34, 0, 6.283);
-  g.fill();
-  g.globalAlpha = 1;
+  // 石球仍然可交互（能踩、推一下又能滚），所以光晕要留；
+  // 但颜色换成石头色系 —— 用黄绿光晕的话，一颗灰球在发绿光，读作"它还是绿的"。
+  // 透明度也压一半：石球已经不是"活的"，光晕弱一档才对。
+  if (!b.stone) {
+    g.globalAlpha = 0.22 + Math.sin(S.t * 7) * 0.09;
+    g.fillStyle = b.mud ? "#B08A52" : "#D8F98C";
+    g.beginPath();
+    g.arc(cx, cy, r * 1.34, 0, 6.283);
+    g.fill();
+    g.globalAlpha = 1;
+  }
 
   // 球体
   /* 「加注」的主信号是**球本身的颜色**，不是那圈金环。
@@ -14522,8 +14690,10 @@ function drawBall(g, b) {
      两条绿/金细线挤在一起读作一条描边。**弱信号叠在强信号旁边等于没有。**
      现在球体从黄绿（#C9E96E）直接转金（#E9DC72），环只当动画。
      泥球不动 —— 泥是"变狠"的状态，两者可以同时存在（泥金球合理）。 */
-  const gold = b.holds >= 3;
-  g.fillStyle = b.mud ? "#7A5C36" : gold ? "#E9DC72" : "#C9E96E";
+  const gold = b.holds >= 3 && !b.stone;
+  g.fillStyle = b.stone ? "#A89F8A"
+              : b.mud ? "#7A5C36"
+              : gold ? "#E9DC72" : "#C9E96E";
   g.beginPath();
   g.ellipse(cx, cy, rx, ry, 0, 0, 6.283);
   g.fill();
@@ -14576,38 +14746,58 @@ function drawBall(g, b) {
     }
   }
 
-  // 缠绕的苔绳：跟着 spin 转，读得出"在滚"
+  /* 缠绕的苔绳：跟着 spin 转，读得出"在滚"。
+     石球换成**石缝**：三条弧改成三条折线，而且不转（spin 冻结在硬化那一刻，
+     因为转 = 在滚 = 还能推，会误导玩家去推一块砖）。
+     弧是"缠着的东西"，折线才是"裂开的石头" —— 这个区别在 46px 上很明确。 */
   g.save();
   g.translate(cx, cy);
-  g.rotate(b.spin);
-  g.strokeStyle = b.mud ? "rgba(50,36,20,.55)" : "rgba(60,110,40,.55)";
-  g.lineWidth = 2.6;
-  g.lineCap = "round";
-  for (let i = 0; i < 3; i++) {
-    g.beginPath();
-    g.arc(0, 0, r * (0.5 + i * 0.16), i * 1.1, i * 1.1 + 1.5);
-    g.stroke();
+  g.rotate(b.stone ? 0 : b.spin);
+  if (b.stone) {
+    g.strokeStyle = "rgba(48,42,32,.72)";
+    g.lineWidth = 2.6;
+    g.lineCap = "round";
+    g.lineJoin = "round";
+    for (let i = 0; i < 3; i++) {
+      const a = i * 2.1 + hash(i) * 2.4;
+      const rr = r * (0.34 + i * 0.20);
+      const ax = Math.cos(a) * rr, ay = Math.sin(a) * rr;
+      const bx = Math.cos(a + 0.9) * rr * 0.9, by = Math.sin(a + 0.9) * rr * 0.9;
+      g.beginPath();
+      g.moveTo(ax, ay);
+      g.lineTo(bx + Math.cos(a + 1.4) * r * 0.16, by + Math.sin(a + 1.4) * r * 0.16);
+      g.lineTo(bx, by);
+      g.stroke();
+    }
+    g.restore();
+  } else {
+    g.strokeStyle = b.mud ? "rgba(50,36,20,.55)" : "rgba(60,110,40,.55)";
+    g.lineWidth = 2.6;
+    g.lineCap = "round";
+    for (let i = 0; i < 3; i++) {
+      g.beginPath();
+      g.arc(0, 0, r * (0.5 + i * 0.16), i * 1.1, i * 1.1 + 1.5);
+      g.stroke();
+    }
+    g.restore();
   }
-  g.restore();
 
-  // 里面那位的眼睛 —— 让球"是个活物被包起来了"，不是道具
-  g.fillStyle = "rgba(20,26,18,.75)";
-  g.beginPath();
-  g.arc(cx - r * 0.18, cy - r * 0.02, r * 0.11, 0, 6.283);
-  g.arc(cx + r * 0.18, cy - r * 0.02, r * 0.11, 0, 6.283);
-  g.fill();
+  /* 里面那位的眼睛 —— 让球"是个活物被包起来了"，不是道具。
+     **石球不画眼睛**：硬化 = 里面那位被压住了，还有眼睛会读成"它只是不动了"，
+     玩家就会去等它自己动。没有眼睛才是"变成石头了"。 */
+  if (!b.stone) {
+    g.fillStyle = "rgba(20,26,18,.75)";
+    g.beginPath();
+    g.arc(cx - r * 0.18, cy - r * 0.02, r * 0.11, 0, 6.283);
+    g.arc(cx + r * 0.18, cy - r * 0.02, r * 0.11, 0, 6.283);
+    g.fill();
+  }
 
   /* ---- 「加注」的读数（2026-10-27）----
      有加成的球必须**在场上就看得出来**，不能等落袋才显示一个数字：
      玩家要能在"再糊一只、还是现在推走"这个瞬间读到"这颗已经值钱了"。
-     做法只加两样，都是零占位的：
-       · 一圈呼吸的金环（在 r+3.5，和"剩余的气"那圈 r+6 分开，不打架）
-       · 装载数从 `x3` 变成 `x3 +1`
-     **为什么不用文字提示"再装一只 +2"**：那是设计师语言，不是玩家语言；
-     而且球旁边已经有气圈、预瞄线、飘字，再加一行就是噪音。
-     金环是"升温"，数字是"多少钱"，两个加起来够读。 */
-  /* ---- 为什么这里**没有**金环（2026-10-27，试过两版）----
-     一开始想在球外加一圈呼吸金环当"加注中"。两版都否掉：
+     两个信号：球体从黄绿转金（主）、装载数从 `x3` 变成 `x3 +1`（金额）。
+     **这里没有金环**，试过两版都否掉：
        · 3px / 透明度 .34~.6 在 r+3.5 —— 放大 4 倍的验收图上一颗都看不见
          （绿草地上，细金线读作描边的一部分）；
        · 加粗到 4px / .55~.9 —— 它和气圈的**内缘**（r+6 宽 3.4，从 r+4.3
@@ -14617,22 +14807,27 @@ function drawBall(g, b) {
 
   // 装载数
   if (b.holds > 1) {
-    g.fillStyle = gold ? "#5A4614" : "#FFE58A";
+    g.fillStyle = b.stone ? "#3E362A" : gold ? "#5A4614" : "#FFE58A";
     g.font = "bold 13px 'Microsoft YaHei','PingFang SC','Hiragino Sans GB',system-ui,sans-serif";
     g.textAlign = "center";
     g.textBaseline = "middle";
     g.lineWidth = 3;
     /* 金字球上的字必须换成深色 —— 原来是 #FFE58A 奶金压在 #E9DC72 金球上，
        对比度不到 1.3:1，放大图上 `x4 +3` 直接消失（和排行榜那次同一个病）。
-       描边也从深棕改成奶白：深描边在深字上等于没有边。 */
-    g.strokeStyle = gold ? "rgba(255,248,220,.9)" : "rgba(24,32,20,.85)";
+       描边也从深棕改成奶白：深描边在深字上等于没有边。
+       石球同理：石灰底上用深褐字 + 浅描边。 */
+    g.strokeStyle = b.stone ? "rgba(232,226,210,.75)"
+                  : gold ? "rgba(255,248,220,.9)" : "rgba(24,32,20,.85)";
     const loadTxt = gold ? "x" + b.holds + " +" + holdBonus(b.holds) : "x" + b.holds;
     g.strokeText(loadTxt, cx, cy + r * 0.52);
     g.fillText(loadTxt, cx, cy + r * 0.52);
   }
 
-  // 剩余的气：球外侧画一圈弧。这是"这颗球还能滚多久"的**唯一**读数，
-  // 必须能在不读数字的情况下看出大概 —— 所以用长度而不是数字。
+  /* 剩余的气：球外侧画一圈弧。这是"这颗球还能滚多久"的**唯一**读数，
+     必须能在不读数字的情况下看出大概 —— 所以用长度而不是数字。
+     **石球没有这一圈**：它不漏气了，画一个不会变的圈等于骗人
+     （玩家会一直等那个圈往下走）。石球的状态读数是"没有圈、没有眼睛、是灰的"。 */
+  if (!b.stone) {
   const air = b.air === undefined ? 1 : b.air;
   const a0 = -Math.PI / 2;
   g.lineWidth = 3.4;
@@ -14661,6 +14856,7 @@ function drawBall(g, b) {
       g.lineTo(cx + jx + Math.cos(a) * r * 0.85, cy + Math.sin(a) * r * 0.85);
       g.stroke();
     }
+  }
   }
 }
 
@@ -19423,6 +19619,10 @@ export const GROVE: any = {
      看不出"蹲了是不是真能上去"。冒烟要用它逐层对账（预演 vs 实跑）。 */
   pounceLands, foeUnderPlat,
   coatFoe, makeBallFrom, burstBall, spawnShot,
+  /* 石球：`hardenBall` 是唯一写入点，两个常量是玩法参数。
+     导出是为了让冒烟能验"停 0.7 秒真的硬、超上限真的吐人"——
+     这两件截图都看不出来（图里只能看到一块灰的圆）。 */
+  hardenBall, STONE_HOLD, STONE_MAX,
   spawnWave, foeFromSpec, updateShocks, hurtPlayer, leavePrints,
   dropChest, dropFrom, DROP_KINDS,
   predictBall, aimFor, ballBudget, checkGoal, rate, goalProgress,

@@ -275,6 +275,13 @@ function genLevel(seed) {
   }
   layers.forEach(l => { l.segs = segsOf(l.floorY, l.holes); });
 
+  /* **出生点 x 在这里就得定下来。**
+     原来是最后一步才算的，于是 ⑥ 放怪时根本不知道出生点在哪 ——
+     结果开局有一只怪站在玩家 30px 旁边，一进关就掉血（出图放大才看见）。
+     它只依赖第一层的地板段，所以能提前算。 */
+  const startSeg = layers[0].segs.filter(s => s.w >= 120)[0] || layers[0].segs[0];
+  const startX = Math.round(clamp(startSeg.x + 36, 40, Math.max(40, startSeg.x + startSeg.w - 44)));
+
   /* ================= ③ 地形 =================
      平台（跳得上，高差 114 < 跳高 123）和斜坡（**走上去，不用跳**）。
      斜坡只在"接平台"时出现得最多：它把"上台"这件事拆成两种解法，
@@ -459,6 +466,44 @@ function genLevel(seed) {
       }
     }
 
+    /* 本层"已经占掉的格子"。门厅的门壳/喂球箱、以及下面砌的箱阶都记在这里，
+       随机平铺要绕开 —— 否则箱阶上会再摞出一列三格，直接变成墙。 */
+    const blockedX = isHall ? hallTaken.slice() : [];
+
+    /* ---- 箱阶：用箱子**砌**出一段路 ----
+       用户原话「你甚至都可以用木箱子作为路况」。这话点到了要害：
+       地形是"长出来的"，箱子是"砌出来的" —— 在一个箱子世界里，
+       后者才像有生物住过的地方，也才有"可以拆"的空间玩法
+       （想拆就拆、不想拆就踩着过，两条路都成立）。
+       **高度封顶 2 格（96）**：跳高 123 吃得下，所以它永远是一段路，
+       不会变成一道墙把这一层隔断。
+       **必须排在随机平铺之前** —— 反过来的话，格子早被 58% 概率的
+       随机箱子占掉，四连格同时空的概率只剩 3%，砌阶几乎永远落不下来。 */
+    if (!isHall && chance(0.55)) {
+      const pat = chance(0.5) ? [1, 2, 2, 1] : [1, 2, 1];
+      const starts = [];
+      for (const s of l.segs) {
+        for (let x = Math.ceil(s.x / 48) * 48; x + 48 * pat.length <= s.x + s.w - 20; x += 48) starts.push(x);
+      }
+      for (let t = 0; t < 24 && starts.length; t++) {
+        const bx0 = starts.splice(Math.floor(R() * starts.length), 1)[0];
+        let ok = true;
+        for (let i = 0; i < pat.length && ok; i++) {
+          const cx = bx0 + i * 48;
+          if (dz.some(d2 => cx < d2[1] && cx + 48 > d2[0])) ok = false;
+          if (l.terrain.some(t2 => t2.kind === 'ramp' && t2.x - 12 < cx + 48 && t2.x + t2.w + 12 > cx)) ok = false;
+        }
+        if (!ok) continue;
+        for (let i = 0; i < pat.length; i++) {
+          const m = matRoll();
+          for (let j = 0; j < pat[i]; j++) B(bx0 + i * 48, l.floorY - 48 * (j + 1), m);
+          blockedX.push(bx0 + i * 48);
+          nBox++;
+        }
+        break;
+      }
+    }
+
     // 平铺 + 偶尔叠一层。**叠层最多 2 格** —— 跳高 123、箱高 48，
     // 两格 96 跳得过去，三格 144 就是一道墙，会把路彻底堵死。
     /* **计数必须是"本层"的，不能用 boxes.length。**
@@ -479,7 +524,7 @@ function genLevel(seed) {
       const x0 = Math.ceil(s.x / 48) * 48;
       for (let x = x0; x + 48 <= s.x + s.w - 20; x += 48) {
         if (nBox >= wantBox) break;
-        if (isHall && hallTaken.indexOf(x) >= 0) continue;
+        if (blockedX.indexOf(x) >= 0) continue;
         if (!chance(0.58)) continue;
         if (dz.some(d => x < d[1] && x + 48 > d[0])) continue;
         if (rampRanges.some(r => x < r[1] && x + 48 > r[0])) continue;
@@ -495,6 +540,7 @@ function genLevel(seed) {
       if (t.kind === 'ramp') continue;
       if (chance(0.55)) B(t.x + 12, t.y - 48, matRoll());
     }
+
   });
 
   /* ================= ⑥ 怪 =================
@@ -516,6 +562,7 @@ function genLevel(seed) {
     let cands = [];
     for (const s of segs) {
       for (let cx = s.x + 16; cx + 40 <= s.x + s.w; cx += 8) {
+        if (k === 0 && Math.abs(cx - startX) < 130) continue;   // 开局别贴脸
         /* 箱子按"**允许蹭到边**"算（两边各让 8px）。
            按严格不接触算的话，48 宽的箱子会吃掉 82px 的 x，一层十来口
            就能把整段地板铺满 —— 结果一关会缺掉整层的怪（实测 200 关里
@@ -547,9 +594,39 @@ function genLevel(seed) {
   const deco = [];
   for (let k = 1; k < nF; k++) {
     const ceilY = floors[k - 1] + GEN.thick;
-    for (let x = 16 + (k * 37) % 58; x < 940; x += 58) {
-      if (layers[k - 1].holes.some(h => x + 34 > h.x && x < h.x + h.w)) continue;
-      deco.push({ x, y: ceilY, w: 14 + ((x * 7 + k * 13) % 20), h: 14 + ((x * 13 + k * 7) % 30), kind: 'stalac' });
+    /* **步长不能恒定。** 原来是每 58px 一根、粗细也差不多 ——
+       排下来是一排等距锯齿，一眼就是程序画的。现在步长、粗细、长短
+       都按坐标散开，还会挖掉 26% 的空位，长出来是"一簇一簇"的。 */
+    for (let x = 12 + (k * 37) % 46; x < 936;) {
+      const w = 10 + ((x * 7 + k * 13) % 26);
+      const hh = 12 + ((x * 13 + k * 7) % 46);
+      const skip = ((x * 17 + k * 29) % 100) < 46;
+      if (!skip && !layers[k - 1].holes.some(o => x + w > o.x && x < o.x + o.w)) {
+        deco.push({ x, y: ceilY, w, h: hh, kind: 'stalac' });
+      }
+      x += w + 10 + ((x * 11 + k * 19) % 56);
+    }
+  }
+  /* 冰柱丛：灰岩里全是同一种灰，需要一点**冷青色**来分离层次。
+     每层两三处，长短粗细都散开 —— 一排等长的那是栅栏。 */
+  for (let k = 1; k < nF; k++) {
+    const cy = floors[k - 1] + GEN.thick;
+    for (let i = 0; i < 3; i++) {
+      const bx = 40 + ((k * 211 + i * 307) % 840);
+      if (layers[k - 1].holes.some(o => bx + 70 > o.x && bx < o.x + o.w)) continue;
+      for (let j = 0; j < 5; j++) {
+        const ix = bx + j * 9 + ((j * 13 + k) % 5);
+        deco.push({ x: ix, y: cy, w: 5 + (j % 3), h: 14 + ((j * 17 + k * 7) % 32), kind: 'icicle' });
+      }
+    }
+  }
+  /* 地面雪堆：贴着地面堆在段尾。**画在地形之后**（见 draw），
+     否则会被地板盖掉 —— 它本来就是"堆在地板上"的东西。 */
+  for (let k = 1; k < nF; k++) {
+    for (const s of layers[k].segs) {
+      if (s.w < 90) continue;
+      if (((s.x + k * 37) % 100) < 42) continue;
+      deco.push({ x: s.x + 3, y: floors[k], w: 26 + ((s.x + k * 11) % 36), h: 8 + ((s.x * 7 + k) % 9), kind: 'drift' });
     }
   }
   for (let x = 90; x < 940; x += 137) {
@@ -559,12 +636,7 @@ function genLevel(seed) {
 
   /* ================= ⑧ 出生点 =================
      地表第一段地板的左侧。**不能在洞口上**，也不能头顶压着箱子。 */
-  const l0 = layers[0];
-  const s0 = l0.segs.filter(s => s.w >= 120)[0] || l0.segs[0];
-  /* **上限必须是这一段自己的右端，不能写死 200。**
-     写死 200 的话，第一段地板如果只有 48 宽（洞开在最左），
-     出生点会被夹到洞上面，人一开局就往下掉。 */
-  let startX = Math.round(clamp(s0.x + 36, 40, Math.max(40, s0.x + s0.w - 44)));
+  /* startX 已在 ② 之后算好（见那里的注释）。这里只负责把占位的箱子清掉。 */
   /* 出生点周围清空。**用"删箱子"而不是"往右挪"** ——
      挪的写法要在"还在段内"和"不压箱子"之间反复试，试不出来就把人推到洞上；
      直接删掉占位的那口箱子，一步到位，而且玩家永远看不出区别。 */
@@ -1551,30 +1623,209 @@ function draw() {
   // 镜头
   g.translate(0, -S.cam.y);
 
-  /* 天空和远山画在**世界坐标**里，不固定在屏幕上。
-     这样它们只属于地表：下到浅井、箱室之后，天就自然看不见了 ——
-     这才是"越来越深"该有的样子。固定在屏幕上会让地下也顶着一片晴空。
-     **底边必须卡在 380（L6 板底）** ——多画一像素，浅井里就会露出蓝天。 */
-  const sky = g.createLinearGradient(0, 0, 0, 380);
-  sky.addColorStop(0, COL.sky1); sky.addColorStop(1, COL.sky2);
-  g.fillStyle = sky; g.fillRect(-40, -40, W + 80, 420);
+  /* ---- 地表：天空 + 两道远山 ----
+     画在**世界坐标**里，不固定在屏幕上。这样它们只属于地表：
+     下到浅井、箱室之后天自然看不见 —— 这才是"越来越深"该有的样子。
+     固定在屏幕上会让地下也顶着一片晴空。
+     **底边必须卡在 380（地表板底）** —— 多画一像素，浅井里就会露出蓝天。 */
+  const sky = g.createLinearGradient(0, -60, 0, 380);
+  sky.addColorStop(0, '#93BDD4'); sky.addColorStop(0.5, COL.sky1); sky.addColorStop(1, COL.sky2);
+  g.fillStyle = sky; g.fillRect(-40, -60, W + 80, 440);
+
+  /* 两道山：远的淡、近的深，中间各带一条积雪线。
+     单道山是"一个剪影"，两道才有"这地方有纵深"。 */
+  const ridge1 = x => 258 - Math.sin(x / 205) * 44 - Math.sin(x / 74) * 13;
+  const ridge2 = x => 314 - Math.sin(x / 128) * 30 - Math.sin(x / 53) * 8;
+  g.fillStyle = '#B7CDD9';
+  g.beginPath(); g.moveTo(-40, 400);
+  for (let x = -40; x <= W + 40; x += 24) g.lineTo(x, ridge1(x));
+  g.lineTo(W + 40, 400); g.closePath(); g.fill();
+  g.fillStyle = '#DCEAF1';
+  g.beginPath();
+  for (let x = -40; x <= W + 40; x += 24) g.lineTo(x, ridge1(x));
+  for (let x = W + 40; x >= -40; x -= 24) g.lineTo(x, ridge1(x) + 7);
+  g.closePath(); g.fill();
 
   g.fillStyle = COL.hill;
-  g.beginPath(); g.moveTo(-40, 330);
-  for (let x = -40; x <= W + 40; x += 80) g.lineTo(x, 330 - 55 - Math.sin(x / 130) * 40);
-  g.lineTo(W + 40, 380); g.lineTo(-40, 380); g.closePath(); g.fill();
+  g.beginPath(); g.moveTo(-40, 400);
+  for (let x = -40; x <= W + 40; x += 24) g.lineTo(x, ridge2(x));
+  g.lineTo(W + 40, 400); g.closePath(); g.fill();
+  g.fillStyle = 'rgba(244,249,252,.62)';
+  g.beginPath();
+  for (let x = -40; x <= W + 40; x += 24) g.lineTo(x, ridge2(x));
+  for (let x = W + 40; x >= -40; x -= 24) g.lineTo(x, ridge2(x) + 8);
+  g.closePath(); g.fill();
+
+  /* ================= 地下 =================
+     **原来是"底色铺黑、层与层之间一片漆黑"。纯黑不读作洞窟，只读作没画。**
+     现在分四层叠出来：
+       ① 整块岩体渐变（浅灰蓝 → 近黑，越深越暗）
+       ② 两层错动的岩影（慢 35% 滚动 = 视差，制造"岩壁在更远处"）
+       ③ 每一层单独画成"一个岩室"：天花板压暗、地面附近被雪反光提亮
+       ④ 左右侧壁（WALL_L / WALL_R 之外是实心岩）用雪线勾边
+     全在世界坐标里跟着镜头走，否则就是一张贴纸。 */
+  const caveTop = GEN.topY + GEN.thick;
+  const cave = g.createLinearGradient(0, caveTop, 0, WORLD_H + 60);
+  cave.addColorStop(0, '#263844');
+  cave.addColorStop(0.30, '#1B2B35');
+  cave.addColorStop(0.65, '#15212A');
+  cave.addColorStop(1, '#0C1319');
+  g.fillStyle = cave;
+  g.fillRect(-60, caveTop, W + 120, WORLD_H - caveTop + 80);
+
+  // ② 视差岩影
+  g.save();
+  g.translate(0, S.cam.y * 0.35);
+  for (let i = 0; i < 18; i++) {
+    const bx = ((i * 197) % 1080) - 60;
+    const by = 440 + ((i * 331) % (WORLD_H - 300));
+    const bw = 130 + ((i * 89) % 230);
+    const bh = 80 + ((i * 47) % 160);
+    g.fillStyle = 'rgba(96,128,148,.07)';
+    g.beginPath(); g.ellipse(bx, by, bw / 2, bh / 2, 0, 0, Math.PI * 2); g.fill();
+  }
+  g.restore();
+
+  // ③ 每层一个岩室
+  for (let k = 1; k < FLOORS.length; k++) {
+    const fY = FLOORS[k];
+    const cY = FLOORS[k - 1] + GEN.thick;
+    const room = g.createLinearGradient(0, cY, 0, fY);
+    room.addColorStop(0, 'rgba(6,11,16,.62)');       // 天花板背光
+    room.addColorStop(0.35, 'rgba(38,62,76,.10)');
+    room.addColorStop(0.82, 'rgba(118,166,192,.09)'); // 雪反光
+    room.addColorStop(1, 'rgba(168,208,228,.13)');
+    g.fillStyle = room;
+    g.fillRect(WALL_L, cY, WALL_R - WALL_L, fY - cY);
+
+    /* 沉积岩层：几条大尺度、缓慢起伏的带子，明暗交替往下压。
+       没有这个，岩室就是一块纯色 —— "洞"和"没画完"长一个样。 */
+    for (let i = 0; i < 4; i++) {
+      const yy = cY + (fY - cY) * (0.16 + i * 0.22) + ((k * 31 + i * 17) % 12);
+      g.beginPath();
+      g.moveTo(WALL_L, yy);
+      for (let px = WALL_L; px <= WALL_R; px += 40) {
+        g.lineTo(px, yy + Math.sin(px * 0.0061 + i * 2.1 + k * 1.7) * 9);
+      }
+      g.lineTo(WALL_R, fY + 2); g.lineTo(WALL_L, fY + 2); g.closePath();
+      g.fillStyle = i % 2 ? 'rgba(8,16,22,.17)' : 'rgba(134,174,196,.045)';
+      g.fill();
+    }
+    /* 远景岩块。**不能用 ellipse** —— 标准椭圆在画面上读作"污渍"，
+       一眼就露馅（第一版就是五个大圆斑）。用一圈抖过的顶点连成
+       不规则多边形，再靠低透明度压在背景里。 */
+    for (let i = 0; i < 4; i++) {
+      const bx = WALL_L + ((k * 137 + i * 211) % (WALL_R - WALL_L));
+      const by = cY + 34 + ((k * 71 + i * 97) % Math.max(28, (fY - cY - 80)));
+      const bw = 66 + ((k * 53 + i * 61) % 120);
+      const bh = 30 + ((k * 29 + i * 43) % 62);
+      g.fillStyle = i % 2 ? 'rgba(146,186,208,.055)' : 'rgba(6,12,17,.20)';
+      g.beginPath();
+      for (let v = 0; v < 9; v++) {
+        const ang = v / 9 * Math.PI * 2;
+        const wob = 0.62 + 0.38 * Math.abs(Math.sin(v * 2.7 + i * 1.3 + k));
+        const px = bx + Math.cos(ang) * (bw / 2) * wob;
+        const py = by + Math.sin(ang) * (bh / 2) * wob;
+        if (v === 0) g.moveTo(px, py); else g.lineTo(px, py);
+      }
+      g.closePath(); g.fill();
+    }
+
+    // ④ 侧壁：岩 + 靠内的雪边（把"可走范围"框出来）
+    for (const side of [0, 1]) {
+      const wx = side ? WALL_R : -60;
+      const ww = side ? (W + 60 - WALL_R) : (WALL_L + 60);
+      const wall = g.createLinearGradient(side ? WALL_R : WALL_L, 0, side ? WALL_R + 40 : WALL_L - 40, 0);
+      wall.addColorStop(0, 'rgba(120,154,174,.26)');
+      wall.addColorStop(1, 'rgba(18,28,36,.05)');
+      g.fillStyle = wall;
+      g.fillRect(wx, cY, ww, fY - cY);
+      g.fillStyle = 'rgba(226,242,250,.20)';
+      g.fillRect(side ? WALL_R - 2 : WALL_L, cY, 2, fY - cY);
+    }
+    // 天花板底面的一道压暗，让"上下两层"有分界
+    g.fillStyle = 'rgba(6,12,17,.35)';
+    g.fillRect(WALL_L, cY, WALL_R - WALL_L, 10);
+  }
+
+  /* ================= 洞里的光 =================
+     **敞开的下行口一定漏光。** 这一笔同时干两件事：
+     一是给地下一个光源叙事（不然全是平光，画面没有戏剧性）；
+     二是"这里能下去"的最高优先级提示 —— 那几种封法里，
+     只有敞开是靠眼睛找的，光就是在替玩家找。
+     光柱画在地形**之前**，让地板把它自然截断；落地的光斑另画在地形之后。 */
+  for (let k = 0; k + 1 < FLOORS.length; k++) {
+    for (const h of LAYERS[k].holes) {
+      /* **不能只看 `h.cover`。** 那是生成时的初始封法，砸开之后它不会变
+         —— 结果"挖穿了却一点光都不漏"，最该有光的时刻反而没有。
+         按此刻洞口上还有没有箱子来定强弱：堵着只剩一线微光，通了就整束下来。 */
+      const covered = S.boxes.some(b => !b.dead && b.x < h.x + h.w && b.x + b.w > h.x &&
+        b.y < h.floorY + 4 && b.y + b.h > h.floorY - 100);
+      /* 堵着只剩一线微光 0.055 —— 再高就成了一块淡蓝色的板子，
+         比"洞里有光"更像"贴了张色纸"。 */
+      const a0 = covered ? 0.055 : 0.30;
+      const y1 = FLOORS[k + 1];
+      /* **一整个梯形填上去，边是硬的** —— 看起来像贴了块半透明色板。
+         改成 7 层由窄到宽的梯形叠加：中间叠得厚、边缘只有一两层，
+         自然就有了"光越往外越淡"的软边。这是不依赖 blur 滤镜的做法。 */
+      const cxh = h.x + h.w / 2;
+      for (let j = 1; j <= 7; j++) {
+        const sfx = 0.40 + 0.60 * (j / 7);
+        const tw = h.w * sfx + 6;
+        const bw = (h.w + 84) * sfx;
+        const al = a0 * 0.16;
+        const lg = g.createLinearGradient(0, h.floorY, 0, y1);
+        lg.addColorStop(0, 'rgba(202,236,252,' + al.toFixed(3) + ')');
+        lg.addColorStop(0.45, 'rgba(200,236,252,' + (al * 0.55).toFixed(3) + ')');
+        lg.addColorStop(1, 'rgba(200,236,252,0)');
+        g.fillStyle = lg;
+        g.beginPath();
+        g.moveTo(cxh - tw / 2, h.floorY);
+        g.lineTo(cxh + tw / 2, h.floorY);
+        g.lineTo(cxh + bw / 2, y1);
+        g.lineTo(cxh - bw / 2, y1);
+        g.closePath(); g.fill();
+      }
+    }
+  }
 
   // 洞窟装饰（画在平台之前，被平台/箱子自然盖住）
   for (const d of S.deco) {
     if (d.kind === 'stalac') {
-      g.fillStyle = '#33434E';
+      // 两侧带一点弧度，尖端再收一下 —— 直边三角形是"图标"，不是石头
       g.beginPath();
-      g.moveTo(d.x, d.y); g.lineTo(d.x + d.w, d.y); g.lineTo(d.x + d.w / 2, d.y + d.h);
-      g.closePath(); g.fill();
-      g.fillStyle = 'rgba(180,214,232,.22)';
+      g.moveTo(d.x, d.y);
+      g.quadraticCurveTo(d.x + d.w * 0.16, d.y + d.h * 0.62, d.x + d.w * 0.5, d.y + d.h);
+      g.quadraticCurveTo(d.x + d.w * 0.84, d.y + d.h * 0.62, d.x + d.w, d.y);
+      g.closePath();
+      const sg = g.createLinearGradient(d.x, 0, d.x + d.w, 0);
+      sg.addColorStop(0, '#2A3841');
+      sg.addColorStop(0.55, '#3C4D58');
+      sg.addColorStop(1, '#242F37');
+      g.fillStyle = sg; g.fill();
+      // 尖上挂的雪
+      g.fillStyle = 'rgba(220,238,248,.45)';
       g.beginPath();
-      g.moveTo(d.x + d.w * 0.55, d.y); g.lineTo(d.x + d.w, d.y); g.lineTo(d.x + d.w / 2, d.y + d.h);
+      g.moveTo(d.x + d.w * 0.34, d.y + d.h * 0.62);
+      g.quadraticCurveTo(d.x + d.w * 0.5, d.y + d.h * 0.92, d.x + d.w * 0.5, d.y + d.h);
+      g.quadraticCurveTo(d.x + d.w * 0.62, d.y + d.h * 0.84, d.x + d.w * 0.66, d.y + d.h * 0.6);
       g.closePath(); g.fill();
+    } else if (d.kind === 'icicle') {
+      // 冰柱：外圈半透明青，中间一道亮芯
+      g.fillStyle = 'rgba(176,222,244,.42)';
+      g.beginPath();
+      g.moveTo(d.x, d.y);
+      g.lineTo(d.x + d.w, d.y);
+      g.lineTo(d.x + d.w / 2, d.y + d.h);
+      g.closePath(); g.fill();
+      g.fillStyle = 'rgba(238,251,255,.65)';
+      g.beginPath();
+      g.moveTo(d.x + d.w * 0.32, d.y);
+      g.lineTo(d.x + d.w * 0.5, d.y);
+      g.lineTo(d.x + d.w / 2, d.y + d.h * 0.86);
+      g.closePath(); g.fill();
+    } else if (d.kind === 'drift') {
+      // 地面雪堆在主装饰循环里跳过（那时地板还没画）
     } else {
       g.fillStyle = 'rgba(58,74,86,.85)';
       g.beginPath();
@@ -1585,6 +1836,30 @@ function draw() {
 
   // 平台
   for (const pl of S.plats) drawPlat(g, pl);
+
+  // 洞光落在地板上的光斑（地板之后、箱子之前：箱子会站上去遮住一块，对）
+  for (let k = 0; k + 1 < FLOORS.length; k++) {
+    for (const h of LAYERS[k].holes) {
+      const covered = S.boxes.some(b => !b.dead && b.x < h.x + h.w && b.x + b.w > h.x &&
+        b.y < h.floorY + 4 && b.y + b.h > h.floorY - 100);
+      if (covered) continue;
+      const y1 = FLOORS[k + 1];
+      const rg = g.createRadialGradient(h.x + h.w / 2, y1, 2, h.x + h.w / 2, y1, h.w * 0.95);
+      rg.addColorStop(0, 'rgba(216,242,255,.20)');
+      rg.addColorStop(1, 'rgba(216,242,255,0)');
+      g.fillStyle = rg;
+      g.beginPath(); g.ellipse(h.x + h.w / 2, y1 - 1, h.w * 0.95, 10, 0, 0, Math.PI * 2); g.fill();
+    }
+  }
+
+  // 地面雪堆：地板画完才轮到它们
+  for (const d of S.deco) {
+    if (d.kind !== 'drift') continue;
+    g.fillStyle = 'rgba(244,250,253,.96)';
+    g.beginPath(); g.ellipse(d.x + d.w / 2, d.y + 1, d.w / 2, d.h, 0, Math.PI, 0); g.fill();
+    g.fillStyle = 'rgba(24,36,44,.10)';
+    g.beginPath(); g.ellipse(d.x + d.w / 2, d.y + 2, d.w / 2 + 3, d.h * 0.35, 0, 0, Math.PI); g.fill();
+  }
 
   // 箱子
   for (const b of S.boxes) if (!b.dead) drawBox(g, b);
@@ -1669,6 +1944,30 @@ function draw() {
     g.fillRect(0, 0, W, H);
   }
 
+  /* ---- 空气里的雪尘 ----
+     屏幕坐标、纯公式驱动（不开随机），60 颗慢慢往下飘。
+     这一层几乎没有性能成本，但"空气里有东西"和"空的"是完全两种画面。 */
+  const T = S.t;
+  for (let i = 0; i < 60; i++) {
+    const sp = 12 + (i % 7) * 5;
+    const px = (i * 97 + Math.sin(T * 0.5 + i) * 26 + T * 6) % (W + 40) - 20;
+    const py = (i * 61 + T * sp) % (H + 40) - 20;
+    const r = 0.8 + (i % 5) * 0.36;
+    g.globalAlpha = 0.10 + (i % 4) * 0.05;
+    g.fillStyle = '#EAF6FD';
+    g.beginPath(); g.arc(px, py, r, 0, Math.PI * 2); g.fill();
+  }
+  g.globalAlpha = 1;
+
+  /* 屏幕四角的暗角。纵深暗化是**跟着玩家走的光圈**，
+     这个是**固定的构图框** —— 两个都要，画面才"收得住"。 */
+  const vg = g.createRadialGradient(W / 2, H * 0.46, H * 0.30, W / 2, H * 0.46, H * 0.92);
+  vg.addColorStop(0, 'rgba(5,10,15,0)');
+  vg.addColorStop(0.65, 'rgba(5,10,15,.14)');
+  vg.addColorStop(1, 'rgba(5,10,15,.46)');
+  g.fillStyle = vg;
+  g.fillRect(0, 0, W, H);
+
   drawHud(g);
 
   if (S.flash > 0) {
@@ -1678,45 +1977,185 @@ function draw() {
   if (S.phase === 'clear') drawClear(g);
 }
 
-function drawPlat(g, pl) {
-  if (pl.kind === 'ramp') {
-    /* 坡画成从斜面到地面的**梯形**，不是平行四边形 ——
-       平行四边形的右端会在地面以下露出一截空隙，看着像地面被掀起来了。 */
-    const topL = pl.y, topR = pl.y - pl.rise;
-    const base = pl.base;
-    g.fillStyle = COL.soil;
-    g.beginPath();
-    g.moveTo(pl.x, topL); g.lineTo(pl.x + pl.w, topR);
-    g.lineTo(pl.x + pl.w, base); g.lineTo(pl.x, base);
-    g.closePath(); g.fill();
-    // 雪线顺着斜面铺，这是"这段能走"的唯一提示
-    /* **端点留不留缝要看那头接的是什么。**
-       接的是空处（平台坡的高端、坡的低端）就缩进 3px，免得圆头探出去
-       像长了个嘴；接的是**另一段坡**（雪包的上坡接下坡）就必须顶满，
-       否则两条线之间留一道 6px 的口子，露出一小块土色的 V。 */
-    const joinsR = S.plats.some(o => o !== pl && o.kind === 'ramp' &&
-      Math.abs(o.x - (pl.x + pl.w)) < 0.5 && Math.abs(o.y - (pl.y - pl.rise)) < 0.5);
-    const joinsL = S.plats.some(o => o !== pl && o.kind === 'ramp' &&
-      Math.abs(o.x + o.w - pl.x) < 0.5 && Math.abs(o.y - o.rise - pl.y) < 0.5);
-    g.strokeStyle = COL.snow; g.lineWidth = 10; g.lineCap = 'round';
-    g.beginPath();
-    g.moveTo(pl.x + (joinsL ? 0 : 3), topL + 5);
-    g.lineTo(pl.x + pl.w - (joinsR ? 0 : 3), topR + 5);
-    g.stroke();
-    g.lineCap = 'butt';
-    g.fillStyle = 'rgba(0,0,0,.07)';
-    g.beginPath();
-    g.moveTo(pl.x, topL + 12); g.lineTo(pl.x + pl.w, topR + 12);
-    g.lineTo(pl.x + pl.w, base); g.lineTo(pl.x, base);
-    g.closePath(); g.fill();
-    return;
+/* ---------------------------------------------------------------- 岩体
+   **纹理必须每帧一模一样。** 用坐标当种子（不开 Math.random），
+   否则石头会在屏幕上"沸腾"。 */
+function rockFill(g, x, y, w, h, seed) {
+  const grd = g.createLinearGradient(0, y, 0, y + h);
+  grd.addColorStop(0, '#7E8D97');
+  grd.addColorStop(0.15, '#65747E');
+  grd.addColorStop(0.55, '#4A5862');
+  grd.addColorStop(1, '#35424B');
+  g.fillStyle = grd;
+  g.fillRect(x, y, w, h);
+
+  g.save();
+  g.beginPath(); g.rect(x, y, w, h); g.clip();
+  // 层理：横向的沉积带，深浅交替
+  for (let i = 0, yy = y + 9; yy < y + h; i++, yy += 9) {
+    g.fillStyle = i % 3 === 0 ? 'rgba(24,36,44,.20)' : 'rgba(220,236,244,.055)';
+    g.fillRect(x, yy, w, i % 3 === 0 ? 2 : 1);
   }
-  g.fillStyle = COL.soil;
-  rr(g, pl.x, pl.y, pl.w, pl.h, 6); g.fill();
+  // 碎石点
+  g.fillStyle = 'rgba(240,250,255,.10)';
+  const n = Math.min(90, Math.round(w * h / 190));
+  for (let i = 0; i < n; i++) {
+    const px = x + ((seed * 37 + i * 131) % Math.max(1, Math.floor(w)));
+    const py = y + 5 + ((seed * 53 + i * 79) % Math.max(1, Math.floor(h - 7)));
+    g.fillRect(px, py, 2, 2);
+  }
+  g.fillStyle = 'rgba(10,18,24,.16)';
+  for (let i = 0; i < n / 3; i++) {
+    const px = x + ((seed * 71 + i * 197) % Math.max(1, Math.floor(w)));
+    const py = y + 5 + ((seed * 29 + i * 113) % Math.max(1, Math.floor(h - 7)));
+    g.fillRect(px, py, 3, 2);
+  }
+  g.restore();
+}
+
+/* 雪盖：顶面在碰撞面上（**不许高出去，高出去人就悬空**），
+   靠左右圆角 + 起伏的边缘 + 底部的软阴影来脱掉"矩形"的机械感。 */
+function snowCap(g, x, y, w, thick, seed) {
+  const wob = px => Math.sin(px * 0.083 + seed) * 0.8 + Math.sin(px * 0.031) * 0.5;
+  g.beginPath();
+  g.moveTo(x - 2, y + thick);
+  for (let px = x - 2; px <= x + w + 2; px += 8) g.lineTo(px, y + wob(px));
+  g.lineTo(x + w + 2, y + thick);
+  g.closePath();
+  const sg = g.createLinearGradient(0, y, 0, y + thick);
+  sg.addColorStop(0, '#FBFDFE');
+  sg.addColorStop(0.55, '#E7F1F7');
+  sg.addColorStop(1, '#CFE0EA');
+  g.fillStyle = sg;
+  g.fill();
+  // 顶面高光
+  g.beginPath();
+  for (let px = x - 2; px <= x + w + 2; px += 8) {
+    const py = y + wob(px);
+    if (px === x - 2) g.moveTo(px, py); else g.lineTo(px, py);
+  }
+  g.strokeStyle = 'rgba(255,255,255,.85)'; g.lineWidth = 2; g.stroke();
+  // 雪盖压在岩体上的软阴影
+  g.fillStyle = 'rgba(22,34,42,.16)';
+  g.fillRect(x - 2, y + thick, w + 4, 4);
+}
+
+function drawRamp(g, pl) {
+  const x0 = pl.x, x1 = pl.x + pl.w;
+  const topL = pl.y, topR = pl.y - pl.rise;
+  const base = pl.base;
+
+  /* **上沿严格是那条直线** —— 它就是碰撞面，弧度一改人就浮空/陷进去。
+     所以"自然"只能从别处来：岩体的层理、雪层的厚度变化、坡脚的积雪堆。 */
+  g.save();
+  g.beginPath();
+  g.moveTo(x0, topL); g.lineTo(x1, topR);
+  g.lineTo(x1, base + 3); g.lineTo(x0, base + 3);
+  g.closePath(); g.clip();
+  rockFill(g, Math.min(x0, x1), Math.min(topL, topR), pl.w, base - Math.min(topL, topR) + 4, Math.round(x0));
+  g.restore();
+
+  // 雪层：厚度沿坡起伏（坡面本来就不会厚薄均匀）
+  const N = Math.max(8, Math.round(pl.w / 10));
+  const pts = [];
+  for (let i = 0; i <= N; i++) {
+    const t = i / N;
+    pts.push([x0 + pl.w * t, topL + (topR - topL) * t]);
+  }
+  /* 端点顶不顶满，看那头接的是空处还是另一段坡：
+     接空处就缩 2px（不然圆角会探出去像长了个嘴），
+     接另一段坡就必须顶满，否则中间留一道缝。 */
+  const joinsL = S.plats.some(o => o !== pl && o.kind === 'ramp' &&
+    Math.abs(o.x + o.w - pl.x) < 0.5 && Math.abs(o.y - o.rise - pl.y) < 0.5);
+  const joinsR = S.plats.some(o => o !== pl && o.kind === 'ramp' &&
+    Math.abs(o.x - (pl.x + pl.w)) < 0.5 && Math.abs(o.y - (pl.y - pl.rise)) < 0.5);
+  g.beginPath();
+  for (let i = 0; i <= N; i++) {
+    const [px, py] = pts[i];
+    const inset = (i === 0 && !joinsL) || (i === N && !joinsR) ? 2 : 0;
+    const sx = i === 0 ? px + inset : (i === N ? px - inset : px);
+    if (i === 0) g.moveTo(sx, py - 1.5); else g.lineTo(sx, py - 1.5);
+  }
+  for (let i = N; i >= 0; i--) {
+    const [px, py] = pts[i];
+    const t = i / N;
+    const th = 6.5 + Math.sin(t * 8.5 + pl.x * 0.05) * 2.2 + Math.sin(t * 21) * 1.1;
+    g.lineTo(px, py + th);
+  }
+  g.closePath();
+  const rsg = g.createLinearGradient(0, Math.min(topL, topR), 0, Math.max(topL, topR) + 16);
+  rsg.addColorStop(0, '#FBFDFE');
+  rsg.addColorStop(0.6, '#E4EFF6');
+  rsg.addColorStop(1, '#CBDDE8');
+  g.fillStyle = rsg;
+  g.fill();
+  // 上沿亮线 + 下沿投影
+  g.beginPath();
+  for (let i = 0; i <= N; i++) {
+    const [px, py] = pts[i];
+    if (i === 0) g.moveTo(px, py - 1.2); else g.lineTo(px, py - 1.2);
+  }
+  g.strokeStyle = 'rgba(255,255,255,.8)'; g.lineWidth = 2; g.stroke();
+  g.beginPath();
+  for (let i = 0; i <= N; i++) {
+    const [px, py] = pts[i];
+    const t = i / N;
+    const th = 6.5 + Math.sin(t * 8.5 + pl.x * 0.05) * 2.2 + Math.sin(t * 21) * 1.1;
+    if (i === 0) g.moveTo(px, py + th); else g.lineTo(px, py + th);
+  }
+  g.strokeStyle = 'rgba(24,36,44,.14)'; g.lineWidth = 3; g.stroke();
+
+  /* 坡脚：不管哪一头落地，都在那一头堆一小片雪 ——
+     纯梯形是"插在地面上的几何体"，有积雪才像"雪堆出来的坡"。 */
+  /* **`rise > 0` 是"右端更高"，所以低端在左（x0）。**
+     这条写反过一次：两段雪包的积雪堆都跑去顶点，成了山坡正中间
+     一道白色弧，看着像张嘴。 */
+  const lowX = pl.rise > 0 ? x0 : x1;
   g.fillStyle = COL.snow;
-  rr(g, pl.x, pl.y, pl.w, 9, 5); g.fill();
-  g.fillStyle = 'rgba(0,0,0,.08)';
-  g.fillRect(pl.x, pl.y + 9, pl.w, 3);
+  g.beginPath(); g.ellipse(lowX, base - 1, 26, 7, 0, Math.PI, 0); g.fill();
+  g.fillStyle = 'rgba(24,36,44,.10)';
+  g.beginPath(); g.ellipse(lowX, base + 1, 28, 4, 0, 0, Math.PI); g.fill();
+
+  /* 坡面上再撒几处雪堆。**完美直线 + 完美三角 = 帐篷**，
+     有了这几坨凸起，轮廓才不"像几何题"。凸起压在路面上 3px 左右，
+     人踩上去正好是"陷进雪里"，不影响判定的观感。 */
+  /* **位置和大小都要散。** 等距 + 等大的几坨连起来像一串珠子，
+     比不加还假。这里用坐标算偏移，间隔 0.19~0.31 不等、半径 9~20 不等。 */
+  const lumpN = pl.w >= 140 ? 4 : 3;
+  for (let i = 0; i < lumpN; i++) {
+    const h1 = Math.abs(Math.sin(i * 12.9898 + pl.x * 0.017)) % 1;
+    const h2 = Math.abs(Math.sin(i * 78.233 + pl.x * 0.011)) % 1;
+    const t = 0.10 + (i + h1 * 0.55) / (lumpN + 0.3);
+    if (t > 0.94) continue;
+    const px = x0 + pl.w * t;
+    const py = topL + (topR - topL) * t;
+    const rw = 9 + h2 * 11;
+    g.fillStyle = h1 > 0.5 ? 'rgba(251,253,254,.95)' : 'rgba(238,247,252,.92)';
+    g.beginPath(); g.ellipse(px, py + 1 + h2 * 3, rw, 5 + h1 * 4, 0, 0, Math.PI * 2); g.fill();
+  }
+}
+
+function drawPlat(g, pl) {
+  if (pl.kind === 'ramp') { drawRamp(g, pl); return; }
+  const seed = Math.round(pl.x) + Math.round(pl.y);
+  /* **不能用 destination-out 去"啃"底边** —— 那会把背景一起啃穿，
+     露出最底层的底色，反而更像贴片。底边直接用路径画出来。 */
+  g.save();
+  g.beginPath();
+  g.moveTo(pl.x - 1, pl.y + 9);
+  g.quadraticCurveTo(pl.x - 1, pl.y + 3, pl.x + 5, pl.y + 3);
+  g.lineTo(pl.x + pl.w - 5, pl.y + 3);
+  g.quadraticCurveTo(pl.x + pl.w + 1, pl.y + 3, pl.x + pl.w + 1, pl.y + 9);
+  g.lineTo(pl.x + pl.w + 1, pl.y + pl.h);
+  for (let px = pl.x + pl.w + 1; px >= pl.x - 1; px -= 10) {
+    g.lineTo(px, pl.y + pl.h - 2 + Math.sin(px * 0.07 + seed) * 3.2);
+  }
+  g.lineTo(pl.x - 1, pl.y + 9);
+  g.closePath();
+  g.clip();
+  rockFill(g, pl.x - 1, pl.y + 3, pl.w + 2, pl.h + 4, seed);
+  g.restore();
+  snowCap(g, pl.x, pl.y, pl.w, 8, seed * 0.7);
 }
 
 function drawBox(g, b) {

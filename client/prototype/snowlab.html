@@ -77,9 +77,12 @@ const NUM = {
      「喷」和「推」就变成两个不相干的阶段了。 */
   shot: { speed: 620, life: 0.24, cd: 0.16, lock: 0.14, r: 7 },
 
-  /* 球。半径沿用 grove 的 22 + 2.8/只，但**上限从 +16 提到 +20**：
-     冰墙既然只认特大球，4 档之间必须拉开肉眼能分辨的差距。 */
-  ball: { baseR: 22, perAbsorb: 2.8, maxAbsorb: 20, life: 4.6, fric: 260, maxR: 42 },
+  /* 球。半径沿用 grove 的 22 + 2.8/点，上限提到 +24。
+     两点 = 一只怪的量；**砸碎一口箱子算 2.0 点，也就是大半只怪** ——
+     用户 2026-10-28：「球砸箱子 球是不能变大的」，他要的是砸箱有即时回报。
+     每档之间必须拉开肉眼能分辨的差距（冰墙只认特大球，读不出档位就无从计划）。 */
+  ball: { baseR: 22, perAbsorb: 2.8, maxAbsorb: 24, life: 4.6, fric: 260, maxR: 46,
+          absorbFoe: 1.0, absorbBox: 2.0 },
 
   /* 推球力度。沿用 grove 的 620 → 1209（助跑满格约 380px）。 */
   push: { base: 620, runGain: 0.95, runFull: 380 },
@@ -106,7 +109,12 @@ const NUM = {
     shardAmmoMax: 5,
   },
 
-  killTarget: 8,
+  /* **3 只，不是杀光。** 两件事同时成立才行：
+     ① 怪分布在三层，要求杀光会逼玩家返回上层找漏网的 —— 那是「返程」不是「探索」；
+     ② **必须 <= 底层怪数**。这关是单向往下的（掉下去就上不来），
+        玩家一路不杀直接挖到底，手上就只剩底层的怪。如果底层只有 2 只
+        而目标是 4，门永远开不了 = 死局。底层放 3 只，门槛写 3，卡不住。 */
+  killTarget: 3,
   hpStart: 3,
   hpInvuln: 1.2,
 
@@ -131,72 +139,183 @@ function rr(g, x, y, w, h, r) {
 }
 
 /* ---------------------------------------------------------------- 关卡
-   一屏。左侧起点，右侧是箱墙 + 门。
-   箱墙是这一版的**主角**：它同时是路障、台阶、资源点、门位。
-   要拆它得先有球，要有球得先冻怪 —— 这条链子就是全部。 */
-const GROUND_Y = 556;
+   **三层纵深，一屏看不完。**
+
+   用户 2026-10-28 的反馈：「箱子明显不够，空间设计感太简陋，达不到探索性的高度，
+   只能体会到一颗球在砸一个箱子」「门这么直接的在右边吗，不是有探索感吗」。
+
+   问题不是箱子太少，是**所有东西都摊在一个平面上**。一屏 960×600 里，
+   箱子、怪、门全部互相可见 —— 没有"里面"，就没有探索。加箱子也只能加出
+   "更多一颗球砸一个箱子"，不会加出空间。
+
+   所以世界高 1560（屏高 600），镜头跟着玩家往深处走：
+
+     L3 地表   y 100~480   出生点。往右走一小段就撞到箱墙，唯一出路是砸开脚下的覆霜木箱
+     L2 中层   y 520~1000  主战场。四处高台错落、两段箱室，第二个洞在中间
+     L1 底层   y1060~1500  黑暗洞窟。冰墙封着门，而门本身藏在一口冰封圣箱里面
+
+   **"霜"是这一关唯一的视觉语言**，三层各用一次，规则递进：
+     覆霜木箱 → 下面是空的，能挖穿（L3 / L2 各一处）
+     冰墙     → 子弹完全无效，只能大球助跑撞（L1 外屏障）
+     冰封圣箱 → 里面是门（L1 最深处）
+   全是霜，长得像，但一次比一次难破。玩家看两次就懂，不需要任何文字教学。
+
+   **为什么底下还有四口普通木箱**：那是"没怪也能把球喂大"的兜底。
+   L1 若玩家先把怪清光，球就永远停在小号，冰墙破不了 —— 直接踩死局红线。
+   球砸箱会吸木屑长大，这几口木箱就是这条机制的救命绳。
+   ---------------------------------------------------------------- */
+const WORLD_H = 1560;              // 世界总高。屏幕 600，一次只看到一层半
+const GROUND_Y = 1500;             // 世界最底的可站立面（底层洞窟地面）
 const WALL_L = 24, WALL_R = 936;
 
 function buildLevel() {
   const plats = [
-    // 地面
-    { x: 0, y: GROUND_Y, w: W, h: 60 },
-    // 左侧台
-    { x: 140, y: 436, w: 240, h: 18 },
-    // 中台
-    { x: 400, y: 348, w: 240, h: 18 },
-    // 右侧高台（门在上面，是"看得见够不着"的第二层诱惑）
-    { x: 700, y: 300, w: 150, h: 18 },
+    /* ---- L3 地表 ---- */
+    { x: 0,   y: 480,  w: 300, h: 60 },     // 左地面（出生点）
+    { x: 444, y: 480,  w: 516, h: 60 },     // 右地面，一直铺到场边
+    { x: 520, y: 372,  w: 168, h: 18 },     // 表层高台
+
+    /* ---- L2 中层 ---- */
+    { x: 0,   y: 1000, w: 424, h: 60 },     // 左地面
+    { x: 520, y: 1000, w: 440, h: 60 },     // 右地面
+    /* 高台高度全部按「跳高 123px」排过：地面 1000 → A 890（差 110）→ C 800（差 90）。
+       B 从地面直接上不去（差 144），必须先踩箱子（952）垫一下 —— 这正是箱子
+       当"空间材料"的用处，不是摆着好看。 */
+    { x: 216, y: 890,  w: 208, h: 18 },     // 高台 A：正对 L3 那个洞，接住掉下来的人
+    { x: 600, y: 856,  w: 200, h: 18 },     // 高台 B
+    { x: 96,  y: 800,  w: 180, h: 18 },     // 高台 C（上层，从 A 才上得去）
+    { x: 700, y: 760,  w: 200, h: 18 },     // 高台 D（上层，从 B 才上得去）
+
+    /* ---- L1 底层 ---- */
+    { x: 0,   y: 1500, w: 960, h: 60 },     // 洞窟地面
+    /* **这两块台的高度是被"球要能滚过去"倒推出来的。**
+       球越大球顶越高：r=46（满档）时球心贴地在 1454，球顶 1408。
+       平台底只要低于 1408，大球就撞上去弹回来 —— 而破冰墙恰恰需要大球，
+       于是玩家永远走不到冰墙前面。实测 1400 的右台就是这样把球吃掉的。
+       底面 1398（y=1380,h=18）留 10px 滚道；同时 1380 离地面 120，
+       玩家（跳高 123）照样直接跳得上去。 */
+    { x: 40,  y: 1380, w: 200, h: 18 },     // 左台
+    { x: 540, y: 1380, w: 180, h: 18 },     // 右台
   ];
 
-  /* 箱子。坐标按 48 的格子摆。
-     右侧 x=792 / 840 这两列从地面往上堆 —— 正好挡住通往门的唯一通道。 */
   const boxes = [];
-  const B = (x, y, mat) => boxes.push({ x, y, w: 48, h: 48, mat, hp: NUM.box[mat].hp, dead: false, hitT: 0, taught: false });
+  const B = (x, y, mat, opt) => boxes.push({
+    x, y, w: 48, h: 48, mat,
+    hp: NUM.box[mat].hp, dead: false, hitT: 0, taught: false,
+    frost: !!(opt && opt.frost),      // 覆霜：既有提示作用，也是"能挖穿"的唯一线索
+  });
 
-  // 箱墙：2 列 × 3 行，共 6 口，其中上两格是石箱（逼玩家拿球）
-  B(792, GROUND_Y - 48, 'wood');
-  B(840, GROUND_Y - 48, 'stone');     // 石箱卡在关键位
-  B(792, GROUND_Y - 96, 'wood');
-  B(840, GROUND_Y - 96, 'iron');      // 铁箱：必须助跑推球
-  B(792, GROUND_Y - 144, 'wood');
-  B(840, GROUND_Y - 144, 'wood');
+  /* ================= L3 地表 =================
+     唯一的洞在 300~444，用三口覆霜木箱**填平**。
+     必须填平 —— 留个缺口的话玩家一眼就看到路，「找」这一步就没了。
+     填平之后地面是连续的，只有木纹和霜这个细节不同。 */
+  B(300, 432, 'wood', { frost: true });
+  B(348, 432, 'wood', { frost: true });
+  B(396, 432, 'wood', { frost: true });
 
-  /* 散箱。
-     **地面上只在起点右侧留两口**（96 / 144）：它们挡路、也挡枪，是玩家的第一课
-     —— 起手就得学会「喷三下」。
-     其余全部放到台面上。原来地面铺了三口（620/668/716），结果和站在 668/716
-     的怪挤在一起：箱子和怪贴得太近，玩家正面喷射时子弹全被箱子吃掉，
-     那只怪变成了「打不着」的，只能贴脸换血。**箱子挡枪是设计，但必须是
-     玩家能绕开的挡，不能是死结。** */
-  B(96, GROUND_Y - 48, 'wood');
-  B(144, GROUND_Y - 48, 'wood');
-  B(190, 436 - 48, 'wood');
-  B(238, 436 - 48, 'wood');
-  B(440, 348 - 48, 'wood');
-  B(488, 348 - 48, 'wood');
-  B(560, 348 - 48, 'stone');
-  B(720, 300 - 48, 'wood');
+  /* 右端一摞：挡住「一直往右走」的惯性，砸开是资源。
+     用石箱夹在中间，第一次到这里就得面对「子弹打不动」。 */
+  B(888, 432, 'wood');
+  B(888, 384, 'stone');
+  B(888, 336, 'wood');
+
+  // 高台上的箱子（顺手砸）
+  B(552, 324, 'wood');
+  B(600, 324, 'wood');
+
+  /* ================= L2 中层 =================
+     第二个洞在 424~520，同样两口覆霜木箱。 */
+  B(424, 952, 'wood', { frost: true });
+  B(472, 952, 'wood', { frost: true });
+
+  // 左路资源
+  B(56,  952, 'wood');
+  B(104, 952, 'wood');
+
+  /* 一座三层箱塔。**它的用处不是"多几口箱子"，是给左半边一个纵向的体块** ——
+     平铺的箱子只能读出"一排"，叠起来才读得出"高度"。
+     顺带它是上高台 C 的第二条路（塔顶 808 和 C 的顶 800 几乎平齐），
+     也是"砸掉最下面一格整摞会塌"最直观的一眼。 */
+  B(168, 952, 'wood');
+  B(168, 904, 'wood');
+  B(168, 856, 'wood');
+
+  B(248, 842, 'stone');           // 高台 A 上：逼一次球，顺便当上高台 C 的台阶
+
+  // 中段高台的箱堆
+  B(624, 808, 'wood');
+  B(672, 808, 'wood');
+
+  // 右路
+  B(760, 952, 'wood');
+  B(808, 952, 'wood');
+  B(888, 952, 'iron');            // 铁箱：子弹无效，必须助跑推球
+  B(760, 712, 'wood');
+  B(808, 712, 'wood');
+
+  /* ================= L1 底层 =================
+     冰封区。左列 792 是外屏障，右列 840 **就是门的外壳** ——
+     门在 (840,1408,48,92)，正好被两口冰箱盖住，砸开才露出来。 */
+  B(792, 1452, 'ice');
+  B(792, 1404, 'ice');
+  B(840, 1452, 'ice');
+  B(840, 1404, 'ice');
+
+  /* 喂球的普通木箱。**这四口是战斗力的兜底**：
+     球砸箱会吸木屑长大，所以就算玩家把怪全清了，也能靠拆这几口箱
+     把球喂到能破冰墙的档位。没有它们，清光怪 = 永久卡关。 */
+  B(392, 1452, 'wood');
+  B(440, 1452, 'wood');
+  B(488, 1452, 'wood');
+  B(392, 1404, 'wood');
+
+  // 左台上的资源
+  B(72,  1332, 'wood');
+  B(120, 1332, 'wood');
+
+  /* 洞窟顶的钟乳石。**纯气氛，但是必须有** ——
+     没有它，L1 就是一块被涂黑的空地，玩家读完"很深"之后就没有别的信息了。
+     位置用 x 的确定性函数算，不用 Math.random：出图和测试要能复现同一张图。 */
+  const deco = [];
+  for (let x = 16; x < 940; x += 58) {
+    if (x > 412 && x < 530) continue;              // 这是从 L2 掉下来的竖井，别挂石头
+    const w = 14 + ((x * 7) % 20);
+    const h = 20 + ((x * 13) % 46);
+    deco.push({ x, y: 1060, w, h, kind: 'stalac' });
+  }
+  // 地面上的碎冰堆
+  for (let x = 90; x < 940; x += 137) {
+    if (x > 320 && x < 560) continue;              // 中间是喂球箱和冰墙区
+    if (x > 760) break;
+    deco.push({ x, y: 1500, w: 30 + ((x * 11) % 26), h: 10 + ((x * 5) % 12), kind: 'rubble' });
+  }
 
   return {
-    plats, boxes,
-    door: { x: 900, y: GROUND_Y - 92, w: 56, h: 92, open: false, openT: 0 },
-    /* **8 只怪，不是 6 只。** 6 只时「全用子弹开路」还剩 25 发，
-       弹药压力根本不存在 —— 玩家不会被迫去学推球。
-       8 只 × 6 发 + 13 口木箱 × 3 发 = 87 发，硬顶 100 才勉强走完。 */
-    /* `y` 是**头顶**，和玩家保持一致。所以地面怪写 GROUND_Y - 30，
-       不是 GROUND_Y —— 写真 GROUND_Y 的话出生第一帧身体整个埋在地面里。 */
+    plats, boxes, deco,
+    /* 门在底层最深处的洞窟里，**外面还盖着两口冰箱**（见上面的 840 列）。
+       玩家在 L3 完全看不见它 —— 门不是"摆在右边"，是"挖到底才找到"。 */
+    door: { x: 840, y: 1408, w: 48, h: 92, open: false, openT: 0 },
+
+    /* 9 只怪，三层分布。`y` 是**头顶**，所以站在 y=K 的地面上就写 K-30。
+       写真 K 的话出生第一帧身体整个埋进地面里。 */
     spawns: [
-      { x: 130, y: GROUND_Y - 30, kind: 'crawler' },
-      { x: 300, y: GROUND_Y - 30, kind: 'crawler' },
-      { x: 470, y: GROUND_Y - 30, kind: 'runner' },
-      { x: 600, y: GROUND_Y - 30, kind: 'crawler' },
-      { x: 700, y: GROUND_Y - 30, kind: 'runner' },
-      { x: 320, y: 436 - 30, kind: 'crawler' },
-      { x: 600, y: 348 - 30, kind: 'runner' },
-      { x: 800, y: 300 - 30, kind: 'crawler' },
+      // L3 地表
+      { x: 180, y: 450,  kind: 'crawler' },
+      { x: 640, y: 450,  kind: 'crawler' },
+      // L2 中层
+      { x: 120, y: 970,  kind: 'crawler' },
+      { x: 300, y: 860,  kind: 'runner' },    // 高台 A
+      { x: 740, y: 826,  kind: 'crawler' },   // 高台 B（往右挪开，别被台上的箱子挡住枪线）
+      { x: 160, y: 770,  kind: 'crawler' },   // 高台 C
+      { x: 820, y: 970,  kind: 'runner' },
+      /* L1 底层 3 只。**这个数字和 NUM.killTarget 是绑死的**：
+         单向关卡里，玩家可能一路挖到底都没杀人，手上只有这 3 只。
+         少于 killTarget 就是死局。 */
+      { x: 200, y: 1470, kind: 'crawler' },
+      { x: 560, y: 1350, kind: 'runner' },    // 右台
+      { x: 680, y: 1470, kind: 'crawler' },
     ],
-    start: { x: 60, y: GROUND_Y },
+    start: { x: 60, y: 480 - 42 },
   };
 }
 
@@ -204,10 +323,14 @@ function buildLevel() {
 const S = {
   t: 0,
   phase: 'play',            // play | clear
+  /* 镜头。世界高 1560，屏幕 600 —— 只有跟着人往下走，才谈得上"纵深"。
+     只做纵向（横向世界正好一屏宽），这样玩家永远看得见整张地图的宽度，
+     不会因为横向滚动而丧失方位感。 */
+  cam: { y: 0 },
   clearT: 0,
   p: null,
   foes: [], shots: [], balls: [], frags: [], texts: [], shards: [],
-  boxes: [], plats: [], door: null,
+  boxes: [], plats: [], deco: [], door: null,
   ammo: 0, belly: 0, hp: 0, invuln: 0,
   killed: 0, killedTarget: 0,
   shake: 0, flash: 0, hitStop: 0,
@@ -229,6 +352,7 @@ function reset() {
   const L = buildLevel();
   S.t = 0; S.phase = 'play'; S.clearT = 0;
   S.plats = L.plats;
+  S.deco = L.deco || [];
   S.boxes = L.boxes.map(b => ({ ...b }));
   S.door = { ...L.door };
   S.foes = L.spawns.map(sp => makeFoe(sp.x, sp.y, sp.kind));
@@ -248,6 +372,7 @@ function reset() {
     ballChain: 0, ballChainMax: 0,
     kills: 0, killByBall: 0, hardHint: 0,
   };
+  S.cam = { y: 0 };
   S.p = {
     x: L.start.x, y: L.start.y, vx: 0, vy: 0,
     w: 30, h: 42, onGround: true, face: 1,
@@ -270,6 +395,7 @@ function makeFoe(x, y, kind) {
     face: 1,
     onGround: false,
     homeX: x,
+    homeY: y,
     patrolT: 0,
     speed: fast ? 190 : 92,
   };
@@ -329,6 +455,19 @@ function solids() {
   return out;
 }
 
+/** 某个 x 处、y 下方最近的可站立面。碎片落地、找回掉出世界的敌人要用。
+    直接拿 GROUND_Y 当"地面"在单屏时代是对的，三层之后不对了 ——
+    底层掉下来的碎片会一路穿过 L2、L3 的地面落到底。 */
+function groundAt(x, y) {
+  let best = WORLD_H;
+  for (const s of solids()) {
+    if (x < s.x || x > s.x + s.w) continue;
+    if (s.y < y - 6) continue;          // 只找脚底下的
+    if (s.y < best) best = s.y;
+  }
+  return best;
+}
+
 /* ---------------------------------------------------------------- 移动体物理
    **顺序必须是「先垂直分离、再水平分离」，而且水平那一轮要跳过"站在上面"的块。**
    反过来做会出一个非常隐蔽的致命 bug：站在地面上的身体，包围盒和地面平台
@@ -375,7 +514,10 @@ function stepBody(o, dt) {
   }
   o.x = clamp(o.x, WALL_L, WALL_R - o.w);
 
-  if (o.y + o.h > GROUND_Y + 60) { o.y = GROUND_Y - o.h; o.vy = 0; o.onGround = true; }
+  /* 兜底：真的掉出世界了才拉回来。**不能写 GROUND_Y** ——
+     GROUND_Y 现在是世界最底（1500），写它等于把中层掉下去的东西
+     全部瞬移到洞窟底，玩家会看到怪物凭空出现在脚边。 */
+  if (o.y + o.h > WORLD_H + 80) { o.y = groundAt(o.x + o.w / 2, 0) - o.h; o.vy = 0; o.onGround = true; }
 }
 
 /* ---------------------------------------------------------------- 吐雪 */
@@ -600,8 +742,18 @@ function ballHitBox(b, box, dir) {
     breakBox(box, 'ball');
     b.vx *= def.keepSpeed;          // 穿透：撞碎之后继续滚，这是爽感的来源
     b.chain++;
-    b.absorbed = Math.min(NUM.ball.maxAbsorb, b.absorbed + 1);
+
+    /* **砸碎箱子，球要把木屑吃进去长大。**
+       这条不是装饰：① 它是砸箱唯一的即时回报（不然砸箱只剩"开路"这一个理由）；
+       ② 它是「怪杀光了怎么办」的兜底 —— 底层那四口木箱就是专门用来喂球的，
+          没有这条机制，清光怪的玩家会永久卡在冰墙前面。 */
+    const before = b.r;
+    b.absorbed = Math.min(NUM.ball.maxAbsorb, b.absorbed + NUM.ball.absorbBox);
     b.r = ballR(b.absorbed);
+    if (b.r > before + 1.2) {
+      addText(b.x, b.y - b.r - 8, '吸木屑 · 球变大', '#CFEFFF', 14, 0.75);
+    }
+
     S.stat.ballChain = b.chain;
     S.stat.ballChainMax = Math.max(S.stat.ballChainMax, b.chain);
     S.shake = Math.max(S.shake, 9);
@@ -652,7 +804,7 @@ function killFoe(f, byBall) {
   addFrag(f.x + f.w / 2, f.y + f.h / 2, 12, '#FFC8B0', 260);
   S.shake = Math.max(S.shake, 7);
   if (byBall) {
-    byBall.absorbed = Math.min(NUM.ball.maxAbsorb, byBall.absorbed + 1);
+    byBall.absorbed = Math.min(NUM.ball.maxAbsorb, byBall.absorbed + NUM.ball.absorbFoe);
     byBall.r = ballR(byBall.absorbed);
   }
   checkDoor();
@@ -674,12 +826,30 @@ function stepFoes(dt) {
       if (Math.abs(f.x - f.homeX) > 120) f.vx = -sign(f.x - f.homeX) * f.speed;
       f.face = sign(f.vx);
     }
+    /* **怪不许走下平台。**
+       三层之后这是一个很隐蔽的塌方：一只巡逻怪顺着台边走下来、再走下来，
+       最后整场的怪都聚在洞窟底，上面两层变成空台子 —— 玩家爬上去只看到
+       空房间，会以为这关坏了。实测 crawler 从 (740,826) 一路走到 (801,826)
+       然后掉层，就是这么发生的。
+       所以在台边折返。runner 也照样折返：它该在台上等你，不是自己跳崖。 */
+    if (f.onGround) {
+      const fy = f.y + f.h;
+      const ahead = f.vx > 0 ? f.x + f.w + 6 : f.x - 6;
+      if (groundAt(ahead, fy + 2) - fy > 40) f.vx = -f.vx;
+    }
+
     /* stepBody 里已经把「水平位移 + 水平碰撞 + 重力 + 垂直落地」全做完了。
        **这里不能再补位移或重力** —— 叠上去会让速度翻倍、一帧穿过地面
        （第一版就是这么写的：crawler 直接掉出画面）。 */
     stepBody(f, dt);
-    // 掉出画面就拉回来（不做死亡，红线：不为难玩家）
-    if (f.y > H + 60) { f.y = GROUND_Y - f.h; f.vy = 0; f.hits = 0; }
+    /* 掉出世界就送回**自己原来那一层**，不是送回洞窟底。
+       三层之后 H 已经不是世界高度了，用 H 会把 L2 掉下去的怪
+       拉到底层（离玩家 1000px 外），看起来像凭空消失了。 */
+    if (f.y > WORLD_H + 80) {
+      f.y = (f.homeY !== undefined ? f.homeY : f.y);
+      f.x = f.homeX;
+      f.vy = 0; f.hits = 0; f.needAt = 0;
+    }
     f.x = clamp(f.x, WALL_L, WALL_R - f.w);
 
     // 撞玩家
@@ -717,7 +887,8 @@ function stepShards(dt) {
     s.t += dt;
     s.vy = Math.min(s.vy + 1600 * dt, 900);
     s.y += s.vy * dt;
-    if (s.y > GROUND_Y - 12) { s.y = GROUND_Y - 12; s.vy = 0; }
+    const gy = groundAt(s.x, s.y) - 12;
+    if (s.y > gy) { s.y = gy; s.vy = 0; }
     // 吸附
     const dx = (p.x + p.w / 2) - s.x, dy = (p.y + p.h / 2) - s.y;
     const d = Math.hypot(dx, dy);
@@ -743,24 +914,70 @@ function stepBoxFall(dt) {
   const live = S.boxes.filter(b => !b.dead).sort((a, b) => b.y - a.y);
   for (const b of live) {
     let supported = false;
-    // 站在平台上？
+    /* 站在平台上？
+       **容差必须是 +2 而不是 -1。** 填洞的盖板箱正好从平台边缘那一格开始
+       （L3 的洞在 300，左平台到 300 结束），数学上是"刚好接触、零重叠"，
+       `b.x >= s.x + s.w - 1` 会把它判成不支撑 —— 三口盖板箱于是全掉到中层，
+       地表看起来是个凭空多出来的大坑。这个 bug 机器断言全绿、只有出图能看出来。 */
     for (const s of S.plats) {
-      if (b.x + b.w <= s.x + 1 || b.x >= s.x + s.w - 1) continue;
+      if (b.x + b.w <= s.x || b.x >= s.x + s.w) continue;
       if (Math.abs((b.y + b.h) - s.y) < 2.5) { supported = true; break; }
     }
-    // 站在别的箱子上？
+    /* 站在别的箱子上？
+       **这里的水平判定必须是严格重叠，不能给容差。** 给 2px 容差的后果：
+       792 那列和 840 那列是肩并肩的（792+48 = 840），容差一开，它们就
+       互认"我在你上面"，于是砸掉 840 的底座、上面那口会赖在 792 上不动，
+       箱子塌落整个失效。接触和重叠是两件事，只有"夹住"那条可以认接触。 */
     if (!supported) {
       for (const o of live) {
         if (o === b) continue;
-        if (b.x + b.w <= o.x + 1 || b.x >= o.x + o.w - 1) continue;
+        if (b.x + b.w <= o.x || b.x >= o.x + o.w) continue;
         if (Math.abs((b.y + b.h) - o.y) < 2.5) { supported = true; break; }
       }
+    }
+    /* 嵌在洞里：**左右都被实心块夹住**才算支撑。
+       填洞的盖板箱是"嵌"进去的，不是"站"在平台上 —— 它的箱底（528）
+       和平台顶（480）根本不在同一高度，靠的是被两边的洞壁夹住。
+       所以上面那两条（站在平台上 / 站在箱子上）对盖板全部失效，
+       第一版没有这一条，三口盖板箱一开局就整排掉到中层，
+       地表凭空多出一个大坑（机器断言全绿，只有出图能看出来）。
+
+       **必须是"左 && 右"。** 写成"贴着一个就算"的话，竖直叠着的两块
+       也会互相认作支撑 —— 砸掉 840 那列底下的冰墙，上面那口会赖在
+       792 那列上不掉，箱子塌落这个设计就废了。 */
+    if (!supported) {
+      let left = false, right = false;
+      for (const o of solids()) {
+        if (o === b) continue;
+        const overlapY = Math.min(o.y + o.h, b.y + b.h) - Math.max(o.y, b.y);
+        if (overlapY < -2) continue;                       // y 方向根本不挨着
+        if (Math.abs(o.x + o.w - b.x) <= 2.5) left = true;
+        if (Math.abs(b.x + b.w - o.x) <= 2.5) right = true;
+      }
+      if (left && right) supported = true;
     }
     if (!supported) b.y += 900 * dt;
   }
 }
 
 /* ---------------------------------------------------------------- 门 */
+/** 门是不是还被箱子盖着。
+    **这是「门藏在箱子里」的唯一实现**：不看任何标记位，直接问"门这块地方
+    还有没有活着的箱子"。砸掉最后一口，函数自己就变 false，门露出来。
+    比维护一个 hiddenBy 数组稳得多 —— 箱子会被塌落、会被连锁砸碎，
+    引用很容易失效，坐标判定永远不会。 */
+function doorBlocked() {
+  const d = S.door;
+  if (!d) return false;
+  for (const b of S.boxes) {
+    if (b.dead) continue;
+    if (b.x + b.w <= d.x + 1 || b.x >= d.x + d.w - 1) continue;
+    if (b.y + b.h <= d.y + 1 || b.y >= d.y + d.h - 1) continue;
+    return true;
+  }
+  return false;
+}
+
 function checkDoor() {
   if (!S.door || S.door.open) return;
   if (S.killed >= S.killedTarget) {
@@ -775,8 +992,23 @@ function checkDoor() {
 function stepDoor(dt) {
   const d = S.door;
   if (!d) return;
+
+  /* 门刚露出来的那一帧，给一次闪光 + 飘字。
+     「砸开最后一口箱、门出现在那里」这个瞬间就是这套设计要卖的惊喜，
+     它必须有声音（这里是视觉）反馈，否则玩家会以为自己眼花了。 */
+  const blocked = doorBlocked();
+  if (d.wasBlocked === undefined) d.wasBlocked = blocked;
+  if (d.wasBlocked && !blocked) {
+    d.revealT = 0;
+    S.flash = Math.max(S.flash, 0.18);
+    S.shake = Math.max(S.shake, 8);
+    addText(d.x + d.w / 2, d.y - 18, '找到门了', '#FFE08A', 24, 1.8);
+    checkDoor();
+  }
+  d.wasBlocked = blocked;
+
   if (d.open) d.openT += dt;
-  if (d.open && S.phase === 'play') {
+  if (d.open && S.phase === 'play' && !blocked) {
     if (aabb(S.p, d)) {
       S.phase = 'clear';
       S.clearT = 0;
@@ -848,6 +1080,12 @@ function step(dt) {
   stepShards(dt);
   stepDoor(dt);
 
+  /* 镜头。只跟纵向，缓动 8/s —— 太快会晕，太慢会掉出画面。
+     夹在世界范围内，L3 顶部不会露出天空以外的空白，L1 底部不会露出世界外。 */
+  const camTarget = clamp(S.p.y + S.p.h / 2 - H / 2, 0, WORLD_H - H);
+  S.cam.y += (camTarget - S.cam.y) * Math.min(1, 8 * dt);
+  if (Math.abs(camTarget - S.cam.y) < 0.5) S.cam.y = camTarget;
+
   if (S.phase === 'clear') S.clearT += dt;
 
   // 粒子与飘字
@@ -875,22 +1113,51 @@ const COL = {
 function draw() {
   if (!ctx) return;
   const g = ctx;
+
+  /* 世界外的底色。**必须先铺满再画世界** —— 镜头一往下走，屏幕上方就是
+     世界 y 之外的空白，不铺底会露出画布的黑。 */
+  g.fillStyle = '#101A21';
+  g.fillRect(0, 0, W, H);
+
   g.save();
 
   // 震屏
   const sh = S.shake;
   if (sh > 0) g.translate(rnd(-sh, sh), rnd(-sh, sh));
 
-  // 天空
-  const sky = g.createLinearGradient(0, 0, 0, H);
-  sky.addColorStop(0, COL.sky1); sky.addColorStop(1, COL.sky2);
-  g.fillStyle = sky; g.fillRect(-40, -40, W + 80, H + 80);
+  // 镜头
+  g.translate(0, -S.cam.y);
 
-  // 远山
+  /* 天空和远山画在**世界坐标**里，不固定在屏幕上。
+     这样它们只属于地表：下到 L2、L1 的时候，天就自然看不见了 ——
+     这才是"越来越深"该有的样子。固定在屏幕上会让地下也顶着一片晴空。 */
+  const sky = g.createLinearGradient(0, 0, 0, 900);
+  sky.addColorStop(0, COL.sky1); sky.addColorStop(1, COL.sky2);
+  g.fillStyle = sky; g.fillRect(-40, -40, W + 80, 940);
+
   g.fillStyle = COL.hill;
-  g.beginPath(); g.moveTo(-40, 430);
-  for (let x = -40; x <= W + 40; x += 80) g.lineTo(x, 430 - 60 - Math.sin(x / 130) * 42);
-  g.lineTo(W + 40, H); g.lineTo(-40, H); g.closePath(); g.fill();
+  g.beginPath(); g.moveTo(-40, 470);
+  for (let x = -40; x <= W + 40; x += 80) g.lineTo(x, 470 - 70 - Math.sin(x / 130) * 46);
+  g.lineTo(W + 40, 960); g.lineTo(-40, 960); g.closePath(); g.fill();
+
+  // 洞窟装饰（画在平台之前，被平台/箱子自然盖住）
+  for (const d of S.deco) {
+    if (d.kind === 'stalac') {
+      g.fillStyle = '#33434E';
+      g.beginPath();
+      g.moveTo(d.x, d.y); g.lineTo(d.x + d.w, d.y); g.lineTo(d.x + d.w / 2, d.y + d.h);
+      g.closePath(); g.fill();
+      g.fillStyle = 'rgba(180,214,232,.22)';
+      g.beginPath();
+      g.moveTo(d.x + d.w * 0.55, d.y); g.lineTo(d.x + d.w, d.y); g.lineTo(d.x + d.w / 2, d.y + d.h);
+      g.closePath(); g.fill();
+    } else {
+      g.fillStyle = 'rgba(58,74,86,.85)';
+      g.beginPath();
+      g.ellipse(d.x + d.w / 2, d.y, d.w / 2, d.h, 0, Math.PI, 0);
+      g.fill();
+    }
+  }
 
   // 平台
   for (const pl of S.plats) drawPlat(g, pl);
@@ -956,6 +1223,24 @@ function draw() {
 
   g.restore();
 
+  /* ---- 纵向纵深：越往下越暗，光只跟着玩家走 ----
+     不加这一层，三层看起来就是"同一张图上下拼了三段"，
+     空格感有了、深度感还是没有。 */
+  const depth = clamp(S.cam.y / (WORLD_H - H), 0, 1);
+  if (depth > 0.03) {
+    const px = S.p.x + S.p.w / 2;
+    const py = S.p.y + S.p.h / 2 - S.cam.y;      // 已经是屏幕坐标
+    /* 光圈半径 340 —— 再宽就等于没暗化（整屏都在圈里），
+       再窄玩家就看不到自己要往哪走。340 大致是"能看清一跳的距离 + 一点余量"。 */
+    const a = 0.2 + depth * 0.58;
+    const grd = g.createRadialGradient(px, py, 80, px, py, 340);
+    grd.addColorStop(0, 'rgba(8,14,20,0)');
+    grd.addColorStop(0.45, 'rgba(8,14,20,' + (a * 0.3).toFixed(3) + ')');
+    grd.addColorStop(1, 'rgba(8,14,20,' + a.toFixed(3) + ')');
+    g.fillStyle = grd;
+    g.fillRect(0, 0, W, H);
+  }
+
   drawHud(g);
 
   if (S.flash > 0) {
@@ -1011,14 +1296,58 @@ function drawBox(g, b) {
     g.strokeStyle = 'rgba(180,196,208,.55)'; g.lineWidth = 2;
     g.beginPath(); g.moveTo(b.x + 12, b.y + 24); g.lineTo(b.x + 36, b.y + 24); g.stroke();
   } else if (b.mat === 'ice') {
-    g.fillStyle = COL.ice;
-    rr(g, b.x, b.y, b.w, b.h, 5); g.fill();
-    g.strokeStyle = COL.iceEdge; g.lineWidth = 2;
-    rr(g, b.x + 1, b.y + 1, b.w - 2, b.h - 2, 4); g.stroke();
-    g.strokeStyle = 'rgba(255,255,255,.75)'; g.lineWidth = 2;
-    g.beginPath(); g.moveTo(b.x + 10, b.y + 38); g.lineTo(b.x + 22, b.y + 20); g.lineTo(b.x + 34, b.y + 30);
+    /* 冰墙。**它必须看起来像一整块冰，不能像瓷砖。**
+       第一版是纯色填充 + 白边框 + 一条折线，四块叠在一起就是四片蓝瓷砖，
+       玩家读不出"这是一堵挡路的墙"，只读到"这里贴了四块砖"。
+       加渐变、气泡、斜面高光、顶面霜之后才有体积。 */
+    const ig = g.createLinearGradient(b.x, b.y, b.x + b.w, b.y + b.h);
+    ig.addColorStop(0, 'rgba(198,238,252,.94)');
+    ig.addColorStop(0.55, 'rgba(122,196,232,.9)');
+    ig.addColorStop(1, 'rgba(166,220,246,.94)');
+    g.fillStyle = ig;
+    rr(g, b.x, b.y, b.w, b.h, 4); g.fill();
+
+    // 冻在里面的气泡
+    g.fillStyle = 'rgba(255,255,255,.45)';
+    for (const [dx, dy, r] of [[14, 13, 3], [31, 21, 2], [19, 35, 2.4], [37, 39, 1.7], [9, 27, 1.4]]) {
+      g.beginPath(); g.arc(b.x + dx, b.y + dy, r, 0, Math.PI * 2); g.fill();
+    }
+    // 斜面高光：一道从右下贯到左上的反光
+    g.strokeStyle = 'rgba(255,255,255,.8)'; g.lineWidth = 2.5;
+    g.beginPath();
+    g.moveTo(b.x + 7, b.y + b.h - 9);
+    g.lineTo(b.x + 19, b.y + 15);
+    g.lineTo(b.x + b.w - 7, b.y + 7);
     g.stroke();
+    // 顶面霜
+    g.fillStyle = 'rgba(243,253,255,.92)';
+    rr(g, b.x + 2, b.y - 3, b.w - 4, 7, 3); g.fill();
+    // 轮廓用深一点的冰蓝，不用白 —— 白边会把它切成独立的小块
+    g.strokeStyle = 'rgba(84,164,204,.5)'; g.lineWidth = 1.5;
+    rr(g, b.x + 0.5, b.y + 0.5, b.w - 1, b.h - 1, 4); g.stroke();
   }
+  /* 覆霜木箱。**这是整关唯一的"能挖穿"线索** ——
+     不是图标、不是箭头、不是文字，就是一层霜和几缕往上飘的寒气。
+     L3 的地面为什么看起来是连续的？因为那三口箱子和地面严丝合缝，
+     玩家能分出它们，靠的就是这层霜。 */
+  if (b.frost) {
+    g.globalAlpha = 0.5 + 0.14 * Math.sin(S.t * 2.2 + b.x * 0.03);
+    g.fillStyle = '#E8F6FF';
+    rr(g, b.x + 3, b.y + 2, b.w - 6, b.h - 6, 6); g.fill();
+    g.globalAlpha = 1;
+    g.strokeStyle = 'rgba(120,190,225,.9)'; g.lineWidth = 1.5;
+    rr(g, b.x + 5, b.y + 4, b.w - 10, b.h - 10, 5); g.stroke();
+    for (let i = 0; i < 3; i++) {
+      const ph = (S.t * 0.5 + i * 0.34 + b.x * 0.01) % 1;
+      g.globalAlpha = (1 - ph) * 0.6;
+      g.fillStyle = '#DCF4FF';
+      g.beginPath();
+      g.arc(b.x + 11 + i * 13, b.y - 2 - ph * 22, Math.max(0.6, 2.8 - ph * 1.6), 0, Math.PI * 2);
+      g.fill();
+    }
+    g.globalAlpha = 1;
+  }
+
   // 拆到一半：裂痕密度跟着 HP 走，玩家能看出"还差几发"
   if (def.hp !== Infinity && b.hp < def.hp) {
     g.globalAlpha = 0.5;
@@ -1037,6 +1366,9 @@ function drawBox(g, b) {
 
 function drawDoor(g, d) {
   if (!d) return;
+  /* 被箱子盖着就不画。**不是画成"模糊的门"** —— 门只要露头，
+     玩家就会去撞箱子试，那就又变成"逐箱砸过去"的扫图了。 */
+  if (doorBlocked()) return;
   // 门框
   g.fillStyle = '#3E4A52';
   rr(g, d.x - 6, d.y - 6, d.w + 12, d.h + 6, 8); g.fill();
@@ -1236,42 +1568,54 @@ function drawHud(g) {
   }
 
   // 击杀进度
+  g.font = '700 15px "PingFang SC","Microsoft YaHei",sans-serif';
   g.fillStyle = '#C8DCE6';
-  g.fillText('击杀', 628, 47);
+  g.fillText('击杀', 596, 47);
   g.fillStyle = S.killed >= S.killedTarget ? '#9BE86E' : '#EAF4F8';
   g.font = '800 22px "PingFang SC","Microsoft YaHei",sans-serif';
-  g.fillText(S.killed + ' / ' + S.killedTarget, 672, 48);
+  g.fillText(S.killed + ' / ' + S.killedTarget, 640, 48);
 
-  // 门的状态
+  /* 当前层。**有纵深的关卡必须告诉玩家"我在第几层"** ——
+     迷路不等于探索，玩家不知道自己在哪只会烦躁。 */
+  const layerIdx = S.p.y < 520 ? 0 : S.p.y < 1060 ? 1 : 2;
+  const LAYER_CN = ['地表', '中层', '深层'];
+  g.font = '700 15px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillStyle = '#C8DCE6';
+  g.fillText('所在', 828, 47);
+  g.fillStyle = ['#DFF2FF', '#FFD08A', '#9BE86E'][layerIdx];
+  g.fillText(LAYER_CN[layerIdx], 870, 47);
+
+  // 门的状态（和"所在"拉开 50px，不然两串字会读成一串）
   g.font = '700 14px "PingFang SC","Microsoft YaHei",sans-serif';
-  g.fillStyle = S.door && S.door.open ? '#9BE86E' : '#FF9E8E';
-  g.fillText(S.door && S.door.open ? '门已开 · 走过去' : '门锁着', 790, 46);
+  const dHidden = doorBlocked();
+  g.fillStyle = S.door && S.door.open ? '#9BE86E' : dHidden ? '#8FA8B8' : '#FF9E8E';
+  g.fillText(dHidden ? '门·未找到' : (S.door.open ? '门·开着' : '门·锁着'), 706, 46);
 
   if (inClear) { g.restore(); return; }
 
   /* 试验台面板（量具，不是玩家 HUD）。
      **必须放右上角。** 原来放左下角，正好压住玩家出生点（x=60）——
      开局第一眼看到的是一块统计面板，不是自己的角色。 */
+  /* 试验台面板（量具）。**压到 4 行、高 88** —— 6 行 / 120 高的版本
+     在 L2 会盖住右上那块浮台上的箱子和怪，玩家以为那层是空的。
+     量具只留三个真正要看的数：裹一只几发、碎箱分布、一球连碎几口。 */
   const st = S.stat;
-  const panelX = W - 268, panelY = 84, panelW = 252, panelH = 120;
-  g.fillStyle = 'rgba(14,22,28,.52)';
+  const panelX = W - 256, panelY = 82, panelW = 240, panelH = 88;
+  g.fillStyle = 'rgba(14,22,28,.46)';
   rr(g, panelX, panelY, panelW, panelH, 10); g.fill();
   const avg = st.shotsPerCoat.length
     ? (st.shotsPerCoat.reduce((a, b) => a + b, 0) / st.shotsPerCoat.length).toFixed(1)
     : '—';
   const lines = [
-    '试验台 · 这一局实测',
-    '裹一只：' + avg + ' 发   （共 ' + st.coats + ' 只）',
-    '碎箱：子弹 ' + st.boxByShot + ' · 球 ' + st.boxByBall,
-    '一球最多连碎：' + st.ballChainMax + ' 口',
-    '球杀：' + st.killByBall + ' / ' + st.kills,
-    '命中：怪 ' + st.hitFoe + ' · 箱 ' + st.hitBox,
+    '试验台 · 裹一只 ' + avg + ' 发（' + st.coats + ' 只）',
+    '碎箱 子弹 ' + st.boxByShot + ' · 球 ' + st.boxByBall,
+    '一球最多连碎 ' + st.ballChainMax + ' 口 · 球杀 ' + st.killByBall,
   ];
-  g.font = '600 13px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.font = '600 12.5px "PingFang SC","Microsoft YaHei",sans-serif';
   g.textAlign = 'left';
   for (let i = 0; i < lines.length; i++) {
-    g.fillStyle = i === 0 ? '#7FA3B5' : '#D6E6EF';
-    g.fillText(lines[i], panelX + 14, panelY + 22 + i * 18);
+    g.fillStyle = i === 0 ? '#8FB0C0' : '#D6E6EF';
+    g.fillText(lines[i], panelX + 13, panelY + 23 + i * 22);
   }
 
   /* 操作提示。**开局 9 秒后淡出** —— 常驻的话它会一直压在地面层，
@@ -1375,11 +1719,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 
 /* **测试出口**。headless 断言全走这里 —— 逻辑不依赖 rAF，也不依赖 canvas。 */
 const API = {
-  NUM, S, W, H, GROUND_Y,
+  NUM, S, W, H, GROUND_Y, WORLD_H,
   reset, step, shoot, draw,
   bellyTier, snowNeed, ballTier, ballR, ballPow,
   coatFoe, makeBallFrom, ballHitBox, shotBox, breakBox, hurtPlayer,
-  checkDoor,
+  checkDoor, doorBlocked, groundAt, stepDoor,
   spawnFoe: (x, y, kind) => { const f = makeFoe(x, y, kind); S.foes.push(f); return f; },
   /** 直接造一颗球（绕过"先冻怪"），用来单独量"球砸箱"的数值 */
   spawnBall: (x, y, vx, absorbed) => {

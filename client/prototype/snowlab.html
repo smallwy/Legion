@@ -1,0 +1,1400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>PAWPACK · 吐雪单屏试验台</title>
+<style>
+  html, body {
+    margin: 0; height: 100%; overflow: hidden; background: #0B1014;
+    font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  #wrap { position: fixed; inset: 0; display: grid; place-items: center; }
+  canvas { display: block; border-radius: 8px; box-shadow: 0 24px 70px rgba(0,0,0,.65); }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<script>
+/* ===========================================================================
+   PAWPACK · 吐雪单屏试验台
+   ---------------------------------------------------------------------------
+   **这个文件不是游戏，是量具。**
+
+   任务只有一件：把「吐雪 → 裹成球 → 推球砸箱 → 砸开箱墙见到门」这一条闭环
+   跑起来，并且把三个数当场量出来：
+
+     ① 裹一只怪平均几发   ② 碎一口箱几发   ③ 一颗球撞碎几个箱
+
+   为什么单开一个文件、不直接改 grove.html：主线 21599 行、27 屏、1463 项冒烟
+   断言，而这一版动的是**输入通道**（近身糊 → 远程吐）和**资源模型**（球额度 →
+   弹药），两处都在主线最底层。先在试验台把数值跑顺，再决定要不要搬。
+
+   数值全部集中在下方的 NUM 表里，改表就能重跑，不用翻代码。
+   =========================================================================== */
+(function () {
+'use strict';
+
+/* ---------------------------------------------------------------- 画布 */
+const W = 960, H = 600;
+const cv = document.getElementById('cv');
+/* jsdom 里没有 canvas 实现。测试只要逻辑，所以拿不到 ctx 就降级成 null，
+   draw() 第一行 return —— 逻辑和渲染因此可以分开验。 */
+let ctx = null;
+try { ctx = cv.getContext('2d'); } catch (e) { ctx = null; }
+if (ctx) {
+  const dpr = Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+  cv.width = W * dpr; cv.height = H * dpr;
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+/* ---------------------------------------------------------------- 数值表
+   全部可调。改这里，不碰逻辑。 */
+const NUM = {
+  /* 弹药。用户 2026-10-28 拍板：单关初始 100 发。
+     这个数看着宽裕，其实是**刚好卡住**的：
+     6 只怪 × 6 发（满饱）+ 16 口木箱 × 3 发 = 84 发，只剩 16。
+     也就是说「全用子弹开路」这条路走不到头，必须靠球省。 */
+  ammoStart: 100,
+
+  /* 裹成球要几发。三档饱食度。
+     ** 6 / 4 的倒挂是待验证的疑点 **：饱的时候反而更费，说不过去。
+     先按用户拍的值跑，跑完看手感再定。HUD 会实时显示当前档位的发数。 */
+  snowShots: { full: 6, half: 4, hungry: 10 },
+
+  bellyStart: 100,
+  bellyFull: 70,          // ≥70 = 满饱
+  bellyHalf: 35,          // ≥35 = 半饱，以下 = 全饿
+  bellyPerBall: 14,       // 造一颗球掉多少
+  bellyPerShard: 20,      // 吃一片雪之碎片回多少
+
+  /* 吐雪。**「喷的代价」在这里**，两条都用：
+     ① 射程短 —— life 0.24s × 620 = 149px，必须靠近
+     ② 喷时锁移动 —— 0.14s，比射速 0.16s 短一点，所以连喷 = 站桩
+     没有这两条，100 发会让玩家站在角落喷满全场再统一推球，
+     「喷」和「推」就变成两个不相干的阶段了。 */
+  shot: { speed: 620, life: 0.24, cd: 0.16, lock: 0.14, r: 7 },
+
+  /* 球。半径沿用 grove 的 22 + 2.8/只，但**上限从 +16 提到 +20**：
+     冰墙既然只认特大球，4 档之间必须拉开肉眼能分辨的差距。 */
+  ball: { baseR: 22, perAbsorb: 2.8, maxAbsorb: 20, life: 4.6, fric: 260, maxR: 42 },
+
+  /* 推球力度。沿用 grove 的 620 → 1209（助跑满格约 380px）。 */
+  push: { base: 620, runGain: 0.95, runFull: 380 },
+
+  /* 箱子。**这里是整套材质系统的核心表**：
+     hp        = 子弹要几发才碎（Infinity = 子弹完全无效）
+     minPow    = 球要多大的动量才能砸碎（0 = 随便推都碎）
+     keepSpeed = 砸碎后球保留多少速度（穿透感就靠这一列）
+     minTier   = 球至少要几档（0小 1中 2大 3特大） */
+  box: {
+    wood:  { hp: 3,        minPow: 0,    keepSpeed: 0.82, minTier: 0, name: '木箱' },
+    stone: { hp: Infinity, minPow: 560,  keepSpeed: 0.46, minTier: 0, name: '石箱' },
+    iron:  { hp: Infinity, minPow: 1150, keepSpeed: 0.30, minTier: 0, name: '铁箱' },
+    ice:   { hp: Infinity, minPow: 1550, keepSpeed: 0.36, minTier: 2, name: '冰墙' },
+  },
+
+  /* 掉弹。**这一列是「用球才回本」的唯一实现**：
+     木箱被子弹砸碎几乎不回本（10%），被球砸碎才值钱（40%）。
+     不靠 HP 磨，靠掉率拉价值差 —— 玩家自己会算出来，不用教。 */
+  drop: {
+    shardByBall: 0.40,
+    shardByShot: 0.10,
+    shardAmmoMin: 3,
+    shardAmmoMax: 5,
+  },
+
+  killTarget: 8,
+  hpStart: 3,
+  hpInvuln: 1.2,
+
+  /* 贴脸保底：跑动中撞上敌人，自己掉 1 血、敌人吃 2 点雪。
+     零弹时的唯一出路，代价是血 —— 保底是**机制**，不是系统施舍。 */
+  bodyCoat: 2,
+};
+
+/* ---------------------------------------------------------------- 工具 */
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const sign = v => v < 0 ? -1 : 1;
+const rnd = (a, b) => a + Math.random() * (b - a);
+function rr(g, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}
+
+/* ---------------------------------------------------------------- 关卡
+   一屏。左侧起点，右侧是箱墙 + 门。
+   箱墙是这一版的**主角**：它同时是路障、台阶、资源点、门位。
+   要拆它得先有球，要有球得先冻怪 —— 这条链子就是全部。 */
+const GROUND_Y = 556;
+const WALL_L = 24, WALL_R = 936;
+
+function buildLevel() {
+  const plats = [
+    // 地面
+    { x: 0, y: GROUND_Y, w: W, h: 60 },
+    // 左侧台
+    { x: 140, y: 436, w: 240, h: 18 },
+    // 中台
+    { x: 400, y: 348, w: 240, h: 18 },
+    // 右侧高台（门在上面，是"看得见够不着"的第二层诱惑）
+    { x: 700, y: 300, w: 150, h: 18 },
+  ];
+
+  /* 箱子。坐标按 48 的格子摆。
+     右侧 x=792 / 840 这两列从地面往上堆 —— 正好挡住通往门的唯一通道。 */
+  const boxes = [];
+  const B = (x, y, mat) => boxes.push({ x, y, w: 48, h: 48, mat, hp: NUM.box[mat].hp, dead: false, hitT: 0, taught: false });
+
+  // 箱墙：2 列 × 3 行，共 6 口，其中上两格是石箱（逼玩家拿球）
+  B(792, GROUND_Y - 48, 'wood');
+  B(840, GROUND_Y - 48, 'stone');     // 石箱卡在关键位
+  B(792, GROUND_Y - 96, 'wood');
+  B(840, GROUND_Y - 96, 'iron');      // 铁箱：必须助跑推球
+  B(792, GROUND_Y - 144, 'wood');
+  B(840, GROUND_Y - 144, 'wood');
+
+  /* 散箱。
+     **地面上只在起点右侧留两口**（96 / 144）：它们挡路、也挡枪，是玩家的第一课
+     —— 起手就得学会「喷三下」。
+     其余全部放到台面上。原来地面铺了三口（620/668/716），结果和站在 668/716
+     的怪挤在一起：箱子和怪贴得太近，玩家正面喷射时子弹全被箱子吃掉，
+     那只怪变成了「打不着」的，只能贴脸换血。**箱子挡枪是设计，但必须是
+     玩家能绕开的挡，不能是死结。** */
+  B(96, GROUND_Y - 48, 'wood');
+  B(144, GROUND_Y - 48, 'wood');
+  B(190, 436 - 48, 'wood');
+  B(238, 436 - 48, 'wood');
+  B(440, 348 - 48, 'wood');
+  B(488, 348 - 48, 'wood');
+  B(560, 348 - 48, 'stone');
+  B(720, 300 - 48, 'wood');
+
+  return {
+    plats, boxes,
+    door: { x: 900, y: GROUND_Y - 92, w: 56, h: 92, open: false, openT: 0 },
+    /* **8 只怪，不是 6 只。** 6 只时「全用子弹开路」还剩 25 发，
+       弹药压力根本不存在 —— 玩家不会被迫去学推球。
+       8 只 × 6 发 + 13 口木箱 × 3 发 = 87 发，硬顶 100 才勉强走完。 */
+    /* `y` 是**头顶**，和玩家保持一致。所以地面怪写 GROUND_Y - 30，
+       不是 GROUND_Y —— 写真 GROUND_Y 的话出生第一帧身体整个埋在地面里。 */
+    spawns: [
+      { x: 130, y: GROUND_Y - 30, kind: 'crawler' },
+      { x: 300, y: GROUND_Y - 30, kind: 'crawler' },
+      { x: 470, y: GROUND_Y - 30, kind: 'runner' },
+      { x: 600, y: GROUND_Y - 30, kind: 'crawler' },
+      { x: 700, y: GROUND_Y - 30, kind: 'runner' },
+      { x: 320, y: 436 - 30, kind: 'crawler' },
+      { x: 600, y: 348 - 30, kind: 'runner' },
+      { x: 800, y: 300 - 30, kind: 'crawler' },
+    ],
+    start: { x: 60, y: GROUND_Y },
+  };
+}
+
+/* ---------------------------------------------------------------- 状态 */
+const S = {
+  t: 0,
+  phase: 'play',            // play | clear
+  clearT: 0,
+  p: null,
+  foes: [], shots: [], balls: [], frags: [], texts: [], shards: [],
+  boxes: [], plats: [], door: null,
+  ammo: 0, belly: 0, hp: 0, invuln: 0,
+  killed: 0, killedTarget: 0,
+  shake: 0, flash: 0, hitStop: 0,
+  keys: {},
+  // 量具：这个面板是给"跑原型"看的，不是给玩家看的
+  stat: {
+    shots: 0, hitFoe: 0, hitBox: 0,
+    coats: 0, shotsPerCoat: [],       // 每只怪用了多少发
+    boxByShot: 0, boxByBall: 0,
+    ballChain: 0, ballChainMax: 0,    // 一颗球最多连碎几个
+    kills: 0, killByBall: 0,
+    hardHint: 0,
+  },
+  _taught: {},              // 首次提示只弹一次
+};
+
+/* ---------------------------------------------------------------- 初始化 */
+function reset() {
+  const L = buildLevel();
+  S.t = 0; S.phase = 'play'; S.clearT = 0;
+  S.plats = L.plats;
+  S.boxes = L.boxes.map(b => ({ ...b }));
+  S.door = { ...L.door };
+  S.foes = L.spawns.map(sp => makeFoe(sp.x, sp.y, sp.kind));
+  S.shots = []; S.balls = []; S.frags = []; S.texts = []; S.shards = [];
+  S.ammo = NUM.ammoStart;
+  S.belly = NUM.bellyStart;
+  S.hp = NUM.hpStart;
+  S.invuln = 0;
+  S.killed = 0;
+  S.killedTarget = NUM.killTarget;
+  S.shake = 0; S.flash = 0; S.hitStop = 0;
+  S._taught = {};
+  S.stat = {
+    shots: 0, hitFoe: 0, hitBox: 0,
+    coats: 0, shotsPerCoat: [],
+    boxByShot: 0, boxByBall: 0,
+    ballChain: 0, ballChainMax: 0,
+    kills: 0, killByBall: 0, hardHint: 0,
+  };
+  S.p = {
+    x: L.start.x, y: L.start.y, vx: 0, vy: 0,
+    w: 30, h: 42, onGround: true, face: 1,
+    runD: 0, lockT: 0, shotCd: 0, anim: 0, shotAnim: 0,
+  };
+}
+
+/* ---------------------------------------------------------------- 敌人 */
+function makeFoe(x, y, kind) {
+  const fast = kind === 'runner';
+  return {
+    x, y, kind,
+    w: 34, h: 30,
+    vx: fast ? 0 : (Math.random() < 0.5 ? -1 : 1) * 90,
+    vy: 0,
+    hits: 0,                 // 已吃雪点数
+    needAt: 0,               // 开始挨第一发时的 need 快照（量具用）
+    hitT: 0,
+    dead: false,
+    face: 1,
+    onGround: false,
+    homeX: x,
+    patrolT: 0,
+    speed: fast ? 190 : 92,
+  };
+}
+
+/* ---------------------------------------------------------------- 饱食 */
+function bellyTier() {
+  if (S.belly >= NUM.bellyFull) return 'full';
+  if (S.belly >= NUM.bellyHalf) return 'half';
+  return 'hungry';
+}
+function snowNeed() { return NUM.snowShots[bellyTier()]; }
+const TIER_CN = { full: '满饱', half: '半饱', hungry: '全饿' };
+
+/* ---------------------------------------------------------------- 球档位 */
+function ballTier(n) {
+  if (n >= 6) return 3;
+  if (n >= 4) return 2;
+  if (n >= 2) return 1;
+  return 0;
+}
+const BALL_TIER_CN = ['小', '中', '大', '特大'];
+function ballR(n) { return Math.min(NUM.ball.maxR, NUM.ball.baseR + NUM.ball.perAbsorb * Math.min(n, NUM.ball.maxAbsorb)); }
+/** 动量。**破冰墙的判据必须是球径 × 速度，不是单看体积** ——
+    否则玩家把怪清光就永远攒不出特大球，而冰墙后面是门，直接死局。 */
+function ballPow(b) { return Math.abs(b.vx) * (b.r / NUM.ball.baseR); }
+
+/* ---------------------------------------------------------------- 飘字 */
+function addText(x, y, s, color, size, lifeT) {
+  S.texts.push({ x, y, s, color: color || '#fff', size: size || 16, t: 0, life: lifeT || 0.9 });
+}
+function addFrag(x, y, n, color, spd) {
+  for (let i = 0; i < n; i++) {
+    const a = rnd(0, Math.PI * 2), v = rnd(60, spd || 260);
+    S.frags.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 80, t: 0, life: rnd(0.35, 0.8), color, r: rnd(2, 4.5) });
+  }
+}
+function hitStop(t) { S.hitStop = Math.max(S.hitStop, t); }
+/** 一次性提示。**「太硬了」只在首次弹一次**，之后靠火花 + 无裂痕表达。
+    常驻文字会把屏幕变成一个一直在喊的提示板。 */
+function once(key, x, y, s, color) {
+  if (S._taught[key]) return;
+  S._taught[key] = 1;
+  addText(x, y, s, color || '#FFD08A', 16, 1.3);
+}
+
+/* ---------------------------------------------------------------- 实体碰撞 */
+function aabb(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+/** 场景里所有实心块：平台 + 没碎的箱子。
+    **箱子必须参与碰撞** —— 它要能挡人、站人、挡子弹。
+    只当贴图的话，「箱墙」这个设计就无从谈起。 */
+function solids() {
+  const out = S.plats.slice();
+  for (const b of S.boxes) if (!b.dead) out.push(b);
+  return out;
+}
+
+/* ---------------------------------------------------------------- 移动体物理
+   **顺序必须是「先垂直分离、再水平分离」，而且水平那一轮要跳过"站在上面"的块。**
+   反过来做会出一个非常隐蔽的致命 bug：站在地面上的身体，包围盒和地面平台
+   永远是重叠的（y+h 比平台顶低一丁点），水平轮会把它当成撞墙，按 vx 的符号
+   推到 `s.x + s.w` 或 `s.x - o.w` —— 也就是**场地最左边或最右边**。
+   第一版就是这样：所有怪在第一帧瞬移到 x=902 挤成一堆。 */
+function stepBody(o, dt) {
+  o.vy = Math.min(o.vy + 2100 * dt, 1250);
+
+  // ---- 垂直
+  const prevBottom = o.y + o.h;
+  o.y += o.vy * dt;
+  o.onGround = false;
+  for (const s of solids()) {
+    if (!aabb(o, s)) continue;
+    // 只认"从上方落下来"和"从下方顶上去"，侧面的事交给下一轮
+    if (o.vy >= 0 && prevBottom <= s.y + 8) {
+      o.y = s.y - o.h; o.vy = 0; o.onGround = true;
+    } else if (o.vy < 0 && o.y < s.y + s.h) {
+      o.y = s.y + s.h; o.vy = 0;
+    }
+  }
+
+  // ---- 水平
+  o.x += o.vx * dt;
+  for (const s of solids()) {
+    if (!aabb(o, s)) continue;
+    // 站在这块上面（脚底贴着顶面）就不算撞墙
+    if (o.y + o.h <= s.y + 2) continue;
+    if (o.vx > 0) { o.x = s.x - o.w; }
+    else if (o.vx < 0) { o.x = s.x + s.w; }
+    else {
+      /* 静止时被挤进块里（典型场景：箱子塌下来砸在玩家头上）。
+         只按 vx 的符号推开的话，vx=0 两条分支都不进，人就永远卡在箱子里动不了。
+         这里按"最近的一条边"顶出去。 */
+      const outTop = Math.abs(o.y + o.h - s.y);
+      const outL = Math.abs(s.x + s.w - o.x);
+      const outR = Math.abs(o.x + o.w - s.x);
+      if (outTop < Math.min(outL, outR)) { o.y = s.y - o.h; o.vy = 0; o.onGround = true; }
+      else if (outL < outR) o.x = s.x + s.w;
+      else o.x = s.x - o.w;
+    }
+    o.vx = 0;
+  }
+  o.x = clamp(o.x, WALL_L, WALL_R - o.w);
+
+  if (o.y + o.h > GROUND_Y + 60) { o.y = GROUND_Y - o.h; o.vy = 0; o.onGround = true; }
+}
+
+/* ---------------------------------------------------------------- 吐雪 */
+function shoot() {
+  const p = S.p;
+  if (p.shotCd > 0 || S.phase !== 'play') return;
+  if (S.ammo <= 0) {
+    once('noammo', p.x, p.y - 40, '没雪了 · 去砸箱子', '#FF9E8E');
+    return;
+  }
+  S.ammo--;
+  S.stat.shots++;
+  p.shotCd = NUM.shot.cd;
+  p.lockT = NUM.shot.lock;      // 喷时不能移动：这是「喷的代价」第 ②条
+  p.shotAnim = 0.18;
+  S.shots.push({
+    x: p.x + p.w / 2 + p.face * 16,
+    y: p.y + p.h * 0.42,
+    vx: p.face * NUM.shot.speed,
+    t: 0, life: NUM.shot.life, r: NUM.shot.r, dead: false,
+  });
+  for (let i = 0; i < 3; i++) addFrag(p.x + p.w / 2 + p.face * 14, p.y + p.h * 0.42, 1, '#EAF6FF', 120);
+}
+
+function stepShots(dt) {
+  for (const s of S.shots) {
+    if (s.dead) continue;
+    s.t += dt;
+    s.x += s.vx * dt;
+    if (s.t >= s.life) { s.dead = true; continue; }
+
+    /* **命中判定必须取"最近的那个"，不能分两轮先怪后箱。**
+       先怪后箱的话，怪站在箱子后面照样被打中 —— 箱子就等于没挡住子弹，
+       「先清怪再推球」永远比「冻住一箭双雕」省事，整条取舍线断掉。
+       雪弹一帧只走 10px，所以"最近"用一个简单比较就够。 */
+    let best = null, bestD = Infinity, bestKind = null;
+    for (const f of S.foes) {
+      if (f.dead) continue;
+      if (s.x + s.r < f.x || s.x - s.r > f.x + f.w) continue;
+      if (s.y + s.r < f.y || s.y - s.r > f.y + f.h) continue;
+      const d = Math.abs((f.x + f.w / 2) - s.x);
+      if (d < bestD) { bestD = d; best = f; bestKind = 'foe'; }
+    }
+    for (const b of S.boxes) {
+      if (b.dead) continue;
+      if (s.x + s.r < b.x || s.x - s.r > b.x + b.w) continue;
+      if (s.y + s.r < b.y || s.y - s.r > b.y + b.h) continue;
+      const d = Math.abs((b.x + b.w / 2) - s.x);
+      if (d < bestD) { bestD = d; best = b; bestKind = 'box'; }
+    }
+    /* 平台挡子弹。原来没有这一条 —— 子弹只会被 enemies / boxes 吃掉，
+       于是站在台上往下喷，雪弹直接穿地板打到下面的怪。 */
+    for (const pl of S.plats) {
+      if (s.x + s.r < pl.x || s.x - s.r > pl.x + pl.w) continue;
+      if (s.y + s.r < pl.y || s.y - s.r > pl.y + pl.h) continue;
+      s.dead = true;
+      break;
+    }
+    if (s.dead) continue;
+
+    if (!best) continue;
+
+    if (bestKind === 'foe') {
+      coatFoe(best, 1);
+      S.stat.hitFoe++;
+    } else {
+      shotBox(best, s);
+    }
+    s.dead = true;
+  }
+  S.shots = S.shots.filter(s => !s.dead);
+}
+
+function shotBox(b, s) {
+  const def = NUM.box[b.mat];
+  S.stat.hitBox++;
+  if (def.hp === Infinity) {
+    // 免疫：冒火花、一点裂痕都没有。玩家两次就懂，不需要常驻文字
+    addFrag(s.x, s.y, 6, '#FFE0A0', 200);
+    b.hitT = 0.12;
+    S.stat.hardHint++;
+    once('hard_' + b.mat, b.x + b.w / 2, b.y - 14, '太硬了', '#FFD08A');
+    return;
+  }
+  b.hp--;
+  b.hitT = 0.12;
+  addFrag(s.x, s.y, 4, '#E8DCC8', 160);
+  if (b.hp <= 0) breakBox(b, 'shot');
+}
+
+/* ---------------------------------------------------------------- 裹雪 */
+function coatFoe(f, n) {
+  if (f.dead) return;
+  if (f.hits === 0) f.needAt = snowNeed();
+  f.hits += n;
+  f.hitT = 0.16;
+  for (let i = 0; i < 4; i++) addFrag(f.x + f.w / 2, f.y + f.h / 2, 1, '#DCF0FF', 150);
+
+  const need = f.needAt || snowNeed();
+  if (f.hits >= need) {
+    S.stat.shotsPerCoat.push(need);
+    S.stat.coats++;
+    makeBallFrom(f);
+  }
+}
+
+/** 雪点满 → 变球。**这一步之后敌人就不存在了，球是唯一的击杀通道。** */
+function makeBallFrom(f) {
+  f.dead = true;
+  S.belly = Math.max(0, S.belly - NUM.bellyPerBall);
+  const n = 1;
+  S.balls.push({
+    x: f.x + f.w / 2, y: f.y + f.h / 2,
+    vx: 0, vy: 0, r: ballR(n), absorbed: n,
+    life: NUM.ball.life, onGround: false, chain: 0, hitCd: 0, dead: false,
+  });
+  addText(f.x + f.w / 2, f.y - 18, '裹成球了', '#9BE86E', 18, 1.1);
+  S.shake = Math.max(S.shake, 5);
+  hitStop(0.04);
+}
+
+/* ---------------------------------------------------------------- 推球 */
+function pushBalls(dt) {
+  const p = S.p;
+  const runUp = clamp((p.runD || 0) / NUM.push.runFull, 0, 1);
+  const pow = NUM.push.base * (1 + NUM.push.runGain * runUp);
+
+  for (const b of S.balls) {
+    if (b.dead) continue;
+    const bx = { x: b.x - b.r, y: b.y - b.r, w: b.r * 2, h: b.r * 2 };
+    if (!aabb(p, bx)) continue;
+    // 只在玩家朝球方向推时才给速度，站着碰不推
+    const dir = b.x > p.x + p.w / 2 ? 1 : -1;
+    if (Math.abs(p.vx) < 10) continue;
+    if (sign(p.vx) !== dir) continue;
+    if (Math.abs(b.vx) >= pow) continue;
+    b.vx = dir * pow;
+    b.life = Math.max(b.life, NUM.ball.life * 0.6);
+    if (runUp > 0.85) {
+      addText(b.x, b.y - b.r - 12, '助跑推!', '#FFE9A8', 16, 0.7);
+      S.shake = Math.max(S.shake, 6);
+    }
+  }
+}
+
+/* ---------------------------------------------------------------- 球 */
+function stepBalls(dt) {
+  for (const b of S.balls) {
+    if (b.dead) continue;
+    b.life -= dt;
+    if (b.life <= 0) { burstBall(b); continue; }
+
+    // 重力 + 水平移动
+    b.vy = Math.min(b.vy + 2100 * dt, 1250);
+    const prevX = b.x, prevBottom = b.y + b.r;
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+
+    // --- 撞箱子。**必须先分清"从上面来"和"从侧面来"** ——
+    //     只看包围盒重叠的话，球在箱顶滚也会被当成侧撞，把脚下的箱子砸了。
+    for (const box of S.boxes) {
+      if (box.dead) continue;
+      const overlapX = b.x + b.r > box.x && b.x - b.r < box.x + box.w;
+      const overlapY = b.y + b.r > box.y + 6 && b.y - b.r < box.y + box.h;
+      if (!overlapX || !overlapY) continue;
+
+      // 从上方落下 / 在箱顶滚：当作地板，不破坏
+      if (prevBottom <= box.y + 10) {
+        b.y = box.y - b.r; b.vy = 0; b.onGround = true;
+        continue;
+      }
+      // 侧面撞击
+      if (Math.abs(b.vx) < 40) continue;
+      const dir = sign(b.vx);
+      ballHitBox(b, box, dir);
+      if (b.dead) break;
+    }
+    if (b.dead) continue;
+
+    // --- 撞平台（左右墙 + 落地）
+    for (const pl of S.plats) {
+      const overlapX = b.x + b.r > pl.x && b.x - b.r < pl.x + pl.w;
+      const overlapY = b.y + b.r > pl.y && b.y - b.r < pl.y + pl.h;
+      if (!overlapX || !overlapY) continue;
+      if (b.vy > 0 && prevBottom <= pl.y + 12) {
+        b.y = pl.y - b.r; b.vy = 0; b.onGround = true;
+      } else {
+        b.x = prevX; b.vx *= -0.35;
+      }
+    }
+
+    // --- 撞墙
+    if (b.x - b.r < WALL_L) { b.x = WALL_L + b.r; b.vx = Math.abs(b.vx) * 0.45; }
+    if (b.x + b.r > WALL_R) { b.x = WALL_R - b.r; b.vx = -Math.abs(b.vx) * 0.45; }
+
+    // --- 地面摩擦
+    if (b.onGround) {
+      const d = NUM.ball.fric * dt;
+      if (Math.abs(b.vx) <= d) b.vx = 0; else b.vx -= sign(b.vx) * d;
+      b.onGround = false;
+    }
+
+    // --- 碾敌。**球是唯一的击杀通道**，这里就是那条通道的收口。
+    if (Math.abs(b.vx) > 60) {
+      for (const f of S.foes) {
+        if (f.dead) continue;
+        if (b.x + b.r < f.x || b.x - b.r > f.x + f.w) continue;
+        if (b.y + b.r < f.y || b.y - b.r > f.y + f.h) continue;
+        killFoe(f, b);
+      }
+    }
+  }
+  S.balls = S.balls.filter(b => !b.dead);
+}
+
+function ballHitBox(b, box, dir) {
+  const def = NUM.box[box.mat];
+  const pow = ballPow(b);
+  const tier = ballTier(b.absorbed);
+
+  if (pow >= def.minPow && tier >= def.minTier) {
+    breakBox(box, 'ball');
+    b.vx *= def.keepSpeed;          // 穿透：撞碎之后继续滚，这是爽感的来源
+    b.chain++;
+    b.absorbed = Math.min(NUM.ball.maxAbsorb, b.absorbed + 1);
+    b.r = ballR(b.absorbed);
+    S.stat.ballChain = b.chain;
+    S.stat.ballChainMax = Math.max(S.stat.ballChainMax, b.chain);
+    S.shake = Math.max(S.shake, 9);
+    hitStop(0.045);
+  } else {
+    // 砸不动：反弹 + 冒火花。**「太硬」这件事必须让玩家在物理上感到**
+    b.x = dir > 0 ? box.x - b.r : box.x + box.w + b.r;
+    b.vx = -dir * Math.max(140, Math.abs(b.vx) * 0.4);
+    addFrag(b.x, b.y, 8, '#FFE0A0', 220);
+    S.shake = Math.max(S.shake, 5);
+    if (box.mat === 'ice' && tier < def.minTier) {
+      once('ice_tier', box.x + box.w / 2, box.y - 14, '球再大点才行', '#9AD8F5');
+    } else {
+      once('hard_ball_' + box.mat, box.x + box.w / 2, box.y - 14, '太硬了 · 换球砸', '#FFD08A');
+    }
+  }
+}
+
+function burstBall(b) {
+  b.dead = true;
+  addFrag(b.x, b.y, 14, '#DCF0FF', 300);
+  addText(b.x, b.y - b.r - 6, '散了', '#9FB4C4', 14, 0.7);
+}
+
+function breakBox(box, how) {
+  box.dead = true;
+  const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+  addFrag(cx, cy, how === 'ball' ? 16 : 9, box.mat === 'wood' ? '#C9A273' : '#9AA6B0', how === 'ball' ? 340 : 200);
+  S.shake = Math.max(S.shake, how === 'ball' ? 10 : 3);
+  if (how === 'ball') hitStop(0.05);
+
+  if (how === 'ball') S.stat.boxByBall++; else S.stat.boxByShot++;
+
+  // 掉弹：价值差就写在这一行
+  const rate = how === 'ball' ? NUM.drop.shardByBall : NUM.drop.shardByShot;
+  if (Math.random() < rate) {
+    S.shards.push({ x: cx, y: cy, vy: -220, t: 0 });
+  }
+}
+
+/* ---------------------------------------------------------------- 敌人 AI */
+function killFoe(f, byBall) {
+  if (f.dead) return;
+  f.dead = true;
+  S.killed++;
+  S.stat.kills++;
+  if (byBall) S.stat.killByBall++;
+  addFrag(f.x + f.w / 2, f.y + f.h / 2, 12, '#FFC8B0', 260);
+  S.shake = Math.max(S.shake, 7);
+  if (byBall) {
+    byBall.absorbed = Math.min(NUM.ball.maxAbsorb, byBall.absorbed + 1);
+    byBall.r = ballR(byBall.absorbed);
+  }
+  checkDoor();
+}
+
+function stepFoes(dt) {
+  const p = S.p;
+  for (const f of S.foes) {
+    if (f.dead) continue;
+    f.hitT = Math.max(0, f.hitT - dt);
+
+    if (f.kind === 'runner') {
+      const dir = (p.x + p.w / 2) > (f.x + f.w / 2) ? 1 : -1;
+      f.vx = dir * f.speed;
+      f.face = dir;
+    } else {
+      f.patrolT -= dt;
+      if (f.patrolT <= 0) { f.patrolT = rnd(1.4, 2.6); f.vx = (Math.random() < 0.5 ? -1 : 1) * f.speed; }
+      if (Math.abs(f.x - f.homeX) > 120) f.vx = -sign(f.x - f.homeX) * f.speed;
+      f.face = sign(f.vx);
+    }
+    /* stepBody 里已经把「水平位移 + 水平碰撞 + 重力 + 垂直落地」全做完了。
+       **这里不能再补位移或重力** —— 叠上去会让速度翻倍、一帧穿过地面
+       （第一版就是这么写的：crawler 直接掉出画面）。 */
+    stepBody(f, dt);
+    // 掉出画面就拉回来（不做死亡，红线：不为难玩家）
+    if (f.y > H + 60) { f.y = GROUND_Y - f.h; f.vy = 0; f.hits = 0; }
+    f.x = clamp(f.x, WALL_L, WALL_R - f.w);
+
+    // 撞玩家
+    if (S.invuln <= 0 && aabb(p, f)) {
+      hurtPlayer();
+      // 贴脸保底：自己掉血，敌人吃两点雪。零弹时唯一的出路
+      coatFoe(f, NUM.bodyCoat);
+    }
+  }
+  S.foes = S.foes.filter(f => !f.dead);
+}
+
+function hurtPlayer() {
+  S.hp--;
+  S.invuln = NUM.hpInvuln;
+  S.shake = Math.max(S.shake, 12);
+  S.flash = Math.max(S.flash, 0.10);
+  const p = S.p;
+  p.vx = -p.face * 260;
+  p.vy = -320;
+  addText(p.x, p.y - 24, '-1', '#FF7E6E', 20, 0.8);
+  if (S.hp <= 0) {
+    // 不做死亡惩罚。缓一缓，原地满血，补一点弹 —— 卡关比失败更难受
+    S.hp = NUM.hpStart;
+    S.ammo = Math.min(NUM.ammoStart, S.ammo + 20);
+    addText(W / 2, 220, '缓一缓 · 弹药补 20', '#9BE86E', 22, 1.6);
+    S.flash = Math.max(S.flash, 0.2);
+  }
+}
+
+/* ---------------------------------------------------------------- 雪之碎片 */
+function stepShards(dt) {
+  const p = S.p;
+  for (const s of S.shards) {
+    s.t += dt;
+    s.vy = Math.min(s.vy + 1600 * dt, 900);
+    s.y += s.vy * dt;
+    if (s.y > GROUND_Y - 12) { s.y = GROUND_Y - 12; s.vy = 0; }
+    // 吸附
+    const dx = (p.x + p.w / 2) - s.x, dy = (p.y + p.h / 2) - s.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 90) { s.x += dx / d * 340 * dt; s.y += dy / d * 340 * dt; }
+    if (d < 26) {
+      s.dead = true;
+      const add = Math.round(rnd(NUM.drop.shardAmmoMin, NUM.drop.shardAmmoMax));
+      S.ammo = Math.min(NUM.ammoStart + 40, S.ammo + add);
+      S.belly = Math.min(100, S.belly + NUM.bellyPerShard);
+      addText(s.x, s.y - 12, '+' + add + ' 发', '#BFE8FF', 16, 0.9);
+    }
+  }
+  S.shards = S.shards.filter(s => !s.dead);
+}
+
+/* ---------------------------------------------------------------- 箱子承重
+   **砸掉下面一格，上面的必须塌下来。**
+   不做这件事的话，玩家只要拆掉箱墙最下面一格，就能从 48px 的缝里钻过去 ——
+   「砸开整面墙」立刻降级成「拆一块砖」，箱墙就不再是关卡结构了。
+   顺带这也是"破坏场景"最直接的一眼反馈：整摞往下沉。 */
+function stepBoxFall(dt) {
+  // 从下往上处理，让链式承重一帧内算对
+  const live = S.boxes.filter(b => !b.dead).sort((a, b) => b.y - a.y);
+  for (const b of live) {
+    let supported = false;
+    // 站在平台上？
+    for (const s of S.plats) {
+      if (b.x + b.w <= s.x + 1 || b.x >= s.x + s.w - 1) continue;
+      if (Math.abs((b.y + b.h) - s.y) < 2.5) { supported = true; break; }
+    }
+    // 站在别的箱子上？
+    if (!supported) {
+      for (const o of live) {
+        if (o === b) continue;
+        if (b.x + b.w <= o.x + 1 || b.x >= o.x + o.w - 1) continue;
+        if (Math.abs((b.y + b.h) - o.y) < 2.5) { supported = true; break; }
+      }
+    }
+    if (!supported) b.y += 900 * dt;
+  }
+}
+
+/* ---------------------------------------------------------------- 门 */
+function checkDoor() {
+  if (!S.door || S.door.open) return;
+  if (S.killed >= S.killedTarget) {
+    S.door.open = true;
+    S.door.openT = 0;
+    S.flash = Math.max(S.flash, 0.16);
+    S.shake = Math.max(S.shake, 10);
+    addText(S.door.x + S.door.w / 2, S.door.y - 20, '门开了', '#9BE86E', 24, 1.8);
+  }
+}
+
+function stepDoor(dt) {
+  const d = S.door;
+  if (!d) return;
+  if (d.open) d.openT += dt;
+  if (d.open && S.phase === 'play') {
+    if (aabb(S.p, d)) {
+      S.phase = 'clear';
+      S.clearT = 0;
+      S.flash = Math.max(S.flash, 0.3);
+    }
+  }
+}
+
+/* ---------------------------------------------------------------- 输入 */
+function onKey(e, down) {
+  const k = e.key;
+  S.keys[k] = down;
+  if (down && (k === 'r' || k === 'R')) reset();
+  if (down && (k === 'j' || k === 'J' || k === 'k' || k === 'K')) shoot();
+  if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].indexOf(k) >= 0) e.preventDefault();
+}
+
+/* ---------------------------------------------------------------- 主步进 */
+function stepPlayer(dt) {
+  const p = S.p;
+  if (S.phase !== 'play') { p.vx = 0; return; }
+
+  p.shotCd = Math.max(0, p.shotCd - dt);
+  p.lockT = Math.max(0, p.lockT - dt);
+  p.shotAnim = Math.max(0, p.shotAnim - dt);
+  S.invuln = Math.max(0, S.invuln - dt);
+
+  const K = S.keys;
+  const left = K['a'] || K['A'] || K['ArrowLeft'];
+  const right = K['d'] || K['D'] || K['ArrowRight'];
+
+  /* 喷时锁移动。这一条让「喷」有成本 —— 没有它，玩家会站在原地
+     把全场喷一遍再统一推球，两个动作就彻底脱钩了。 */
+  if (p.lockT > 0) {
+    p.vx = 0;
+    p.runD = 0;
+  } else {
+    let ax = 0;
+    if (left) ax -= 1;
+    if (right) ax += 1;
+    p.vx = ax * 300;
+    if (ax !== 0) { p.face = ax; p.runD = Math.min(NUM.push.runFull, p.runD + 300 * dt); }
+    else p.runD = Math.max(0, p.runD - 600 * dt);
+  }
+
+  if ((K['w'] || K['W'] || K['ArrowUp'] || K[' ']) && p.onGround && p.lockT <= 0) {
+    p.vy = -720;
+    p.onGround = false;
+  }
+
+  stepBody(p, dt);
+  p.anim += dt;
+}
+
+function step(dt) {
+  dt = Math.min(dt, 1 / 30);
+  if (S.hitStop > 0) { S.hitStop = Math.max(0, S.hitStop - dt); S.t += dt * 0.25; return; }
+
+  S.t += dt;
+  S.shake = Math.max(0, S.shake - 60 * dt);
+  S.flash = Math.max(0, S.flash - 2.4 * dt);
+
+  stepPlayer(dt);
+  stepFoes(dt);
+  stepShots(dt);
+  pushBalls(dt);
+  stepBalls(dt);
+  stepBoxFall(dt);
+  stepShards(dt);
+  stepDoor(dt);
+
+  if (S.phase === 'clear') S.clearT += dt;
+
+  // 粒子与飘字
+  for (const f of S.frags) { f.t += dt; f.x += f.vx * dt; f.y += f.vy * dt; f.vy += 900 * dt; }
+  S.frags = S.frags.filter(f => f.t < f.life).slice(-400);
+  for (const t of S.texts) { t.t += dt; t.y -= 26 * dt; }
+  S.texts = S.texts.filter(t => t.t < t.life);
+}
+
+/* =========================================================================
+   渲染
+   ========================================================================= */
+const COL = {
+  sky1: '#C4DBE6', sky2: '#EDF4F8',
+  hill: '#A2BCC7', snow: '#F4F9FC', soil: '#6F7F8A', soilDark: '#55646E',
+  wood: '#C0904F', woodDark: '#94703A', woodTop: '#E4EEF3',
+  stone: '#8D99A3', stoneDark: '#6C7883',
+  iron: '#6B7681', ironLit: '#8F9BA6',
+  ice: 'rgba(150,215,240,.72)', iceEdge: 'rgba(210,242,255,.95)',
+  cat: '#F5A65B', catDark: '#D07F38',
+  snowball: '#F4FBFF', snowballEdge: '#BFE0F0',
+  door: '#4E7D6B', doorLock: '#C9483F',
+};
+
+function draw() {
+  if (!ctx) return;
+  const g = ctx;
+  g.save();
+
+  // 震屏
+  const sh = S.shake;
+  if (sh > 0) g.translate(rnd(-sh, sh), rnd(-sh, sh));
+
+  // 天空
+  const sky = g.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, COL.sky1); sky.addColorStop(1, COL.sky2);
+  g.fillStyle = sky; g.fillRect(-40, -40, W + 80, H + 80);
+
+  // 远山
+  g.fillStyle = COL.hill;
+  g.beginPath(); g.moveTo(-40, 430);
+  for (let x = -40; x <= W + 40; x += 80) g.lineTo(x, 430 - 60 - Math.sin(x / 130) * 42);
+  g.lineTo(W + 40, H); g.lineTo(-40, H); g.closePath(); g.fill();
+
+  // 平台
+  for (const pl of S.plats) drawPlat(g, pl);
+
+  // 箱子
+  for (const b of S.boxes) if (!b.dead) drawBox(g, b);
+
+  // 门
+  drawDoor(g, S.door);
+
+  // 雪之碎片
+  for (const s of S.shards) {
+    g.save(); g.translate(s.x, s.y); g.rotate(s.t * 3);
+    g.fillStyle = '#CFEFFF';
+    g.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a = i / 6 * Math.PI * 2;
+      g.lineTo(Math.cos(a) * 9, Math.sin(a) * 9);
+      g.lineTo(Math.cos(a + 0.52) * 4, Math.sin(a + 0.52) * 4);
+    }
+    g.closePath(); g.fill();
+    g.restore();
+  }
+
+  // 敌人
+  for (const f of S.foes) drawFoe(g, f);
+
+  // 球
+  for (const b of S.balls) drawBall(g, b);
+
+  // 雪弹
+  for (const s of S.shots) {
+    g.fillStyle = '#FFFFFF';
+    g.globalAlpha = 0.9;
+    g.beginPath(); g.arc(s.x, s.y, s.r, 0, Math.PI * 2); g.fill();
+    g.globalAlpha = 0.35;
+    g.beginPath(); g.arc(s.x - s.vx * 0.012, s.y, s.r * 1.9, 0, Math.PI * 2); g.fill();
+    g.globalAlpha = 1;
+  }
+
+  // 玩家
+  drawPlayer(g, S.p);
+
+  // 粒子
+  for (const f of S.frags) {
+    g.globalAlpha = Math.max(0, 1 - f.t / f.life);
+    g.fillStyle = f.color;
+    g.fillRect(f.x - f.r / 2, f.y - f.r / 2, f.r, f.r);
+  }
+  g.globalAlpha = 1;
+
+  // 飘字
+  for (const t of S.texts) {
+    g.globalAlpha = Math.max(0, Math.min(1, (t.life - t.t) * 3));
+    g.font = '700 ' + t.size + 'px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.textAlign = 'center';
+    g.lineWidth = 4; g.strokeStyle = 'rgba(20,30,36,.55)';
+    g.strokeText(t.s, t.x, t.y);
+    g.fillStyle = t.color;
+    g.fillText(t.s, t.x, t.y);
+  }
+  g.globalAlpha = 1;
+
+  g.restore();
+
+  drawHud(g);
+
+  if (S.flash > 0) {
+    g.fillStyle = 'rgba(255,255,255,' + (S.flash * 0.8) + ')';
+    g.fillRect(0, 0, W, H);
+  }
+  if (S.phase === 'clear') drawClear(g);
+}
+
+function drawPlat(g, pl) {
+  g.fillStyle = COL.soil;
+  rr(g, pl.x, pl.y, pl.w, pl.h, 6); g.fill();
+  g.fillStyle = COL.snow;
+  rr(g, pl.x, pl.y, pl.w, 9, 5); g.fill();
+  g.fillStyle = 'rgba(0,0,0,.08)';
+  g.fillRect(pl.x, pl.y + 9, pl.w, 3);
+}
+
+function drawBox(g, b) {
+  const def = NUM.box[b.mat];
+  const hit = b.hitT > 0 ? 1 : 0;
+  if (b.mat === 'wood') {
+    g.fillStyle = hit ? '#E4C088' : COL.wood;
+    rr(g, b.x, b.y, b.w, b.h, 7); g.fill();
+    g.strokeStyle = COL.woodDark; g.lineWidth = 2;
+    rr(g, b.x + 1, b.y + 1, b.w - 2, b.h - 2, 6); g.stroke();
+    g.strokeStyle = 'rgba(140,105,55,.55)'; g.lineWidth = 1.5;
+    g.beginPath();
+    g.moveTo(b.x + 6, b.y + 16); g.lineTo(b.x + b.w - 6, b.y + 16);
+    g.moveTo(b.x + 6, b.y + 32); g.lineTo(b.x + b.w - 6, b.y + 32);
+    g.stroke();
+    g.fillStyle = COL.woodTop;
+    rr(g, b.x + 2, b.y - 3, b.w - 4, 8, 4); g.fill();
+  } else if (b.mat === 'stone') {
+    g.fillStyle = hit ? '#A8B4BE' : COL.stone;
+    rr(g, b.x, b.y, b.w, b.h, 6); g.fill();
+    g.strokeStyle = COL.stoneDark; g.lineWidth = 2;
+    rr(g, b.x + 1, b.y + 1, b.w - 2, b.h - 2, 5); g.stroke();
+    g.strokeStyle = 'rgba(80,92,102,.5)'; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(b.x + 12, b.y + 30); g.lineTo(b.x + 24, b.y + 22); g.lineTo(b.x + 36, b.y + 34);
+    g.stroke();
+    g.fillStyle = 'rgba(255,255,255,.5)';
+    g.fillRect(b.x + 8, b.y + 8, 8, 3);
+  } else if (b.mat === 'iron') {
+    g.fillStyle = hit ? COL.ironLit : COL.iron;
+    rr(g, b.x, b.y, b.w, b.h, 5); g.fill();
+    g.strokeStyle = '#4C5761'; g.lineWidth = 3;
+    rr(g, b.x + 1.5, b.y + 1.5, b.w - 3, b.h - 3, 4); g.stroke();
+    g.fillStyle = '#B9C4CE';
+    for (const [dx, dy] of [[8, 8], [40, 8], [8, 40], [40, 40]]) {
+      g.beginPath(); g.arc(b.x + dx, b.y + dy, 3, 0, Math.PI * 2); g.fill();
+    }
+    g.strokeStyle = 'rgba(180,196,208,.55)'; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(b.x + 12, b.y + 24); g.lineTo(b.x + 36, b.y + 24); g.stroke();
+  } else if (b.mat === 'ice') {
+    g.fillStyle = COL.ice;
+    rr(g, b.x, b.y, b.w, b.h, 5); g.fill();
+    g.strokeStyle = COL.iceEdge; g.lineWidth = 2;
+    rr(g, b.x + 1, b.y + 1, b.w - 2, b.h - 2, 4); g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,.75)'; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(b.x + 10, b.y + 38); g.lineTo(b.x + 22, b.y + 20); g.lineTo(b.x + 34, b.y + 30);
+    g.stroke();
+  }
+  // 拆到一半：裂痕密度跟着 HP 走，玩家能看出"还差几发"
+  if (def.hp !== Infinity && b.hp < def.hp) {
+    g.globalAlpha = 0.5;
+    g.strokeStyle = '#5B4A32'; g.lineWidth = 1.5;
+    const n = def.hp - b.hp;
+    for (let i = 0; i < n; i++) {
+      g.beginPath();
+      g.moveTo(b.x + 8 + i * 13, b.y + 10);
+      g.lineTo(b.x + 16 + i * 13, b.y + 28);
+      g.lineTo(b.x + 10 + i * 13, b.y + 40);
+      g.stroke();
+    }
+    g.globalAlpha = 1;
+  }
+}
+
+function drawDoor(g, d) {
+  if (!d) return;
+  // 门框
+  g.fillStyle = '#3E4A52';
+  rr(g, d.x - 6, d.y - 6, d.w + 12, d.h + 6, 8); g.fill();
+  g.fillStyle = d.open ? '#8FE3B4' : COL.door;
+  rr(g, d.x, d.y, d.w, d.h, 6); g.fill();
+  // 拱顶
+  g.fillStyle = d.open ? '#B6F2CE' : '#5C8C78';
+  g.beginPath(); g.arc(d.x + d.w / 2, d.y + 12, d.w / 2, Math.PI, 0); g.fill();
+
+  if (d.open) {
+    // 开锁特效：门口一团往上飘的光
+    const k = Math.min(1, d.openT * 2.2);
+    g.globalAlpha = 0.35 + 0.25 * Math.sin(S.t * 6);
+    g.fillStyle = '#DFFFEE';
+    rr(g, d.x + 4, d.y + 4, d.w - 8, d.h - 8, 5); g.fill();
+    g.globalAlpha = 1;
+    g.strokeStyle = '#9BE86E'; g.lineWidth = 3;
+    rr(g, d.x - 3, d.y - 3, d.w + 6, d.h + 6, 8); g.stroke();
+    if (k < 1) {
+      g.globalAlpha = 1 - k;
+      g.fillStyle = '#FFFFFF';
+      g.beginPath(); g.arc(d.x + d.w / 2, d.y + d.h / 2, 30 + k * 90, 0, Math.PI * 2); g.fill();
+      g.globalAlpha = 1;
+    }
+  } else {
+    // 红锁：**未达成时门一定是锁着的**，而且锁要看得见
+    g.fillStyle = COL.doorLock;
+    g.beginPath(); g.arc(d.x + d.w / 2, d.y + d.h * 0.55, 9, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = COL.doorLock; g.lineWidth = 4;
+    g.beginPath(); g.arc(d.x + d.w / 2, d.y + d.h * 0.55 - 9, 7, Math.PI, 0); g.stroke();
+    g.fillStyle = '#8A2E27';
+    g.fillRect(d.x + d.w / 2 - 2, d.y + d.h * 0.55, 4, 8);
+  }
+}
+
+function drawFoe(g, f) {
+  const cx = f.x + f.w / 2, cy = f.y + f.h / 2;
+  const style = f.kind === 'runner'
+    ? { body: '#C97F8C', dark: '#A05E6B' }
+    : { body: '#7FA86B', dark: '#5F8450' };
+
+  g.fillStyle = f.hitT > 0 ? '#FFFFFF' : style.body;
+  rr(g, f.x, f.y, f.w, f.h, 9); g.fill();
+  g.fillStyle = style.dark;
+  g.fillRect(f.x + 3, f.y + f.h - 6, f.w - 6, 5);
+
+  // 眼睛
+  g.fillStyle = '#20282C';
+  const ex = f.face > 0 ? 4 : -4;
+  g.beginPath(); g.arc(cx - 6 + ex, f.y + 12, 3, 0, Math.PI * 2); g.fill();
+  g.beginPath(); g.arc(cx + 6 + ex, f.y + 12, 3, 0, Math.PI * 2); g.fill();
+
+  // 雪覆盖：按 hits/need 上白，**这是玩家读"还差几发"的唯一线索**
+  const need = f.needAt || snowNeed();
+  const k = clamp(f.hits / need, 0, 1);
+  if (k > 0) {
+    g.globalAlpha = 0.35 + k * 0.6;
+    g.fillStyle = '#FFFFFF';
+    rr(g, f.x - 1, f.y - 1, f.w + 2, f.h * (0.25 + k * 0.7), 8); g.fill();
+    g.globalAlpha = 1;
+  }
+  // 进度条（细，不抢眼，但读得清）
+  if (f.hits > 0) {
+    const bw = f.w + 4;
+    g.fillStyle = 'rgba(20,30,36,.35)';
+    g.fillRect(f.x - 2, f.y - 8, bw, 3);
+    g.fillStyle = '#9BE86E';
+    g.fillRect(f.x - 2, f.y - 8, bw * k, 3);
+  }
+}
+
+/* 四档球的配色。**档位必须一眼能读出来** ——
+   冰墙只认特大球，玩家得能判断"我还差几只"，光靠半径差 1.5 倍不够。 */
+const BALL_SKIN = [
+  { a: '#FFFFFF', b: '#D8ECF7', edge: '#BFE0F0' },   // 小
+  { a: '#FFFFFF', b: '#BCE2F5', edge: '#8FCDEB' },   // 中
+  { a: '#F2FBFF', b: '#8FD2F0', edge: '#5FB6DD' },   // 大
+  { a: '#EAF9FF', b: '#4FAEDD', edge: '#2E8FC4' },   // 特大
+];
+
+function drawBall(g, b) {
+  const tier = ballTier(b.absorbed);
+  const skin = BALL_SKIN[tier];
+  g.save();
+  g.translate(b.x, b.y);
+  // 影子
+  g.globalAlpha = 0.16; g.fillStyle = '#1A2A32';
+  g.beginPath(); g.ellipse(0, b.r * 0.95, b.r * 0.9, b.r * 0.28, 0, 0, Math.PI * 2); g.fill();
+  g.globalAlpha = 1;
+
+  // 特大球的光晕：远远就能看出这颗是"能破冰墙的"
+  if (tier === 3) {
+    g.globalAlpha = 0.22 + 0.1 * Math.sin(S.t * 5);
+    g.fillStyle = '#9EE0FF';
+    g.beginPath(); g.arc(0, 0, b.r + 10, 0, Math.PI * 2); g.fill();
+    g.globalAlpha = 1;
+  }
+
+  g.rotate(-b.x / b.r * 0.6);
+  const grd = g.createRadialGradient(-b.r * 0.3, -b.r * 0.35, b.r * 0.2, 0, 0, b.r);
+  grd.addColorStop(0, skin.a);
+  grd.addColorStop(1, skin.b);
+  g.fillStyle = grd;
+  g.beginPath(); g.arc(0, 0, b.r, 0, Math.PI * 2); g.fill();
+
+  /* **这里原来写的是 `b.snowballEdge`（球对象上没有这个字段），
+     赋值 undefined 在 canvas 里等于"不改"，于是球沿用了上一个 strokeStyle
+     —— 也就是门的锁红，四颗球全戴了一圈红环，看起来像"快散了"。 */
+  g.strokeStyle = skin.edge; g.lineWidth = 2;
+  g.beginPath(); g.arc(0, 0, b.r - 1, 0, Math.PI * 2); g.stroke();
+
+  // 档位标记：每档多一圈内纹
+  for (let i = 0; i < tier; i++) {
+    g.strokeStyle = 'rgba(255,255,255,' + (0.55 - i * 0.08) + ')';
+    g.lineWidth = 1.5;
+    g.beginPath(); g.arc(0, 0, b.r * (0.66 - i * 0.14), 0, Math.PI * 2); g.stroke();
+  }
+  g.restore();
+
+  // 气条：球快散了要看得出来
+  const lifeK = b.life / NUM.ball.life;
+  if (lifeK < 0.55) {
+    g.strokeStyle = lifeK < 0.25 ? '#FF9E8E' : '#FFD08A';
+    g.lineWidth = 3;
+    g.beginPath();
+    g.arc(b.x, b.y, b.r + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * lifeK);
+    g.stroke();
+  }
+}
+
+function drawPlayer(g, p) {
+  const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
+  g.globalAlpha = S.invuln > 0 && Math.floor(S.invuln * 14) % 2 ? 0.45 : 1;
+
+  // 身体
+  g.fillStyle = COL.cat;
+  rr(g, p.x, p.y + 8, p.w, p.h - 8, 10); g.fill();
+  // 头
+  g.fillStyle = COL.cat;
+  g.beginPath(); g.arc(cx, p.y + 12, 15, 0, Math.PI * 2); g.fill();
+  // 耳朵
+  g.beginPath();
+  g.moveTo(cx - 13, p.y + 4); g.lineTo(cx - 6, p.y - 7); g.lineTo(cx - 1, p.y + 6); g.closePath(); g.fill();
+  g.beginPath();
+  g.moveTo(cx + 13, p.y + 4); g.lineTo(cx + 6, p.y - 7); g.lineTo(cx + 1, p.y + 6); g.closePath(); g.fill();
+  // 脸
+  g.fillStyle = '#3A2A20';
+  const ex = p.face > 0 ? 3 : -3;
+  g.beginPath(); g.arc(cx - 5 + ex, p.y + 11, 2.6, 0, Math.PI * 2); g.fill();
+  g.beginPath(); g.arc(cx + 5 + ex, p.y + 11, 2.6, 0, Math.PI * 2); g.fill();
+  // 嘴：喷的时候张开
+  if (p.shotAnim > 0) {
+    g.fillStyle = '#8A3B2E';
+    g.beginPath(); g.arc(cx + p.face * 8, p.y + 18, 4.5, 0, Math.PI * 2); g.fill();
+  }
+  g.globalAlpha = 1;
+}
+
+function drawHud(g) {
+  g.save();
+  const inClear = S.phase === 'clear';
+
+  // 顶栏
+  g.fillStyle = 'rgba(14,22,28,.62)';
+  rr(g, 16, 14, W - 32, 52, 12); g.fill();
+
+  g.textAlign = 'left';
+  g.font = '700 15px "PingFang SC","Microsoft YaHei",sans-serif';
+
+  // 弹药
+  g.fillStyle = S.ammo <= 15 ? '#FF9E8E' : '#DFF2FF';
+  g.fillText('弹药', 34, 47);
+  g.font = '800 26px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillText(String(S.ammo), 78, 49);
+
+  // 饱食度
+  const bx = 160;
+  g.font = '700 15px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillStyle = '#C8DCE6';
+  g.fillText('饱食', bx, 47);
+  g.fillStyle = 'rgba(255,255,255,.16)';
+  rr(g, bx + 44, 33, 110, 14, 7); g.fill();
+  g.fillStyle = S.belly >= NUM.bellyFull ? '#9BE86E' : S.belly >= NUM.bellyHalf ? '#FFD08A' : '#FF9E8E';
+  rr(g, bx + 44, 33, 110 * clamp(S.belly / 100, 0, 1), 14, 7); g.fill();
+  g.fillStyle = '#EAF4F8';
+  g.font = '700 13px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillText(TIER_CN[bellyTier()] + ' · 每只要 ' + snowNeed() + ' 发', bx + 162, 45);
+
+  // 血
+  const hx = 452;
+  g.font = '700 15px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillStyle = '#C8DCE6';
+  g.fillText('体力', hx, 47);
+  for (let i = 0; i < NUM.hpStart; i++) {
+    g.fillStyle = i < S.hp ? '#FF8B7A' : 'rgba(255,255,255,.18)';
+    g.beginPath(); g.arc(hx + 52 + i * 20, 41, 7, 0, Math.PI * 2); g.fill();
+  }
+
+  // 击杀进度
+  g.fillStyle = '#C8DCE6';
+  g.fillText('击杀', 628, 47);
+  g.fillStyle = S.killed >= S.killedTarget ? '#9BE86E' : '#EAF4F8';
+  g.font = '800 22px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillText(S.killed + ' / ' + S.killedTarget, 672, 48);
+
+  // 门的状态
+  g.font = '700 14px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillStyle = S.door && S.door.open ? '#9BE86E' : '#FF9E8E';
+  g.fillText(S.door && S.door.open ? '门已开 · 走过去' : '门锁着', 790, 46);
+
+  if (inClear) { g.restore(); return; }
+
+  /* 试验台面板（量具，不是玩家 HUD）。
+     **必须放右上角。** 原来放左下角，正好压住玩家出生点（x=60）——
+     开局第一眼看到的是一块统计面板，不是自己的角色。 */
+  const st = S.stat;
+  const panelX = W - 268, panelY = 84, panelW = 252, panelH = 120;
+  g.fillStyle = 'rgba(14,22,28,.52)';
+  rr(g, panelX, panelY, panelW, panelH, 10); g.fill();
+  const avg = st.shotsPerCoat.length
+    ? (st.shotsPerCoat.reduce((a, b) => a + b, 0) / st.shotsPerCoat.length).toFixed(1)
+    : '—';
+  const lines = [
+    '试验台 · 这一局实测',
+    '裹一只：' + avg + ' 发   （共 ' + st.coats + ' 只）',
+    '碎箱：子弹 ' + st.boxByShot + ' · 球 ' + st.boxByBall,
+    '一球最多连碎：' + st.ballChainMax + ' 口',
+    '球杀：' + st.killByBall + ' / ' + st.kills,
+    '命中：怪 ' + st.hitFoe + ' · 箱 ' + st.hitBox,
+  ];
+  g.font = '600 13px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.textAlign = 'left';
+  for (let i = 0; i < lines.length; i++) {
+    g.fillStyle = i === 0 ? '#7FA3B5' : '#D6E6EF';
+    g.fillText(lines[i], panelX + 14, panelY + 22 + i * 18);
+  }
+
+  /* 操作提示。**开局 9 秒后淡出** —— 常驻的话它会一直压在地面层，
+     左下那条路是玩家反复要走的。 */
+  const tipA = clamp(9 - S.t, 0, 1);
+  if (tipA > 0) {
+    g.globalAlpha = tipA;
+    g.fillStyle = 'rgba(14,22,28,.5)';
+    rr(g, 16, 76, 330, 30, 8); g.fill();
+    g.fillStyle = '#C8DCE6';
+    g.font = '600 13px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillText('A/D 移动 · W 跳 · J 吐雪 · 走过去顶球 = 推 · R 重开', 30, 96);
+    g.globalAlpha = 1;
+  }
+
+  // 全饿提示
+  if (bellyTier() === 'hungry') {
+    g.textAlign = 'center';
+    g.fillStyle = 'rgba(255,158,142,.95)';
+    g.font = '700 15px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillText('全饿：每只要 ' + NUM.snowShots.hungry + ' 发 —— 去砸箱子吃碎片', W / 2, 124);
+  }
+
+  g.restore();
+}
+
+function drawClear(g) {
+  g.fillStyle = 'rgba(10,18,24,.72)';
+  g.fillRect(0, 0, W, H);
+
+  /* 实体卡片。**不能只把字浮在暗化的画面上** ——
+     背景里还有箱子、平台、敌人，"子弹碎箱 / 球碎箱"那一行正好压在
+     箱子上，白字和木色糊在一起，数字读不出来。 */
+  const cw = 460, ch = 424, cx = (W - cw) / 2, cy = 88;
+  g.fillStyle = '#16232B';
+  rr(g, cx, cy, cw, ch, 18); g.fill();
+  g.strokeStyle = 'rgba(155,232,110,.32)'; g.lineWidth = 2;
+  rr(g, cx, cy, cw, ch, 18); g.stroke();
+
+  g.textAlign = 'center';
+  g.fillStyle = '#EAF8FF';
+  g.font = '800 38px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillText('进 门 了', W / 2, cy + 68);
+
+  g.fillStyle = 'rgba(155,232,110,.7)';
+  g.font = '600 14px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillText('这一屏的量具数据', W / 2, cy + 96);
+
+  const st = S.stat;
+  const avg = st.shotsPerCoat.length
+    ? (st.shotsPerCoat.reduce((a, b) => a + b, 0) / st.shotsPerCoat.length).toFixed(2) + ' 发'
+    : '—';
+  const rows = [
+    ['裹一只平均', avg],
+    ['子弹碎箱 / 球碎箱', st.boxByShot + ' / ' + st.boxByBall],
+    ['一球最多连碎', st.ballChainMax + ' 口'],
+    ['剩余弹药', S.ammo + ' 发'],
+    ['剩余饱食', Math.round(S.belly) + '（' + TIER_CN[bellyTier()] + '）'],
+    ['总发弹数', st.shots + ' 发'],
+  ];
+  g.font = '600 17px "PingFang SC","Microsoft YaHei",sans-serif';
+  for (let i = 0; i < rows.length; i++) {
+    const y = cy + 138 + i * 36;
+    if (i % 2 === 0) {
+      g.fillStyle = 'rgba(255,255,255,.04)';
+      rr(g, cx + 26, y - 21, cw - 52, 30, 6); g.fill();
+    }
+    g.textAlign = 'right'; g.fillStyle = '#8FA8B8';
+    g.fillText(rows[i][0], W / 2 - 16, y);
+    g.textAlign = 'left'; g.fillStyle = '#DFF2FF';
+    g.fillText(rows[i][1], W / 2 + 16, y);
+  }
+
+  g.textAlign = 'center';
+  g.fillStyle = '#7FA3B5';
+  g.font = '600 15px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillText('按 R 再来一局', W / 2, cy + ch - 24);
+}
+
+/* =========================================================================
+   循环 + 测试出口
+   ========================================================================= */
+let last = 0;
+function loop(ts) {
+  if (!last) last = ts;
+  const dt = Math.min(0.05, (ts - last) / 1000);
+  last = ts;
+  step(dt);
+  draw();
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(loop);
+}
+
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  window.addEventListener('keydown', e => onKey(e, true));
+  window.addEventListener('keyup', e => onKey(e, false));
+  window.addEventListener('blur', () => { S.keys = {}; });
+  reset();
+  if (typeof requestAnimationFrame === 'function' && ctx) requestAnimationFrame(loop);
+  else draw();
+}
+
+/* **测试出口**。headless 断言全走这里 —— 逻辑不依赖 rAF，也不依赖 canvas。 */
+const API = {
+  NUM, S, W, H, GROUND_Y,
+  reset, step, shoot, draw,
+  bellyTier, snowNeed, ballTier, ballR, ballPow,
+  coatFoe, makeBallFrom, ballHitBox, shotBox, breakBox, hurtPlayer,
+  checkDoor,
+  spawnFoe: (x, y, kind) => { const f = makeFoe(x, y, kind); S.foes.push(f); return f; },
+  /** 直接造一颗球（绕过"先冻怪"），用来单独量"球砸箱"的数值 */
+  spawnBall: (x, y, vx, absorbed) => {
+    const n = absorbed == null ? 1 : absorbed;
+    const b = { x, y, vx: vx || 0, vy: 0, r: ballR(n), absorbed: n, life: NUM.ball.life, onGround: false, chain: 0, hitCd: 0, dead: false };
+    S.balls.push(b); return b;
+  },
+  /** 把玩家放到指定位置（测试站位用） */
+  placePlayer: (x, y) => { S.p.x = x; S.p.y = y; S.p.vx = 0; S.p.vy = 0; },
+  /** 打 N 发雪弹到指定敌人（跳过物理飞行，直接命中） */
+  hitFoeN: (f, n) => { for (let i = 0; i < n; i++) coatFoe(f, 1); },
+};
+if (typeof window !== 'undefined') window.SNOWLAB = API;
+if (typeof module !== 'undefined' && module.exports) module.exports = API;
+})();
+</script>
+</body>
+</html>

@@ -56,35 +56,94 @@ function findBox(mat, pred) {
 }
 
 /* =========================================================================
-   一、初始状态
+   一、关卡生成不变量（扫 200 个种子）
+   ---------------------------------------------------------------------------
+   **这一节是这一版最要紧的测试。** 关卡从手写坐标改成程序生成之后，
+   "随机"就一定会有生成出死局的那一次 —— 撞在最难复现、也最要命的地方。
+   所以不能只验当前这一关，要扫一批种子，每一个都必须满足：
+   掉得下去、接得住、凑得够、走得到。
    ========================================================================= */
-group("一、初始状态");
-L.reset();
+group("一、关卡生成不变量（200 个种子）");
+const NSEED = 200;
+let gOK = 0;
+const gBad = [];
+const nfHist = {};
+const coverHist = {};
+let rampTotal = 0, boxTotal = 0;
+for (let sd = 1; sd <= NSEED; sd++) {
+  const g = L.genLevel(sd);
+  if (L.validateLevel(g)) gOK++; else gBad.push(sd);
+  nfHist[g.nFloors] = (nfHist[g.nFloors] || 0) + 1;
+  boxTotal += g.boxes.length;
+  g.layers.forEach(l => {
+    l.holes.forEach(h => { coverHist[h.cover] = (coverHist[h.cover] || 0) + 1; });
+    l.terrain.forEach(t => { if (t.kind === "ramp") rampTotal++; });
+  });
+}
+ck(NSEED + " 个种子全部通过校验", gOK === NSEED, (NSEED - gOK) + " 个没过: " + gBad.slice(0, 8).join(","));
+ck("层数 4~8，而且每个档都出现过", Object.keys(nfHist).length >= 4 &&
+   Object.keys(nfHist).every(k => +k >= 4 && +k <= 8), JSON.stringify(nfHist));
+ck("三种封口方式都出现过（不是每层都同一招）",
+   coverHist.frost > 0 && coverHist.ice > 0 && coverHist.none > 0, JSON.stringify(coverHist));
+/* 阈值 1.2：平均每关一条半。**不是每层都有坡** ——
+   落点带（上一层洞口正下方）不能放平台和坡，不然掉下来会被接在半空；
+   剩下的可放位置本来就不多，硬要每层都塞会挤掉高台。 */
+ck("斜坡平均每关 " + (rampTotal / NSEED).toFixed(1) + " 条（地形不止平台）",
+   rampTotal / NSEED > 1.2, (rampTotal / NSEED).toFixed(2));
+ck("箱子平均每关 " + (boxTotal / NSEED).toFixed(1) + " 口", boxTotal / NSEED > 50, (boxTotal / NSEED).toFixed(1));
+
+/* 上面是一条大 bool，只知道"没通过"，不知道踩了哪条。
+   这里把四条硬不变量各自单列，红的时候能直接指出是哪一条。 */
+let badOverlap = 0, badCatch = 0, badFoe = 0, badFeed = 0;
+for (let sd = 1; sd <= NSEED; sd++) {
+  const g = L.genLevel(sd);
+  const N = g.floors.length;
+  for (let k = 0; k + 1 < N; k++) {
+    for (const p of g.layers[k].holes) for (const q of g.layers[k + 1].holes) {
+      if (p.x < q.x + q.w + 24 && q.x < p.x + p.w + 24) badOverlap++;
+    }
+  }
+  for (let k = 0; k + 1 < N; k++) {
+    const next = g.layers[k + 1].segs;
+    for (const h of g.layers[k].holes) for (const px of [h.x + 20, h.x + h.w - 20]) {
+      if (!next.some(s => px >= s.x && px <= s.x + s.w)) badCatch++;
+    }
+  }
+  const lastY = g.floors[N - 1];
+  if (g.spawns.filter(s => s.y >= lastY - 100).length < NUM.killTarget) badFoe++;
+  if (g.boxes.filter(b => b.mat === "wood" && !b.frost && b.y >= lastY - 60 && b.y <= lastY).length < 3) badFeed++;
+}
+ck("★ 相邻两层的洞从不重叠（否则一次掉两层）", badOverlap === 0, badOverlap);
+ck("★ 每个洞正下方都接得住", badCatch === 0, badCatch);
+ck("★ 每关门厅怪数都 >= killTarget（单向关卡的死局线）", badFoe === 0, badFoe);
+ck("★ 每关门厅都有 3 口喂球箱（清光怪之后的活路）", badFeed === 0, badFeed);
+
+/* =========================================================================
+   二、当前关卡
+   ========================================================================= */
+group("二、当前关卡");
+/* 挑一个"地表第一层是霜箱封口"的种子 —— 第十九节要测"喷侧面 → 整排塌"，
+   那一层换成冰封或敞开的洞，这个动作根本不存在，测了也是假绿。 */
+let SEED = 1;
+for (let s = 1; s < 300; s++) {
+  const g = L.genLevel(s);
+  const h0 = g.layers[0].holes;
+  if (h0.length === 1 && h0[0].cover === "frost" && h0[0].w >= 96) { SEED = s; break; }
+}
+L.reset(SEED);
+ck("seed " + SEED + "：层数 " + L.FLOORS.length + "（4~8）", L.FLOORS.length >= 4 && L.FLOORS.length <= 8, L.FLOORS.length);
+ck("世界高 = 最后一层 + 80", L.WORLD_H === L.GROUND_Y + 80, L.WORLD_H + " / " + L.GROUND_Y);
+ck("相邻层高差恒为 240（跳不回去的硬约束）",
+   L.FLOORS.every((y, i) => i === 0 || y - L.FLOORS[i - 1] === 240), L.FLOORS.join(","));
 ck("弹药 100", S.ammo === 100, S.ammo);
 ck("饱食 100（满饱）", S.belly === 100, S.belly);
 ck("体力 3", S.hp === NUM.hpStart, S.hp);
-ck("世界高 1580（六层 × 240）", L.WORLD_H === 1580, L.WORLD_H);
-ck("场上 11 只怪（六层分布）", S.foes.length === 11, S.foes.length);
-ck("击杀目标 = 3（不要求杀光，避免返程）", S.killedTarget === NUM.killTarget && NUM.killTarget === 3, S.killedTarget);
-ck("★ 门厅怪数 >= 击杀目标（不返程也能凑够）",
-   S.foes.filter(f => f.y >= L.FLOORS[4]).length >= NUM.killTarget,
-   S.foes.filter(f => f.y >= L.FLOORS[4]).length + " 只 vs 门槛 " + NUM.killTarget);
-ck("箱子 66 口（每层 9~13 口，六层箱室）", S.boxes.length === 66, S.boxes.length);
-ck("门初始锁着", S.door && S.door.open === false);
-ck("门初始藏在冰箱里（看不见）", L.doorBlocked() === true);
-ck("四种材质都在场上", ["wood", "stone", "iron", "ice"].every(t => S.boxes.some(b => b.mat === t)), "缺少材质");
-ck("覆霜木箱 10 口（五层各两口，一层一个洞）", S.boxes.filter(b => b.frost).length === 10, S.boxes.filter(b => b.frost).length);
-ck("覆霜箱都是木箱（霜只标路，不标硬度）", S.boxes.filter(b => b.frost).every(b => b.mat === "wood"));
-ck("六层每层都有怪（不然有一层是空的）",
+ck("击杀目标 = 3", S.killedTarget === NUM.killTarget && NUM.killTarget === 3, S.killedTarget);
+ck("门初始锁着且藏在外壳里", S.door.open === false && L.doorBlocked() === true);
+ck("场上 " + S.foes.length + " 只怪，每层都有",
    L.FLOORS.every((top, k) => S.foes.some(f => f.y > (k ? L.FLOORS[k - 1] : 0) && f.y <= top)));
-ck("★ 六个洞的 x 区间两两不重叠（上一版重叠 20px，能一穿两层）",
-   L.HOLES.every((a, i) => L.HOLES.every((b, j) => i === j || a[1] <= b[0] || b[1] <= a[0])));
-ck("★ 每个洞都正对着下一层的地板（掉下去必须接得住）",
-   L.HOLES.every((h, k) => {
-     const floor = L.FLOORS[k + 1];
-     const mid = (h[0] + h[1]) / 2;
-     return L.groundAt(mid, floor - 10) === floor;
-   }));
+ck("箱子 " + S.boxes.length + " 口（每层至少 8 口）", S.boxes.length >= L.FLOORS.length * 8, S.boxes.length);
+ck("覆霜箱都是木箱（霜只标路，不标硬度）", S.boxes.filter(b => b.frost).every(b => b.mat === "wood"));
 settle(60);
 
 /* =========================================================================
@@ -165,48 +224,53 @@ function swingAt(box, vx, absorbed) {
   return { box, ball: b };
 }
 
-// 木箱：任何速度都碎
-L.reset(); settle(20);
-let wb2 = findBox("wood", b => !b.frost && b.x <= 700);
-let wb2Y = wb2.y;
+/* **每个子测试都清场 + 只造一口箱子。**
+   球撞碎箱子之后会带着衰减速度继续滚，场上只要还有第二口，
+   量到的就是"撞了两口之后"的速度 —— 第一版在这里假红过
+   （82% 的穿透保留量成了 31%，看起来像参数错了，其实是撞了两次）。 */
+function soloBox(mat, x) {
+  L.reset(); settle(10);
+  S.foes.length = 0;
+  S.boxes.forEach(b => { b.dead = true; });
+  const bx = { x: x == null ? 700 : x, y: L.GROUND_Y - 48, w: 48, h: 48, mat,
+               hp: NUM.box[mat].hp, dead: false, hitT: 0, frost: false };
+  S.boxes.push(bx);
+  return bx;
+}
+
+// 木箱：站立推即碎
+let wb2 = soloBox("wood");
 let b1 = L.spawnBall(wb2.x - 30, wb2.y + 24, 620, 1);
 for (let i = 0; i < 20 && !wb2.dead; i++) L.step(DT);
 ck("木箱：站立推球即碎", wb2.dead === true);
 ck("木箱：碎后球还在（穿透）", b1.dead === false);
 ck("木箱：穿透保留 82% 速度", near(Math.abs(b1.vx), 620 * NUM.box.wood.keepSpeed, 20), Math.round(Math.abs(b1.vx)));
 
-// 石箱：站立推（620）够，但球会掉速
-L.reset(); settle(20);
-let st = findBox("stone");
+// 石箱：站立推（620）够
+let st = soloBox("stone");
 let b2 = L.spawnBall(st.x - 30, st.y + 24, 620, 1);
 for (let i = 0; i < 20 && !st.dead; i++) L.step(DT);
 ck("石箱：站立推球（pow 620）能碎", st.dead === true);
 
 // 铁箱：站立推不够，助跑够
-L.reset(); settle(20);
-let ir = findBox("iron");
+let ir = soloBox("iron");
 let b3 = L.spawnBall(ir.x - 30, ir.y + 24, 620, 1);
 for (let i = 0; i < 20 && !ir.dead; i++) L.step(DT);
 ck("铁箱：站立推（pow 620 < 1150）砸不动", ir.dead === false);
 ck("铁箱：砸不动会反弹", b3.vx < 0, Math.round(b3.vx));
 
-L.reset(); settle(20);
-let ir2 = findBox("iron", b => b.y > 700 && b.y < 900);
+let ir2 = soloBox("iron");
 let b4 = L.spawnBall(ir2.x - 30, ir2.y + 24, 1209, 1);
 for (let i = 0; i < 20 && !ir2.dead; i++) L.step(DT);
 ck("铁箱：助跑推（pow 1209）能碎", ir2.dead === true);
 
 // 冰墙：小球高速不够，特大球够
-L.reset(); settle(20);
-S.boxes.push({ x: 600, y: 400, w: 48, h: 48, mat: "ice", hp: Infinity, dead: false, hitT: 0 });
-let ice = S.boxes[S.boxes.length - 1];
+let ice = soloBox("ice");
 let b5 = L.spawnBall(ice.x - 30, ice.y + 24, 1209, 1);
 for (let i = 0; i < 20 && !ice.dead; i++) L.step(DT);
 ck("冰墙：小球助跑（pow 1209）砸不动", ice.dead === false);
 
-L.reset(); settle(20);
-S.boxes.push({ x: 600, y: 400, w: 48, h: 48, mat: "ice", hp: Infinity, dead: false, hitT: 0 });
-let ice2 = S.boxes[S.boxes.length - 1];
+let ice2 = soloBox("ice");
 let b6 = L.spawnBall(ice2.x - 40, ice2.y + 24, 1209, 6);
 for (let i = 0; i < 20 && !ice2.dead; i++) L.step(DT);
 ck("冰墙：特大球助跑（pow > 1550）能碎", ice2.dead === true);
@@ -230,11 +294,16 @@ group("六、球碾敌");
 L.reset(); settle(20);
 /* 清场。不清的话球会一路碾过去连杀几只，`killed === killedBefore + 1` 就假失败。 */
 S.foes.length = 0;
-/* 位置要挑门厅的空地：392~536 是那四口喂球箱，球和怪生在箱子里会被顶出来。 */
-let tf = L.spawnFoe(620, L.GROUND_Y - 30, "crawler");
+/* **门厅的箱子也要清掉。** 箱子随机生成，球滚过去可能先撞箱再撞怪，
+   `killed` 就不会在这一帧涨 —— 那是测试被布局干扰，不是机制坏了。 */
+S.boxes.forEach(b => { b.dead = true; });
+/* **位置要挑门壳左边的空地。** 门壳在 doorX-48 ~ doorX+48，每关不同；
+   球生在壳里会被顶出来，测出来就是"球没动、怪没死"。 */
+const runX = Math.max(80, Math.min(360, S.door.x - 380));
+let tf = L.spawnFoe(runX + 90, L.GROUND_Y - 30, "crawler");
 tf.vx = 0; tf.speed = 0;
 const killedBefore = S.killed;
-let mb = L.spawnBall(560, L.GROUND_Y - 22, 700, 1);
+let mb = L.spawnBall(runX, L.GROUND_Y - L.ballR(1), 700, 1);
 for (let i = 0; i < 60 && S.killed === killedBefore; i++) L.step(DT);
 ck("球滚过敌人 = 击杀", S.killed === killedBefore + 1, S.killed);
 ck("击杀后球变大（吸收）", mb.absorbed >= 2, mb.absorbed);
@@ -244,6 +313,7 @@ ck("击杀后球变大（吸收）", mb.absorbed >= 2, mb.absorbed);
    ========================================================================= */
 group("七、子弹不杀生");
 L.reset(); settle(20);
+S.boxes.forEach(b => { b.dead = true; });
 let nf = L.spawnFoe(620, L.GROUND_Y - 30, "crawler");
 S.belly = 100;
 for (let i = 0; i < 5; i++) L.coatFoe(nf, 1);
@@ -258,7 +328,13 @@ L.reset(); settle(20);
 /* 只留一口木箱。留一片箱群的话，子弹打到的是**前面那口**而不是被测的那口 ——
    第一版就是在这里假绿的（敌人确实没吃到雪，但被测箱子的 HP 一点没掉，
    因为子弹被隔壁箱子吃了）。 */
-const blocker = findBox("wood", b => b.y > 1400);   // 底层地面上的木箱：玩家和它同一水平线
+/* 门厅地面上的木箱（和玩家同一水平线）。**位置每关都不一样，只能动态找。**
+   优先级：门左半边的 —— 右边是门壳，站在门壳左边开枪等于隔墙打。 */
+const hallY = L.GROUND_Y - 48;
+const blocker = S.boxes.filter(b => !b.dead && b.mat === "wood" && b.y === hallY && b.x < S.door.x - 96)[0]
+             || S.boxes.filter(b => !b.dead && b.mat === "wood" && b.y === hallY)[0]
+             || S.boxes.filter(b => !b.dead && b.mat === "wood")[0];
+ck("场上还有木箱可测", !!blocker);
 S.boxes.forEach(b => { if (b !== blocker) b.dead = true; });
 S.foes.length = 0;                       // 场上的怪会替箱子吃子弹，必须清掉
 const behind = L.spawnFoe(blocker.x + blocker.w + 6, blocker.y + blocker.h - 30, "crawler");
@@ -302,11 +378,13 @@ ck("球砸的回本是子弹的 3 倍以上", rateBall > rateShot * 3, (rateBall
 group("十、弹药经济核算");
 L.reset();
 const woodCount = S.boxes.filter(b => b.mat === "wood").length;
-const allFoeShots = S.foes.length * NUM.snowShots.full;                    // 11 × 6
+/* 怪的数量是随机的（4~8 层，每层 1~3 只），所以这里只验**关系**，不验绝对值。 */
+const allFoeShots = S.foes.length * NUM.snowShots.full;
 const spare = NUM.ammoStart - allFoeShots;
 const canBreak = Math.floor(spare / NUM.box.wood.hp);
-ck("11 只怪全冻 = 66 发", allFoeShots === 66, allFoeShots);
-ck("剩下 " + spare + " 发只够砸 " + canBreak + " 口木箱", canBreak === 11, canBreak);
+ck(S.foes.length + " 只怪全冻 = " + allFoeShots + " 发", allFoeShots === S.foes.length * 6, allFoeShots);
+ck("剩下 " + spare + " 发只够砸 " + canBreak + " 口木箱（用子弹开路走不完）",
+   canBreak < woodCount, canBreak + " vs " + woodCount);
 ck("场上有 " + woodCount + " 口木箱，子弹砸不完（缺口 " + (woodCount - canBreak) + " 口）",
    woodCount > canBreak && woodCount - canBreak >= 5, woodCount + " vs " + canBreak);
 ck("「全部用子弹开路」走不到头 → 必须用球", woodCount * NUM.box.wood.hp + allFoeShots > NUM.ammoStart,
@@ -319,7 +397,13 @@ group("十一、门（藏箱 / 露出 / 解锁 / 过关）");
 L.reset(); settle(20);
 ck("门初始被冰墙盖着（看不见、也碰不到）", L.doorBlocked() === true);
 
-const shells = S.boxes.filter(b => b.mat === "ice" && b.x === 840);
+/* **门壳那一列的 x 是随机的，必须从 S.door 推。** 写死 840 的断言
+   在门开在别处时全都是假绿 —— 它数的是"840 有没有冰箱"，不是"门有没有壳"。
+   另外**必须按层筛 y**：`x` 是全球共用的，下面某一层的"冰封洞口"完全可能
+   和门开在同一列，只按 x 数会把那两格冰墙也算进门壳里（实测数到 4）。 */
+const hallFloorY = S.door.y + S.door.h;
+const shells = S.boxes.filter(b => b.mat === "ice" && b.x === S.door.x &&
+  b.y + b.h <= hallFloorY + 1 && b.y >= hallFloorY - 96 - 1);
 ck("门的外壳正好 2 口冰箱", shells.length === 2, shells.length);
 ck("外壳盖住门的包围盒", shells.every(b => b.y + b.h > S.door.y && b.y < S.door.y + S.door.h));
 
@@ -346,16 +430,19 @@ ck("碰门 → phase = clear", S.phase === "clear", S.phase);
    ========================================================================= */
 group("十二、箱子挡路 / 可站 / 塌落");
 L.reset(); settle(20);
-L.placePlayer(700, L.GROUND_Y - 42);
+/* 从门左边 300px 往右走，撞在门壳左列上。**起点必须动态** ——
+   门的位置每关都变，写死 700 的话有时会站在门壳右边，一路畅通走到底。 */
+L.placePlayer(Math.max(48, S.door.x - 300), L.GROUND_Y - 42);
 S.keys = { d: true };
 for (let i = 0; i < 120; i++) L.step(DT);
 S.keys = {};
-ck("玩家被冰墙挡住", S.p.x + S.p.w <= 792 + 1, Math.round(S.p.x + S.p.w));
+ck("玩家被冰墙挡住（左外屏障 = 门壳左边一列）",
+   S.p.x + S.p.w <= S.door.x - 48 + 1, Math.round(S.p.x + S.p.w) + " vs " + (S.door.x - 48));
 
-// 塌落：840 这列砸掉底下那口，上面那口必须掉下来
+// 塌落：门壳左边那一列砸掉底下那口，上面那口必须掉下来
 L.reset(); settle(30);
-const colB = S.boxes.filter(b => !b.dead && b.x === 840).sort((a, b) => b.y - a.y);
-ck("840 列是 2 口叠着", colB.length === 2, colB.length);
+const colB = S.boxes.filter(b => !b.dead && b.x === S.door.x - 48 && b.mat === "ice").sort((a, b) => b.y - a.y);
+ck("门壳左边那列是 2 口叠着", colB.length === 2, colB.length);
 const aboveY0 = colB[1].y;
 L.breakBox(colB[0], "ball");
 for (let i = 0; i < 60; i++) L.step(DT);
@@ -423,8 +510,10 @@ L.reset(); settle(20);
 S.foes.length = 0;
 /* 用 x 认这四口，不用 y —— 门厅那摞回程箱塔也在 y>=1400，
    只按 y 过滤会数出 6 口，喂球增益跟着虚高。 */
-const feed = S.boxes.filter(b => !b.dead && b.mat === "wood" && b.y >= 1400 && b.x >= 240 && b.x <= 288);
-ck("门厅有 3 口喂球木箱", feed.length === 3, feed.length);
+/* 门厅地面上的木箱，且必须在门壳左边（门壳右边的够不着）。
+   位置每关都变，只认"地面高度 + 在门左侧"这两条。 */
+const feed = S.boxes.filter(b => !b.dead && b.mat === "wood" && b.y === L.GROUND_Y - 48 && b.x < S.door.x - 48);
+ck("门厅有 3 口喂球木箱", feed.length >= 3, feed.length);
 const fb = L.spawnBall(feed[0].x - 30, feed[0].y + 24, 620, 0);
 for (const bx of feed) {
   for (let i = 0; i < 30 && !bx.dead; i++) { if (fb.dead) break; L.step(DT); }
@@ -473,16 +562,21 @@ ck("全部 " + plats.length + " 块平台都从出生点可达", unreachablePlat
    unreachablePlats.map(pl => "(" + pl.x + "," + pl.y + ")").join(" "));
 
 /* 每只怪都站在某块平台上（没有悬空的怪） */
-function platOf(f) {
-  for (const pl of L.S.plats) {
+/** `withBox` 决定要不要把箱子也算成落脚面。
+    **悬空检查要算（怪站在箱顶是合法的），射程检查不算（箱子太窄，塞不下玩家）。** */
+function platOf(f, withBox) {
+  const all = withBox ? L.S.plats.concat(L.S.boxes.filter(b => !b.dead)) : L.S.plats;
+  for (const pl of all) {
     if (f.x + f.w <= pl.x + 1 || f.x >= pl.x + pl.w - 1) continue;
-    if (Math.abs((f.y + f.h) - pl.y) < 4) return pl;
+    /* **斜坡要按截面高度比，不能比 pl.y** —— pl.y 是左端高度，
+       怪站在坡右半截时，脚底比 pl.y 低几十像素，会误判成悬空。 */
+    if (Math.abs((f.y + f.h) - L.surfY(pl, f.x + f.w / 2)) < 6) return pl;
   }
   return null;
 }
 L.reset(); settle(40);
-const floating = S.foes.filter(f => !platOf(f));
-ck("10 只怪全部站在平台上（没有悬空卡死的）", floating.length === 0,
+const floating = S.foes.filter(f => !platOf(f, true));
+ck(S.foes.length + " 只怪全部站在平台上（没有悬空卡死的）", floating.length === 0,
    floating.map(f => "(" + Math.round(f.x) + "," + Math.round(f.y) + ")").join(" "));
 
 /* =========================================================================
@@ -490,7 +584,9 @@ ck("10 只怪全部站在平台上（没有悬空卡死的）", floating.length 
    ========================================================================= */
 group("十七、射程可达性");
 let unreachable = [];
-for (let i = 0; i < 10; i++) {
+let skipped = 0;
+const foeN = S.foes.length;
+for (let i = 0; i < foeN; i++) {
   L.reset();
   S.foes.forEach(f => { f.speed = 0; f.vx = 0; });
   /* **先砸箱子、再 settle**。反过来的话，那些站在箱顶上的怪会在这一瞬间
@@ -501,26 +597,44 @@ for (let i = 0; i < 10; i++) {
   const f = S.foes[i];
   S.foes = [f];
   f.speed = 0; f.vx = 0;
-  const pl = platOf(f);
-  /* 把怪摆到平台正中，玩家从平台内距它 60px 处喷。
-     测的是「这块平台上的怪能不能打到」，站位靠十六节保证可达。 */
-  f.x = pl.x + pl.w / 2 - f.w / 2;
-  const px = Math.min(Math.max(pl.x + 2, f.x - 60), pl.x + pl.w - S.p.w - 2);
-  L.placePlayer(px, pl.y - S.p.h);
-  for (let k = 0; k < 8; k++) L.step(DT);
-  S.p.face = 1;
+  const pl = platOf(f, false);
+  if (!pl) { skipped++; continue; }        // 站在箱顶上的怪：箱子 48 宽，塞不下玩家，跳过
+  /* **怪贴平台右端、玩家贴左端。**
+     早先的做法是"玩家离怪 60px"，有两个坑：
+     ① 平台上放不下 60px 时，两个盒子会重叠 → 每帧撞脸 → 玩家 3 帧就没血了，
+        `shoot()` 因为 phase 变了直接返回，测出来是"喷不到"，其实是人已经死了；
+     ② 斜坡上水平距离就是高度差，站远了子弹从怪头顶飞过去，也是假红。
+     现在两端各贴边，距离由平台宽度决定，既不会重叠也不会越过。 */
+  /* **玩家直接摆到和怪同一水平线，离它 40px。**
+     这一节测的是"这只怪能不能被雪弹碰到"，不是"地形怎么走"——
+     地形可达性由十六节那张 BFS 管。
+     早先按平台算出玩家 y，在斜坡上会差几十像素：雪弹是水平飞的，
+     38° 的坡上差 140px 就是差 111px 高，子弹从怪头顶过去，
+     测出来是"喷不到"，但其实玩家走上去就打得着。
+     离 40 是"玩家宽 30 + 10"，再近两个盒子会重叠，撞脸掉血之后
+     `shoot()` 会因为 phase 变了直接返回。 */
+  /* **左边放不下就放右边。** 怪可能就站在平台最左端，`f.x - 40` 会落到平台外，
+     夹回平台边界之后玩家正好压在怪身上 —— 撞脸掉血、phase 变成结束、
+     `shoot()` 直接返回，测出来是"喷不到"。 */
+  let px = f.x - 40, face = 1;
+  if (px < pl.x + 2) { px = f.x + f.w + 10; face = -1; }
+  L.placePlayer(px, f.y + f.h - S.p.h);
+  /* **不 settle 直接喷。** 摆好位置再跑几帧的话，玩家会先掉下去
+     （他悬在怪的水平线上，脚下未必有地），子弹就从错的高度出去了。 */
+  S.p.face = face;
   S.ammo = 100;
   const h0 = f.hits;
   L.shoot();
   for (let k = 0; k < 24; k++) L.step(DT);
   if (f.hits <= h0) unreachable.push("#" + i + "(" + Math.round(f.x) + "," + Math.round(f.y) + ")");
 }
-ck("10 只怪全部喷得到", unreachable.length === 0, unreachable.join(" "));
+ck(foeN + " 只怪全部喷得到（" + skipped + " 只站在箱顶上跳过）", unreachable.length === 0, unreachable.join(" "));
 
 /* 门砸开后够得着 */
 L.reset(); settle(20);
-S.boxes.filter(b => b.x >= 780).forEach(b => { b.dead = true; });
-L.placePlayer(700, L.GROUND_Y - 42);
+/* 全清：从门左边 200px 走到门，路上任何一口箱子都会让"走到门"这条测不准。 */
+S.boxes.forEach(b => { b.dead = true; });
+L.placePlayer(Math.max(60, S.door.x - 200), L.GROUND_Y - 42);
 S.keys = { d: true };
 for (let i = 0; i < 90; i++) L.step(DT);
 S.keys = {};
@@ -532,7 +646,7 @@ ck("冰墙砸开后玩家能走到门", S.p.x + S.p.w >= S.door.x, Math.round(S.
 group("十八、镜头跟随");
 L.reset(); settle(30);
 ck("出发点镜头在最上面（地表）", S.cam.y < 200, Math.round(S.cam.y));
-L.placePlayer(200, 1470);
+L.placePlayer(200, L.GROUND_Y - 42);
 for (let i = 0; i < 90; i++) L.step(DT);
 ck("下到底层后镜头跟着下去", S.cam.y > L.WORLD_H - L.H - 2, Math.round(S.cam.y));
 ck("镜头不会超出世界底", S.cam.y <= L.WORLD_H - L.H + 0.5, S.cam.y);
@@ -550,86 +664,101 @@ ck("镜头不会超出世界底", S.cam.y <= L.WORLD_H - L.H + 0.5, S.cam.y);
    ========================================================================= */
 group("十九、挖穿：喷侧面 → 整排塌");
 L.reset(); settle(30);
-const capL = S.boxes.filter(b => b.frost && b.y < 520).sort((a, b) => a.x - b.x)[0];
-ck("地表盖板最左边那口在 x=" + capL.x, capL.x === 240, capL.x);
-L.placePlayer(capL.x - 56, capL.y + 48 - S.p.h);
-S.p.face = 1; S.ammo = 100;
+const hole0 = L.LAYERS[0].holes[0];
+const y0 = L.FLOORS[0];
+/* 地表的盖板就是洞上那两口霜箱。**位置每关都变**，只能按"贴在这一层地面上、
+   带霜、并且落在洞口区间里"去找 —— 写死 x 的版本在随机布局下等于没测。 */
+const caps = S.boxes.filter(b => !b.dead && b.frost && Math.abs(b.y + 48 - y0) < 1).sort((a, b) => a.x - b.x);
+ck("地表盖板 " + caps.length + " 口，铺在洞 " + hole0.x + "~" + (hole0.x + hole0.w) + " 上",
+   caps.length >= 2 && caps[0].x >= hole0.x - 1 && caps[caps.length - 1].x + 48 <= hole0.x + hole0.w + 1,
+   caps.map(b => b.x).join(","));
+
+/* 站哪边喷：左边有地面就站左边朝右，否则站右边朝左 */
+const leftOK = hole0.x - 56 >= 48 && L.groundAt(hole0.x - 56 + 15, y0 - 10) === y0;
+const px0 = leftOK ? hole0.x - 56 : hole0.x + hole0.w + 8;
+const target = leftOK ? caps[0] : caps[caps.length - 1];
+L.placePlayer(px0, y0 - S.p.h);
+S.p.face = leftOK ? 1 : -1;
+S.ammo = 100;
 /* 喷到碎为止（上限 8 发）。**不写死"恰好 3 发"** —— shotCd 和飞行时间
    会让"发几发"和"命中几发"对不齐，写死就成了测时序而不是测机制。 */
 let shotsFired = 0;
-for (let i = 0; i < 8 && !capL.dead; i++) {
+for (let i = 0; i < 8 && !target.dead; i++) {
   const a0 = S.ammo;
   L.shoot();
   if (S.ammo < a0) shotsFired++;
   for (let k = 0; k < 24; k++) L.step(DT);
 }
-ck("站在左边地面喷，能打碎最左边那口盖板", capL.dead === true, "hp=" + capL.hp + " 发了 " + shotsFired + " 发");
+ck("站在洞口旁边喷，能打碎靠外那口盖板", target.dead === true, "hp=" + target.hp + " 发了 " + shotsFired + " 发");
 settle(90);
-const capsLeft = S.boxes.filter(b => !b.dead && b.frost && b.y < 520);
-ck("中间几口失去左右夹持，整排塌下去", capsLeft.length === 0, capsLeft.length);
+const capsLeft = S.boxes.filter(b => !b.dead && b.frost && Math.abs(b.y + 48 - y0) < 1);
+ck("其余几口失去左右夹持，整排塌下去", capsLeft.length === 0, capsLeft.map(b => b.x).join(","));
+const mid0 = hole0.x + hole0.w / 2;
 ck("盖板没了之后洞口是空的（脚下没有实心块）",
-   L.groundAt(capL.x + 20, 330) > 340 + 40,
-   "groundAt=" + L.groundAt(capL.x + 20, 330));
+   L.groundAt(mid0, y0 - 10) > y0 + 40, "groundAt=" + L.groundAt(mid0, y0 - 10));
 
-/* 走过去真的会掉到中层 */
-L.placePlayer(capL.x + 20, 298);
+L.placePlayer(mid0, y0 - 42);
 for (let i = 0; i < 120; i++) L.step(DT);
-/* 砸掉一口，另一口会塌下去垫在落点 —— 玩家落在箱顶（约 490），不是地面。
-   所以判据是"已经低于地表板底 380"，不是"踩着 L5 地面"。 */
-ck("从洞口走下去会掉到下一层（y > 380）", S.p.y > 380 && S.p.y < 600, Math.round(S.p.y));
+ck("从洞口走下去会掉到下一层",
+   S.p.y > y0 + 100 && S.p.y < L.FLOORS[1] + 10, Math.round(S.p.y) + " / 第2层 " + L.FLOORS[1]);
 ck("掉到下一层之后镜头也跟下去了", S.cam.y > 150, Math.round(S.cam.y));
 
 /* =========================================================================
    二十、全流程：挖到底 → 破冰墙 → 门露出 → 杀够 → 过关
    ---------------------------------------------------------------------------
    前面每一节都在单点验证。这一节走一遍真的路径，确认没有"单点都对、
-   串起来走不通"的地方。
+   串起来走不通"的地方。**层数是随机的，所有循环都用 FLOORS.length** ——
+   写死 6 的话，8 层的关卡会漏掉最后两层，4 层的会越界。
    ========================================================================= */
 group("二十、全流程");
 L.reset(); settle(30);
+const NF = L.FLOORS.length;
 
-/* ①~⑧ 逐层往下。**六层的关卡必须每层都走一遍** ——
-   只在头尾各验一次的话，中间四层"洞的位置对不对"就没有任何东西守着，
-   而这一版全部的设计就在洞的位置上。
-   `b.y + 48 === FLOORS[k]` 认的是"盖在第 k 层地面上的那两口霜箱"。 */
-for (let k = 0; k < 5; k++) {
-  S.boxes.filter(b => b.frost && b.y + 48 === L.FLOORS[k]).forEach(b => L.breakBox(b, "ball"));
-  L.placePlayer(L.HOLES[k][0] + 20, L.FLOORS[k] - 42);
+for (let k = 0; k < NF - 1; k++) {
+  const h = L.LAYERS[k].holes[0];
+  const yk = L.FLOORS[k];
+  /* 砸掉这一层洞口上方 100px 内的所有箱子：霜箱盖板、冰封、或者什么都不用砸 */
+  S.boxes.filter(b => !b.dead && b.x >= h.x - 1 && b.x < h.x + h.w && b.y >= yk - 100 && b.y < yk)
+         .forEach(b => L.breakBox(b, "ball"));
+  L.placePlayer(h.x + h.w / 2, yk - 42);
   for (let i = 0; i < 150; i++) L.step(DT);
   const next = L.FLOORS[k + 1];
   ck("第 " + (k + 1) + " 层挖穿 → 落在第 " + (k + 2) + " 层（只掉 240，不是一坠到底）",
      S.p.y > next - 200 && S.p.y <= next, Math.round(S.p.y));
 }
 
-// ⑥ 推球破冰墙
-const wall = S.boxes.filter(b => b.mat === "ice").sort((a, b) => a.x - b.x)[0];
-ck("⑥ 冰墙还在（玩家还没破）", wall && !wall.dead);
-S.ammo = 100;
-/* **球心 y 必须是"地面减去半径"，不是"地面减去固定值"。**
-   特大球 r=46，写成 GROUND_Y-30 的话球底比地面还低 16px，
-   球在第一帧就被判成"侧面撞地面"、原地反弹，永远走不到冰墙前面。 */
+/* ⑥ 推球破冰墙。门壳右边一列是门本身，左边一列是外屏障。 */
+const doorX = S.door.x;
+const wallX = doorX - 48;
+S.balls.length = 0;
+/* 先把门左侧的箱子清掉，给球留出滚动的跑道（喂球箱可能正好在那儿） */
+S.boxes.filter(b => !b.dead && b.x >= wallX - 160 && b.x < wallX && b.y >= L.GROUND_Y - 120)
+       .forEach(b => L.breakBox(b, "ball"));
+for (let i = 0; i < 20; i++) L.step(DT);
+
 /* **冰墙一列两格，一颗球只能破一格。**
    撞碎第一格之后 keepSpeed 把速度砍到 36%，pow 从 2500 掉到 ~900，
    破不了第二格 —— 这是有意的：冰墙要推两次，不是一次性奖励。
-   玩家撞完看见球弹回来、墙还缺一半，自然会再推一次。 */
-/* **用引用认箱子，不用 y 认。** 冰墙被砸掉下半格之后，上半格会失去支撑
-   掉下来 —— 坐标变了，`b.y === 1444` 就不再指向它，断言会假红。 */
-const colF = S.boxes.filter(b => b.mat === "ice" && b.x === 792);
-const lowerF = colF.find(b => b.y === 1492);
-const upperF = colF.find(b => b.y === 1444);
-ck("⑥ 冰墙下半格还在", lowerF && !lowerF.dead);
-L.spawnBall(732, L.GROUND_Y - L.ballR(12), 1209, 12);
+   **用引用认箱子，不用 y 认**：砸掉下半格之后上半格会失去支撑掉下来，
+   坐标变了，`b.y === 1444` 就不再指向它，断言会假红。 */
+const colF = S.boxes.filter(b => b.mat === "ice" && b.x === wallX && !b.dead).sort((a, b) => b.y - a.y);
+ck("⑥ 门厅外屏障是 2 格冰", colF.length === 2, colF.length);
+const lowerF = colF[0], upperF = colF[1];
+/* **球心 y 必须是"地面减去半径"，不是"地面减去固定值"。**
+   特大球 r=46，写成 GROUND_Y-30 的话球底比地面还低 16px，
+   球在第一帧就被判成"侧面撞地面"、原地反弹，永远走不到冰墙前面。 */
+L.spawnBall(wallX - 100, L.GROUND_Y - L.ballR(12), 1209, 12);
 for (let i = 0; i < 40 && !lowerF.dead; i++) L.step(DT);
 ck("⑥ 推第一颗球破掉冰墙下半", lowerF.dead === true);
 ck("⑥ 上半格没被同一颗球带走（速度衰减到 36% 就不够了）", upperF.dead === false);
 
 S.balls.length = 0;
-L.spawnBall(732, L.GROUND_Y - L.ballR(12), 1209, 12);
+L.spawnBall(wallX - 100, L.GROUND_Y - L.ballR(12), 1209, 12);
 for (let i = 0; i < 40 && !upperF.dead; i++) L.step(DT);
 ck("⑥ 推第二颗球破掉冰墙上半", upperF.dead === true);
 
 // ⑦ 破门壳 → 门露出
-S.boxes.filter(b => b.mat === "ice" && b.x === 840).forEach(b => L.breakBox(b, "ball"));
+S.boxes.filter(b => b.mat === "ice" && b.x === doorX).forEach(b => L.breakBox(b, "ball"));
 for (let i = 0; i < 10; i++) L.step(DT);
 ck("⑦ 门露出来", L.doorBlocked() === false);
 

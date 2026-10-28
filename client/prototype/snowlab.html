@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>PAWPACK · 六层试验台</title>
+<title>PAWPACK · 随机雪洞试验台</title>
 <style>
   html, body {
     margin: 0; height: 100%; overflow: hidden; background: #0B1014;
@@ -18,7 +18,7 @@
 <div id="wrap"><canvas id="cv"></canvas></div>
 <script>
 /* ===========================================================================
-   PAWPACK · 六层试验台
+   PAWPACK · 随机雪洞试验台
    ---------------------------------------------------------------------------
    **这个文件不是游戏，是量具。**
 
@@ -139,281 +139,556 @@ function rr(g, x, y, w, h, r) {
 }
 
 /* ---------------------------------------------------------------- 关卡
-   **六层，每层 240，每层都是一个箱室。**
+   **随机生成的纵向下行关，层数 4~8，每层一个箱室。**
 
-   用户 2026-10-28 的两次反馈：
+   用户 2026-10-28 的三次反馈连起来看是一条线：
      ① 「箱子明显不够，空间设计感太简陋，只能体会到一颗球在砸一个箱子」
      ② 「层与层太远了，你可以设置很多层，有很多木箱」
+     ③ 「L1 到 L6 应该是随机布局吧，首先不一定是 6 层，其次也有可能有斜坡，
+        而且每层不一定只有一个出口去下一层，可以灵活空间设计」
 
-   第一次按"加纵深"做成了三层 × 520 —— 错了。三层等于只掉两次，
-   一次 410 / 一次 548，掉的过程看不见中间那层，玩家经历的只是"掉了两次"。
-   而且每层只有 5~8 口箱子，砸两口就没东西了。
+   ①的答案是纵深，②的答案是很多层 × 240，③的答案是**别再手写坐标**。
+   手写坐标只能手写出一张图；要"灵活"，就得让关卡是算出来的：
 
-   这一版把纵深切成六段，落差 288（洞口箱顶到下一层地面）——
-   **一次只掉一层，抬头就看得见上面那个洞**：
+     · 层数 4~8 随机，层高锁死 240
+     · 每层 1~2 个下行口（34% 的层给两个），位置在三个槽位里随机
+     · 下行口三种封法：覆霜木箱 / 冰墙 / 敞开（敞开的要自己看出来）
+     · 每层地形 1~2 组：平台 + 配套坡（能直接走上去，不用跳），
+       或者一段孤立的雪包（上坡 + 下坡，两端都落地）
+     · 箱子 9~13 口一层，越深越硬；每层 1~3 只怪
+     · 门厅的门位置也随机，外面裹两列冰
 
-     L6 地表 340   出生点。石箱教「子弹打不动」
-     L5 浅井 580
-     L4 箱室 820   箱子最多的一层
-     L3 冰廊 1060  第一块冰出现
-     L2 深窟 1300
-     L1 门厅 1540  冰墙 + 门
+   **层高必须锁死 240，这是全关唯一不能随机的数。**
+   净空 = 240 − 板厚 40 = 200；玩家高 42、跳高 123。站在 h 高的箱子上
+   想上到上一层，起跳空间 (200−h−42)，需要上升 (240−h)，两者**恒差 82** ——
+   与层高取值无关。所以任何箱堆都送不回上一层，这一关是单向下行的，
+   箱子只做空间材料和高台台阶。反过来看这也是好事：层高固定，
+   跳跃/坠落/镜头这一套参数只需要对一种高度调好。
 
-   **每层只有一个洞，六个洞的位置各不相同**（240 / 528 / 96 / 672 / 384），
-   那两口覆霜木箱就是这一层唯一的出口。砸开掉 288 —— 只掉一层，
-   抬头还看得见刚才那个洞。
+   **随机和可解是两件平行的事。** 生成器出图之后必须过 `validateLevel()`：
+   相邻两层的洞不能重叠（否则一穿两层）、每个洞正下方必须接得住（否则
+   掉进下一层的洞里连环坠）、地形不能盖住本层的出口、地表出生点不能悬空、
+   门厅怪数必须够 killTarget、怪不能生在雪包里（会永久卡在坡体内）。
+   不过就换种子重掷，最多 80 次。随机负责新鲜，校验负责不死局。
 
-   **这一关是单向下行的，回不去。这是硬约束，不是省事：**
-   层高 240、板厚 40 → 净空 200；玩家高 42、跳高 123。
-   站在 h 高的箱子上想上到上一层，起跳空间是 (200−h−42)，
-   需要上升 (240−h)，两者**恒差 82** —— 跟层高多少无关。
-   任何箱堆都不可能把人送回上一层，除非上一层地板开洞。
-   所以箱子在这里只做两件事：空间材料、高台台阶。不做梯子。
-   代价是掉下去就回不去，于是 killTarget(3) 必须 <= 门厅怪数(3)，
-   这条在断言里钉死了 —— 单向关卡唯一的死局风险就在这里。
-
-   **"霜"是唯一的视觉语言**，规则逐层收紧：
-     覆霜木箱 → 下面是空的，能挖穿（L6~L2 每层一处）
-     冰墙     → 子弹完全无效，只能大球助跑撞（L3 一块教学 / L1 封门）
-   长得像，但一次比一次难破。玩家看两次就懂，不需要文字教学。
-
-   **为什么门厅还有四口普通木箱**：那是"没怪也能把球喂大"的兜底。
-   玩家若把怪清光，球就永远停在小号，冰墙破不了 —— 直接踩死局红线。
-   球砸箱会吸木屑长大，这几口木箱就是这条机制的救命绳。
+   **"放之前先验，别放完再筛"** —— 地形按"平台 + 配套坡"整段验，箱子给坡让位，
+   怪先枚举整层的可站点再抽。这三条都是同一个教训：事后过滤会把能用的东西
+   一起扔掉，数量直接塌（坡从 2.4 条/关掉到 1.3 条就是这么来的）。
    ---------------------------------------------------------------- */
-const WORLD_H = 1580;              // 世界总高。屏幕 600，一次看到两层半
-const GROUND_Y = 1540;             // 世界最底的可站立面（门厅地面）
+
 const WALL_L = 24, WALL_R = 936;
 
-/* 六层的站立面。**这张表是关卡的骨架**，洞的位置、箱子、怪、HUD 层名
-   全部从它推 —— 改层数只改这里和 buildLevel，别处不要散写数字。 */
-const FLOORS = [340, 580, 820, 1060, 1300, 1540];
-const LAYER_CN = ['地表', '浅井', '箱室', '冰廊', '深窟', '门厅'];
+const GEN = {
+  topY: 340,          // 地表地板高度
+  floorH: 240,        // 层高（不可随机，见上）
+  thick: 40,          // 地板厚度
+  minFloors: 4,
+  maxFloors: 8,
+  /* 三个下行口槽位，48 对齐，**槽与槽之间留 72px 空档**。
+     相邻两层不能共用槽位 —— 共用就有概率让上下两个洞的 x 重叠，
+     人从上面掉下来直接穿过下面那个洞，一次掉两层。
+     空档是第二道保险：槽紧挨着的话（比如 336 结束、336 开始），
+     两层的洞会正好贴边，加上"玩家宽 30"的安全余量照样算重叠。 */
+  slots: [[48, 288], [360, 600], [672, 912]],
+};
 
-/* 五个洞的 x 区间（最后一层没有洞）。**两两不重叠是硬约束** ——
-   上一版 L3 洞 300~444 和 L2 洞 424~520 重叠了 20px，从重叠段掉下去
-   会一穿两层，整个中层被跳过。 */
-const HOLES = [
-  [240, 336],   // L6 → L5
-  [528, 624],   // L5 → L4
-  [96, 192],    // L4 → L3
-  [672, 768],   // L3 → L2
-  [384, 480],   // L2 → L1
-];
+let WORLD_H = 1580, GROUND_Y = 1540;
+let FLOORS = [], LAYER_CN = [], HOLES = [], LAYERS = [];
+let LEVEL_SEED = null;
 
-function buildLevel() {
-  const plats = [
-    /* ---- L6 地表 340 ---- 洞 240~336 */
-    { x: 0,   y: 340,  w: 240, h: 40 },
-    { x: 336, y: 340,  w: 624, h: 40 },
-    { x: 560, y: 226,  w: 200, h: 18 },     // 表层高台（差 114，跳得上）
+/* mulberry32。**不能用 Math.random**：出图和断言都要能复现同一张关卡，
+   否则"随机布局"等于"不可测"。 */
+function rngFrom(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), 1 | t);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
-    /* ---- L5 浅井 580 ---- 洞 528~624（换到右半边） */
-    { x: 0,   y: 580,  w: 528, h: 40 },
-    { x: 624, y: 580,  w: 336, h: 40 },
-    /* 台必须避开 240~336（上层洞口的落点带，玩家宽 30 还要再放宽 30）。
-       原来放在 280，掉下来的人右半边正好搭在台左缘上，挂在半空下不去。 */
-    { x: 360, y: 466,  w: 160, h: 18 },
+/** 一块实心体在 x 处的顶面高度。**斜坡是全场唯一的非矩形件**，
+    其余（地板、平台、箱子）都直接返回 s.y。 */
+function surfY(s, x) {
+  if (!s || s.kind !== 'ramp') return s ? s.y : WORLD_H;
+  const t = clamp((x - s.x) / s.w, 0, 1);
+  return s.y - s.rise * t;
+}
 
-    /* ---- L4 箱室 820 ---- 洞 96~192（换到最左） */
-    { x: 0,   y: 820,  w: 96,  h: 40 },
-    { x: 192, y: 820,  w: 768, h: 40 },
-    { x: 760, y: 706,  w: 170, h: 18 },
+function genLevel(seed) {
+  const R = rngFrom(seed);
+  const ri = (a, b) => a + Math.floor(R() * (b - a + 1));
+  const chance = p => R() < p;
+  const pickOne = a => a[Math.floor(R() * a.length)];
 
-    /* ---- L3 冰廊 1060 ---- 洞 672~768（换到最右） */
-    { x: 0,   y: 1060, w: 672, h: 40 },
-    { x: 768, y: 1060, w: 192, h: 40 },
-    { x: 360, y: 946,  w: 200, h: 18 },
+  const nF = ri(GEN.minFloors, GEN.maxFloors);
+  const floors = [];
+  for (let i = 0; i < nF; i++) floors.push(GEN.topY + i * GEN.floorH);
 
-    /* ---- L2 深窟 1300 ---- 洞 384~480（回到中左） */
-    { x: 0,   y: 1300, w: 384, h: 40 },
-    { x: 480, y: 1300, w: 480, h: 40 },
-    { x: 120, y: 1186, w: 190, h: 18 },
+  const NAME_POOL = ['地表', '浅井', '箱室', '冰廊', '深窟', '暗廊', '裂谷'];
+  const layerCN = floors.map((_, k) => (k === nF - 1 ? '门厅' : NAME_POOL[Math.min(k, NAME_POOL.length - 1)]));
 
-    /* ---- L1 门厅 1540 ---- 没有洞，这是尽头 */
-    { x: 0,   y: 1540, w: 960, h: 40 },     // 门厅地面
-    /* 两块台都按「球要滚得过去」排：底面 1444，满档球球顶 1448 —— 
-       差 4px 会擦到，所以台面抬到 1426（底面 1444）之后球顶仍有余量。
-       实测 1400 的台会把大球吃掉，这一条别乱动。 */
-    { x: 40,  y: 1426, w: 200, h: 18 },
-    { x: 540, y: 1426, w: 180, h: 18 },
-  ];
+  /* ================= ① 下行口 =================
+     槽位轮转保证相邻两层不同槽，同层两个口天然不重叠。 */
+  const layers = [];
+  let prevSlots = [];
+  for (let k = 0; k < nF - 1; k++) {
+    let free = [0, 1, 2].filter(s => prevSlots.indexOf(s) < 0);
+    for (let i = free.length - 1; i > 0; i--) { const j = Math.floor(R() * (i + 1)); const t = free[i]; free[i] = free[j]; free[j] = t; }
+    if (!free.length) free = [0, 1, 2];
 
+    const want = (free.length >= 2 && chance(0.34)) ? 2 : 1;
+    const depth = nF > 2 ? k / (nF - 2) : 0;
+    const holes = [];
+    for (let i = 0; i < want; i++) {
+      const slot = free[i];
+      const s0 = GEN.slots[slot][0], s1 = GEN.slots[slot][1];
+      const w = chance(0.30) ? 144 : 96;
+      const x = s0 + 48 * ri(0, Math.max(0, Math.floor((s1 - s0 - w) / 48)));
+      const r = R();
+      /* **冰封的洞只从第 3 层开始。** 前面几层玩家还没有大球，
+         拿冰封口等于直接关死这条路；而且冰墙这个语言要先在别处教过。 */
+      let cover = 'frost';
+      if (k >= 2 && r < 0.14 + depth * 0.22) cover = 'ice';
+      else if (r < 0.42 + depth * 0.12) cover = 'none';
+      holes.push({ slot, x, w, cover, floorY: floors[k] });
+    }
+    holes.sort((a, b) => a.x - b.x);
+    layers.push({ floorY: floors[k], holes });
+    prevSlots = holes.map(h => h.slot);
+  }
+  layers.push({ floorY: floors[nF - 1], holes: [] });      // 门厅：没有下行口
+
+  /* ================= ② 地板段 =================
+     被洞切开。段宽决定了这一层能不能放平台/怪。 */
+  function segsOf(floorY, holes) {
+    const out = [];
+    let cx = 0;
+    for (const h of holes) {
+      if (h.x > cx) out.push({ x: cx, y: floorY, w: h.x - cx, h: GEN.thick });
+      cx = h.x + h.w;
+    }
+    if (cx < 960) out.push({ x: cx, y: floorY, w: 960 - cx, h: GEN.thick });
+    return out;
+  }
+  layers.forEach(l => { l.segs = segsOf(l.floorY, l.holes); });
+
+  /* ================= ③ 地形 =================
+     平台（跳得上，高差 114 < 跳高 123）和斜坡（**走上去，不用跳**）。
+     斜坡只在"接平台"时出现得最多：它把"上台"这件事拆成两种解法，
+     跳跃之外多一条路。偶尔也放一条孤坡当起伏。 */
+  layers.forEach((l, k) => {
+    const out = [];
+    if (k < nF - 1) {
+      /* **两处都要避开：上一层的落点带（会被接在半空）、本层的洞口（会把路盖住）。**
+         只避开落点带的话，平台或斜坡会正好架在洞口上 ——
+         尤其"敞开"型洞口，本来就是让玩家靠眼睛找的，被一块平台压住之后
+         这一层根本没有出口可用了。 */
+      const dz0 = (k > 0 ? layers[k - 1].holes.map(h => [h.x - 24, h.x + h.w + 24]) : [])
+        .concat(l.holes.map(h => [h.x - 24, h.x + h.w + 24]));
+      /* **一个 [x, x+w) 是否两道带都躲开了。**
+         所有地形（平台、配套坡、孤坡）都必须先过这一关再落位 ——
+         第一版只有平台本体过了，坡是"延伸出去"的（`px + w` 往右、`px - rw`
+         往左），那一段压根没验；孤坡更是一路裸奔，`rx` 直接 48..912 随便取。
+         结果就是坡横跨在洞口上，把唯一的出口盖掉。 */
+      const freeOf = (x, w) => !dz0.some(z => x < z[1] && x + w > z[0]);
+
+      const wide = l.segs.filter(s => s.w >= 240);
+      const wantRamp = chance(0.55);
+      const RAMP_W = 144;
+      let placed = false;
+      if (wide.length && chance(0.62)) {
+        /* **候选段池按"平台 + 坡"的总宽挑。**
+           只要平台的话 240 就够，可一旦带坡，平台 144~192 + 坡 144
+           就是 288~336 —— 从 240 宽的段里随机取位，坡**必然**跨到段尾外面，
+           而段尾外面就是洞口，`freeOf` 一路否掉，重试 12 次也全白跑。
+           这正是"平均每关只有 1.3 条坡、四分之一的关一条坡都没有"的原因。 */
+        const pool0 = wantRamp ? wide.filter(s => s.w >= 192 + RAMP_W) : wide;
+        const pool = pool0.length ? pool0 : wide;
+        /* **位置重试，不是"撞上就整块丢掉"。**
+           落点带上不能有地形（会把人接在半空），但直接丢弃的话，
+           一半以上的层会连一台平台都没有 —— 地形多样性直接没了。 */
+        for (let t = 0; t < 12 && !placed; t++) {
+          const cand = pickOne(pool);
+          const cw = 48 * ri(3, 4);
+          const room = Math.max(0, Math.floor((cand.w - cw) / 48));
+          const cx = cand.x + 48 * ri(0, room);
+          if (!freeOf(cx, cw)) continue;
+          const py = l.floorY - 114;
+          /* **坡和平台是一个整体，要么整段放得下，要么这个坡不要。**
+             先随机排左右顺序，再挑第一个"整段都在本层地板里、且不压洞口"
+             的一边 —— 不能先定边再验，否则随机选中的那一边正好压洞口时，
+             只能把整台平台一起扔掉。 */
+          let ramp = null;
+          if (wantRamp) {
+            const sides = chance(0.5) ? ['R', 'L'] : ['L', 'R'];
+            for (const sd of sides) {
+              if (sd === 'R' && cx + cw + RAMP_W <= cand.x + cand.w && cx + cw + RAMP_W <= 912 && freeOf(cx + cw, RAMP_W)) {
+                /* 坡在平台右侧：左端接台面（高），右端接地面（低）→ rise 为负 */
+                ramp = { x: cx + cw, y: py, w: RAMP_W, h: GEN.thick, base: l.floorY, rise: py - l.floorY, kind: 'ramp' };
+                break;
+              }
+              if (sd === 'L' && cx - RAMP_W >= cand.x && cx - RAMP_W >= 48 && freeOf(cx - RAMP_W, RAMP_W)) {
+                /* 坡在平台左侧：左端接地，右端接台面 → rise 为正 */
+                ramp = { x: cx - RAMP_W, y: l.floorY, w: RAMP_W, h: GEN.thick, base: l.floorY, rise: l.floorY - py, kind: 'ramp' };
+                break;
+              }
+            }
+            /* 带坡的这次没谈成就不算数，换位置重来 —— 否则会出现
+               "平台摆在段中间、两边都是空地却没有坡"的怪形状。 */
+            if (!ramp) continue;
+          }
+          out.push({ x: cx, y: py, w: cw, h: 18 });
+          if (ramp) out.push(ramp);
+          placed = true;
+        }
+      }
+      if (!placed && chance(0.30)) {
+        /* **孤坡必须是"上坡 + 下坡"两段,不能是一条单边楔子。**
+           单边楔子的高端悬空:一堵 76px 的垂直墙(斜坡不做水平阻挡,
+           因为整块包围盒会造成"坡变成墙"),玩家从高端那头走进来会直接
+           穿进坡里;雪线的圆头还会从墙角探出来一截,像长了个嘴。
+           拆成两段之后两个低端都落回本层地面,坡度也对称 ——
+           球顺着滚会先减速再加速,正好是"起伏"该有的手感。 */
+        const MOUND_W = 96, MOUND_RISE = 64;
+        for (let t = 0; t < 8; t++) {
+          const rx = 48 * ri(1, Math.floor((912 - MOUND_W * 2) / 48));
+          if (!freeOf(rx, MOUND_W * 2)) continue;
+          out.push({ x: rx, y: l.floorY, w: MOUND_W, h: GEN.thick, base: l.floorY, rise: MOUND_RISE, kind: 'ramp' });
+          out.push({ x: rx + MOUND_W, y: l.floorY - MOUND_RISE, w: MOUND_W, h: GEN.thick, base: l.floorY, rise: -MOUND_RISE, kind: 'ramp' });
+          break;
+        }
+      }
+    }
+    /* **地形不能压在落点带上。**
+       平台上如果还放着一口箱子，从上一层掉下来的人会被它接在半空 ——
+       砸开洞口只掉一个箱子的高度（48px），玩家就卡在那儿了。
+       校验只查了"洞正下方是下一层地板"，管不到"中途有没有东西接着"。 */
+    const dz = k > 0 ? layers[k - 1].holes.map(h => [h.x - 24, h.x + h.w + 24]) : [];
+    l.terrain = out.filter(t => !dz.some(z => t.x < z[1] && t.x + t.w > z[0]));
+  });
+
+  /* ================= ④ 箱子 ================= */
   const boxes = [];
   const B = (x, y, mat, opt) => boxes.push({
     x, y, w: 48, h: 48, mat,
     hp: NUM.box[mat].hp, dead: false, hitT: 0, taught: false,
-    frost: !!(opt && opt.frost),      // 覆霜：既有提示作用，也是"能挖穿"的唯一线索
+    frost: !!(opt && opt.frost),
   });
 
-  /* ================= L6 地表 340 =================
-     洞 240~336，两口覆霜木箱盖在上面（箱顶 292，比地面高 48）。
-     砸开任意一口就掉到浅井。 */
-  B(240, 292, 'wood', { frost: true });
-  B(288, 292, 'wood', { frost: true });
+  /** 这一层的落点带：上一层洞口正下方。**不能摆箱子** ——
+      砸开上层，剩下那口盖板会顺着洞塌下来，跟这里的箱子叠在同一格就穿模了。 */
+  function dropZones(k) {
+    const out = [];
+    if (k > 0) for (const h of layers[k - 1].holes) out.push([h.x - 24, h.x + h.w + 24]);
+    return out;
+  }
 
-  /* 右端一摞：挡住「一直往右走」的惯性，砸开是资源。
-     石箱夹在中间，第一次到这里就得面对「子弹打不动」。 */
-  B(888, 292, 'wood');
-  B(888, 244, 'stone');
-  B(888, 196, 'wood');
+  /* ---- 门厅先摆：门壳 + 喂球箱 ----
+     **必须先摆。** 先平铺再补喂球的话，两边会抢同一格：撞出"一格叠两口箱"
+     的假象，而且一旦抢输就凑不够 3 口 —— 玩家把怪清光之后就是死局。
+     顺序本身就是一条正确性约束，不是排版偏好。 */
+  const lastY = floors[nF - 1];
+  const doorX = 48 * ri(12, 17);
+  const door = { x: doorX, y: lastY - 92, w: 48, h: 92, open: false, openT: 0 };
+  const hallTaken = [];        // 门厅里已被占掉的 x，平铺要避开
+  for (const cx of [doorX - 48, doorX]) {
+    B(cx, lastY - 48, 'ice');
+    B(cx, lastY - 96, 'ice');
+    hallTaken.push(cx);
+  }
+  hallTaken.push(doorX - 96);  // 门前留一格空地，不然打不开的门等于墙
+  /* 喂球木箱。**这是战斗力的兜底**：球砸箱会吸木屑长大，玩家把怪清光了
+     也能靠拆这几口把球喂到破冰墙的档位。没有它们，清光怪 = 永久卡关。 */
+  {
+    const hallZones = layers[nF - 2].holes.map(h => [h.x - 24, h.x + h.w + 24]);
+    const all = [];
+    for (let x = 48; x + 48 <= doorX - 96; x += 48) all.push(x);
+    const free = all.filter(x => !hallZones.some(z => x < z[1] && x + 48 > z[0]));
+    /* 两轮：先避开落点带，不够 3 个就放宽。**落点带只是防"塌下来的盖板箱
+       跟这里的箱子穿模"，是观感问题；喂球箱数量是死局问题。观感可以让一步。** */
+    const src = free.length >= 3 ? free : all;
+    /* 随机取 3 个，**彼此间隔 >= 96** —— 挨着摆会连成一堵墙，
+       把"从左走到门"的路堵掉；而等距取值在候选数不是 3 的整数倍时
+       会取重，凑不满 3 个（第一版就是这样漏了两关的死局线）。 */
+    const picks = [];
+    for (let t = 0; t < 40 && picks.length < 3 && src.length; t++) {
+      const x = src[Math.floor(R() * src.length)];
+      if (picks.some(p => Math.abs(p - x) < 96)) continue;
+      picks.push(x);
+    }
+    // 兜底：门右侧
+    for (let x = doorX + 96; picks.length < 3 && x + 48 <= 912; x += 48) {
+      if (picks.some(p => Math.abs(p - x) < 96)) continue;
+      picks.push(x);
+    }
+    for (const x of picks) { B(x, lastY - 48, 'wood'); hallTaken.push(x); }
+    if (picks.length) B(picks[0], lastY - 96, 'wood');    // 叠一口，给"箱子能堆"一个样本
+  }
 
-  B(576, 178, 'wood');            // 高台上的箱
-  B(624, 178, 'wood');
+  layers.forEach((l, k) => {
+    const dz = dropZones(k);
+    const isHall = k === nF - 1;
+    let nBox = 0;
+    const wantBox = 9 + ri(0, 4);        // 每层 9~13 口（不含本层洞口的盖板）
+    const pWood = Math.max(0.30, 1 - k * 0.13);
+    /* **普通箱子不出冰。**
+       冰在这一关里只有两个意思：封住下行口的墙、包住门的外壳。
+       让它也当普通材质之后，"这是一堵墙"和"这是一口能砸的箱子"
+       长得一模一样，玩家每次看到冰都得先撞一下才知道 ——
+       一种视觉语言一旦有两种解释，就等于没有。 */
+    const matRoll = () => {
+      const r = R();
+      if (r < pWood) return 'wood';
+      if (r < pWood + (1 - pWood) * 0.55) return 'stone';
+      return k >= 3 ? 'iron' : 'stone';
+    };
 
-  B(444, 292, 'wood');            // 洞口右边的散箱
-  B(492, 292, 'wood');
+    /* 洞的盖板。frost = 盖板箱本身既是线索也是锁；ice = 冰墙（子弹无效）；
+       none = 敞着，走过去直接掉 —— 这三句是这一关全部的关卡语言。 */
+    for (const h of l.holes) {
+      if (h.cover === 'frost') {
+        for (let x = h.x; x < h.x + h.w; x += 48) B(x, l.floorY - 48, 'wood', { frost: true });
+      } else if (h.cover === 'ice') {
+        for (let x = h.x; x < h.x + h.w; x += 48) {
+          B(x, l.floorY - 48, 'ice');
+          B(x, l.floorY - 96, 'ice');
+        }
+      }
+    }
 
-  /* ================= L5 浅井 580 =================
-     洞 528~624。井口左边留一摞两格的货箱，既是遮挡也是「这一层还有东西」。 */
-  B(528, 532, 'wood', { frost: true });
-  B(576, 532, 'wood', { frost: true });
+    // 平铺 + 偶尔叠一层。**叠层最多 2 格** —— 跳高 123、箱高 48，
+    // 两格 96 跳得过去，三格 144 就是一道墙，会把路彻底堵死。
+    /* **计数必须是"本层"的，不能用 boxes.length。**
+       第一版拿全局长度当上限，第二层就把配额吃满了，
+       后面几层只剩盖板箱 —— 层数越多越空，正好和"很多木箱"相反。 */
+    /* **地板上的箱子要给斜坡让位。**
+       坡是从斜面一直填充到地面的实心楔子，箱子铺在它的 x 区间里就会
+       半截插进坡里（出图里能看到一口木箱横插在上坡面上）。
+       平台不用让 —— 平台底面在 floorY-96，箱子顶在 floorY-48，本来就不碰。 */
+    const rampRanges = l.terrain.filter(t => t.kind === 'ramp').map(t => [t.x, t.x + t.w]);
 
-  B(480, 532, 'wood');
-  B(480, 484, 'wood');
+    for (const s of l.segs) {
+      if (nBox >= wantBox) break;
+      /* **起点必须 48 对齐。** 写成 `s.x + 24` 的话，格子落在 24/72/120…
+         这些半格位置，门厅的 `hallTaken`（记的是 48 的倍数）就永远命中不了 ——
+         于是有一口箱子正好盖在门框上，门壳砸光了门还是"被挡住"，
+         玩家在门厅转半天也过不了关。 */
+      const x0 = Math.ceil(s.x / 48) * 48;
+      for (let x = x0; x + 48 <= s.x + s.w - 20; x += 48) {
+        if (nBox >= wantBox) break;
+        if (isHall && hallTaken.indexOf(x) >= 0) continue;
+        if (!chance(0.58)) continue;
+        if (dz.some(d => x < d[1] && x + 48 > d[0])) continue;
+        if (rampRanges.some(r => x < r[1] && x + 48 > r[0])) continue;
+        const m = matRoll();
+        B(x, l.floorY - 48, m);
+        nBox++;
+        if (chance(0.20)) { B(x, l.floorY - 96, m === 'ice' ? 'wood' : m); nBox++; }
+      }
+    }
 
-  B(384, 418, 'wood');            // 高台上的箱
-  B(432, 418, 'wood');
+    // 平台上顺手放一口
+    for (const t of l.terrain) {
+      if (t.kind === 'ramp') continue;
+      if (chance(0.55)) B(t.x + 12, t.y - 48, matRoll());
+    }
+  });
 
-  B(672, 532, 'wood');
-  B(720, 532, 'wood');
-  B(816, 532, 'stone');
-  B(864, 532, 'iron');            // 铁箱：子弹无效，必须助跑推球
+  /* ================= ⑥ 怪 =================
+     `y` 是**头顶**，站在 y=K 的地面上就写 K-30，写真 K 会埋进地里。 */
+  const spawns = [];
+  layers.forEach((l, k) => {
+    const want = (k === nF - 1) ? 3 : (chance(0.26) ? 2 : 1);
+    const segs = l.segs.filter(s => s.w >= 96);
+    if (!segs.length) return;
+    /* **先枚举这一层所有能站的位置，再从里面取。**
+       原来是"随机试 12 次，试不到就用最后一次那个 x 硬塞"，于是怪会被塞进
+       雪包里：脚的 y 停在坡底，坡面却高出一大截，垂直贴面判据
+       （`prevBottom <= top + 14`）永远不成立，它一辈子站在坡体内部，
+       画面上就是半个身子埋进雪山。"试 N 次就认"永远有这个尾巴。
 
-  /* ================= L4 箱室 820 =================
-     洞 96~192（最左边）。这一层箱子最多，玩家掉下来第一眼是一片箱堆。 */
-  B(96, 772, 'wood', { frost: true });
-  B(144, 772, 'wood', { frost: true });
+       更要命的是那个箱子判据原来**没有 y 上界**：`b.y + b.h > l.floorY - 90`
+       对**下面每一层**的箱子都成立，等于"本层地面被全场的箱子铺满"，
+       12 次重试几乎次次失败 —— 这才是硬塞的真正原因。 */
+    let cands = [];
+    for (const s of segs) {
+      for (let cx = s.x + 16; cx + 40 <= s.x + s.w; cx += 8) {
+        /* 箱子按"**允许蹭到边**"算（两边各让 8px）。
+           按严格不接触算的话，48 宽的箱子会吃掉 82px 的 x，一层十来口
+           就能把整段地板铺满 —— 结果一关会缺掉整层的怪（实测 200 关里
+           有 2 关撞上）。箱子边缘蹭一下在画面上看不出来，缺怪是死局。 */
+        const blocked = boxes.some(b => b.y + b.h > l.floorY - 150 && b.y + b.h <= l.floorY + 4 &&
+          b.x + 8 < cx + 34 && b.x + b.w - 8 > cx);
+        if (blocked) continue;
+        if (l.terrain.some(t2 => t2.kind === 'ramp' && t2.x - 12 < cx + 34 && t2.x + t2.w + 12 > cx)) continue;
+        cands.push(cx);
+      }
+    }
+    if (!cands.length) return;          // 这一层真没地方，宁可少一只也不硬塞
+    /* pick 用独立的池子，取完就扣掉 ±72 的范围；池子空了就退回全量。
+       **门厅必须凑够 3 只**（killTarget 是硬门槛，少一只就是死局），
+       所以宁可两只挨近一点，也不能少。 */
+    const all = cands.slice();
+    let pool = all.slice();
+    for (let i = 0; i < want; i++) {
+      if (!pool.length) pool = all.slice();
+      const x = pool[Math.floor(R() * pool.length)];
+      pool = pool.filter(c => Math.abs(c - x) >= 72);
+      spawns.push({ x: Math.round(x), y: l.floorY - 30, kind: (k > 1 && chance(0.30 + k * 0.05)) ? 'runner' : 'crawler' });
+    }
+  });
 
-  B(48, 772, 'wood');
-  B(48, 724, 'wood');
-
-  B(280, 772, 'wood');
-  B(328, 772, 'wood');
-  B(280, 724, 'wood');
-
-  B(600, 772, 'wood');
-  B(648, 772, 'wood');
-
-  B(776, 658, 'wood');
-  B(824, 658, 'wood');
-  B(856, 772, 'iron');            // 地面铁箱：不助跑推球砸不开
-
-  /* ================= L3 冰廊 1060 =================
-     洞 672~768（最右边）。从这一层开始出现冰，提示"再往下更冷"。 */
-  B(672, 1012, 'wood', { frost: true });
-  B(720, 1012, 'wood', { frost: true });
-
-  B(624, 1012, 'wood');
-  B(624, 964, 'wood');
-
-  B(120, 1012, 'wood');
-  B(168, 1012, 'wood');
-
-  B(384, 898, 'wood');
-  B(432, 898, 'wood');
-
-  B(560, 1012, 'wood');
-  B(608, 1012, 'wood');
-
-  B(816, 1012, 'ice');            // 第一块冰：子弹打上去没反应
-  /* **位置不能写 840。** 840 是门壳那一列（门厅），断言按 x 认箱子，
-     这一层要是也放 840，门壳就会数出 3 口。816 在洞右缘、地板右段上。 */
-
-  /* ================= L2 深窟 1300 =================
-     洞 384~480。掉下去就是门厅，落差 288，抬头还能看见上面的洞口。 */
-  B(384, 1252, 'wood', { frost: true });
-  B(432, 1252, 'wood', { frost: true });
-
-  B(336, 1252, 'wood');
-  B(336, 1204, 'wood');
-
-  B(648, 1252, 'wood');
-  B(696, 1252, 'wood');
-
-  B(144, 1138, 'wood');
-  B(192, 1138, 'wood');
-
-  B(800, 1252, 'wood');
-  B(848, 1252, 'wood');
-  B(896, 1252, 'stone');
-
-  /* ================= L1 门厅 1540 =================
-     冰封区。左列 792 是外屏障，右列 840 **就是门的外壳** ——
-     门在 (840,1448,48,92)，正好被两口冰箱盖住，砸开才露出来。 */
-  B(336, 1492, 'wood');
-  B(336, 1444, 'wood');
-
-  B(792, 1492, 'ice');
-  B(792, 1444, 'ice');
-  B(840, 1492, 'ice');
-  B(840, 1444, 'ice');
-
-  /* 喂球的普通木箱。**这是战斗力的兜底**：球砸箱会吸木屑长大，
-     就算玩家把怪全清了，也能靠拆这几口把球喂到破冰墙的档位。
-     位置同时受两件事约束：
-     ① 避开 384~480 —— 那是 L2 洞口的落点（上层砸开，剩下那口霜箱会塌下来）
-     ② 右边必须给 336 那摞货箱留出能翻过去的空间（玩家宽 30，
-        第一版摆到 264，262~336 只剩 24px，走过去直接卡死）。 */
-  B(240, 1492, 'wood');
-  B(288, 1492, 'wood');
-  B(240, 1444, 'wood');
-
-  B(560, 1492, 'wood');           // 右段散箱
-  B(608, 1492, 'wood');
-
-  B(64,  1378, 'wood');           // 左台上的资源
-  B(112, 1378, 'wood');
-
-  /* 每层天花板挂钟乳石。天花板 = 上一层的板底。
-     **地表（最上面那层）没有天花板** —— 它头顶是天，不是石头。
-     第一版把 CEILS 写成从 100 起，结果石钟乳浮在天空里，
-     出图第一眼就看出来天上挂着一排倒三角。
-     **必须避开所有洞的 x 区间** —— 洞里挂石头正好挡住"下面是什么"那一眼，
-     而那一抬眼正是这一版全部的价值所在。
-     位置用 x 的确定性函数算，不用 Math.random：出图和测试要能复现同一张图。 */
+  /* ================= ⑦ 装饰 =================
+     钟乳石挂在天花板上。天花板 = 上一层地板底面 = floors[k-1] + 40。
+     **必须避开所有洞** —— 洞里挂石头，正好挡住"下面是哪"那一眼。 */
   const deco = [];
-  const CEILS = [380, 620, 860, 1100, 1340];
-  for (let li = 0; li < CEILS.length; li++) {
-    for (let x = 16 + (li * 37) % 58; x < 940; x += 58) {
-      if (HOLES.some(h => x + 34 > h[0] && x < h[1])) continue;
-      const w = 14 + ((x * 7 + li * 13) % 20);
-      const h = 14 + ((x * 13 + li * 7) % 30);
-      deco.push({ x, y: CEILS[li], w, h, kind: 'stalac' });
+  for (let k = 1; k < nF; k++) {
+    const ceilY = floors[k - 1] + GEN.thick;
+    for (let x = 16 + (k * 37) % 58; x < 940; x += 58) {
+      if (layers[k - 1].holes.some(h => x + 34 > h.x && x < h.x + h.w)) continue;
+      deco.push({ x, y: ceilY, w: 14 + ((x * 7 + k * 13) % 20), h: 14 + ((x * 13 + k * 7) % 30), kind: 'stalac' });
     }
   }
-  // 门厅地面的碎冰堆（只有最底层有，上一层是箱子不是冰）
   for (let x = 90; x < 940; x += 137) {
-    if (x > 320 && x < 560) continue;              // 中间是喂球箱和冰墙区
-    if (x > 760) break;
-    deco.push({ x, y: 1540, w: 30 + ((x * 11) % 26), h: 10 + ((x * 5) % 12), kind: 'rubble' });
+    if (Math.abs(x - doorX) < 130) continue;
+    deco.push({ x, y: lastY, w: 30 + ((x * 11) % 26), h: 10 + ((x * 5) % 12), kind: 'rubble' });
   }
 
-  return {
-    plats, boxes, deco,
-    /* 门在门厅最深处的冰壳里，**外面还盖着两口冰箱**（见上面的 840 列）。
-       玩家在上面五层完全看不见它 —— 门不是"摆在右边"，是"挖到底才找到"。 */
-    door: { x: 840, y: 1448, w: 48, h: 92, open: false, openT: 0 },
+  /* ================= ⑧ 出生点 =================
+     地表第一段地板的左侧。**不能在洞口上**，也不能头顶压着箱子。 */
+  const l0 = layers[0];
+  const s0 = l0.segs.filter(s => s.w >= 120)[0] || l0.segs[0];
+  /* **上限必须是这一段自己的右端，不能写死 200。**
+     写死 200 的话，第一段地板如果只有 48 宽（洞开在最左），
+     出生点会被夹到洞上面，人一开局就往下掉。 */
+  let startX = Math.round(clamp(s0.x + 36, 40, Math.max(40, s0.x + s0.w - 44)));
+  /* 出生点周围清空。**用"删箱子"而不是"往右挪"** ——
+     挪的写法要在"还在段内"和"不压箱子"之间反复试，试不出来就把人推到洞上；
+     直接删掉占位的那口箱子，一步到位，而且玩家永远看不出区别。 */
+  for (let i = boxes.length - 1; i >= 0; i--) {
+    const b = boxes[i];
+    /* **y 的上界不能省。** 第一版只写了"底边在地表以上 140 以内"，
+       而这句话对深层恒真（门厅的箱子当然比地表低得多），
+       结果地表清箱子时把整张图里 x 靠近出生点的箱子全删了 ——
+       门厅的喂球箱就这样少了两口，直接踩死局线。 */
+    if (b.x < startX + 44 && b.x + b.w > startX - 14 &&
+        b.y + b.h > GEN.topY - 140 && b.y < GEN.topY + 20) boxes.splice(i, 1);
+  }
 
-    /* 11 只怪，六层每层一到两只。`y` 是**头顶**，站在 y=K 的地面上就写 K-30。
-       写真 K 的话出生第一帧身体整个埋进地面里。 */
-    spawns: [
-      { x: 180, y: 310,  kind: 'crawler' },   // L6 地表
-      { x: 700, y: 310,  kind: 'crawler' },
-      { x: 380, y: 550,  kind: 'crawler' },   // L5 浅井
-      { x: 720, y: 790,  kind: 'crawler' },   // L4 箱室（避开 600/648 那摞箱）
-      { x: 872, y: 676,  kind: 'runner' },    // L4 高台顶（避开台上的箱）
-      { x: 240, y: 1030, kind: 'runner' },    // L3 冰廊
-      { x: 560, y: 1270, kind: 'crawler' },   // L2 深窟
-      { x: 262, y: 1156, kind: 'crawler' },   // L2 高台顶（避开台上的箱）
-      /* L1 门厅 3 只。**这个数字和 NUM.killTarget 是绑死的**：
-         玩家可能一路挖到底都没杀人，手上只有这 3 只。少于 killTarget 就是死局。 */
-      { x: 100, y: 1510, kind: 'crawler' },
-      { x: 600, y: 1396, kind: 'runner' },    // 右台
-      { x: 750, y: 1510, kind: 'crawler' },
-    ],
-    start: { x: 60, y: 340 - 42 },
+  const plats = [];
+  layers.forEach(l => {
+    for (const s of l.segs) plats.push(s);
+    for (const t of l.terrain) plats.push(t);
+  });
+
+  WORLD_H = lastY + GEN.thick + 40;
+  GROUND_Y = lastY;
+  FLOORS = floors;
+  LAYER_CN = layerCN;
+  LAYERS = layers;
+  /* 所有洞的 x 区间，按层序扁平展开（只在断言里用）。
+     **别拿它的下标当层号** —— 一层的洞可能有两个，下标和层号会错位；
+     要"第 k 层的洞"请用 LAYERS[k].holes。 */
+  HOLES = [];
+  layers.forEach(l => l.holes.forEach(h => HOLES.push([h.x, h.x + h.w])));
+
+  return {
+    seed, nFloors: nF,
+    floors, layers, plats, boxes, deco, door, spawns,
+    start: { x: startX, y: GEN.topY - 42 },
+    worldH: WORLD_H, groundY: GROUND_Y,
   };
+}
+
+/** 生成后的自检。**这些不是"最好有"，是"没有就得死局"。** */
+function validateLevel(L, verbose) {
+  const bad = [];
+  const F = L.floors, N = F.length;
+
+  // 1. 相邻两层的洞不能重叠 —— 重叠就能一穿两层，中间那层等于不存在
+  for (let k = 0; k + 1 < N; k++) {
+    for (const p of L.layers[k].holes) {
+      for (const q of L.layers[k + 1].holes) {
+        if (p.x < q.x + q.w + 24 && q.x < p.x + p.w + 24) bad.push('洞第' + k + '/' + (k + 1) + '层重叠');
+      }
+    }
+  }
+
+  // 2. 每个洞正下方必须接得住（玩家宽 30，取洞内两端各内缩 20 验两次）
+  for (let k = 0; k + 1 < N; k++) {
+    const next = L.layers[k + 1].segs;
+    for (const h of L.layers[k].holes) {
+      for (const px of [h.x + 20, h.x + h.w - 20]) {
+        if (!next.some(s => px >= s.x && px <= s.x + s.w)) bad.push('洞第' + k + '层没接住');
+      }
+    }
+  }
+
+  // 2a. 地形不能压在本层洞口上（会把唯一的出口盖住）
+  for (let k = 0; k < N; k++) {
+    for (const t of L.layers[k].terrain) {
+      for (const h of L.layers[k].holes) {
+        if (t.x < h.x + h.w + 16 && h.x < t.x + t.w + 16) bad.push('第' + k + '层地形盖住洞口');
+      }
+    }
+  }
+
+  // 2b. 落点带上不能有地形件（否则掉下去被平台接在半空，等于没掉）
+  for (let k = 1; k < N; k++) {
+    const dz = L.layers[k - 1].holes.map(h => [h.x - 24, h.x + h.w + 24]);
+    for (const t of L.layers[k].terrain) {
+      if (dz.some(z => t.x < z[1] && t.x + t.w > z[0])) bad.push('第' + k + '层地形接住了落点');
+    }
+  }
+
+  // 3. 每层都得有洞（最后一层除外），且不能全被别的东西盖住
+  for (let k = 0; k + 1 < N; k++) if (!L.layers[k].holes.length) bad.push('第' + k + '层没有出口');
+
+  // 4. 出生点脚下是实心
+  if (!L.layers[0].segs.some(s => L.start.x + 15 >= s.x && L.start.x + 15 <= s.x + s.w)) bad.push('出生点悬空');
+
+  // 5. 门厅怪数 >= killTarget（单向关卡，一路不杀也得凑得够）
+  const hallFoes = L.spawns.filter(s => s.y >= F[N - 1] - 100).length;
+  if (hallFoes < NUM.killTarget) bad.push('门厅怪 ' + hallFoes + ' < 门槛 ' + NUM.killTarget);
+
+  // 6. 门厅必须有喂球木箱（清光怪之后的唯一活路）
+  const feed = L.boxes.filter(b => b.mat === 'wood' && !b.frost && b.y >= F[N - 1] - 60 && b.y <= F[N - 1]).length;
+  if (feed < 3) bad.push('门厅喂球箱 ' + feed + ' < 3');
+
+  // 7. 每层至少一只怪
+  for (let k = 0; k < N; k++) {
+    if (!L.spawns.some(s => s.y > (k ? F[k - 1] : 0) && s.y <= F[k])) bad.push('第' + k + '层没有怪');
+  }
+
+  // 8. 怪不能生在斜坡/雪包里（脚的 y 停在坡底、坡面却高出一截 → 永远贴在坡体内）
+  for (const sp of L.spawns) {
+    let k = 0;
+    for (let i = 0; i < N; i++) if (sp.y <= F[i]) { k = i; break; }
+    for (const t of L.layers[k].terrain) {
+      if (t.kind !== 'ramp') continue;
+      if (t.x - 12 < sp.x + 34 && t.x + t.w + 12 > sp.x) bad.push('第' + k + '层怪生在地形里');
+    }
+  }
+
+  if (verbose && bad.length) console.log('  ✗ 校验未过：' + bad.join(' / '));
+  return bad.length === 0;
+}
+
+/** 换种子重掷，直到过校验。80 次都不过就返回最后一个 —— 宁可跑起来，
+    让断言把它抓出来，也不要卡在初始化里。 */
+function buildLevel(seed) {
+  const base = (seed == null ? 1 : seed) >>> 0;
+  let last = null;
+  for (let t = 0; t < 80; t++) {
+    const s = (base + t * 7919) >>> 0;
+    const L = genLevel(s);
+    last = L;
+    if (validateLevel(L)) { L.seed = s; return L; }
+  }
+  return last;
 }
 
 /* ---------------------------------------------------------------- 状态 */
@@ -444,9 +719,21 @@ const S = {
   _taught: {},              // 首次提示只弹一次
 };
 
-/* ---------------------------------------------------------------- 初始化 */
-function reset() {
-  const L = buildLevel();
+/* ---------------------------------------------------------------- 初始化
+   **`reset()` 不带参数是"重开这一关"，`reset(seed)` 是"换一张图"。**
+   两者的区别很重要：断言里到处调 reset() 期望回到同一个状态，
+   如果 reset() 每次重新掷骰子，所有"前后对比"的断言都会随机红。
+   所以种子存在模块级的 LEVEL_SEED 里，只有 newLevel() 会换掉它。 */
+function newLevel(seed) {
+  LEVEL_SEED = (seed == null ? (Math.random() * 1e9) : seed) >>> 0;
+  reset();
+}
+
+function reset(seed) {
+  if (seed != null) LEVEL_SEED = seed >>> 0;
+  if (LEVEL_SEED == null) LEVEL_SEED = (Math.random() * 1e9) >>> 0;
+  const L = buildLevel(LEVEL_SEED);
+  S.level = L;
   S.t = 0; S.phase = 'play'; S.clearT = 0;
   S.plats = L.plats;
   S.deco = L.deco || [];
@@ -559,8 +846,9 @@ function groundAt(x, y) {
   let best = WORLD_H;
   for (const s of solids()) {
     if (x < s.x || x > s.x + s.w) continue;
-    if (s.y < y - 6) continue;          // 只找脚底下的
-    if (s.y < best) best = s.y;
+    const top = surfY(s, x);
+    if (top < y - 6) continue;          // 只找脚底下的
+    if (top < best) best = top;
   }
   return best;
 }
@@ -579,6 +867,23 @@ function stepBody(o, dt) {
   o.y += o.vy * dt;
   o.onGround = false;
   for (const s of solids()) {
+    if (s.kind === 'ramp') {
+      /* 斜坡：**只认顶面，不参与侧面阻挡。**
+         横向不挡是故意的 —— 玩家走过来时脚底被下方地板托着，每一帧的
+         垂直落地再把他贴回斜面，看上去就是"顺着坡走上去"，不会像台阶
+         那样一格一格卡住。反过来，如果让斜坡参与水平阻挡，人会在坡脚
+         撞一下停住，斜坡就退化成一堵墙。 */
+      if (o.x + o.w <= s.x || o.x >= s.x + s.w) continue;
+      const top = surfY(s, o.x + o.w / 2);
+      /* **三个条件缺一不可：往下走 + 上一帧在坡面之上 + 这一帧确实穿过了坡面。**
+         少了最后一条，人从上层往下掉、x 正好落在某个坡的区间里时，
+         `prevBottom <= top + 14` 一样成立（人家在上面几十米呢），
+         于是被判成"落地"，一发瞬移到那个坡顶上 —— 掉五层变成掉半层。 */
+      if (o.vy >= 0 && prevBottom <= top + 14 && o.y + o.h >= top) {
+        o.y = top - o.h; o.vy = 0; o.onGround = true;
+      }
+      continue;
+    }
     if (!aabb(o, s)) continue;
     // 只认"从上方落下来"和"从下方顶上去"，侧面的事交给下一轮
     if (o.vy >= 0 && prevBottom <= s.y + 8) {
@@ -591,6 +896,7 @@ function stepBody(o, dt) {
   // ---- 水平
   o.x += o.vx * dt;
   for (const s of solids()) {
+    if (s.kind === 'ramp') continue;      // 斜坡不挡横移，见上
     if (!aabb(o, s)) continue;
     // 站在这块上面（脚底贴着顶面）就不算撞墙
     if (o.y + o.h <= s.y + 2) continue;
@@ -668,6 +974,7 @@ function stepShots(dt) {
     /* 平台挡子弹。原来没有这一条 —— 子弹只会被 enemies / boxes 吃掉，
        于是站在台上往下喷，雪弹直接穿地板打到下面的怪。 */
     for (const pl of S.plats) {
+      if (pl.kind === 'ramp') continue;        // 斜坡不挡子弹：它是地板，不是墙
       if (s.x + s.r < pl.x || s.x - s.r > pl.x + pl.w) continue;
       if (s.y + s.r < pl.y || s.y - s.r > pl.y + pl.h) continue;
       s.dead = true;
@@ -796,6 +1103,24 @@ function stepBalls(dt) {
 
     // --- 撞平台（左右墙 + 落地）
     for (const pl of S.plats) {
+      if (pl.kind === 'ramp') {
+        /* 球走坡：贴顶面，并**顺着坡自己往下滚**。
+           这是全场唯一给球加的外力 —— 不加的话球能停在一段 30° 的坡上不动，
+           一眼就假。顺带它把斜坡变成一条"加速跑道"：从坡顶滚下来撞箱，
+           动量比平地推大得多，斜坡因此有了战术价值，不只是过路地形。 */
+        if (b.x + b.r <= pl.x || b.x - b.r >= pl.x + pl.w) continue;
+        const top = surfY(pl, b.x);
+        /* **必须判"从上方来"（prevBottom 在坡面附近），只看 x 重叠会出事：**
+           球在下面几层往右滚，只要 x 恰好落在某个上层斜坡的区间里，
+           `b.y + b.r > top - 4` 就成立（球底当然在坡面以下），
+           球会被一发瞬移到那个坡顶上 —— 看起来像"球凭空飞上去了"。
+           加 prevBottom 之后，只有真的从坡上方落下来才贴面。 */
+        if (b.vy >= 0 && prevBottom <= top + 16 && b.y + b.r > top - 4) {
+          b.y = top - b.r; b.vy = 0; b.onGround = true;
+          b.vx += (pl.rise > 0 ? -1 : 1) * 420 * dt;
+        }
+        continue;
+      }
       const overlapX = b.x + b.r > pl.x && b.x - b.r < pl.x + pl.w;
       const overlapY = b.y + b.r > pl.y && b.y - b.r < pl.y + pl.h;
       if (!overlapX || !overlapY) continue;
@@ -1118,7 +1443,8 @@ function stepDoor(dt) {
 function onKey(e, down) {
   const k = e.key;
   S.keys[k] = down;
-  if (down && (k === 'r' || k === 'R')) reset();
+  /* R 换一关（不是重开）。**布局是随机的，重开等于没有 R 键。** */
+  if (down && (k === 'r' || k === 'R')) newLevel();
   if (down && (k === 'j' || k === 'J' || k === 'k' || k === 'K')) shoot();
   if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].indexOf(k) >= 0) e.preventDefault();
 }
@@ -1329,9 +1655,13 @@ function draw() {
     const px = S.p.x + S.p.w / 2;
     const py = S.p.y + S.p.h / 2 - S.cam.y;      // 已经是屏幕坐标
     /* 光圈半径 340 —— 再宽就等于没暗化（整屏都在圈里），
-       再窄玩家就看不到自己要往哪走。340 大致是"能看清一跳的距离 + 一点余量"。 */
-    const a = 0.2 + depth * 0.58;
-    const grd = g.createRadialGradient(px, py, 80, px, py, 340);
+       再窄玩家就看不到自己要往哪走。340 大致是"能看清一跳的距离 + 一点余量"。
+       **最深处的黑度上限是 0.54，不是 0.78。**
+       层数从 6 变成 4~8 之后，8 层的门厅 depth 会顶到 1；
+       原来那条曲线在 0.78 上，出来是一整屏黑，门和冰全糊在一起 ——
+       出图才看出来。深度感靠"越往下越暗"就够，不需要真的看不见。 */
+    const a = 0.10 + depth * 0.34;
+    const grd = g.createRadialGradient(px, py, 90, px, py, 400);
     grd.addColorStop(0, 'rgba(8,14,20,0)');
     grd.addColorStop(0.45, 'rgba(8,14,20,' + (a * 0.3).toFixed(3) + ')');
     grd.addColorStop(1, 'rgba(8,14,20,' + a.toFixed(3) + ')');
@@ -1349,6 +1679,38 @@ function draw() {
 }
 
 function drawPlat(g, pl) {
+  if (pl.kind === 'ramp') {
+    /* 坡画成从斜面到地面的**梯形**，不是平行四边形 ——
+       平行四边形的右端会在地面以下露出一截空隙，看着像地面被掀起来了。 */
+    const topL = pl.y, topR = pl.y - pl.rise;
+    const base = pl.base;
+    g.fillStyle = COL.soil;
+    g.beginPath();
+    g.moveTo(pl.x, topL); g.lineTo(pl.x + pl.w, topR);
+    g.lineTo(pl.x + pl.w, base); g.lineTo(pl.x, base);
+    g.closePath(); g.fill();
+    // 雪线顺着斜面铺，这是"这段能走"的唯一提示
+    /* **端点留不留缝要看那头接的是什么。**
+       接的是空处（平台坡的高端、坡的低端）就缩进 3px，免得圆头探出去
+       像长了个嘴；接的是**另一段坡**（雪包的上坡接下坡）就必须顶满，
+       否则两条线之间留一道 6px 的口子，露出一小块土色的 V。 */
+    const joinsR = S.plats.some(o => o !== pl && o.kind === 'ramp' &&
+      Math.abs(o.x - (pl.x + pl.w)) < 0.5 && Math.abs(o.y - (pl.y - pl.rise)) < 0.5);
+    const joinsL = S.plats.some(o => o !== pl && o.kind === 'ramp' &&
+      Math.abs(o.x + o.w - pl.x) < 0.5 && Math.abs(o.y - o.rise - pl.y) < 0.5);
+    g.strokeStyle = COL.snow; g.lineWidth = 10; g.lineCap = 'round';
+    g.beginPath();
+    g.moveTo(pl.x + (joinsL ? 0 : 3), topL + 5);
+    g.lineTo(pl.x + pl.w - (joinsR ? 0 : 3), topR + 5);
+    g.stroke();
+    g.lineCap = 'butt';
+    g.fillStyle = 'rgba(0,0,0,.07)';
+    g.beginPath();
+    g.moveTo(pl.x, topL + 12); g.lineTo(pl.x + pl.w, topR + 12);
+    g.lineTo(pl.x + pl.w, base); g.lineTo(pl.x, base);
+    g.closePath(); g.fill();
+    return;
+  }
   g.fillStyle = COL.soil;
   rr(g, pl.x, pl.y, pl.w, pl.h, 6); g.fill();
   g.fillStyle = COL.snow;
@@ -1682,8 +2044,10 @@ function drawHud(g) {
   g.font = '700 15px "PingFang SC","Microsoft YaHei",sans-serif';
   g.fillStyle = '#C8DCE6';
   g.fillText('所在', 812, 47);
-  g.fillStyle = LAYER_COL[layerIdx];
-  g.fillText((layerIdx + 1) + '·' + LAYER_CN[layerIdx], 858, 47);
+  /* 层数现在是随机的（4~8），所以这里必须写 `第几/共几` ——
+     只写名字的话，玩家没法知道自己还剩多深，而这一关唯一的进度感就是深度。 */
+  g.fillStyle = LAYER_COL[Math.min(layerIdx, LAYER_COL.length - 1)];
+  g.fillText((layerIdx + 1) + '/' + FLOORS.length + ' ' + LAYER_CN[layerIdx], 846, 47);
 
   // 门的状态（和"所在"拉开 50px，不然两串字会读成一串）
   g.font = '700 14px "PingFang SC","Microsoft YaHei",sans-serif';
@@ -1727,7 +2091,7 @@ function drawHud(g) {
     rr(g, 16, 76, 330, 30, 8); g.fill();
     g.fillStyle = '#C8DCE6';
     g.font = '600 13px "PingFang SC","Microsoft YaHei",sans-serif';
-    g.fillText('A/D 移动 · W 跳 · J 吐雪 · 走过去顶球 = 推 · R 重开', 30, 96);
+    g.fillText('A/D 移动 · W 跳 · J 吐雪 · 走过去顶球 = 推 · R 换一关', 30, 96);
     g.globalAlpha = 1;
   }
 
@@ -1792,7 +2156,7 @@ function drawClear(g) {
   g.textAlign = 'center';
   g.fillStyle = '#7FA3B5';
   g.font = '600 15px "PingFang SC","Microsoft YaHei",sans-serif';
-  g.fillText('按 R 再来一局', W / 2, cy + ch - 24);
+  g.fillText('按 R 换一关（布局每局随机）', W / 2, cy + ch - 24);
 }
 
 /* =========================================================================
@@ -1817,11 +2181,14 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   else draw();
 }
 
-/* **测试出口**。headless 断言全走这里 —— 逻辑不依赖 rAF，也不依赖 canvas。 */
+/* **测试出口**。headless 断言全走这里 —— 逻辑不依赖 rAF，也不依赖 canvas。
+   `WORLD_H / GROUND_Y / FLOORS / HOLES` 现在是**每关重新生成**的，
+   所以必须用 getter 导出：写成字面量的属性会把第一关的值焊死在里面，
+   断言在第二关就会拿到上一次的层高。 */
 const API = {
-  NUM, S, W, H, GROUND_Y, WORLD_H,
-  FLOORS, HOLES, LAYER_CN,
-  reset, step, shoot, draw,
+  NUM, S, W, H,
+  reset, newLevel, step, shoot, draw,
+  genLevel, validateLevel, buildLevel, surfY,
   bellyTier, snowNeed, ballTier, ballR, ballPow,
   coatFoe, makeBallFrom, ballHitBox, shotBox, breakBox, hurtPlayer,
   checkDoor, doorBlocked, groundAt, stepDoor,
@@ -1837,6 +2204,18 @@ const API = {
   /** 打 N 发雪弹到指定敌人（跳过物理飞行，直接命中） */
   hitFoeN: (f, n) => { for (let i = 0; i < n; i++) coatFoe(f, 1); },
 };
+
+/* 关卡结构走 getter：每关重新生成，导出时必须实时取。 */
+Object.defineProperties(API, {
+  GROUND_Y: { get: () => GROUND_Y },
+  WORLD_H: { get: () => WORLD_H },
+  FLOORS: { get: () => FLOORS },
+  HOLES: { get: () => HOLES },
+  LAYERS: { get: () => LAYERS },
+  LAYER_CN: { get: () => LAYER_CN },
+  SEED: { get: () => LEVEL_SEED },
+});
+
 if (typeof window !== 'undefined') window.SNOWLAB = API;
 if (typeof module !== 'undefined' && module.exports) module.exports = API;
 })();

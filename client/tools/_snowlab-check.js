@@ -81,8 +81,10 @@ for (let sd = 1; sd <= NSEED; sd++) {
   });
 }
 ck(NSEED + " 个种子全部通过校验", gOK === NSEED, (NSEED - gOK) + " 个没过: " + gBad.slice(0, 8).join(","));
-ck("层数 4~8，而且每个档都出现过", Object.keys(nfHist).length >= 4 &&
-   Object.keys(nfHist).every(k => +k >= 4 && +k <= 8), JSON.stringify(nfHist));
+/* 层数收到 3~5（4 层占一半）。**层数一多，每层的箱子就被摊薄** ——
+   4~8 层时越深的层越空，正好和"很多木箱"相反。 */
+ck("层数 3~5，而且每个档都出现过", Object.keys(nfHist).length >= 3 &&
+   Object.keys(nfHist).every(k => +k >= 3 && +k <= 5), JSON.stringify(nfHist));
 ck("三种封口方式都出现过（不是每层都同一招）",
    coverHist.frost > 0 && coverHist.ice > 0 && coverHist.none > 0, JSON.stringify(coverHist));
 /* 阈值 1.2：平均每关一条半。**不是每层都有坡** ——
@@ -110,7 +112,9 @@ for (let sd = 1; sd <= NSEED; sd++) {
     }
   }
   const lastY = g.floors[N - 1];
-  if (g.spawns.filter(s => s.y >= lastY - 100).length < NUM.killTarget) badFoe++;
+  /* **按 layer 判层，不能按 y 阈值**：怪会站在 2 格箱顶上（y 比地板高 96），
+     用 y 判会把它算成"不在门厅"，200 关里有 110 关被误判。 */
+  if (g.spawns.filter(s => s.layer === N - 1).length < NUM.killTarget) badFoe++;
   if (g.boxes.filter(b => b.mat === "wood" && !b.frost && b.y >= lastY - 60 && b.y <= lastY).length < 3) badFeed++;
 }
 ck("★ 相邻两层的洞从不重叠（否则一次掉两层）", badOverlap === 0, badOverlap);
@@ -441,7 +445,10 @@ ck("玩家被冰墙挡住（左外屏障 = 门壳左边一列）",
 
 // 塌落：门壳左边那一列砸掉底下那口，上面那口必须掉下来
 L.reset(); settle(30);
-const colB = S.boxes.filter(b => !b.dead && b.x === S.door.x - 48 && b.mat === "ice").sort((a, b) => b.y - a.y);
+/* **必须限定在门厅这一层。** 只按 x 筛的话，别的层"冰封洞口"正好和门同列时
+   也会被数进来，199 关里会数出 4 口（箱子铺满之后这个碰撞概率变得很高）。 */
+const colB = S.boxes.filter(b => !b.dead && b.x === S.door.x - 48 && b.mat === "ice" &&
+  b.y + b.h > L.GROUND_Y - 200).sort((a, b) => b.y - a.y);
 ck("门壳左边那列是 2 口叠着", colB.length === 2, colB.length);
 const aboveY0 = colB[1].y;
 L.breakBox(colB[0], "ball");
@@ -741,7 +748,8 @@ for (let i = 0; i < 20; i++) L.step(DT);
    破不了第二格 —— 这是有意的：冰墙要推两次，不是一次性奖励。
    **用引用认箱子，不用 y 认**：砸掉下半格之后上半格会失去支撑掉下来，
    坐标变了，`b.y === 1444` 就不再指向它，断言会假红。 */
-const colF = S.boxes.filter(b => b.mat === "ice" && b.x === wallX && !b.dead).sort((a, b) => b.y - a.y);
+const colF = S.boxes.filter(b => b.mat === "ice" && b.x === wallX && !b.dead &&
+  b.y + b.h > L.GROUND_Y - 200).sort((a, b) => b.y - a.y);
 ck("⑥ 门厅外屏障是 2 格冰", colF.length === 2, colF.length);
 const lowerF = colF[0], upperF = colF[1];
 /* **球心 y 必须是"地面减去半径"，不是"地面减去固定值"。**

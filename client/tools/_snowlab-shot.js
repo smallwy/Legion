@@ -61,7 +61,13 @@ for (let s = 1; s < 500; s++) {
 
 function shot(name, fn) {
   L.reset(SEED);
+  /* 两块"给跑原型的人看"的东西在设计图里是噪音：
+     ① 右上角的量具面板 —— 正好压住第 1~2 层右侧那段浮台上的箱子，
+        看图的人会以为那层是空的；
+     ② 「A/D 移动…」操作提示 —— 只在开局 9 秒内出现，会横穿地面层。 */
+  S.showMeter = false;
   fn && fn();
+  S.t = 12;                 // tipA = clamp(9 - S.t, 0, 1) → 提示淡出
   L.draw();
   const file = path.join(OUT, "snowlab-" + name + ".png");
   fs.writeFileSync(file, real.toBuffer("image/png"));
@@ -106,9 +112,11 @@ shot("02-dug", () => {
   for (let i = 0; i < 22; i++) L.step(DT);
 });
 
-/* 3) 逐层：每层一张，看箱室密度、地形、洞的位置是不是真的每层不一样 */
+/* 3) 逐层：每层一张，看箱室密度、地形、洞的位置是不是真的每层不一样。
+     层数是 3~5 随机，**图名不能写死 f1..f8** —— 那样图比层多，
+     多出来的几张是上一关的残留，看图的人会当成"还有第 6 层"。 */
 for (let k = 0; k < NF; k++) {
-  shot("f" + (k + 1), () => { freezeFoes(); standOn(k); });
+  shot("floor" + (k + 1), () => { freezeFoes(); standOn(k); });
 }
 
 /* 4) 斜坡特写：坡能不能读成"可以直接走上去" */
@@ -157,10 +165,18 @@ shot("balls", () => {
   for (let i = 0; i < 4; i++) L.step(DT);
 });
 
-/* 8) 结算 */
+/* 8) 结算。
+   **只破冰墙不够。** 门厅的"喂球箱"是按列撒的，有概率正好落在门的格子上；
+   只清 `mat === 'ice'` 的话，门矩形里还压着一口木箱，`doorBlocked()` 为真，
+   于是 HUD 显示"门·未找到"、结算面板压根不出现 —— 出图工具自己把图画错了。 */
 shot("clear", () => {
+  freezeFoes();
   standNearDoor();
-  S.boxes.filter(b => b.mat === "ice").forEach(b => L.breakBox(b, "ball"));
+  const d = S.door;
+  const onDoor = b => !(b.x + b.w <= d.x + 1 || b.x >= d.x + d.w - 1 ||
+                        b.y + b.h <= d.y + 1 || b.y >= d.y + d.h - 1);
+  S.boxes.filter(b => !b.dead && (b.mat === "ice" || onDoor(b)))
+    .forEach(b => L.breakBox(b, "ball"));
   S.killed = S.killedTarget;
   L.checkDoor();
   L.placePlayer(S.door.x + 4, L.GROUND_Y - 42);

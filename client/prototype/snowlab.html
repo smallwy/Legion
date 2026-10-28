@@ -1629,7 +1629,7 @@ function reset(seed) {
     x: L.start.x, y: L.start.y, vx: 0, vy: 0,
     w: PLAYER_W, h: PLAYER_H, onGround: true, face: 1,
     runD: 0, lockT: 0, shotCd: 0, anim: 0, shotAnim: 0,
-    jumps: NUM.hero.airJump, jumpHeld: false,
+    jumps: NUM.hero.airJump, jumpHeld: false, onBall: null,
   };
 }
 
@@ -1912,6 +1912,22 @@ function stepBody(o, dt) {
       if (o.x >= s.x + s.w && o.x < s.x + s.w + 40) nx = s.x + s.w - o.w + 4;
       else if (o.x + o.w <= s.x && o.x + o.w > s.x - 40) nx = s.x - 4;
       if (nx == null) continue;
+      /* ---- 2026-10-28 第三轮：两条闸，修「跳起来一起往后走」 ----
+         用户原话：「现在跳起来 一起往后走　跳起来有问题」。
+
+         这段扒边是"把人整段横移一个身位"（玩家 45 宽、台面 48 宽，
+         从台子外侧挪到台面上正好 ≈ 44px）。方向还**不看玩家想往哪走** ——
+         往右跑跳、脚一接近某个台面，人可以被挪到左边 44px。
+         那就是"跳一下人往后闪一截"，而且一帧完成，看不出发生了什么。
+
+         ① **不往运动的反方向扒。** 有水平速度时，只有"往台面那个方向"
+            才允许扒；vx = 0（原地起跳）不限制，否则不按方向键就上不去。
+         ② **一帧最多挪 20px。** 差得更远就说明人还在台子外面老远，
+            那不是"差一口气"，是自己的走位还没到 —— 这一帧不扒，
+            下一帧再看。20px 够救"脚已经悬在台沿外"的所有情况。 */
+      const dx = nx - o.x;
+      if (o.vx !== 0 && Math.sign(o.vx) !== Math.sign(dx)) continue;
+      if (Math.abs(dx) > 20) continue;
       const ny = s.y - o.h;
       if (blockedAt(nx, ny, o.w, o.h, s)) continue;
       o.x = nx; o.y = ny; o.vy = 0; o.onGround = true; break;
@@ -2052,6 +2068,10 @@ function pushBalls(dt) {
 
   for (const b of S.balls) {
     if (b.dead) continue;
+    /* **踩在脚下的球不推。** 站在球顶时脚底与球顶只差浮点误差，
+       `aabb` 偶尔会重叠 0.1px —— 那一帧就会把球推出去，人立刻掉下来。
+       用户反馈的"站不住"里，除了"球不在碰撞世界"这一条，还有这个。 */
+    if (p.onBall === b) continue;
     const bx = { x: b.x - b.r, y: b.y - b.r, w: b.r * 2, h: b.r * 2 };
     if (!aabb(p, bx)) continue;
     // 只在玩家朝球方向推时才给速度，站着碰不推
@@ -2088,7 +2108,15 @@ function stepBalls(dt) {
     for (const box of S.boxes) {
       if (box.dead) continue;
       const overlapX = b.x + b.r > box.x && b.x - b.r < box.x + box.w;
-      const overlapY = b.y + b.r > box.y + 6 && b.y - b.r < box.y + box.h;
+      /* **`box.y + 6` → `box.y`（2026-10-28 第三轮）。**
+         那 6px 是当年为"别把箱顶滚动的球判成侧撞"留的余量，可它同时
+         让**停在箱顶的球每帧漏检**：球底贴住箱顶时 `球底 > 箱顶 + 6`
+         不成立 → 这一帧不算落地 → 球继续掉 0.58px，要掉满 6px 才重新
+         被接住。于是球静止时以 5 帧为周期上下抖 6.2px，玩家踩上去
+         整个人跟着抖 —— 这是"站不住"体感的一半来源。
+         "从上方来"这件事已经由下面的 `prevBottom <= box.y + 10` 判得很准，
+         这里不需要再垫 6px。 */
+      const overlapY = b.y + b.r > box.y && b.y - b.r < box.y + box.h;
       if (!overlapX || !overlapY) continue;
 
       // 从上方落下 / 在箱顶滚：当作地板，不破坏
@@ -2893,6 +2921,13 @@ function onKey(e, down) {
 function wellClimb(p) {
   const L = S.level;
   if (!L) return null;
+  /* **踩在球上时按 W 一律是跳，不给爬。**（2026-10-28 第三轮）
+     井梯判据只看"脚离上层地板多远 + 人在不在洞口范围里"，
+     而球的半径 22~46、球顶又会随球沉浮 —— 站在球上时很容易
+     恰好落进这个窗口，于是按 W 不是起跳，是人被"搬"到井口另一侧。
+     玩家看到的是「跳起来人往后走了一截」，实测复现。
+     球顶本来就是个可以借高的台阶，这里该跳就跳。 */
+  if (p.onBall) return null;
   const feet = p.y + p.h;
   for (let k = 1; k < L.floors.length; k++) {
     const upper = L.floors[k - 1];
@@ -3046,13 +3081,32 @@ function stepPlayer(dt) {
      用接近的话，在楼板下面横着跑也会被翻上去。
 
      **不要求按方向键。** 洞口两边的楼板哪边近就往哪边翻（有按键则按键），
-     否则"跳起来还得同时按住方向"这件事本身就不轻松。 */
+     否则"跳起来还得同时按住方向"这件事本身就不轻松。
+
+     ---- 2026-10-28 第三轮：这一段曾经把普通跳跃整废了 ----
+     用户原话：「现在跳起来 一起往后走　跳起来有问题」。
+
+     第一版判据只写了"这一帧脚从 f 下方穿到 f 上方"，而**站在 f 这层地面上
+     起跳的那一帧，prevFeet 恰好等于 f**（不是小于）—— 于是判据成立，
+     人刚起跳就被横移 20px 并按回地面。实测：站在地面按 W+D，第一帧
+     x 51 → 71、vy 0、onGround true，**一跳都跳不出去，人还往按键方向挪**。
+     按 A 跳就是用户说的"跳起来一起往后走"。
+
+     现在补三条前提，缺一不可：
+       ① `prevFeet > f + 8`：脚原本确实在楼板面**下面**（站在这层起跳时
+          prevFeet === f，差 0，被挡掉）；
+       ② 人此刻水平方向**确实在洞口的范围内**：没有洞的地方头顶是实心
+          楼板，stepBody 会挡住，根本穿不过去，也就不该翻；
+       ③ 翻上去之后得真的更高（`gh < prevFeet - 4`）。 */
   if (!p.onGround && p.vy < -30) {
     const feet = p.y + p.h;
     for (let k = 0; k < FLOORS.length; k++) {
       const f = FLOORS[k];
-      /* 这一帧脚从 f 下方穿到了 f 上方（含 6px 容差） */
-      if (!(prevFeet > f - 2 && feet <= f + 6)) continue;
+      if (prevFeet <= f + 8) continue;         // ① 从下面上来的，不是站这层起跳
+      if (feet > f + 6 || feet < f - 40) continue;
+      /* ② 洞口。`LAYERS[k].holes` 就是 f 这层楼板上的洞。 */
+      const holes = (LAYERS[k] && LAYERS[k].holes) || [];
+      if (!holes.some(h => p.x + p.w > h.x - 6 && p.x < h.x + h.w + 6)) continue;
       const dirs = (left || right) ? [left ? -1 : 1] : [-1, 1];
       for (const dir of dirs) {
         for (const step of [20, 34, 48, 62, 78, 96, 112]) {
@@ -3064,6 +3118,7 @@ function stepPlayer(dt) {
              只认楼板的话，洞口旁边那摞箱子会把"已经成功"判成失败。 */
           const gh = groundAt(nx + p.w / 2, f - 1);
           if (gh < f - 96 || gh > f + 2) continue;
+          if (gh >= prevFeet - 4) continue;      // ③ 翻过去得更低，不是原地
           p.x = nx; p.y = gh - p.h; p.vx = 0; p.vy = 0; p.onGround = true;
           p.jumps = NUM.hero.airJump;
           break;
@@ -3071,6 +3126,52 @@ function stepPlayer(dt) {
         if (p.onGround) break;
       }
       if (p.onGround) break;
+    }
+  }
+
+  /* ---- 踩球（2026-10-28 第三轮）----
+     用户原话：「没办法站在球上」。
+
+     查下来不是 bug，是**从来没做过**：`solids()` 只返回平台和箱子，
+     球根本不在碰撞世界里 —— 球顶对玩家来说是一层空气，人穿过去继续落地。
+     而"跳上球、踩球借高"恰恰是雪人兄弟里唯一的垂直机动手段。
+
+     三个细节，都是踩上去好不好用的关键：
+       ① **只在"从上方落下来"时接住**（`prevFeet <= 球顶 + 10`）。
+          不加这条，人从球下方走过、球从人身上飞过时都会被吸到顶上；
+       ② **上升中不接**（`vy < 0`）：起跳穿过球体不该被粘住 ——
+          那会让"从球旁边跳过去"变成一件做不到的事；
+       ③ **水平对准球心 ±(r−4) 才踩得稳**，边缘踩空就掉下去。
+          判据用球心而不是包围盒：圆的东西用盒子量，角落会站得住，
+          视觉上就是"站在空气上"。 */
+  p.onBall = null;
+  {
+    const feetNow = p.y + p.h;
+    for (const b of S.balls) {
+      if (b.dead) continue;
+      const top = b.y - b.r;
+      const cx = p.x + p.w / 2;
+      if (cx < b.x - b.r + 4 || cx > b.x + b.r - 4) continue;
+      if (p.vy < 0) continue;
+      if (prevFeet > top + 10) continue;
+      if (feetNow < top - 3) continue;
+      /* **头顶塞不下就别踩。** 球顶是"人凭空被抬高 2r"，而这块地方的
+         天花板高度是按"人站在地面上"留的 —— 在低矮处（比如紧贴上层
+         楼板或箱子下沿）球顶会把人顶进天花板里。踩上去的结果是
+         一起跳就撞头，人被压回原高度，看起来像"跳不动"。
+         这里直接放弃接住：人落回地面，球从身上滚过去，读起来清楚。 */
+      if (blockedAt(p.x, top - p.h, p.w, p.h, null)) continue;
+      p.y = top - p.h; p.vy = 0; p.onGround = true;
+      p.jumps = NUM.hero.airJump;
+      p.onBall = b;
+      /* **踩住就把球压慢。** 不压的话 620px/s 的球一踩就窜出去，
+         人站在原地看球跑 —— 那不是"站上去"，是"被弹开"。压到 35%
+         之后球滚三五步就停，站在上面能看清自己站在哪。 */
+      if (Math.abs(b.vx) > 40) b.vx *= 0.35;
+      /* 球滚人也跟着滚。**球动人不跟 = 球从脚下滑走**，看起来像是
+         人站在冰面上被抽走了毯子。 */
+      p.x = clamp(p.x + b.vx * dt, WALL_L, WALL_R - p.w);
+      break;
     }
   }
 
@@ -5878,6 +5979,9 @@ function drawBall(g, b) {
 function drawBallHint(g) {
   const p = S.p;
   if (!p || S.phase !== 'play') return;
+  /* 出图开关：评审图里这个气泡正好压着主角（人站在球上时它必出），
+     和 `S.showMeter` 一样只在工具里关。 */
+  if (S.showHint === false) return;
   let best = null, bestD = 1e9;
   for (const b of S.balls) {
     if (b.dead || Math.abs(b.vx) > 140) continue;

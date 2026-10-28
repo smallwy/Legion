@@ -43,6 +43,23 @@ const L = window.SNOWLAB;
 const S = L.S;
 const DT = 1 / 60;
 
+/* ---------------------------------------------------------------- 背景立绘
+   **必须用异步的 loadImage，不能用 `new Image(); im.src = buffer`。**
+   后者能读出 width/height、`complete` 也是 true，但 drawImage 画出来
+   是全黑的 —— 实测踩过，而且它不会抛错，只是"背景凭空消失"，最难查。
+   所以整段出图逻辑都塞进 async 里；读不到就 setBackdrop(null)，
+   自动退回程序化天空，图照样出得来。 */
+(async () => {
+const BG_PATH = path.join(ROOT, "assets", "snowlab", "bg-surface.jpg");
+try {
+  const BG = await require("@napi-rs/canvas").loadImage(BG_PATH);
+  L.setBackdrop(BG);
+  console.log("背景立绘：" + BG.width + "×" + BG.height);
+} catch (e) {
+  L.setBackdrop(null);
+  console.log("（背景立绘未加载 → 走程序化天空：" + e.message + "）");
+}
+
 /* ---------------------------------------------------------------- 挑种子
    层数最多、有斜坡、三种封口（霜箱 / 冰 / 敞开）都出现过。 */
 let SEED = 1, bestScore = -1;
@@ -207,3 +224,4 @@ shot("clear", () => {
 });
 
 console.log("\n全部出图完成 → " + OUT);
+})().catch(e => { console.error("出图失败：" + e.stack); process.exit(1); });

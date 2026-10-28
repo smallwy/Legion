@@ -104,7 +104,13 @@ const NUM = {
      两点 = 一只怪的量；**砸碎一口箱子算 2.0 点，也就是大半只怪** ——
      用户 2026-10-28：「球砸箱子 球是不能变大的」，他要的是砸箱有即时回报。
      每档之间必须拉开肉眼能分辨的差距（冰墙只认特大球，读不出档位就无从计划）。 */
-  ball: { baseR: 22, perAbsorb: 2.8, maxAbsorb: 24, life: 4.6, fric: 260, maxR: 46,
+  ball: { baseR: 22, perAbsorb: 2.8, maxAbsorb: 24, life: 16, fric: 260, maxR: 46,
+          /* **life 4.6 → 16（2026-10-28）。**
+             用户问「成球之后怎么推呢」—— 查下来一半是没提示，另一半是
+             **根本来不及**：4.6 秒里要绕到球后面、对准方向、助跑，然后球
+             自己"散了"。玩家看到的是"怪没了、球也没了"，学不到任何东西。
+             16 秒够走三四个来回，"融化"只用来防止场上堆满死球。
+             推一次回满（见 pushBalls），所以真正在用的球不会中途消失。 */
           /* **撞碎箱子不涨体积。**（2026-10-28 用户否掉的旧设计）
              理由两条：
                ① 常识上说不通 —— 雪球撞碎木箱，凭什么把木屑吃进去变大；
@@ -366,12 +372,16 @@ function genLevel(seed) {
          它现在的角色是"石头打的台子"，给箱堆丘陵一个材质对比。 */
       const wide = l.segs.filter(s => s.w >= 240);
       const wantRamp = chance(0.55);
+      /* **坡长也要抖开。** 原来固定 144，于是每一关每一层看到的都是
+         同一条 38° 的坡 —— 用户说的"太规矩"有一半是这个：不是画法问题，
+         是**全场的坡都长得一样**。现在 144 / 168 / 192 三档，坡度落在
+         26°~38°，同一个画面里两条坡不会是一个斜度。 */
       const RAMP_W = 144;
       let placed = false;
       if (wide.length && chance(0.4)) {
         /* **候选段池按"平台 + 坡"的总宽挑。**
-           只要平台的话 240 就够，可一旦带坡，平台 144~192 + 坡 144
-           就是 288~336 —— 从 240 宽的段里随机取位，坡**必然**跨到段尾外面，
+           只要平台的话 240 就够，可一旦带坡，平台 96~192 + 坡 144~192
+           就是 240~384 —— 从 240 宽的段里随机取位，坡**必然**跨到段尾外面，
            而段尾外面就是洞口，`freeOf` 一路否掉，重试 12 次也全白跑。
            这正是"平均每关只有 1.3 条坡、四分之一的关一条坡都没有"的原因。 */
         const pool0 = wantRamp ? wide.filter(s => s.w >= 192 + RAMP_W) : wide;
@@ -385,7 +395,10 @@ function genLevel(seed) {
           const room = Math.max(0, Math.floor((cand.w - cw) / 48));
           const cx = cand.x + 48 * ri(0, room);
           if (!freeOf(cx, cw)) continue;
-          const py = l.floorY - 114;
+          /* **台面高度两档：96 / 114。** 跳高是 123，两档都在射程内；
+             原来固定 114，全场的台子顶面在同一条水平线上，一眼就是
+             "编辑器里刷的"。96 那一档还能让人从台子上直接跳上 2 格箱顶。 */
+          const py = l.floorY - (chance(0.45) ? 114 : 96);
           /* **坡和平台是一个整体，要么整段放得下，要么这个坡不要。**
              先随机排左右顺序，再挑第一个"整段都在本层地板里、且不压洞口"
              的一边 —— 不能先定边再验，否则随机选中的那一边正好压洞口时，
@@ -409,7 +422,11 @@ function genLevel(seed) {
                "平台摆在段中间、两边都是空地却没有坡"的怪形状。 */
             if (!ramp) continue;
           }
-          out.push({ x: cx, y: py, w: cw, h: 18 });
+          /* **h 18 → 34。** 18px 是一块"板"，画出来就是一条横着的厚线，
+             再怎么加纹理也还是直尺画的边。34 才够画成一个"悬在墙上的
+             土石台子"，底面能做出瘤状起伏。碰撞只认顶面和侧面，
+             加厚不影响跳跃和阻挡（净空 200，台底下照样走得过人）。 */
+          out.push({ x: cx, y: py, w: cw, h: 34 });
           if (ramp) out.push(ramp);
           placed = true;
         }
@@ -429,13 +446,23 @@ function genLevel(seed) {
 
            **不能再往宽放。** 试过 132：地形是按"列（48px）与包围盒相交"
            吃列的，132 宽会连着吃掉 4 列，有坡的那层箱子掉到 11 口
-           （门槛 12），200 种子里 135 / 172 两关直接判红。 */
-        const MOUND_W = 120, MOUND_RISE = 44;
+           （门槛 12），200 种子里 135 / 172 两关直接判红。
+           现在宽度取 108~132、高度取 38~50，坡度落在 16°~24° —— 幅度不大，
+           但两座土丘不会是一个模子倒出来的。 */
+        const MOUND_RISE = 38 + ri(0, 12);                // 38~50
+        /* **两侧坡度必须不一样。** 96 + 144 的坡长配 40 左右的落差，
+           迎风面 23°、背风面 15° —— 对称的两个人字拼起来一定是"三角屋顶"
+           （这是上一版被一眼看穿的地方），一边陡一边缓才像被风堆出来的雪梁。
+           总宽锁 240：每多 48 就是一列箱子没了（门槛 12 口，试过 132 就红）。 */
+        const wL = chance(0.5) ? 96 : 144;
+        const wR = 240 - wL;
         for (let t = 0; t < 8; t++) {
-          const rx = 48 * ri(1, Math.floor((912 - MOUND_W * 2) / 48));
-          if (!freeOf(rx, MOUND_W * 2)) continue;
-          out.push({ x: rx, y: l.floorY, w: MOUND_W, h: GEN.thick, base: l.floorY, rise: MOUND_RISE, kind: 'ramp' });
-          out.push({ x: rx + MOUND_W, y: l.floorY - MOUND_RISE, w: MOUND_W, h: GEN.thick, base: l.floorY, rise: -MOUND_RISE, kind: 'ramp' });
+          const rx = 48 * ri(1, Math.floor((912 - 240) / 48));
+          if (!freeOf(rx, 240)) continue;
+          /* cap: 1 → 顶点扣一顶东西（画在 drawRamp 里）：室内是压一块石头，
+             地表是一顶雪帽。人字顶点太尖，顶一下才不像三角屋顶。 */
+          out.push({ x: rx, y: l.floorY, w: wL, h: GEN.thick, base: l.floorY, rise: MOUND_RISE, kind: 'ramp', cap: 1 });
+          out.push({ x: rx + wL, y: l.floorY - MOUND_RISE, w: wR, h: GEN.thick, base: l.floorY, rise: -MOUND_RISE, kind: 'ramp' });
           break;
         }
       }
@@ -1199,6 +1226,20 @@ function groundAt(x, y) {
   return best;
 }
 
+/** 把 `w×h` 摆到 (x, y) 会不会插进什么实体里。`ignore` 是"算它托着我"的那块。
+    **给瞬移类修正用（扒边）。** 只判 > 2px 的重叠：贴着台面站时包围盒和台面
+    正好相切，相切不算"插进去"。 */
+function blockedAt(x, y, w, h, ignore) {
+  for (const s of solids()) {
+    if (s === ignore) continue;
+    if (s.kind === 'ramp') continue;
+    const ox = Math.min(x + w, s.x + s.w) - Math.max(x, s.x);
+    const oy = Math.min(y + h, s.y + s.h) - Math.max(y, s.y);
+    if (ox > 2 && oy > 2) return true;
+  }
+  return false;
+}
+
 /* ---------------------------------------------------------------- 移动体物理
    **顺序必须是「先垂直分离、再水平分离」，而且水平那一轮要跳过"站在上面"的块。**
    反过来做会出一个非常隐蔽的致命 bug：站在地面上的身体，包围盒和地面平台
@@ -1210,6 +1251,10 @@ function stepBody(o, dt) {
 
   // ---- 垂直
   const prevBottom = o.y + o.h;
+  const prevTop = o.y;
+  /* **上一帧是不是站在地上。** 下坡贴地要用它 —— 见垂直段落末尾。
+     必须在 `o.onGround = false` 之前取，之后这个值就没了。 */
+  const wasGround = o.onGround;
   o.y += o.vy * dt;
   o.onGround = false;
   for (const s of solids()) {
@@ -1235,7 +1280,37 @@ function stepBody(o, dt) {
     if (o.vy >= 0 && prevBottom <= s.y + 8) {
       o.y = s.y - o.h; o.vy = 0; o.onGround = true;
     } else if (o.vy < 0 && o.y < s.y + s.h) {
-      o.y = s.y + s.h; o.vy = 0;
+      /* **顶天花板也要判"上一帧在下面"。**
+         少了 prevTop 这一条，斜着往上跳、身体从侧面啃进箱子/平台边缘时，
+         这一帧会被当成"头顶撞到"，把人**按到块的底面**去 —— 也就是
+         一脚踩进下一格箱子里面。实测贴着箱墙起跳，48 次里有 46 次
+         身体插进箱体 26~30px，玩起来就是"往上跳反而掉进箱子"。
+         判据：上一帧的头顶还在块的底边以下，才算是从下面顶上来。 */
+      if (prevTop >= s.y + s.h - 2) { o.y = s.y + s.h; o.vy = 0; }
+    }
+  }
+
+  /* ---- 下坡贴地（只在"上一帧还站在地上"时生效）----
+     **这是"移动发抖"的真正原因，不在镜头。**
+     斜坡的承托是"这一帧脚底穿过了坡面才贴上去"，上坡时坡面往上升，
+     每帧都穿得过，所以顺；下坡时坡面在往下跑，而人只靠重力往下掉
+     （一帧 0.6px），坡面一帧却能掉 4px —— 于是人和坡面越离越远、
+     腾空、再砸下来。60 帧里 onGround 翻转 4 次，肉眼看就是一路抖。
+
+     修法：上一帧站在地上、这一帧正在下落、脚下 16px 内有坡面 → 直接贴上去。
+     16px 是"一帧最多能漏掉的距离"的两倍多，再宽就会把"从平台边缘走下去"
+     也吸住。往上跳（vy < 0）不吸，起跳不受影响。 */
+  if (!o.onGround && wasGround && o.vy >= 0) {
+    for (const s of solids()) {
+      if (s.kind !== 'ramp') continue;
+      if (o.x + o.w <= s.x || o.x >= s.x + s.w) continue;
+      const top = surfY(s, o.x + o.w / 2);
+      /* **符号：`top − 脚底`，正值才是"坡面在脚下面"。**
+         第一版写成 `脚底 − top`，于是所有该吸的情况都算成了负值被跳过 ——
+         探针数字一动不动，还以为是公差不够。y 向下增大，记住方向。 */
+      const gap = top - (o.y + o.h);
+      if (gap < -1 || gap > 16) continue;
+      o.y = top - o.h; o.vy = 0; o.onGround = true; break;
     }
   }
 
@@ -1275,9 +1350,16 @@ function stepBody(o, dt) {
        ② **必须在上升或最高点（vy ≤ 0）。** 这里差点写成 vy ≤ 60 ——
           那样玩家刚踏进洞口往下掉的第一帧（vy 只有 35）也会被判定成
           "上升中"，于是被扶回地板，永远掉不下去（逐层挖穿的断言直接红）。
-       ③ 和台子边缘的横向距离 < 16px（就在边上）
+       ③ 和台子边缘的横向距离 < 40px（就在边上）
+       ④ **人站住了就别扒。** onGround 的 vy 也是 0，不排掉的话，
+          贴着箱子走路会被一路"扶"上箱顶。
+       ⑤ **落点必须是空的。** 这一条是后补的，代价是踩了一次大坑：
+          "贴墙起跳会被塞进箱子里"（48 次里 46 次，最深 30px）。
+          原因是扒边会把人横向瞬移 26px 挪到台面上，却没问过台面上方
+          有没有东西 —— 冰墙上面摞着箱子时，那 26px 正好把人推进上一格
+          箱体内部。**瞬移类的修正必须验落点，不能只验出发点。**
      普通平台跳上去本来就会正常落地，走不到这里。 */
-  if (o === S.p && o.vy <= 0) {
+  if (o === S.p && o.vy <= 0 && !o.onGround) {
     const foot = o.y + o.h;
     for (const s of solids()) {
       if (s.kind === 'ramp') continue;
@@ -1286,15 +1368,13 @@ function stepBody(o, dt) {
       /* 玩家在台子的右边（往左扒） */
       /* 40px 的吸附范围：洞口 96~144 宽，梯子列在洞内、离边缘还能有
          三十来像素 —— 收太紧就成了"必须像素级对位"，手感等于没做。 */
-      if (o.x >= s.x + s.w && o.x < s.x + s.w + 40) {
-        o.x = s.x + s.w - o.w + 4;
-        o.y = s.y - o.h; o.vy = 0; o.onGround = true; break;
-      }
-      /* 玩家在台子的左边（往右扒） */
-      if (o.x + o.w <= s.x && o.x + o.w > s.x - 40) {
-        o.x = s.x - 4;
-        o.y = s.y - o.h; o.vy = 0; o.onGround = true; break;
-      }
+      let nx = null;
+      if (o.x >= s.x + s.w && o.x < s.x + s.w + 40) nx = s.x + s.w - o.w + 4;
+      else if (o.x + o.w <= s.x && o.x + o.w > s.x - 40) nx = s.x - 4;
+      if (nx == null) continue;
+      const ny = s.y - o.h;
+      if (blockedAt(nx, ny, o.w, o.h, s)) continue;
+      o.x = nx; o.y = ny; o.vy = 0; o.onGround = true; break;
     }
   }
 
@@ -1440,7 +1520,9 @@ function pushBalls(dt) {
     if (sign(p.vx) !== dir) continue;
     if (Math.abs(b.vx) >= pow) continue;
     b.vx = dir * pow;
-    b.life = Math.max(b.life, NUM.ball.life * 0.6);
+    /* **推一次回满，不是回 60%。**
+       "正在用的球不该中途蒸发" —— 回满之后，融化只清理被丢下的球。 */
+    b.life = NUM.ball.life;
     if (runUp > 0.85) {
       addText(b.x, b.y - b.r - 12, '助跑推!', '#FFE9A8', 16, 0.7);
       S.shake = Math.max(S.shake, 6);
@@ -1867,8 +1949,31 @@ function wellClimb(p) {
     const onRight = segs.some(s => s.x <= h.x + h.w + 2 && s.x + s.w > h.x + h.w);
     const dl = (p.x + p.w) - h.x;              // 玩家离洞口左边多近
     const dr = (h.x + h.w) - p.x;              // 离右边多近
-    if (onLeft && (!onRight || dl <= dr)) return { x: h.x - p.w - 3, y: upper - p.h };
-    if (onRight) return { x: h.x + h.w + 3, y: upper - p.h };
+
+    /* **落点必须验，而且验不到就换一边、再不行就站箱顶。**
+       踩到的实况：洞口左边那列的上层地面上正好摞着一口木箱，
+       人爬到 63 号位、身体和木箱横向重叠 30px —— 紧接着的水平碰撞
+       把人推到 `box.x + box.w = 96`，也就是**又推回洞口里**，然后原样掉下去。
+       表现是"按 W 明明爬上去了，人却落回井底"，而且十个种子里有一半中招。
+
+       兜底顺序：① 近的那边地面 → ② 远的那边地面 → ③ 洞口边那口箱子的顶上。
+       ③ 不是妥协：洞口卡着一口箱子时，站到箱子上是玩家唯一合理的落点，
+       而且箱子最高 3 格（144），站上去头顶还剩 14px，不会顶穿。 */
+    const cands = [];
+    if (onLeft) cands.push({ x: h.x - p.w - 3, d: dl });
+    if (onRight) cands.push({ x: h.x + h.w + 3, d: dr });
+    cands.sort((a, b) => a.d - b.d);
+    for (const c of cands) {
+      if (c.x < WALL_L || c.x + p.w > WALL_R) continue;
+      if (!blockedAt(c.x, upper - p.h, p.w, p.h, null)) return { x: c.x, y: upper - p.h };
+      for (const s of solids()) {
+        if (s.kind === 'ramp') continue;
+        if (s.y > upper + 2 || s.y < upper - 146) continue;
+        if (c.x + p.w < s.x || c.x > s.x + s.w) continue;
+        if (blockedAt(c.x, s.y - p.h, p.w, p.h, s)) continue;
+        return { x: c.x, y: s.y - p.h };
+      }
+    }
   }
   return null;
 }
@@ -2436,6 +2541,7 @@ function draw() {
   // 玩家
   drawPlayer(g, S.p);
   drawClimbHint(g);
+  drawBallHint(g);
 
   // 粒子
   for (const f of S.frags) {
@@ -2561,7 +2667,7 @@ function rockFill(g, x, y, w, h, seed) {
 
 /* 雪盖（现在是"草皮 / 木顶"）。顶面在碰撞面上 —— **不许高出去，高出去人就悬空**，
    所以"自然"只能靠左右圆角 + 起伏的边缘 + 底部的一条暗边。 */
-function snowCap(g, x, y, w, thick, seed, grass) {
+function snowCap(g, x, y, w, thick, seed, grass, stone) {
   const wob = px => Math.sin(px * 0.083 + seed) * 0.8 + Math.sin(px * 0.031) * 0.5;
   g.beginPath();
   g.moveTo(x - 2, y + thick);
@@ -2576,6 +2682,13 @@ function snowCap(g, x, y, w, thick, seed, grass) {
     sg.addColorStop(0, '#F6FCFF');
     sg.addColorStop(0.55, '#E2F2FB');
     sg.addColorStop(1, '#C3DDEC');
+  } else if (stone) {
+    /* 悬空台子的顶面是**石头**，不是木地板。
+       原来所有顶面都走木色渐变，台子于是读成"一块钉在墙上的木板" ——
+       用户说的"横向的太规矩"，一半来自这个。 */
+    sg.addColorStop(0, '#CFC8BC');
+    sg.addColorStop(0.6, '#B4AB9D');
+    sg.addColorStop(1, '#958B7C');
   } else {
     sg.addColorStop(0, '#F1D3A4');
     sg.addColorStop(0.65, '#E0B87F');
@@ -2594,91 +2707,325 @@ function snowCap(g, x, y, w, thick, seed, grass) {
   g.stroke();
 }
 
+/* ---------------------------------------------------------------- 地形绘制
+   **这一版把"平台 / 坡"从几何体改成了"长在地里的东西"。**
+   用户 2026-10-28：「你这斜坡和横向的也太规矩了吧 不能看起来自然点吗」。
+
+   原来是什么：平台 = 18px 高的圆角矩形 + 一条雪盖；坡 = 一条完美三角 + 等宽
+   木板。那是在编辑器里拖出来的形状，不是挖出来的土。现在三条一起改：
+     · **轮廓是有机的**：底面瘤状起伏、端头缺口、坡脚堆碎石；
+     · **顶面严格压在碰撞线上** —— 画高一个像素人就浮空，所以"自然"
+       只能从轮廓和贴面物上找，不能在顶边上找（这一条是硬约束，别改）；
+     · **坡面铺装三选一**（木阶 / 乱石 / 素土 + 碎石），同一个画面里
+       两条坡不会穿同一件衣服。
+   所有"随机"都用坐标当种子 —— 用 Math.random 的话土纹每帧重排，
+   看起来像在沸腾。 */
+
 function drawRamp(g, pl) {
   const x0 = pl.x, x1 = pl.x + pl.w;
   const topL = pl.y, topR = pl.y - pl.rise;
   const base = pl.base;
+  const s = Math.round(x0 * 1.7 + base * 0.3);
+  const snowy = base === GEN.topY;            // 地表那层的坡是"雪坡"，不是"木坡"
+  const botAt = px => base + 2 + Math.sin(px * 0.058 + s) * 2.0 + Math.sin(px * 0.021 + s * 0.6) * 1.6;
+  const surfAt = px => topL + (topR - topL) * ((px - x0) / pl.w);
 
-  /* **上沿严格是那条直线** —— 它就是碰撞面，弧度一改人就浮空/陷进去。
-     所以"像不像天然的东西"只能从别处来：土体的碎石、钉上去的木板踏面、
-     坡脚那一坨土。 */
-  g.save();
-  g.beginPath();
-  g.moveTo(x0, topL); g.lineTo(x1, topR);
-  g.lineTo(x1, base + 3); g.lineTo(x0, base + 3);
-  g.closePath(); g.clip();
-  rockFill(g, Math.min(x0, x1), Math.min(topL, topR), pl.w, base - Math.min(topL, topR) + 4, Math.round(x0));
-  g.restore();
-
-  /* 坡面：**钉一排木板当踏面**。
-     "用木板铺的坡"比"雪坡"更像这个世界 —— 满场都是木箱，
-     坡当然也是木头钉的。而且它顺便解决了"斜面上没法画纹理"的问题。 */
-  const N = Math.max(4, Math.round(pl.w / 30));
-  g.save();
-  g.beginPath();
-  g.moveTo(x0, topL); g.lineTo(x1, topR);
-  g.lineTo(x1, base + 3); g.lineTo(x0, base + 3);
-  g.closePath(); g.clip();
-  for (let i = 0; i < N; i++) {
-    const t0 = i / N, t1 = (i + 1) / N;
-    const ax = x0 + pl.w * t0, ay = topL + (topR - topL) * t0;
-    const bx = x0 + pl.w * t1, by = topL + (topR - topL) * t1;
+  /* 土体轮廓。上沿逐点走过去、**一点抖动都不加**（它就是碰撞面），
+     自然感交给下面那条瘤状的底边。 */
+  const bodyPath = () => {
     g.beginPath();
-    g.moveTo(ax, ay + 2); g.lineTo(bx + 0.5, by + 2);
-    g.lineTo(bx + 0.5, by + 17); g.lineTo(ax, ay + 17);
+    g.moveTo(x0, topL);
+    const step = Math.max(8, pl.w / 24);
+    for (let px = x0 + step; px < x1; px += step) g.lineTo(px, surfAt(px));
+    g.lineTo(x1, topR);
+    g.lineTo(x1, base + 3);
+    for (let px = x1; px > x0; px -= 13) g.lineTo(px, botAt(px));
+    g.lineTo(x0, base + 3);
     g.closePath();
-    g.fillStyle = i % 2 ? '#E7B077' : '#CE9257';
-    g.fill();
-    g.strokeStyle = 'rgba(74,58,44,.62)';
-    g.lineWidth = 2;
+  };
+
+  g.save();
+  bodyPath(); g.clip();
+  if (snowy) {
+    /* **地表那层的坡整块是雪**，不是"土坡盖一条白边"。
+       上一版是土体 + 一条 10px 的白边，在雪原上一眼就是"褐色三角 + 白边"，
+       像贴上去的。整块换成雪之后，它才是"被风吹堆起来的一道雪梁"。 */
+    const sg = g.createLinearGradient(0, Math.min(topL, topR), 0, base);
+    sg.addColorStop(0, '#FFFFFF');
+    sg.addColorStop(0.5, '#EDF7FE');
+    sg.addColorStop(1, '#C9DFEE');
+    g.fillStyle = sg;
+    g.fillRect(Math.min(x0, x1) - 2, Math.min(topL, topR) - 2, pl.w + 4, base - Math.min(topL, topR) + 6);
+    /* 背光面：靠坡脚压一条冷影，雪堆才有厚度 */
+    g.fillStyle = 'rgba(150,188,214,.28)';
+    g.beginPath();
+    g.moveTo(x0, base + 3);
+    for (let px = x0; px <= x1; px += 12) g.lineTo(px, surfAt(px) + 16 + Math.sin(px * 0.05) * 5);
+    g.lineTo(x1, base + 3);
+    g.closePath(); g.fill();
+  } else {
+    rockFill(g, Math.min(x0, x1), Math.min(topL, topR), pl.w, base - Math.min(topL, topR) + 4, s);
+  }
+
+  /* ---- 坡面铺装 ----
+     **坡度决定铺什么，不是随机决定。**
+     陡坡（>23°）是人踩出来的路，铺木板或垫石头；缓坡（土丘那种 20°）
+     铺装只会显得莫名其妙 —— 谁会在一个小土包上钉木板。
+     另外**地表那层一律不铺**：雪原上的土丘被木板盖住，一眼就是"人造坡道"，
+     这是上一版最假的一处（整块读成了船底）。 */
+  const steep = Math.abs(pl.rise) / pl.w > 0.42;
+  const variant = (!steep || snowy) ? 2 : (Math.abs(Math.round(pl.x * 3.1 + pl.base * 0.7)) % 2);
+  if (variant !== 2) {
+    const N = Math.max(5, Math.round(pl.w / 26));
+    for (let i = 0; i < N; i++) {
+      const t0 = i / N, t1 = (i + 1) / N;
+      const ax = x0 + pl.w * t0, ay = surfAt(ax);
+      const bx = x0 + pl.w * t1, by = surfAt(bx);
+      if (variant === 0) {
+        /* 木阶：**每一级要留缝、下垂高度要抖开**。
+           全宽等高的排板读出来是"百叶窗"，抖开之后才像一块块钉歪的板。 */
+        const drop = 13 + ((i * 7) % 6);
+        g.beginPath();
+        g.moveTo(ax + 2, ay + 1.5); g.lineTo(bx - 2, by + 1.5);
+        g.lineTo(bx - 2, by + drop); g.lineTo(ax + 2, ay + drop + 1);
+        g.closePath();
+        g.fillStyle = i % 2 ? '#E0A96C' : '#C98C51';
+        g.fill();
+        g.strokeStyle = 'rgba(74,58,44,.5)'; g.lineWidth = 1.8; g.stroke();
+      } else {
+        /* 乱石：一块一块圆头的石头，中间露土 */
+        const drop = 15 + ((i * 5) % 9);
+        const cx = (ax + bx) / 2, cy = (ay + by) / 2;
+        g.beginPath();
+        g.moveTo(ax + 3, ay + 3);
+        g.lineTo(bx - 4, by + 3);
+        g.quadraticCurveTo(bx - 3, by + drop, cx, by + drop + 1);
+        g.quadraticCurveTo(ax + 3, ay + drop, ax + 3, ay + 3);
+        g.closePath();
+        g.fillStyle = i % 2 ? '#C2BAAD' : '#ABA396';
+        g.fill();
+        g.strokeStyle = 'rgba(58,48,40,.4)'; g.lineWidth = 1.6; g.stroke();
+        g.fillStyle = 'rgba(255,250,240,.30)';
+        g.beginPath(); g.ellipse(cx, cy + 5, Math.max(3, (bx - ax) * 0.3), 2.2, 0, 0, Math.PI * 2); g.fill();
+      }
+    }
+  }
+  /* 半埋的石头 + 被踩秃的顶边。
+     **一块 240×114 的纯土色三角，无论纹理怎么调都是一块"纸板"。**
+     能救它的只有两样：往下压几块石头（有体积感）、顶边磨出一道浅色
+     （人和球天天从这儿过）。石头一律**画在坡面以下**，不许露头 ——
+     露头就是玩家脚下多出来的 6px 空气。 */
+  if (!snowy) {
+    for (let i = 0; i < 4; i++) {
+      const t = 0.13 + i * 0.23 + ((s + i * 31) % 7) / 100;
+      const px = x0 + pl.w * t;
+      const py = surfAt(px) + 15 + ((i * 13 + s) % 20);
+      const r = 6 + ((i * 7 + s) % 6);
+      g.fillStyle = i % 2 ? '#C0B5A4' : '#A79B8A';
+      g.beginPath(); g.ellipse(px, py, r * 1.35, r * 0.86, (i % 3 - 1) * 0.22, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = 'rgba(74,58,44,.28)'; g.lineWidth = 1.6; g.stroke();
+      g.fillStyle = 'rgba(255,252,244,.26)';
+      g.beginPath(); g.ellipse(px - r * 0.3, py - r * 0.34, r * 0.7, r * 0.34, 0, 0, Math.PI * 2); g.fill();
+    }
+    g.strokeStyle = 'rgba(255,248,228,.45)';
+    g.lineWidth = 3.2;
+    g.beginPath();
+    for (let px = x0 + 6; px <= x1 - 6; px += 12) g.lineTo(px, surfAt(px) + 2.4);
     g.stroke();
   }
+  if (variant === 2 && !snowy) {
+    /* 素土：不铺装，只撒碎石和几道被踩出来的浅槽 —— 读起来是
+       "这里本来就是土坡，人走多了压出来的路"。
+       **地表那块不能撒**：雪面上撒土色碎石，看起来像脏了。 */
+    for (let i = 0; i < 10; i++) {
+      const t = ((i * 137 + s) % 1000) / 1000;
+      const px = x0 + pl.w * t;
+      const py = surfAt(px) + 5 + ((i * 53) % 18);
+      g.fillStyle = i % 3 === 0 ? 'rgba(255,244,222,.42)' : 'rgba(96,66,40,.32)';
+      g.beginPath(); g.ellipse(px, py, 2.6 + (i % 3), 1.7 + (i % 2), 0.3, 0, Math.PI * 2); g.fill();
+    }
+  }
+
   g.restore();
 
-  /* 整条坡的轮廓描边。**这一步是"卡通"和"一块色"的分界线** ——
-     没有它，坡和地面、墙全都糊在一起。 */
+  /* 描边。**只描上沿那一条，不闭合。**
+     闭合描边会在两段土丘共用的那条竖直边上画出两道线 ——
+     人字坡正中间一道黑缝，看上去就是"两个楔子拼起来的"，
+     一眼假。高端永远接着别的东西（平台侧面或另一半土丘），
+     那条竖边交给对面去画，这里留空。 */
   g.beginPath();
-  g.moveTo(x0, topL); g.lineTo(x1, topR);
-  g.lineTo(x1, base + 2); g.lineTo(x0, base + 2);
-  g.closePath();
+  g.moveTo(x0, topL);
+  for (let px = x0; px <= x1; px += 8) g.lineTo(px, surfAt(px));
   g.strokeStyle = COL.ink;
   g.lineWidth = 3;
+  g.lineCap = 'round';
   g.lineJoin = 'round';
   g.stroke();
 
-  /* 坡脚那一坨土。**`rise > 0` 是"右端更高"，所以低端在左（x0）。**
+  /* 坡脚的碎石堆。`rise > 0` 是"右端更高"，所以低端在左（x0）。
      这条写反过一次：两段坡的土全堆到顶点，山坡正中间一道弧，像张嘴。 */
   const lowX = pl.rise > 0 ? x0 : x1;
-  g.fillStyle = '#B78F64';
+  const dir = pl.rise > 0 ? 1 : -1;
+  g.fillStyle = snowy ? '#E4F2FA' : '#B78F64';
   g.beginPath(); g.ellipse(lowX, base - 1, 26, 7, 0, Math.PI, 0); g.fill();
-  g.strokeStyle = COL.ink; g.lineWidth = 2.5;
+  g.strokeStyle = 'rgba(74,58,44,.55)'; g.lineWidth = 2.2;
   g.beginPath(); g.ellipse(lowX, base - 1, 26, 7, 0, Math.PI, 0); g.stroke();
+  for (let i = 0; i < 3; i++) {
+    const px = lowX + dir * (10 + i * 14) + (i % 2 ? 3 : -2);
+    const r = 3.6 + (i % 2) * 1.4;
+    g.fillStyle = snowy ? (i % 2 ? '#F2FAFF' : '#D8EAF6') : (i % 2 ? '#C6A585' : '#A8815C');
+    g.beginPath(); g.arc(px, base - 2 - r * 0.4, r, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = 'rgba(74,58,44,.45)'; g.lineWidth = 1.5; g.stroke();
+  }
+
+  /* 土丘的**压顶石**。两段坡拼成一个人字，顶点那一下太尖 ——
+     一眼就是个三角屋顶。压一块石头上去，人字立刻读成"被石头压住的山包"。
+     石头**整体画在顶点以下**，顶面正好压在顶点那条线上，
+     所以站上去不会浮空。 */
+  if (pl.cap) {
+    const cx = pl.rise > 0 ? x1 : x0, cy = Math.min(topL, topR);
+    if (snowy) {
+      /* 地表的顶点扣一顶**雪帽**，不是压石头。
+         雪原上出现一块石头本来就没道理；而人字顶点又太尖（像个三角屋顶）。
+         雪帽是"风把雪堆到梁顶上"的样子，顶面正好压在顶点那条线上。 */
+      g.fillStyle = '#FFFFFF';
+      g.beginPath();
+      g.moveTo(cx - 30, cy + 15);
+      g.quadraticCurveTo(cx - 28, cy + 4, cx - 12, cy + 1.2);
+      g.quadraticCurveTo(cx, cy - 0.4, cx + 12, cy + 1.4);
+      g.quadraticCurveTo(cx + 28, cy + 4, cx + 30, cy + 15);
+      g.quadraticCurveTo(cx, cy + 20, cx - 30, cy + 15);
+      g.closePath(); g.fill();
+      g.strokeStyle = COL.ink; g.lineWidth = 2.6; g.lineJoin = 'round'; g.stroke();
+      g.fillStyle = 'rgba(160,198,222,.22)';
+      g.beginPath(); g.ellipse(cx, cy + 12, 22, 4.6, 0, 0, Math.PI * 2); g.fill();
+    } else {
+      g.fillStyle = '#B3ABA0';
+      g.beginPath();
+      g.moveTo(cx - 25, cy + 13);
+      g.quadraticCurveTo(cx - 24, cy + 2, cx - 12, cy + 0.5);
+      g.quadraticCurveTo(cx + 4, cy - 0.5, cx + 14, cy + 1.5);
+      g.quadraticCurveTo(cx + 25, cy + 3, cx + 26, cy + 14);
+      g.lineTo(cx + 18, cy + 21);
+      g.lineTo(cx - 18, cy + 21);
+      g.closePath(); g.fill();
+      g.strokeStyle = COL.ink; g.lineWidth = 2.6; g.lineJoin = 'round'; g.stroke();
+      g.strokeStyle = 'rgba(255,252,244,.55)'; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(cx - 14, cy + 4); g.lineTo(cx + 11, cy + 3.5); g.stroke();
+    }
+  }
 }
 
 function drawPlat(g, pl) {
   if (pl.kind === 'ramp') { drawRamp(g, pl); return; }
   const seed = Math.round(pl.x) + Math.round(pl.y);
+  const snowy = pl.y === GEN.topY;
+  const isGround = (S.level ? S.level.floors : []).some(f => Math.abs(f - pl.y) < 1);
+  const x0 = pl.x, x1 = pl.x + pl.w, yT = pl.y, hh = pl.h;
+  /* 底面的瘤状起伏。**只在悬空台子上用** —— 地板的下沿就是下一层的天花板，
+     把它画成波浪等于把下一层的净空挖掉一块。 */
+  const botAt = px => yT + hh - 3 + Math.sin(px * 0.071 + seed * 1.3) * 3.2 + Math.sin(px * 0.023 + seed) * 2;
 
-  /* **一块台子 = 土体 + 顶面草皮 + 一圈粗描边。**
-     描边是这里最重要的东西：没有它，台子和墙、和箱子全糊成一团色块。 */
+  const bodyPath = () => {
+    g.beginPath();
+    g.moveTo(x0 - 1, yT + 2);
+    for (let px = x0 + 8; px < x1; px += 8) g.lineTo(px, yT + 2);
+    g.lineTo(x1 + 1, yT + 2);
+    if (isGround) {
+      g.lineTo(x1 + 1, yT + hh + 1);
+      g.lineTo(x0 - 1, yT + hh + 1);
+    } else {
+      g.lineTo(x1 + 1, botAt(x1));
+      for (let px = x1; px >= x0; px -= 9) g.lineTo(px, botAt(px));
+      g.lineTo(x0 - 1, botAt(x0));
+    }
+    g.closePath();
+  };
+
   g.save();
-  rr(g, pl.x - 1, pl.y + 2, pl.w + 2, pl.h + 1, 7);
-  g.clip();
-  rockFill(g, pl.x - 1, pl.y + 2, pl.w + 2, pl.h + 3, seed);
+  bodyPath(); g.clip();
+  rockFill(g, x0 - 1, yT + 2, pl.w + 2, hh + 2, seed);
+  /* 地板的**板缝**。一整条 960 宽的色带上什么都没有，看不出这是"铺出来的
+     地面"；每 64px 一道缝，才有工坊/砖房的地板感。悬空台子不画（太窄）。 */
+  if (isGround && !snowy) {
+    /* **板缝不能等距。** 每 64px 一道的等距缝，一整条屏看过去就是"栅栏"，
+       而且四条缝一模一样长 —— 这是"太规矩"里最容易被一眼看穿的一种。
+       间距抖到 46~82，偶尔一块板换个深浅、再点一个节疤。 */
+    let px = x0 + 30 + (seed % 26);
+    for (let i = 0; px < x1; i++) {
+      if (i % 4 === 2) {
+        g.fillStyle = 'rgba(96,66,40,.10)';
+        g.fillRect(px, yT + 8, 52, hh - 6);
+      }
+      g.strokeStyle = 'rgba(96,66,40,.26)';
+      g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(px, yT + 8); g.lineTo(px + 1.2, yT + hh); g.stroke();
+      if (i % 5 === 3) {
+        g.fillStyle = 'rgba(96,66,40,.22)';
+        g.beginPath(); g.ellipse(px - 18, yT + hh * 0.55, 4.6, 2.6, 0.2, 0, Math.PI * 2); g.fill();
+        g.fillStyle = 'rgba(96,66,40,.16)';
+        g.beginPath(); g.ellipse(px - 18, yT + hh * 0.55, 8.4, 4.4, 0.2, 0, Math.PI * 2); g.fill();
+      }
+      px += 46 + ((i * 37 + seed * 11) % 36);
+    }
+  }
   g.restore();
 
-  g.beginPath();
-  rr(g, pl.x - 1, pl.y + 2, pl.w + 2, pl.h + 1, 7);
+  if (!isGround) {
+    /* 台底下挂的东西：一两根根须 + 一颗悬着的石子。
+       **不挂东西的悬浮台子看起来就是个贴纸** —— 玩家不会觉得它能站人。 */
+    const rootX = x0 + 14 + (seed % Math.max(8, Math.round(pl.w - 28)));
+    g.strokeStyle = 'rgba(122,86,52,.85)';
+    g.lineWidth = 2.4; g.lineCap = 'round';
+    g.beginPath();
+    g.moveTo(rootX, botAt(rootX) - 4);
+    g.quadraticCurveTo(rootX + 5, botAt(rootX) + 9, rootX - 3, botAt(rootX) + 20);
+    g.stroke();
+    g.strokeStyle = 'rgba(122,86,52,.55)';
+    g.lineWidth = 1.8;
+    g.beginPath();
+    g.moveTo(rootX + 22, botAt(rootX + 22) - 3);
+    g.quadraticCurveTo(rootX + 26, botAt(rootX + 22) + 7, rootX + 20, botAt(rootX + 22) + 13);
+    g.stroke();
+    g.fillStyle = '#A8815C';
+    g.beginPath(); g.arc(rootX + 44, botAt(rootX + 44) + 8, 4.6, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = 'rgba(74,58,44,.6)'; g.lineWidth = 1.6; g.stroke();
+  }
+
+  bodyPath();
   g.strokeStyle = COL.ink;
   g.lineWidth = 3;
+  g.lineJoin = 'round';
   g.stroke();
 
-  snowCap(g, pl.x, pl.y, pl.w, 9, seed * 0.7, pl.y === GEN.topY);
+  snowCap(g, pl.x, pl.y, pl.w, isGround ? 9 : 13, seed * 0.7, snowy, !isGround);
+
+  /* 顶面上的小东西：**两三颗石子 + 一撮苔**。
+     它们只有 4~6px 高，压在碰撞线上也看不出来（人的鞋本来就在这条线里），
+     但没它们，台面就是一条剃刀一样平的直边。 */
+  const nTop = Math.round(pl.w / 46);
+  for (let i = 0; i < nTop; i++) {
+    const px = x0 + 12 + ((i * 97 + seed * 13) % Math.max(16, pl.w - 24));
+    if (i % 3 === 2) {
+      g.fillStyle = 'rgba(126,158,104,.9)';
+      for (let k = 0; k < 3; k++) {
+        g.beginPath();
+        g.moveTo(px + k * 3 - 3, yT + 3);
+        g.quadraticCurveTo(px + k * 3 - 4, yT - 4, px + k * 3 + (k - 1) * 2, yT - 7);
+        g.quadraticCurveTo(px + k * 3 - 1, yT - 3, px + k * 3 + 1, yT + 3);
+        g.closePath(); g.fill();
+      }
+    } else {
+      g.fillStyle = i % 2 ? '#C6A585' : '#A8815C';
+      g.beginPath(); g.ellipse(px, yT + 3, 3.4 + (i % 2), 2.4, 0.2, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = 'rgba(74,58,44,.42)'; g.lineWidth = 1.2; g.stroke();
+    }
+  }
 
   /* 地表的雪堆：**贴着板顶的几坨低雪包**。
      一整条平板雪面看着像"刷了白漆的木板"，加几坨吹雪堆才有"积雪"的意思。
      位置按列号取，不用随机 —— 否则每帧风一吹雪包就换地方。 */
-  if (pl.y === GEN.topY) {
+  if (snowy) {
     for (let i = 0; i < 9; i++) {
       const sx = pl.x + 26 + ((i * 137 + seed * 7) % Math.max(40, pl.w - 52));
       const sr = 16 + ((i * 29) % 13);
@@ -3187,6 +3534,55 @@ function drawBall(g, b) {
    **这是"能上能下"的可发现性。** 玩家看到的只是一列顶到天花板的箱子，
    光看图不会知道"按 W 能爬"；而提示只在他**真的能爬**的时候出现，
    所以既不会变成常驻噪音，也不会骗人。 */
+/* 球停在旁边时，告诉玩家"怎么推"。
+   **用户 2026-10-28 的原话是「成球之后怎么推呢」—— 这是提示缺失，不是机制缺失。**
+   推法本身一直存在（`pushBalls`：朝球的方向走过去撞它，助跑更猛），但画面上
+   一颗静止的雪球和一块石头没有区别，玩家不会想到"用身体撞"。
+   条件收得很窄，只有三条同时成立才出：
+     ① 球几乎是停的（|vx| < 140）—— 滚起来的时候不需要提示；
+     ② 玩家就在旁边（横向 110px、纵向 90px 内）—— 远了不提示，避免全场刷屏；
+     ③ 只给**最近的那一颗** —— 三颗球各挂一个气泡是噪音不是提示。 */
+function drawBallHint(g) {
+  const p = S.p;
+  if (!p || S.phase !== 'play') return;
+  let best = null, bestD = 1e9;
+  for (const b of S.balls) {
+    if (b.dead || Math.abs(b.vx) > 140) continue;
+    const dx = b.x - (p.x + p.w / 2), dy = b.y - (p.y + p.h / 2);
+    if (Math.abs(dx) > 110 || Math.abs(dy) > 90) continue;
+    const d = Math.abs(dx) + Math.abs(dy);
+    if (d < bestD) { bestD = d; best = b; }
+  }
+  if (!best) return;
+  const b = best;
+  const dir = b.x > p.x + p.w / 2 ? 1 : -1;
+  const txt = '走过去顶它';
+  const tw = 96, th = 23;
+  const bx = clamp(b.x - tw / 2, 6, W - tw - 6);
+  const by = b.y - b.r - th - 8;
+  const a = 0.72 + 0.28 * Math.sin(S.t * 5);
+  g.save();
+  g.globalAlpha = a;
+  g.fillStyle = 'rgba(20,32,40,.74)';
+  rr(g, bx, by, tw, th, 11); g.fill();
+  /* 一头小尖角指向球，读起来才像"这话是说这颗球的" */
+  g.beginPath();
+  g.moveTo(b.x - 5, by + th); g.lineTo(b.x + 5, by + th); g.lineTo(b.x, by + th + 6);
+  g.closePath(); g.fill();
+  g.fillStyle = '#EAF6FF';
+  g.font = '700 13px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.textAlign = 'center';
+  g.fillText(txt, bx + tw / 2 - 9, by + 16);
+  /* 推的方向 */
+  g.strokeStyle = '#9BE86E'; g.lineWidth = 2.4; g.lineCap = 'round';
+  const ax = bx + tw - 16 + dir * 3;
+  g.beginPath();
+  g.moveTo(ax - dir * 5, by + 8); g.lineTo(ax + dir * 4, by + 11.5);
+  g.lineTo(ax - dir * 5, by + 15);
+  g.stroke();
+  g.restore();
+}
+
 function drawClimbHint(g) {
   const p = S.p, L = S.level;
   if (!p || !L || S.phase !== 'play') return;

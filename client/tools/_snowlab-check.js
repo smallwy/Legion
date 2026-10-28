@@ -916,6 +916,116 @@ group("二十二、弹药经济（真造球，不 spawnBall）");
 }
 
 /* =========================================================================
+   二十三、手感回归：贴墙起跳不穿箱 / 走坡不弹 / 球不会中途消失
+   ---------------------------------------------------------------------------
+   **这一节守的是三次"改好了又坏回去"的坑**，全部来自用户 2026-10-28 的反馈
+   「玩家上移动会掉入箱子，移动也会出现抖动」：
+
+   ① 扒边会把人横向瞬移 ~26px 挪到台面上。冰墙上面摞着箱子时，那 26px
+      正好把人推进上一格箱体内部 —— 实测 48 次里 46 次，最深 30px
+      （30px 就是身体宽度，完全埋进去）。根因：**瞬移只验了出发点没验落点。**
+   ② 下坡时坡面一帧掉 4px、人只靠重力掉 0.6px，于是人一路腾空、落地、再腾空。
+      60 帧里 onGround 翻转 4 次 —— 肉眼就是"一路抖"。
+   ③ 球的初始生活是 4.6 秒：刚裹住怪、还没绕到球后面，它就"散了"。
+      玩家学到的不是"该怎么推"，而是"这个玩法会自己消失"。
+   ========================================================================= */
+group("二十三、手感回归（贴墙跳 / 走坡 / 球的生命）");
+{
+  /* ① 贴墙起跳：每关取几处箱墙，站定、按住 W + 方向键往箱子里挤 40 帧，
+     全程身体任何一帧穿进箱体都不许超过 6px（贴脚那一瞬的重叠不算）。 */
+  function boxPen(p) {
+    let w = -999;
+    for (const b of S.boxes) {
+      if (b.dead) continue;
+      const ox = Math.min(p.x + p.w, b.x + b.w) - Math.max(p.x, b.x);
+      const oy = Math.min(p.y + p.h, b.y + b.h) - Math.max(p.y, b.y);
+      if (ox <= 0 || oy <= 0) continue;
+      w = Math.max(w, Math.min(ox, oy));
+    }
+    return w;
+  }
+  let cases = 0, worst = 0;
+  for (let sd = 0; sd < 6; sd++) {
+    L.reset(1000 + sd * 37);
+    settle(30);
+    const p = S.p;
+    let tried = 0;
+    for (const b of S.boxes) {
+      if (tried >= 5) break;
+      if (b.dead) continue;
+      const floor = L.groundAt(b.x + b.w / 2, b.y + b.h + 4);
+      if (Math.abs(floor - (b.y + b.h)) > 3) continue;   // 只要站在地上的箱子
+      const sx = b.x - p.w - 2;
+      if (sx < 50) continue;
+      const probe = { x: sx, y: b.y + b.h - p.h, w: p.w, h: p.h };
+      if (boxPen(probe) > 0) continue;
+      tried++; cases++;
+      L.placePlayer(sx, b.y + b.h - p.h);
+      S.hp = 999; S.invuln = 999;
+      for (let f = 0; f < 40; f++) {
+        S.keys = { w: true, d: true };
+        L.step(DT);
+        S.invuln = 999;
+        worst = Math.max(worst, boxPen(p));
+      }
+      S.keys = {};
+    }
+  }
+  ck("贴墙起跳不会插进箱体（" + cases + " 处，最深 " + worst.toFixed(1) + "px ≤ 6）",
+     cases > 20 && worst <= 6, worst.toFixed(1));
+
+  /* ② 走坡：从坡的高端往下走 60 帧，落地状态不许反复翻转。
+     留 1 次容差（走到坡脚、落到地板那一下本来就该算一次落地）。 */
+  let flipWorst = 0, slopeCases = 0;
+  for (let sd = 0; sd < 6; sd++) {
+    L.reset(1000 + sd * 37);
+    settle(30);
+    const p = S.p;
+    const rp = S.plats.filter(pl => pl.kind === 'ramp' && pl.rise > 0)[0] ||
+               S.plats.filter(pl => pl.kind === 'ramp' && pl.rise < 0)[0];
+    if (!rp) continue;
+    slopeCases++;
+    const backRight = rp.rise > 0;                   // 高端在右 → 从右往左走 = 下坡
+    const sx = backRight ? rp.x + rp.w - 6 - p.w : rp.x + 6;
+    L.placePlayer(sx, L.surfY(rp, sx + p.w / 2) - p.h);
+    S.hp = 999; S.invuln = 999;
+    let flips = 0, last = S.p.onGround;
+    for (let f = 0; f < 60; f++) {
+      S.keys = backRight ? { a: true } : { d: true };
+      L.step(DT);
+      S.invuln = 999;
+      if (p.onGround !== last) flips++;
+      last = p.onGround;
+    }
+    S.keys = {};
+    flipWorst = Math.max(flipWorst, flips);
+  }
+  ck("走下坡不会一路弹（" + slopeCases + " 条坡，最多翻转 " + flipWorst + " 次 ≤ 1）",
+     slopeCases > 0 && flipWorst <= 1, flipWorst);
+
+  /* ③ 球的生命：够玩家绕到球后面、还要够他试错一次。 */
+  ck("球的生命 ≥ 12s（不是 4.6s：" + L.NUM.ball.life + "s）", L.NUM.ball.life >= 12, L.NUM.ball.life);
+  /* 找一个**空地**：出生点右边可能就是一摞箱子，人在那儿走不动，
+     球自然推不到 —— 第一版就踩了这个空，白看了两轮"没推上"。 */
+  L.reset(1000); settle(30);
+  const seg = S.plats.filter(pl => pl.kind !== 'ramp' && pl.w >= 260 && pl.y === L.FLOORS[0])[0];
+  const px0 = (seg ? seg.x : 60) + 40;
+  L.placePlayer(px0, L.FLOORS[0] - S.p.h);
+  const bb = L.spawnBall(px0 + S.p.w + 10, L.FLOORS[0] - L.ballR(1), 0, 1);
+  for (let i = 0; i < 120; i++) L.step(DT);            // 放 2 秒
+  const decayed = bb.life;
+  S.keys = { d: true };
+  for (let i = 0; i < 12; i++) L.step(DT);             // 走过去顶一下
+  S.keys = {};
+  /* **不要比"是否等于满值"**：推完之后还在继续 step，life 每帧都在掉。
+     比"推之前涨了一截"就行 —— 第一版写成 `|life − 满值| < 0.01`，
+     于是自家断言被自己多跑的那三帧打败了。 */
+  ck("推一下球的生命回满（" + decayed.toFixed(1) + "s → " + bb.life.toFixed(1) + "s）",
+     bb.life > decayed + 1,
+     decayed.toFixed(1) + " / " + bb.life.toFixed(1));
+}
+
+/* =========================================================================
    汇总
    ========================================================================= */
 console.log("\n" + "=".repeat(56));

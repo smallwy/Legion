@@ -198,11 +198,15 @@ shot("balls", () => {
   S.boxes.forEach(b => { b.dead = true; });
   L.placePlayer(780, L.GROUND_Y - 42);
   for (let i = 0; i < 50; i++) L.step(DT);
-  L.spawnBall(140, L.GROUND_Y - L.ballR(0), 0, 0);
-  L.spawnBall(300, L.GROUND_Y - L.ballR(3), 0, 3);
-  L.spawnBall(460, L.GROUND_Y - L.ballR(6), 0, 6);
-  L.spawnBall(630, L.GROUND_Y - L.ballR(12), 0, 12);
+  L.spawnBall(110, L.GROUND_Y - L.ballR(0), 0, 0);
+  L.spawnBall(280, L.GROUND_Y - L.ballR(3), 0, 3);
+  L.spawnBall(450, L.GROUND_Y - L.ballR(6), 0, 6);
+  L.spawnBall(620, L.GROUND_Y - L.ballR(12), 0, 12);
   for (let i = 0; i < 4; i++) L.step(DT);
+  /* 站到最大那颗球旁边 —— **这张图也要能看出"怎么推"**：
+     球停在脚边时才会浮出「走过去顶它」的提示，站远了什么都不显示。 */
+  L.placePlayer(560, L.GROUND_Y - 42);
+  for (let i = 0; i < 3; i++) L.step(DT);
 });
 
 /* 8) 结算。

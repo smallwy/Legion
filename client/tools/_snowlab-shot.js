@@ -54,82 +54,71 @@ function goto(x, y, n) {
   for (let i = 0; i < (n || 90); i++) L.step(DT);
 }
 
-/* 1) L3 地表：整层。这一张要能读出"右边有一摞挡住去路的箱子，
-      脚下这段地面是木箱铺的（带霜）" */
-shot("01-L3", () => {
+/** 钉住怪：不然 runner 会追过来撞掉一血，图上挂着 "-1" 和受伤闪白，像 bug。 */
+function freezeFoes() { S.foes.forEach(f => { f.speed = 0; f.vx = 0; }); }
+
+/* 1) 地表：出生点。要能读出"往右走是死路（石箱堆），脚下这段带霜的地板能挖" */
+shot("01-L6", () => {
   for (let i = 0; i < 50; i++) L.step(DT);
 });
 
-/* 2) L3 喷雪：雪弹 + 裹雪进度 */
-shot("02-L3-shoot", () => {
-  for (let i = 0; i < 40; i++) L.step(DT);
-  const f = S.foes[1];
-  f.speed = 0; f.vx = 0;
-  L.placePlayer(f.x - 96, f.y + f.h - 42);
-  S.ammo = 100;
-  S.p.face = 1;
-  for (let k = 0; k < 3; k++) { L.shoot(); for (let i = 0; i < 11; i++) L.step(DT); }
-  L.shoot();
-  for (let i = 0; i < 4; i++) L.step(DT);
+/* 2) 挖穿地表：洞露出来，往下看得见浅井那一层 ——
+      **这一张是这一版全部的说服力所在**：掉下去只掉一层，抬头还看得见上面 */
+shot("02-L6-dug", () => {
+  freezeFoes();
+  S.boxes.filter(b => b.frost && b.y + 48 === L.FLOORS[0]).forEach(b => L.breakBox(b, "ball"));
+  L.placePlayer(262, 298);
+  for (let i = 0; i < 26; i++) L.step(DT);
 });
 
-/* 3) 挖穿 L3 地板：三口覆霜箱砸掉之后，洞露出来，往下看得见中层 */
-shot("03-L3-dug", () => {
-  for (let i = 0; i < 40; i++) L.step(DT);
-  S.boxes.filter(b => b.frost && b.y < 520).forEach(b => L.breakBox(b, "ball"));
-  L.placePlayer(240, 438);
-  for (let i = 0; i < 60; i++) L.step(DT);
-});
+/* 3) 浅井：右边井口，左边一堆货箱，中间是高台 */
+shot("03-L5", () => { freezeFoes(); goto(150, 538); });
 
-/* 4) L2 中层：主战场。这一张要看得出"四处高台错落 + 箱室"，不是一条走廊 */
-shot("04-L2", () => {
-  /* 把怪钉住再出图：不然 runner 会追过来撞掉玩家一血，
-     图上会挂着 "-1" 和受伤闪白，看起来像 bug。 */
-  S.foes.forEach(f => { f.speed = 0; f.vx = 0; });
-  goto(372, 848);
-});
+/* 4) 箱室：箱子最多的一层 */
+shot("04-L4", () => { freezeFoes(); goto(700, 778); });
 
-/* 5) L2 中层的箱室近景 */
-shot("05-L2-boxes", () => {
-  S.foes.forEach(f => { f.speed = 0; f.vx = 0; });
-  goto(680, 952);
-});
+/* 5) 冰廊：第一块冰，教"子弹打不动" */
+shot("05-L3", () => { freezeFoes(); goto(400, 1018); });
 
-/* 6) L1 底层：黑暗洞窟 + 冰墙封着右边 */
-shot("06-L1", () => {
-  goto(300, 1458);
-});
+/* 6) 深窟：再往下就是门厅，洞在中间偏左 */
+shot("06-L2", () => { freezeFoes(); goto(560, 1258); });
 
-/* 7) 破冰墙：砸开外层，门的外壳（840 那两口）露出来 */
-shot("07-L1-broken", () => {
-  goto(300, 1458);
+/* 7) 门厅：冰墙封着右边，门还看不见 */
+shot("07-L1", () => { freezeFoes(); goto(300, 1498); });
+
+/* 8) 破外屏障：792 那两格砸掉，门壳（840）露出来 */
+shot("08-L1-broken", () => {
+  freezeFoes();
+  goto(300, 1498);
   S.boxes.filter(b => b.mat === "ice" && b.x === 792).forEach(b => L.breakBox(b, "ball"));
   for (let i = 0; i < 40; i++) L.step(DT);
 });
 
-/* 8) 门露出：外壳也砸掉，门出现在洞窟最深处 */
-shot("08-door-revealed", () => {
-  goto(300, 1458);
+/* 9) 门露出 */
+shot("09-door", () => {
+  freezeFoes();
+  goto(300, 1498);
   S.boxes.filter(b => b.mat === "ice").forEach(b => L.breakBox(b, "ball"));
   for (let i = 0; i < 30; i++) L.step(DT);
 });
 
-/* 9) 球四档：同一屏摆四颗，看档位能不能一眼读出来 */
-shot("09-balls", () => {
-  for (let i = 0; i < 40; i++) L.step(DT);
+/* 10) 球四档：同一屏摆四颗，看档位能不能一眼读出来 */
+shot("10-balls", () => {
+  freezeFoes();
   S.foes.length = 0;
   S.boxes.forEach(b => { b.dead = true; });
-  L.spawnBall(180, L.GROUND_Y - 22, 120, 0);
-  L.spawnBall(320, L.GROUND_Y - 27, 90, 3);
-  L.spawnBall(470, L.GROUND_Y - 33, 60, 6);
-  L.spawnBall(640, L.GROUND_Y - 39, 30, 12);
-  for (let i = 0; i < 6; i++) L.step(DT);
-  for (let i = 0; i < 90; i++) L.step(DT);   // 顺手让镜头落到 L1
+  L.placePlayer(700, L.GROUND_Y - 42);
+  for (let i = 0; i < 60; i++) L.step(DT);
+  L.spawnBall(160, L.GROUND_Y - 22, 0, 0);
+  L.spawnBall(320, L.GROUND_Y - 27, 0, 3);
+  L.spawnBall(480, L.GROUND_Y - 33, 0, 6);
+  L.spawnBall(650, L.GROUND_Y - 39, 0, 12);
+  for (let i = 0; i < 4; i++) L.step(DT);
 });
 
-/* 10) 结算面板 */
-shot("10-clear", () => {
-  goto(300, 1458);
+/* 11) 结算 */
+shot("11-clear", () => {
+  goto(300, 1498);
   S.boxes.filter(b => b.mat === "ice").forEach(b => L.breakBox(b, "ball"));
   S.killed = S.killedTarget;
   L.checkDoor();

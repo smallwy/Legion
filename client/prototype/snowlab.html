@@ -2996,18 +2996,34 @@ function drawBall(g, b) {
    光看图不会知道"按 W 能爬"；而提示只在他**真的能爬**的时候出现，
    所以既不会变成常驻噪音，也不会骗人。 */
 function drawClimbHint(g) {
-  const p = S.p;
-  if (!p || S.phase !== 'play') return;
+  const p = S.p, L = S.level;
+  if (!p || !L || S.phase !== 'play') return;
   if (!wellClimb(p)) return;
+  /* **气泡默认画在头顶，可梯顶离天花板只有 14px。**
+     3 格梯（144）+ 身高 42，头顶到上一层楼板**底面**的净空就是
+     200 − 144 − 42 = 14px，而气泡要 36px —— 直接画上去会整个跑进
+     上一层房间，看着像"楼上有人在喊"。头顶塞不下就挪到**身侧**：
+     梯子旁边那列只垫 1 格（48），身体高度上是空气，气泡压在
+     奶白墙上最清楚；挪到脚下会变成"贴在箱面上的一张标签"，
+     语义反而指向下面的箱子。 */
+  let room = 999;
+  for (const fy of L.floors) {
+    if (fy < p.y - 2) room = Math.min(room, p.y - (fy + GEN.thick));
+  }
+  let hx = p.x + p.w / 2 - 36, hy = p.y - 36;
+  if (room < 38) {
+    hy = p.y + 2;
+    hx = p.x + p.w + 6 + 72 <= W ? p.x + p.w + 6 : p.x - 78;
+  }
   const a = 0.7 + 0.3 * Math.sin(S.t * 5);
   g.save();
   g.globalAlpha = a;
   g.fillStyle = 'rgba(20,32,40,.74)';
-  rr(g, p.x + p.w / 2 - 36, p.y - 36, 72, 23, 11); g.fill();
+  rr(g, hx, hy, 72, 23, 11); g.fill();
   g.fillStyle = '#CFEFFF';
   g.font = '700 13px "PingFang SC","Microsoft YaHei",sans-serif';
   g.textAlign = 'center';
-  g.fillText('W ↑ 爬上去', p.x + p.w / 2, p.y - 19);
+  g.fillText('W ↑ 爬上去', hx + 36, hy + 17);
   g.restore();
 }
 

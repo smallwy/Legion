@@ -53,29 +53,60 @@ const L = window.SNOWLAB;
 const S = L.S;
 const DT = 1 / 60;
 
-L.reset(1);
-S.showMeter = false;
-/* 站在地表最左那段实心地板上：相机的 x 不偏移（关卡正好一屏宽），
-   所以主角的屏幕坐标 = 世界坐标，裁切框可以直接算。 */
-const seg = L.LAYERS[0].segs.filter(s => s.w >= 120).sort((a, b) => b.w - a.w)[0] || L.LAYERS[0].segs[0];
-L.placePlayer(seg.x + Math.min(seg.w * 0.35, 300), L.FLOORS[0] - L.ART_K * 42);
-/* 让镜头缓动到位、待机呼吸稳定下来 */
-for (let i = 0; i < 80; i++) L.step(DT);
-S.foes.forEach(f => { f.speed = 0; f.vx = 0; });
-S.t = 12;
-L.draw();
+(async () => {
+  L.reset(1);
+  S.showMeter = false;
 
-/* 裁切：以脚底为基准，往上取够头顶 + 呆毛，左右留出尾巴的余量。
-   数值按 ART_K=1.5 下的实际包围盒给的，换尺度要一起改。 */
-const cx = S.p.x + S.p.w / 2;
-const by = S.p.y + S.p.h - S.cam.y;
-const CW = 132, CH = 132;
-const sx = Math.round(cx - CW / 2), sy = Math.round(by - CH + 12);
+  /* 宠物贴图。**不注入就静默走代码图形**，一张"看着也行"的代码猫会让人
+     以为改动生效了 —— 这类静默回退是最难查的一类，所以要么注入成功、要么吭声。 */
+  try {
+    const { loadImage } = require("@napi-rs/canvas");
+    const petDir = path.join(ROOT, "assets", "resources", "grove", "pet");
+    const map = {};
+    for (const f of fs.readdirSync(petDir)) {
+      if (!f.endsWith(".png")) continue;
+      map["pet-" + f.replace(/\.png$/, "")] = await loadImage(path.join(petDir, f));
+    }
+    L.setArt(map);
+    console.log("宠物贴图：" + Object.keys(map).join(" "));
+  } catch (e) {
+    console.log("（宠物贴图未加载 → 走代码图形：" + e.message + "）");
+  }
 
-const out = createCanvas(CW * ZOOM, CH * ZOOM);
-const og = out.getContext("2d");
-og.drawImage(real, sx * ZOOM, sy * ZOOM, CW * ZOOM, CH * ZOOM, 0, 0, CW * ZOOM, CH * ZOOM);
+  /* 站在地表最左那段实心地板上：相机的 x 不偏移（关卡正好一屏宽），
+     所以主角的屏幕坐标 = 世界坐标，裁切框可以直接算。 */
+  const seg = L.LAYERS[0].segs.filter(s => s.w >= 120).sort((a, b) => b.w - a.w)[0] || L.LAYERS[0].segs[0];
+  L.placePlayer(seg.x + Math.min(seg.w * 0.35, 300), L.FLOORS[0] - L.ART_K * 42);
+  /* 让镜头缓动到位、待机呼吸稳定下来 */
+  for (let i = 0; i < 80; i++) L.step(DT);
 
-if (!fs.existsSync(path.dirname(OUT))) fs.mkdirSync(path.dirname(OUT), { recursive: true });
-fs.writeFileSync(OUT, out.toBuffer("image/png"));
-console.log("✓ " + OUT + "  " + (CW * ZOOM) + "×" + (CH * ZOOM) + "  (裁 " + CW + "×" + CH + " @ " + sx + "," + sy + ")");
+  /* `POSE=run` 出跑动帧。**贴图版走路的切腿动画只有动起来那一帧才看得见** ——
+     静止特写永远是站立图，切歪了（把肚子切进腿里、露出两双脚）也看不出来。 */
+  if (process.env.POSE === "run") {
+    /* **先把怪清掉。** 第一版没清，角色跑三步就撞上苔藓团、掉一血、被弹起来 ——
+       出图上是"悬在半空 + 一个 -1"，既看不出跑姿，也看不出腿有没有切歪。 */
+    S.foes.length = 0;
+    for (let i = 0; i < 26; i++) { S.p.vx = 240; L.step(DT); }
+    S.p.vx = 240;                 // step 之后会被 AI 改写，画之前再按一次
+    S.hp = 3; S.invuln = 0;
+  }
+  S.foes.forEach(f => { f.speed = 0; f.vx = 0; });
+  S.t = 12;
+  L.draw();
+
+  /* 裁切：以脚底为基准，往上取够头顶 + 呆毛，左右留出尾巴的余量。
+     数值按 ART_K=1.5 下的实际包围盒给的，换尺度要一起改。 */
+  const cx = S.p.x + S.p.w / 2;
+  const by = S.p.y + S.p.h - S.cam.y;
+  const CW = 132, CH = 132;
+  const sx = Math.round(cx - CW / 2), sy = Math.round(by - CH + 12);
+
+  const out = createCanvas(CW * ZOOM, CH * ZOOM);
+  const og = out.getContext("2d");
+  og.drawImage(real, sx * ZOOM, sy * ZOOM, CW * ZOOM, CH * ZOOM, 0, 0, CW * ZOOM, CH * ZOOM);
+
+  if (!fs.existsSync(path.dirname(OUT))) fs.mkdirSync(path.dirname(OUT), { recursive: true });
+  fs.writeFileSync(OUT, out.toBuffer("image/png"));
+  console.log("✓ " + OUT + "  " + (CW * ZOOM) + "×" + (CH * ZOOM) + "  (裁 " + CW + "×" + CH + " @ " + sx + "," + sy + ")");
+
+})().catch(e => { console.error(e); process.exit(1); });

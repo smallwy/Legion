@@ -3409,6 +3409,20 @@ let BG_IMG = null;
   im.src = src;
 })();
 
+/* ---- 宠物贴图（可选；没有就走下面的代码图形） ----
+   **主角不是这里画的，是 `assets/resources/grove/pet/cat.png` 那张图。**
+   2026-10-28 晚用户提醒：「之前是雪人关卡那个，单位也是侧着施法的，
+   pet 资源以前在这」。确实 —— 那批图（六只，统一高 292）是美术管道从
+   `ui/home/` 的立绘收缩出来的**游戏内版本**，`GroveBattle.ts` 的
+   `ART_MANIFEST` 里一直挂着 `pet-<id>`，雪人关卡（grove.html）就在贴。
+   侧视、能施法、和主界面是同一只 —— 这三件事它本来就满足。
+
+   所以这里的规矩照抄 grove：**有贴图贴图，没有才走代码图形**。
+   代码那套不退场，它是回退路径（jsdom 出图、贴图加载失败、以后换角色没出图时）。
+   注入键沿用 `pet-<id>`，和 GroveBattle 的 ART_MANIFEST 是同一套名字。 */
+const ART = Object.create(null);
+function artOf(key) { return ART[key] || null; }
+
 /* ================= 地表：寒地雪原 =================
    这一层负责回答"这是哪儿"。规矩就一条 —— **外面冷、里面暖**：
    天空和雪原全是青蓝，木箱和墙全是暖黄。有了这条关系，
@@ -5831,6 +5845,95 @@ function drawClimbHint(g) {
   g.restore();
 }
 
+/* ============================================================================
+   贴图版主角：直接贴 `grove/pet/cat.png`
+   ----------------------------------------------------------------------------
+   这套是从 `prototype/grove.html` 的 `drawPetSprite` 搬过来的，
+   连同它踩过的三个坑一起搬 —— 那几个数字不是调出来的，是量出来的：
+
+   ① **按体高缩，不按图高。** 六张图统一高 292，其中脚底到头顶只占 0.656，
+      顶上那一段是耳朵和给耳朵的留白。直接按图高缩，身体只有该有的 65.6%，
+      六只集体缩水三分之一，站在怪旁边像只幼崽。
+   ② **原图朝左。** 翻转判据是 `face > 0` 不是 `face < 0` ——
+      写反的那版是"向右跑、脸朝左"，玩家一眼看出在倒着走。
+   ③ **出手闪白用 filter 提亮，不是盖白矩形。** 盖矩形会在角色周围留一圈白框。
+      系数 0.8 不是 1.8：1.8 会把橙猫提成白猫，读作"换了只宠物"。
+
+   走路不用整只上下蹦（那是跳），是**同一张站立图切三块**、
+   绕髋关节前后对摆，身体反方向轻前倾。 */
+const PET_BODY_K = 0.656;   // 体高 / 图高
+/* **这个系数不能照抄 grove 的 0.78。**
+   它定义的是「画出来的**体高** / 碰撞高」，不是图高 —— 图高还要再除 0.656。
+   grove 用 0.78，是让猫的体高只有碰撞盒的 78%；但 snowlab 的碰撞盒
+   PLAYER_H=63 是照**代码画的那只**量的，那只的体高就是 63。
+   直接搬 0.78 的后果：体高 49，比木箱（48）高一格都不到，
+   断言第三十节「玩家比箱子高 1.31」当场作废 —— 而且断言还是绿的，
+   因为那一条按 PLAYER_H 算、根本不看贴图。**机器绿、画面错**，
+   这类只有出图能抓到。
+   这里取 1.0：体高 = 碰撞高，和代码画的那只同尺寸。
+   代价是耳朵溢出碰撞盒顶 33px（cat.png 的耳朵占图高 34%，
+   代码那只只占 14%），耳朵大是素材本身的特征，认了。 */
+const PET_VIS_K = 1.0;
+/** 站立图上前后腿的切法。原图都朝左，split 左侧是前腿。
+    hip 是髋在图高上的位置（0 = 图顶，1 = 脚底），对着不透明像素量的。 */
+const WALK_CUT = {
+  cat: { hip: 0.87, split: 0.54 },
+  dog: { hip: 0.90, split: 0.55 },
+  fox: { hip: 0.87, split: 0.48 },
+  ham: { hip: 0.93, split: 0.55 },
+  ox:  { hip: 0.84, split: 0.55 },
+  rab: { hip: 0.88, split: 0.52 },
+};
+
+function drawPetSprite(g, img, x, footY, w, h, face, A, o, id) {
+  const sq = o.squash || 0;
+  const dh = h * PET_VIS_K / PET_BODY_K * (1 - sq * 0.14);
+  const dw = dh * ((img.width || img.naturalWidth) / (img.height || img.naturalHeight)) * (1 + sq * 0.16);
+
+  g.globalAlpha = 1 * A;
+  g.save();
+  g.translate(x, footY);
+  if (face > 0) g.scale(-1, 1);      // 原图朝左
+  if (o.flash > 0) g.filter = "brightness(" + (1 + o.flash * 0.8).toFixed(2) + ")";
+
+  const cut = o.stepping && WALK_CUT[id];
+  if (!cut) {
+    g.drawImage(img, -dw / 2, -dh, dw, dh);
+    g.restore();
+    g.globalAlpha = 1;
+    return;
+  }
+
+  const hipY = -dh * (1 - cut.hip);
+  const xL = -dw / 2;
+  const xR = dw / 2;
+  const split = xL + dw * cut.split;
+  const swing = Math.sin(o.gait || 0) * 0.95;
+  const rock = Math.sin(o.gait || 0) * 0.10;
+  const yTop = hipY - 2;
+  const legH = 8 - yTop;
+
+  function part(x0, y0, rw, rh, rot, px, py) {
+    g.save();
+    g.translate(px, py);
+    g.rotate(rot);
+    g.translate(-px, -py);
+    g.beginPath();
+    g.rect(x0, y0, rw, rh);
+    g.clip();
+    g.drawImage(img, xL, -dh, dw, dh);
+    g.restore();
+  }
+
+  part(split - 3, yTop, xR - split + 8, legH, swing, (split + xR) / 2, hipY);
+  // 身体只压过髋线 3px。再往下会把站立的脚也画出来，和摆出去的腿叠成两双脚。
+  part(xL - 4, -dh - 8, dw + 8, hipY + 3 - (-dh - 8), -rock, 0, hipY);
+  part(xL - 6, yTop, split - xL + 8, legH, -swing, (xL + split) / 2, hipY);
+
+  g.restore();
+  g.globalAlpha = 1;
+}
+
 function drawPlayer(g, p) {
   const cx = p.x + p.w / 2;
   const by = p.y + p.h;           // 脚底
@@ -5863,6 +5966,22 @@ function drawPlayer(g, p) {
     g.ellipse(cx, gy - 1.5, 17 * k + 4, 4.8 * k + 1.4, 0, 0, Math.PI * 2);
     g.fill();
     g.globalAlpha = blinkA;
+  }
+
+  /* ---- 有贴图就贴图，代码图形退成回退路径 ----
+     `stepping` 不只看速度，还要看 `onGround`：在空中切腿会读成"在跑步机上"。
+     `flash` 用手上的出手计时归一化到 0~1，`drawPetSprite` 内部再乘 0.8。 */
+  const petArt = artOf('pet-cat');
+  if (petArt) {
+    drawPetSprite(g, petArt, cx, by, p.w, p.h, face, blinkA, {
+      squash: p.onGround ? 0 : clamp(-p.vy / 900, 0, 0.5),
+      flash: p.shotAnim > 0 ? clamp(p.shotAnim / 0.18, 0, 1) : 0,
+      stepping: moveK > 0.15 && p.onGround,
+      gait: ph,
+    }, 'cat');
+    g.globalAlpha = 1;
+    g.restore();
+    return;
   }
 
   g.translate(cx, by); g.scale(ART_K, ART_K); g.translate(-cx, -by);
@@ -6356,6 +6475,9 @@ const API = {
   hitFoeN: (f, n) => { for (let i = 0; i < n; i++) coatFoe(f, 1); },
   /** 出图工具用：把已解码的立绘塞进来（jsdom 没有 <img> 解码） */
   setBackdrop: (img) => { BG_IMG = img || null; },
+  /** 出图工具用：注入宠物贴图。键名沿用 `GroveBattle.ts` 的 ART_MANIFEST
+      （`pet-cat` / `pet-dog` …），两份清单用同一套名字，换角色时不会对不上。 */
+  setArt: (map) => { for (const k in map) ART[k] = map[k]; },
 };
 
 /* 关卡结构走 getter：每关重新生成，导出时必须实时取。 */

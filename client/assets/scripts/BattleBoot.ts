@@ -17,17 +17,21 @@ import { director, Director, Node } from 'cc';
 import { EDITOR } from 'cc/env';
 import { GameBootstrap } from './GameBootstrap';
 import { GroveBattle } from './grove/GroveBattle';
+import { SnowlabBattle } from './snowlab/SnowlabBattle';
 
 /**
  * 出发进战斗跑哪套玩法。
  *
- *   'grove' —— 推球（雪人兄弟式）。当前交付的玩法，
- *              场景里只建一台相机 + 一块离屏画布，玩法在 GroveRuntime 里跑。
- *   'mow'   —— 割草自动战斗垂直切片（CR-015 甲方案）。留作对照，不再迭代。
+ *   'grove'   —— 推球（雪人兄弟式）。当前交付的玩法，
+ *                场景里只建一台相机 + 一块离屏画布，玩法在 GroveRuntime 里跑。
+ *   'snowlab' —— **第二套关卡**（雪人兄弟式 + 可破坏地形 + 挖穿楼层）。
+ *                玩法在 SnowlabRuntime 里跑，挂载逻辑和 grove 同形。
+ *                还差存档结算和角色选择（主角写死 cat），所以默认不开。
+ *   'mow'     —— 割草自动战斗垂直切片（CR-015 甲方案）。留作对照，不再迭代。
  *
- * 改这一行就切玩法，两套代码都还在，谁也没被删掉。
+ * 改这一行就切玩法，三套代码都还在，谁也没被删掉。
  */
-const MODE: 'grove' | 'mow' = 'grove';
+const MODE: 'grove' | 'snowlab' | 'mow' = 'grove';
 
 let bootedScene: Node | null = null;
 
@@ -45,6 +49,14 @@ function tryBoot() {
         bootedScene = sc as unknown as Node;
         root.addComponent(GroveBattle);
         console.log('[BattleBoot] 战斗场景已接管（GroveBattle · 推球）');
+        return;
+    }
+
+    if (MODE === 'snowlab') {
+        if (root.getComponent(SnowlabBattle)) return;
+        bootedScene = sc as unknown as Node;
+        root.addComponent(SnowlabBattle);
+        console.log('[BattleBoot] 战斗场景已接管（SnowlabBattle · 雪人关卡）');
         return;
     }
 

@@ -135,6 +135,29 @@ if (rampInfo) {
   });
 }
 
+/* 4b) 上行：站在井梯顶端、头顶的洞口敞着 —— 应该浮出「W ↑ 爬上去」。
+       **这张图验的是"能上能下"**：只看箱子的话，玩家不会知道按 W 能爬。 */
+let climbInfo = null;
+for (let k = 1; k < NF - 1 && !climbInfo; k++) {
+  const h0 = L.LAYERS[k - 1].holes[0];
+  if (!h0) continue;
+  const l2 = L.LAYERS[k];
+  const a = Math.max(0, Math.ceil(h0.x / 48));
+  const b = Math.min(19, Math.floor((h0.x + h0.w) / 48) - 1);
+  for (let i = a; i <= b; i++) if ((l2.colHgt[i] || 0) >= 3) { climbInfo = { k, col: i, h0 }; break; }
+}
+if (climbInfo) {
+  shot("climb", () => {
+    freezeFoes();
+    const { k, col, h0 } = climbInfo;
+    S.boxes.filter(b => !b.dead && b.x + b.w > h0.x && b.x < h0.x + h0.w &&
+                        b.y + b.h > L.FLOORS[k - 1] - 200 && b.y < L.FLOORS[k - 1] + 4)
+      .forEach(b => L.breakBox(b, "ball"));
+    L.placePlayer(col * 48 + 9, L.LAYERS[k].floorY - 144 - 42);
+    for (let i = 0; i < 40; i++) L.step(DT);
+  });
+}
+
 /* 5) 门厅：冰墙封着门，门还看不见。**站到门左边 260px** ——
       这一段的意义就是"看见一堵冰墙挡着门"，站太远只能看到一片黑。 */
 function standNearDoor() {

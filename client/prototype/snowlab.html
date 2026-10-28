@@ -46,7 +46,8 @@
    一关平均 114 口，每层中位 28 口。它们同时是墙、是路、是盖子：
      峰值封顶 3 格（144px）—— 站上去头顶 186，不顶 200 的净空；
      相邻列高差 ≤2 格（96px）—— 小于跳高 123，整片箱山都爬得上去；
-     站在箱堆上回不了上层（恒差 82px）—— 关卡天然单向下行。
+     上行只能走洞口：洞正下方一列 3 格（井梯）+ 按 W 爬上去。
+        （光跳不行 —— 洞是镂空的，跳上去正好落回洞里。见 wellClimb 的注释）
 
    **层数 3~5（4 层占一半）。** 4~8 层时每层的箱子会被摊薄，越深越空，
    正好和"很多木箱"相反。
@@ -103,7 +104,20 @@ const NUM = {
      用户 2026-10-28：「球砸箱子 球是不能变大的」，他要的是砸箱有即时回报。
      每档之间必须拉开肉眼能分辨的差距（冰墙只认特大球，读不出档位就无从计划）。 */
   ball: { baseR: 22, perAbsorb: 2.8, maxAbsorb: 24, life: 4.6, fric: 260, maxR: 46,
-          absorbFoe: 1.0, absorbBox: 2.0 },
+          /* **撞碎箱子不涨体积。**（2026-10-28 用户否掉的旧设计）
+             理由两条：
+               ① 常识上说不通 —— 雪球撞碎木箱，凭什么把木屑吃进去变大；
+               ② 玩法上它是捷径 —— 一关一百多口箱子，砸三口就从小球变特大球，
+                  「裹住敌人」这个核心操作直接被绕过，冰墙也就成了摆设。
+
+             球唯一的长大来源是**吞掉敌人**：裹住算，被球碾死也算
+             （`killFoe` 里同样加 absorbFoe）。所以"把怪杀光了会不会卡在
+             冰墙前"依然有解 —— 杀怪本身就在喂球，不需要箱子来兜底。
+
+             absorbFoe = 2.0 而不是 1.0：门厅只有 3 只怪，档位阈值是
+             2 / 4 / 6，裹一只是"中"、两只才"大"。1.0 的时候门厅攒不出
+             能破冰墙的球 —— 这是数值上过不去，不是玩家操作问题。 */
+          absorbFoe: 2.0, absorbBox: 0 },
 
   /* 推球力度。沿用 grove 的 620 → 1209（助跑满格约 380px）。 */
   push: { base: 620, runGain: 0.95, runFull: 380 },
@@ -182,9 +196,15 @@ function rr(g, x, y, w, h, r) {
    **层高必须锁死 240，这是全关唯一不能随机的数。**
    净空 = 240 − 板厚 40 = 200；玩家高 42、跳高 123。站在 h 高的箱子上
    想上到上一层，起跳空间 (200−h−42)，需要上升 (240−h)，两者**恒差 82** ——
-   与层高取值无关。所以任何箱堆都送不回上一层，这一关是单向下行的，
-   箱子只做空间材料和高台台阶。反过来看这也是好事：层高固定，
-   跳跃/坠落/镜头这一套参数只需要对一种高度调好。
+   与层高取值无关。
+
+   **所以"能上能下"只能靠洞口 + 井梯，不能靠堆箱子。**（2026-10-28 加）
+   上一层地板上那个洞就是唯一的上行通道：洞正下方必须有一列摞到 3 格
+   （144），144 + 123 = 267 才越过上一层地板（240）。但洞是**镂空**的，
+   光能跳上去没用 —— 落点正好在洞里，还是会掉回来。真正的上行靠两件事：
+     ① 洞口正下方那一列 3 格箱堆（井梯），旁边各垫 1 格当台阶；
+     ② 站在梯顶按 W 就"爬"上去（`wellClimb`），不是跳。
+   门厅不做井梯（见生成器里 wells 的注释）。
 
    **随机和可解是两件平行的事。** 生成器出图之后必须过 `validateLevel()`：
    相邻两层的洞不能重叠（否则一穿两层）、每个洞正下方必须接得住（否则
@@ -413,7 +433,9 @@ function genLevel(seed) {
        平台上如果还放着一口箱子，从上一层掉下来的人会被它接在半空 ——
        砸开洞口只掉一个箱子的高度（48px），玩家就卡在那儿了。
        校验只查了"洞正下方是下一层地板"，管不到"中途有没有东西接着"。 */
-    const dz = k > 0 ? layers[k - 1].holes.map(h => [h.x - 24, h.x + h.w + 24]) : [];
+    /* **±48 而不是 ±24。** 井梯是 3 格高的硬列，旁边一列如果是地形（canAdd
+       被地形锁死），高差 3 一样削不平。留整整一列缓冲，井梯左右就能自由削坡。 */
+    const dz = k > 0 ? layers[k - 1].holes.map(h => [h.x - 48, h.x + h.w + 48]) : [];
     l.terrain = out.filter(t => !dz.some(z => t.x < z[1] && t.x + t.w > z[0]));
   });
 
@@ -465,8 +487,9 @@ function genLevel(seed) {
     hallTaken.push(cx);
   }
   hallTaken.push(doorX - 96);  // 门前留一格空地，不然打不开的门等于墙
-  /* 喂球木箱。**这是战斗力的兜底**：球砸箱会吸木屑长大，玩家把怪清光了
-     也能靠拆这几口把球喂到破冰墙的档位。没有它们，清光怪 = 永久卡关。 */
+  /* 门厅喂球木箱。**注意它们不再是"喂球"用的了** —— 球撞箱子已经不涨体积
+     （2026-10-28），涨体积只认吞敌人。留 5 口的原因是**弹药经济**：
+     门厅的怪会挡枪，先拆几口清出射界；顺带也是"箱子能堆"的最后一次演示。 */
   {
     const hallZones = layers[nF - 2].holes.map(h => [h.x - 24, h.x + h.w + 24]);
     const all = [];
@@ -507,19 +530,34 @@ function genLevel(seed) {
     const HGT = new Array(COLS).fill(0);
     const canAdd = new Array(COLS).fill(true);
     const MAX0 = new Array(COLS).fill(3);    // 列模型阶段就能定下的上限
+    /* 这一列是哪种洞口（-1 = 不是洞口）。削坡要用它 —— 见 setH 的注释。 */
+    const holeCol = new Array(COLS).fill(-1);
+
+    /* 上行井梯 = 上一层洞口正下方的那几列。用法见下面的注释。
+       **门厅（最后一层）不做井梯。** 门厅是终点：门壳和 5 口喂球箱占掉
+       八九列，那些列必须是 0 格（否则门打不开、球喂不出来），井梯硬要在
+       旁边摞 3 格就永远削不平 —— 200 个种子里 149 次红在这里。
+       门厅的怪数 ≥ killTarget，玩家到了那里就能凑够，不需要回上一层补。 */
+    /* **列必须完全落在洞口里。** 用 floor 取"包含洞口左边缘的那一列"时，
+       如果洞口没对齐 48（比如洞从 360 起、列从 336 起），那一列有一半是
+       在地板下面的 —— 玩家站上去，头顶正好顶着上层地板，一跳就撞回来，
+       根本升不起来（实测上升 14px 就被打回地面）。用 ceil 往洞里收一列。 */
+    const wells = (k > 0 && k < nF - 1 ? layers[k - 1].holes : []).map(hd => {
+      let a = Math.ceil(hd.x / 48);
+      let b = Math.floor((hd.x + hd.w) / 48) - 1;
+      if (b < a) { a = Math.floor(hd.x / 48); b = a; }   // 窄洞不对齐时的兜底
+      return [clamp(a, 0, COLS - 1), clamp(b, 0, COLS - 1)];
+    });
+
     for (let i = 0; i < COLS; i++) {
       const x = i * 48;
-      /* **落点带只压到 1 层，不是全禁。**
-         全禁是怕"人从上面的洞掉下来被箱子接在半空"——但 1 格只有 48，
-         踩上去一步就能走开，砸开也不塌（上层盖板塌下来正好摞成 2 格，是正常堆叠）。
-         原来一刀切成"这 3~6 列一口箱子都没有"，是每层箱子偏少的一大块。 */
-      if (hitsRange(x, 48, dz)) { MAX0[i] = 1; continue; }
       if (isHall && hallTaken.indexOf(x) >= 0) { canAdd[i] = false; continue; }
       /* **地形占掉的列不摞箱子。** 平台面在 floorY-114，
          3 格箱山在 floorY-144，硬摞上去会直接穿插。 */
       if (l.terrain.some(t => x + 48 > t.x && x < t.x + t.w)) { canAdd[i] = false; continue; }
       const hole = l.holes.find(o => x + 48 > o.x && x < o.x + o.w);
       if (hole) {
+        holeCol[i] = hole.cover;
         if (hole.cover === 'ice') { HGT[i] = 2; canAdd[i] = false; }
         else if (hole.cover === 'frost') {
           /* **霜箱允许被埋。** 35% 的洞口在盖板上再摞 1~2 层普通箱：
@@ -533,7 +571,37 @@ function genLevel(seed) {
         } else { canAdd[i] = false; }
         continue;
       }
-      if (!l.segs.some(s => x >= s.x && x + 48 <= s.x + s.w)) canAdd[i] = false;
+
+      /* 段外列不摞箱子。**这条要在井梯之前** —— 段外的列下面是空的，
+         井梯摞在段边界外侧就是一座悬空的塔，玩家既上不去也跳不过来。 */
+      if (!l.segs.some(s => x >= s.x && x + 48 <= s.x + s.w)) { canAdd[i] = false; continue; }
+
+      /* ---- 上行井梯 ----
+         **这里原来写的是 `MAX0[i] = 1`，等于把上行通道焊死了。**
+         玩家在下一层要回到上一层，唯一的路就是上一层地板上的那个洞：
+             站 3 格箱顶（144），跳 123 → 267，越过上一层地板（240）✓
+             站 2 格（96）  ，跳 123 → 219，差 21px，永远上不去      ✗
+         所以洞口正下方这几列必须摞到 3 格。它同时是"掉下来的落点"和
+         "爬回去的井梯"—— 两件事共用同一摞箱子：掉下去要砸穿三口，
+         爬上去要跳三格，成本是对称的。
+
+         盖板还封着的时候上不去（撞头），这正好是"先砸开才能走"的复习。 */
+      /* **一口井只留一列做梯，其余列只垫 1 格。**
+         全垫 3 格的话，玩家挖穿掉下来会落在 144 高处，得连砸三口才落地 ——
+         "我明明挖穿了怎么还在半空"。垫 1 格（48）砸一口就到底，
+         想上去时横移两格走到梯子那列再跳（高差 2 格 = 96 < 跳高 123）。
+         视觉上正好是"井底竖着一把梯子"，不用额外解释。 */
+      const inWell = wells.some(w => i >= w[0] && i <= w[1]);
+      if (inWell) {
+        const isLadder = wells.some(w => i === w[0]);
+        HGT[i] = isLadder ? 3 : 1;
+        MAX0[i] = isLadder ? 3 : 1;
+        continue;
+      }
+
+      /* 落点带往外一列只压到 2：**别让每次掉下来都接在三格高处**，
+         但也不能留空 —— 1 格（48）太矮，玩家会以为自己已经落到地板上了。 */
+      if (hitsRange(x, 48, dz)) MAX0[i] = 2;
     }
 
     /* ---- ② 箱堆地形 ----
@@ -567,8 +635,18 @@ function genLevel(seed) {
     /* 削坡：相邻不得超过 2 格。**优先抬高矮的那一边**（不损失箱子），
        矮的那边不能加（地形 / 落点带）时才压高的。 */
     const setH = (j, v) => {
-      if (j < 0 || j >= COLS || !canAdd[j]) return;
-      HGT[j] = clamp(Math.round(v), Math.max(0, LOCK[j]), MAXH[j]);
+      if (j < 0 || j >= COLS) return;
+      const hv = clamp(Math.round(v), Math.max(0, LOCK[j]), MAXH[j]);
+      if (!canAdd[j]) {
+        /* **敞开的洞口列是"默认不摞箱子"，不是"绝对不能摞"。**
+           井梯是硬性的 3 格，它旁边如果正好是一个 0 格的敞口洞，
+           高差 3 削不平（144 > 跳高 123），玩家连井梯都爬不上去 ——
+           200 个种子里 116 个死在这里。允许敞口洞抬到 1 格就够了：
+           洞口上多一口能砸的木箱，敞口"一眼看见"的卖点没变。 */
+        if (holeCol[j] === 'none' && hv >= 1) HGT[j] = 1;
+        return;
+      }
+      HGT[j] = hv;
     };
     for (let round = 0; round < 10; round++) {
       let moved = false;
@@ -1174,6 +1252,41 @@ function stepBody(o, dt) {
   }
   o.x = clamp(o.x, WALL_L, WALL_R - o.w);
 
+  /* ---- 扒边（只给玩家）----
+     **没有这一条，玩家就永远回不到上一层。**
+     上行通道是上一层地板上的那个洞，而洞是**镂空**的：玩家从井梯箱顶
+     跳起来，脚确实越过了上一层地板（144 + 123 = 267 > 240），但落点正好
+     在洞里，于是又原样掉回去 —— 实测"跳起来再按方向键"的窗口只有三四帧，
+     81 次里成功 7 次。那不是难度，是动作根本没做出来。
+
+     判据收得很窄，只在"脚已经够到台面、横向还差一口气"时扶一把：
+       ① 台面比脚高不超过 30px（跳得起来才给，矮处不给）
+       ② **必须在上升或最高点（vy ≤ 0）。** 这里差点写成 vy ≤ 60 ——
+          那样玩家刚踏进洞口往下掉的第一帧（vy 只有 35）也会被判定成
+          "上升中"，于是被扶回地板，永远掉不下去（逐层挖穿的断言直接红）。
+       ③ 和台子边缘的横向距离 < 16px（就在边上）
+     普通平台跳上去本来就会正常落地，走不到这里。 */
+  if (o === S.p && o.vy <= 0) {
+    const foot = o.y + o.h;
+    for (const s of solids()) {
+      if (s.kind === 'ramp') continue;
+      const dy = s.y - foot;
+      if (dy < -1 || dy > 30) continue;
+      /* 玩家在台子的右边（往左扒） */
+      /* 40px 的吸附范围：洞口 96~144 宽，梯子列在洞内、离边缘还能有
+         三十来像素 —— 收太紧就成了"必须像素级对位"，手感等于没做。 */
+      if (o.x >= s.x + s.w && o.x < s.x + s.w + 40) {
+        o.x = s.x + s.w - o.w + 4;
+        o.y = s.y - o.h; o.vy = 0; o.onGround = true; break;
+      }
+      /* 玩家在台子的左边（往右扒） */
+      if (o.x + o.w <= s.x && o.x + o.w > s.x - 40) {
+        o.x = s.x - 4;
+        o.y = s.y - o.h; o.vy = 0; o.onGround = true; break;
+      }
+    }
+  }
+
   /* 兜底：真的掉出世界了才拉回来。**不能写 GROUND_Y** ——
      GROUND_Y 现在是世界最底（1500），写它等于把中层掉下去的东西
      全部瞬移到洞窟底，玩家会看到怪物凭空出现在脚边。 */
@@ -1422,17 +1535,10 @@ function ballHitBox(b, box, dir) {
     b.vx *= def.keepSpeed;          // 穿透：撞碎之后继续滚，这是爽感的来源
     b.chain++;
 
-    /* **砸碎箱子，球要把木屑吃进去长大。**
-       这条不是装饰：① 它是砸箱唯一的即时回报（不然砸箱只剩"开路"这一个理由）；
-       ② 它是「怪杀光了怎么办」的兜底 —— 底层那四口木箱就是专门用来喂球的，
-          没有这条机制，清光怪的玩家会永久卡在冰墙前面。 */
-    const before = b.r;
-    b.absorbed = Math.min(NUM.ball.maxAbsorb, b.absorbed + NUM.ball.absorbBox);
-    b.r = ballR(b.absorbed);
-    if (b.r > before + 1.2) {
-      addText(b.x, b.y - b.r - 8, '吸木屑 · 球变大', '#CFEFFF', 14, 0.75);
-    }
-
+    /* **撞碎箱子不给体积。**
+       即时回报已经够了：`keepSpeed` 让球继续滚、`chain` 记连碎数、
+       9 点震屏 + 45ms 顿帧。体积只认"吞掉敌人"这一条来源，
+       否则裹怪这个核心操作会被"随便砸三口箱"替代掉。 */
     S.stat.ballChain = b.chain;
     S.stat.ballChainMax = Math.max(S.stat.ballChainMax, b.chain);
     S.shake = Math.max(S.shake, 9);
@@ -1719,6 +1825,43 @@ function onKey(e, down) {
   if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].indexOf(k) >= 0) e.preventDefault();
 }
 
+/* ---------------------------------------------------------------- 井梯攀爬
+   **光靠"跳"回不到上一层，得能"爬"。**
+   上行通道是上一层地板上的那个洞，而洞是镂空的：玩家从井梯箱顶跳起来，
+   脚越过上一层地板（144 + 123 = 267 > 240）之后落点正好在洞里，又原样
+   掉回去 —— 实测"跳起来再按方向键"的 81 次里成功 7 次。那不是难度，
+   是这个动作根本没做出来。
+
+   井梯的视觉本来就是"井底竖着一把梯子"，那就按梯子处理：
+   站在梯顶、头顶是敞开的洞口、按 W 就爬上去。
+   盖板没砸开时爬不上去（洞口里还有箱子），正好复习一次"先砸开才能走"。 */
+function wellClimb(p) {
+  const L = S.level;
+  if (!L) return null;
+  const feet = p.y + p.h;
+  for (let k = 1; k < L.floors.length; k++) {
+    const upper = L.floors[k - 1];
+    /* **符号别写反。** 玩家在下一层，脚在 upper 的"下面"，feet 比 upper 大。
+       站 3 格时 feet - upper = 96；站 1 格时是 192，够不着，不给爬。
+       （写成 upper - feet 的话恒为负，整段永远跳过 —— 白改一遍。） */
+    const d = feet - upper;
+    if (d < -2 || d > 120) continue;
+    const h = L.layers[k - 1].holes.filter(o => p.x + p.w > o.x + 6 && p.x < o.x + o.w - 6)[0];
+    if (!h) continue;
+    /* 洞口里还有活箱子 = 盖板没砸，爬不上去。 */
+    if (S.boxes.some(b => !b.dead && b.x + b.w > h.x && b.x < h.x + h.w &&
+        b.y + b.h > upper - 200 && b.y < upper + 4)) return null;
+    const segs = L.layers[k - 1].segs;
+    const onLeft = segs.some(s => s.x + s.w >= h.x - 2 && s.x < h.x);
+    const onRight = segs.some(s => s.x <= h.x + h.w + 2 && s.x + s.w > h.x + h.w);
+    const dl = (p.x + p.w) - h.x;              // 玩家离洞口左边多近
+    const dr = (h.x + h.w) - p.x;              // 离右边多近
+    if (onLeft && (!onRight || dl <= dr)) return { x: h.x - p.w - 3, y: upper - p.h };
+    if (onRight) return { x: h.x + h.w + 3, y: upper - p.h };
+  }
+  return null;
+}
+
 /* ---------------------------------------------------------------- 主步进 */
 function stepPlayer(dt) {
   const p = S.p;
@@ -1748,8 +1891,16 @@ function stepPlayer(dt) {
   }
 
   if ((K['w'] || K['W'] || K['ArrowUp'] || K[' ']) && p.onGround && p.lockT <= 0) {
-    p.vy = -720;
-    p.onGround = false;
+    /* 先试爬井梯，爬不了才是普通跳。顺序不能反 —— 先跳起来的话，
+       玩家在洞口正下方又被天花板挡住，等于什么也没发生。 */
+    const cw = wellClimb(p);
+    if (cw) {
+      p.x = cw.x; p.y = cw.y; p.vx = 0; p.vy = 0; p.onGround = true;
+      once('well_climb', p.x + p.w / 2, p.y - 12, '爬上来了', '#CFEFFF');
+    } else {
+      p.vy = -720;
+      p.onGround = false;
+    }
   }
 
   stepBody(p, dt);
@@ -2111,6 +2262,7 @@ function draw() {
 
   // 玩家
   drawPlayer(g, S.p);
+  drawClimbHint(g);
 
   // 粒子
   for (const f of S.frags) {
@@ -2837,6 +2989,26 @@ function drawBall(g, b) {
     g.arc(b.x, b.y, b.r + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * lifeK);
     g.stroke();
   }
+}
+
+/* 站在井梯顶端、头顶的洞口敞着时，给一个「W ↑ 爬上去」的小提示。
+   **这是"能上能下"的可发现性。** 玩家看到的只是一列顶到天花板的箱子，
+   光看图不会知道"按 W 能爬"；而提示只在他**真的能爬**的时候出现，
+   所以既不会变成常驻噪音，也不会骗人。 */
+function drawClimbHint(g) {
+  const p = S.p;
+  if (!p || S.phase !== 'play') return;
+  if (!wellClimb(p)) return;
+  const a = 0.7 + 0.3 * Math.sin(S.t * 5);
+  g.save();
+  g.globalAlpha = a;
+  g.fillStyle = 'rgba(20,32,40,.74)';
+  rr(g, p.x + p.w / 2 - 36, p.y - 36, 72, 23, 11); g.fill();
+  g.fillStyle = '#CFEFFF';
+  g.font = '700 13px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.textAlign = 'center';
+  g.fillText('W ↑ 爬上去', p.x + p.w / 2, p.y - 19);
+  g.restore();
 }
 
 function drawPlayer(g, p) {

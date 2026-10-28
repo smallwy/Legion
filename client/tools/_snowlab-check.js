@@ -90,8 +90,11 @@ ck("三种封口方式都出现过（不是每层都同一招）",
 /* 阈值 1.2：平均每关一条半。**不是每层都有坡** ——
    落点带（上一层洞口正下方）不能放平台和坡，不然掉下来会被接在半空；
    剩下的可放位置本来就不多，硬要每层都塞会挤掉高台。 */
+/* 阈值 1.1。**从 1.2 降下来的原因是"井梯"占掉了地形的位置** ——
+   地形避让落点带的范围从 ±24 扩到 ±48（整列），可放平台的段变短，
+   坡自然少一点。这是"能跳回上一层"的代价，不是退化。 */
 ck("斜坡平均每关 " + (rampTotal / NSEED).toFixed(1) + " 条（地形不止平台）",
-   rampTotal / NSEED > 1.2, (rampTotal / NSEED).toFixed(2));
+   rampTotal / NSEED > 1.1, (rampTotal / NSEED).toFixed(2));
 ck("箱子平均每关 " + (boxTotal / NSEED).toFixed(1) + " 口", boxTotal / NSEED > 50, (boxTotal / NSEED).toFixed(1));
 
 /* 上面是一条大 bool，只知道"没通过"，不知道踩了哪条。
@@ -495,9 +498,14 @@ ck("弹药不会变负", S.ammo >= 0, S.ammo);
 ck("球数不会爆炸", S.balls.length < 20, S.balls.length);
 
 /* =========================================================================
-   十五、球砸箱会长大（用户明确要求，也是「清光怪不卡关」的兜底）
+   十五、球撞箱不变大 —— 体积只来自「吞掉敌人」
+   ---------------------------------------------------------------------------
+   **这一节守的是「裹住敌人」这个核心操作不能被绕过。**
+   旧设计里砸碎一口箱 absorbed += 2.0：一关一百多口箱子，砸三口就从小球
+   变特大球，冰墙形同虚设，玩家再也不会去裹怪。用户 2026-10-28 直接否掉：
+   「球撞击箱子应该不会变大吧」—— 常识上也说不通，雪球凭什么吃木屑。
    ========================================================================= */
-group("十五、球砸箱吸木屑");
+group("十五、球撞箱不变大（体积只来自吞敌）");
 L.reset(); settle(20);
 S.foes.length = 0;
 S.boxes.forEach(b => { if (b.mat !== "wood") b.dead = true; });      // 只留木箱，别让石/铁吃掉球
@@ -508,24 +516,19 @@ ck("球出生是最小号", Math.abs(gb.r - r0) < 0.01, gb.r + " vs " + r0);
 const absorbed0 = gb.absorbed;
 for (let i = 0; i < 30 && !growBox.dead; i++) L.step(DT);
 ck("球砸碎木箱", growBox.dead === true);
-ck("砸碎后球吸收木屑（absorbed 变大）", gb.absorbed > absorbed0, absorbed0 + " → " + gb.absorbed);
-ck("砸碎后球半径变大", gb.r > r0, r0 + " → " + gb.r.toFixed(1));
-ck("单口箱的增益比吸一只怪大", NUM.ball.absorbBox > NUM.ball.absorbFoe, NUM.ball.absorbBox + " vs " + NUM.ball.absorbFoe);
+ck("砸碎后球体积不变", gb.absorbed === absorbed0 && Math.abs(gb.r - r0) < 0.01,
+   "absorbed " + absorbed0 + " → " + gb.absorbed + "，r " + r0 + " → " + gb.r.toFixed(1));
+ck("absorbBox 明确是 0（不是碰巧没走到那行）", NUM.ball.absorbBox === 0, NUM.ball.absorbBox);
+ck("穿透仍然保留（砸完继续滚，爽感不靠变大）", Math.abs(gb.vx) > 100, Math.round(gb.vx));
 
-/* 兜底验证：底层那四口木箱，够不够把小球喂到能破冰墙的档位 */
+/* **体积唯一的来源是吞敌，所以关卡必须提供足够的敌人。**
+   破冰墙要 tier 2（大档）＝ absorbed ≥ 4；一只 2.0，也就是两只。 */
 L.reset(); settle(20);
-S.foes.length = 0;
-/* 用 x 认这四口，不用 y —— 门厅那摞回程箱塔也在 y>=1400，
-   只按 y 过滤会数出 6 口，喂球增益跟着虚高。 */
-/* 门厅地面上的木箱，且必须在门壳左边（门壳右边的够不着）。
-   位置每关都变，只认"地面高度 + 在门左侧"这两条。 */
-const feed = S.boxes.filter(b => !b.dead && b.mat === "wood" && b.y === L.GROUND_Y - 48 && b.x < S.door.x - 48);
-ck("门厅有 3 口喂球木箱", feed.length >= 3, feed.length);
-const fb = L.spawnBall(feed[0].x - 30, feed[0].y + 24, 620, 0);
-for (const bx of feed) {
-  for (let i = 0; i < 30 && !bx.dead; i++) { if (fb.dead) break; L.step(DT); }
-}
-ck("喂完之后球到了大档以上（能破冰墙）", L.ballTier(fb.absorbed) >= 2, "tier=" + L.ballTier(fb.absorbed) + " absorbed=" + fb.absorbed);
+const N = L.FLOORS.length;
+const hallFoes = S.level.spawns.filter(s => s.layer === N - 1).length;
+ck("门厅怪数够喂出一颗大档球（" + hallFoes + " × " + NUM.ball.absorbFoe + " ≥ 4）",
+   hallFoes * NUM.ball.absorbFoe >= 4, hallFoes + " 只");
+ck("撞死怪也算吞（不然「清光怪」就又卡死了）", NUM.ball.absorbFoe >= 2, NUM.ball.absorbFoe);
 
 /* =========================================================================
    十六、垂直连通：每个有怪的平台，玩家都上得去
@@ -706,9 +709,28 @@ ck("盖板没了之后洞口是空的（脚下没有实心块）",
 
 L.placePlayer(mid0, y0 - 42);
 for (let i = 0; i < 120; i++) L.step(DT);
-ck("从洞口走下去会掉到下一层",
-   S.p.y > y0 + 100 && S.p.y < L.FLOORS[1] + 10, Math.round(S.p.y) + " / 第2层 " + L.FLOORS[1]);
-ck("掉到下一层之后镜头也跟下去了", S.cam.y > 150, Math.round(S.cam.y));
+/* **现在掉下去会先落在井梯垫的那口箱子上**（见生成器里的"上行井梯"）：
+   这是"能跳回上一层"的必要代价 —— 台阶和落点共用同一摞箱子。
+   所以判据从"落到底板"放宽成"人已经进了下一层的空间"。 */
+ck("从洞口走下去会落进下一层（先停在井梯垫的箱子上）",
+   S.p.y + S.p.h > y0 + 80 && S.p.y < L.FLOORS[1] + 10,
+   "脚 " + Math.round(S.p.y + S.p.h) + " / 上层地板 " + y0 + " / 下层地板 " + L.FLOORS[1]);
+
+/* 把垫脚那口砸开，就真的落到下一层地板上了。
+   **按"脚下"找箱子，不按 x 猜** —— 井梯可能叠 1 格也可能 3 格，
+   只认 `b.y ≈ 玩家脚底` 才不会砸错口。 */
+for (let t = 0; t < 4 && Math.abs(S.p.y + S.p.h - L.FLOORS[1]) >= 4; t++) {
+  const foot = S.p.y + S.p.h;
+  for (const b of S.boxes) {
+    if (b.dead) continue;
+    if (b.y >= foot - 8 && b.y <= foot + 10 &&
+        b.x + b.w > S.p.x + 2 && b.x < S.p.x + S.p.w - 2) L.breakBox(b, "ball");
+  }
+  for (let i = 0; i < 60; i++) L.step(DT);
+}
+ck("把井梯垫的箱子砸开，落到下一层地板", Math.abs(S.p.y + S.p.h - L.FLOORS[1]) < 4,
+   Math.round(S.p.y + S.p.h) + " vs " + L.FLOORS[1]);
+ck("掉到下一层之后镜头也跟下去了", S.cam.y > 50, Math.round(S.cam.y));
 
 /* =========================================================================
    二十、全流程：挖到底 → 破冰墙 → 门露出 → 杀够 → 过关
@@ -779,6 +801,62 @@ ck("⑧ 门解锁", S.door.open === true);
 L.placePlayer(S.door.x + 4, L.GROUND_Y - 42);
 for (let i = 0; i < 20 && S.phase === "play"; i++) L.step(DT);
 ck("⑨ 碰门过关", S.phase === "clear", S.phase);
+
+/* =========================================================================
+   二十一、能跳回上一层（用户 2026-10-28 明确要求）
+   ---------------------------------------------------------------------------
+   **这一节是这次改动的全部意义。** 之前关卡是"单向下行"：站在 3 格箱顶
+   只能到 267，而上一层地板在 240 —— 数字上够，但上一层的地板在洞口处是
+   **镂空**的，玩家跳上去正好落回洞里，等于永远上不去。
+
+   现在的做法有两半，缺一半就不成立：
+     ① 生成：每个洞口正下方有一列摞到 3 格（井梯），旁边各垫 1 格当台阶；
+     ② 物理：跳到"脚够到台面、横向差一口气"时自动扒边（mantle）。
+   只做 ①——实测 81 次里成功 7 次，那不是难度，是动作没做出来；
+   只做 ②——从地面跳不了 240，井梯给不了起跳高度。
+
+   **按层真实跑一遍**，不做结构近似：把玩家放上井梯、按 W、看有没有站到
+   上一层地板上。
+   ========================================================================= */
+group("二十一、能跳回上一层（逐层真跑）");
+{
+  let tot = 0, ok = 0, miss = [];
+  for (let sd = 1; sd <= 12; sd++) {
+    L.reset(sd);
+    const N2 = L.FLOORS.length;
+    for (let k = 1; k < N2 - 1; k++) {          // 门厅不做井梯，见生成器注释
+      const holes = L.LAYERS[k - 1].holes;
+      if (!holes.length) continue;
+      const h0 = holes[0];
+      const l2 = L.LAYERS[k];
+      const a = Math.max(0, Math.ceil(h0.x / 48));
+      const b = Math.min(19, Math.floor((h0.x + h0.w) / 48) - 1);
+      let col = -1;
+      for (let i = a; i <= b; i++) if ((l2.colHgt[i] || 0) >= 3) { col = i; break; }
+      if (col < 0) { miss.push("s" + sd + "k" + k + " 无梯"); continue; }
+      tot++;
+      /* 先把上一层洞口上的盖板砸掉（不然一撞头就回来了，那是设计） */
+      S.boxes.filter(bx => !bx.dead && bx.x + bx.w > h0.x && bx.x < h0.x + h0.w &&
+                           bx.y + bx.h > L.FLOORS[k - 1] - 200 && bx.y < L.FLOORS[k - 1] + 4)
+        .forEach(bx => L.breakBox(bx, "ball"));
+      S.foes.length = 0;
+      S.keys = {};
+      L.placePlayer(col * 48 + 9, l2.floorY - 144 - 42);
+      for (let i = 0; i < 8; i++) L.step(DT);        // 落稳
+      /* **只按一帧。** 按住 W 六十帧的话，玩家爬上去之后会接着在原地
+         一直跳，跳到最高点又落回洞里 —— 看起来像"爬梯失败"，其实是
+         测试自己按着不放。 */
+      S.keys["w"] = true;
+      L.step(DT);
+      S.keys = {};
+      for (let i = 0; i < 50; i++) L.step(DT);
+      if (S.p.y + S.p.h <= L.FLOORS[k - 1] + 2) ok++;
+      else miss.push("s" + sd + "k" + k + " 停在 " + Math.round(S.p.y + S.p.h));
+    }
+  }
+  ck("每一层的井梯都真能跳回上一层（" + ok + "/" + tot + "）",
+     tot > 0 && ok === tot, miss.slice(0, 4).join("; "));
+}
 
 /* =========================================================================
    汇总

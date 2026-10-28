@@ -695,7 +695,14 @@ console.log("\n=== 11. 八关几何：每关都得能下到地面、推得到营
     const R = P.curStage();
 
     ok(P.PLATS.some(p => p.kind === "ground"), R.name + "：有地面");
-    ok(P.PITS.some(p => p.kind === "fire"), R.name + "：有火坑");
+    /* 崖坎没有火坑，也放不下火坑 —— 它的球道只有**一段**：
+       砸穿岩壳 → 落进崖腔 → 向左滚进营地（116..300 这一段地面）。
+       火坑摆哪儿都会吃掉这条路上唯一的球：
+       摆 116..300 里 = 必烧，摆右侧 = 那里是土崖的立面，根本没有地面。
+       **"每屏必须有火坑"是个假规矩** —— 火坑的语义是"接住滚回来的球"，
+       而这一屏的球不会滚回来（它是从上面砸下来的）。 */
+    const NO_FIRE = ["wither_cliff"];
+    if (!NO_FIRE.includes(R.id)) ok(P.PITS.some(p => p.kind === "fire"), R.name + "：有火坑");
     ok(P.PITS.some(p => p.kind === "mud"), R.name + "：有泥坑");
     ok(P.CAMP && P.CAMP.w > 0, R.name + "：有营地");
     // 教学关不放桩（出生点就在旁边，所有弹丸出门第一帧就被它吃掉）；
@@ -703,12 +710,23 @@ console.log("\n=== 11. 八关几何：每关都得能下到地面、推得到营
     // 回弹井同样不放 —— 唯一可放的位置 646..852 正是"打上 462 层再推下来"的
     // 回家路，桩杵在那儿球撞上去就弹回左边的火坑，打不打上去结局一样。
     // **可破坏件不是每屏都必须有的零件**，硬塞一个就是给球道添堵。
-    const NO_STUMP = ["entry", "slope", "rebound"];
+    /* 崖坎同样没有木桩，理由和火坑同源：球砸穿岩壳之后落进崖腔，
+       崖腔左右是 460 的土崖立面和洞口，中间整段都是球的必经路。
+       硬塞一根桩进去，球撞上就弹回右墙 —— 等于把唯一的球道堵死。 */
+    const NO_STUMP = ["entry", "slope", "rebound", "wither_cliff"];
     if (!NO_STUMP.includes(R.id)) ok(S.stumps.length > 0, R.name + "：有木桩");
 
-    const shaft = shaftOf(P, 350, 462);
-    ok(shaft && shaft.w >= 55, R.name + "：竖井够宽（球能穿过）",
-      shaft ? "w=" + shaft.w.toFixed(0) : "两层缺口没有交集");
+    /* 「竖井」= 350 层和 462 层的缺口交集。**这两层不是每屏都有** ——
+       断崖路（谷道 + 山丘）和回弹井本来就没有 350 层，`gapsAt` 会退化成
+       "整屏一个缺口"，于是这条断言和下面的落点断言都变成**测了空集**：
+       全绿，但什么也没测（断崖路就因此在"木桩挡住落点"上报了个假红，
+       落点 50..910 根本不是井，是整面墙）。没有双层结构就不该算竖井。 */
+    const layered = (y) => P.PLATS.some(q => q.kind !== "ground" && Math.abs(q.y - y) < 8);
+    const hasTwo = layered(350) && layered(462);
+    const shaft = hasTwo ? shaftOf(P, 350, 462) : null;
+    ok(!hasTwo || (shaft && shaft.w >= 55), R.name + "：竖井够宽（球能穿过）",
+      hasTwo ? (shaft ? "w=" + shaft.w.toFixed(0) : "两层缺口没有交集")
+             : "本屏没有 350/462 双层结构（不算竖井）");
 
     // 木桩不能站进坑里，也不能站在竖井的落点上。
     // 这两条都是截图看出来的：双坑的木桩原来立在火坑右半截，
@@ -739,9 +757,18 @@ console.log("\n=== 11. 八关几何：每关都得能下到地面、推得到营
       if (S.p) { S.p.x = P.WALL_R - 40; S.p.vx = 0; }
       // 记最低点而不是看最后落在哪：有斜坡那关球会掉到地面又被坡送回来，
       // 只看最终 y 会误判成"掉不下去"。
+      /* 4 秒对"一层竖向井"够，对**盘山道**不够 —— 球要先跑完四段坡才落到地面，
+         实测要 6~8 秒，所以给 12 秒。
+
+         **必须先把气流关掉再测。** 判的是"这一屏有没有被封死"，
+         而盘山道的球在落到底部之前就被井接走了（设计如此），
+         不关井的话它永远到不了地面，这条断言会变成"在测井"，不是在测封死。
+         关掉井之后球必须落到地面 —— 这才是这条断言真正想问的事。 */
+      const savedDraft = P.UPDRAFTS.splice(0, P.UPDRAFTS.length);
       let low = b.y;
-      for (let k = 0; k < 60 * 4; k++) { P.tick(1 / 60); if (b.dead) break; low = Math.max(low, b.y); }
-      ok(b.dead || low >= 550, R.name + "：球真的能掉到地面", "最低 y=" + low.toFixed(0));
+      for (let k = 0; k < 60 * 12; k++) { P.tick(1 / 60); if (b.dead) break; low = Math.max(low, b.y); }
+      for (const u of savedDraft) P.UPDRAFTS.push(u);
+      ok(b.dead || low >= 550, R.name + "：球真的能掉到地面（关掉气流）", "最低 y=" + low.toFixed(0));
     }
 
     // 营地必须**推得到**，否则这屏的「落袋」目标是个死关。
@@ -1721,7 +1748,13 @@ console.log("\n=== 20. 第六轮：坡、下穿、波次、BOSS ===");
       const st = P.curStage();
       for (const r of P.RAMPS) {
         const hi = Math.min(r.yL, r.yR), lo = Math.max(r.yL, r.yR);
-        ok(hi >= 300 && lo <= P.GROUND_Y + 2, st.name + "：坡在场地内",
+        /* 这两条判的是**坡有没有跑出场地**：上不出画面（70 = 最高层 156 再往上
+           留一段余量）、下不钻进地面。原来写的是 `hi >= 300`，意思是
+           "每条坡都得从 300 以下落到地面" —— 那只在"一屏一条坡"时等价，
+           盘山道的四条坡各占一段高度，按老判据会把三条正确坡判红。
+           **"坡网真的通到地面"由 §11 那条「球真的能掉到地面」管** —— 那里不放球在坡上，
+           只看"从 350 丢一颗球下去，最终有没有到过地面"。 */
+        ok(hi >= 70 && lo <= P.GROUND_Y + 2, st.name + "：坡没跑出场地",
            "y " + hi + ".." + lo);
 
         // 坡盖住营地的时候有个坑：球在坡上时 y < GROUND_Y，营地判定不触发，

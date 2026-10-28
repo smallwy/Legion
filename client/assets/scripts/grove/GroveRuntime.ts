@@ -1847,76 +1847,140 @@ const LEVELS = [
   },
 
   /* ---------------- 14 ----------------
-     全八关里落差最大的一屏：五段窄台，最窄 140。
-     没有一段够球横向滚两秒，打法是"推到边缘、让它往下砸"。
+     ★ 2026-10-28 第四次重做：**梯田崖壁**。
 
-     ★ 2026-10-28：这一屏成了「上行」的样板。
-     在此之前它是 27 屏里唯一一屏**玩家和球都上不到最高处**的关卡：
-     156 层（26..200）离下面最近的一块台面（462 层 26..180）有 306px，
-     而玩家跳 123px、球根本不会跳 —— 顶层站着的那只虫是个永远打不到的摆设，
-     ALL9 机器人在这屏 0/9、240 秒超时，也就是"这一屏没有解法"。
+     ## 前三版错在哪（逐条对应用户的原话）
 
-     一口风柱把这一整层接回关卡：**站在柱里起跳，风把你顶 331px**，
-     于是 地面 → 462 → 156 变成两步。球同样被吹上去（柱高 300 + 惯性 100 = 400），
-     正好落在 156 层的台面上。**"怎么上去"这件事第一次有了答案。** */
+     ① 「这个透明的气流柱很突兀」→ 平地长出一根柱子，没有来源。
+     ② 「只有一个陡桥，不太够」→ 空间信息量不够。
+     ③ 「长坡不要搞得很不自然很突兀」「右边几个横着的是为了设计而设计」
+        → **这一版要解决的就是这两句。**
+
+     病根：前几版的台面全是"悬空的一根圆木"，台下一直空到地面。
+     一屏里两三条这样的板，再加一段 25° 的木栈道斜架过去 —— 那读起来是**工地**，
+     不是山谷。玩家看到的是"有人在这儿搭了一层东西"，不是"这块地比较高"。
+
+     ## 这一版：没有一条悬空台，也没有一段坡
+
+     地形是**三级实心崖坎**，从左往右升高，每级从台面一直填进地下：
+
+          崖顶 234              ████████████  700..934  ← 造球点 · 木箱 862
+                                │
+          中台 340        ██████│  460..700  ← 球第一次落地
+                          │     │
+          崖腔 446   ▒▒▒▒▒▒│▓│   │  240..420 岩壳 / 420..460 崖腔
+          地面 556  ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+                    → 营地 56..116
+
+     · **台面是草皮，立面是岩块** —— 和地面同一套语汇，所以读作"地"，
+       不读作"构件"（`drawEarthBlock` 里记着三条画法约束的来历）。
+     · 每级立面是一堵 `wall: true` 的竖直硬墙，`hide: 1` 关掉它的视觉
+       （墙的视觉由崖壁本身承担 —— 在崖壁上再贴一根石柱，物理对、画面错）。
+     · 每级落差 106~110，全在跳跃高度 123 之内 → 上行路就是**攀着崖壁跳**。
+
+     ## 第三级是「岩壳」：全屏唯一会被玩家改掉的地形
+
+     崖脚被水掏空，顶上只剩一层 20 厚的薄岩板（`mat: "shell"`，`drawShellPlat`）。
+     球从 460 落下来砸在它上面 → **塌** → 露出下面的崖腔（`drawShellPlatUnder`）。
+     塌过之后这一趟的后续球直接穿过去 —— 玩家亲眼看见"我把这层砸开了"。
+
+     土崖砸不破、岩壳砸得穿，而这个区别**在画面上是一眼可见的**
+     （实心岩体 vs 一层悬在洞上的薄板 + 裂缝），不需要教学，也不需要 UI。
+
+     **崖腔里 430..464 那根石柱是必须的**：壳是会消失的地形，而它是人上中台的
+     必经一级。没有它，砸穿壳之后玩家被困在地面（落差 216 > 跳跃 123），
+     再也上不了崖顶推球 —— 整屏变成死局。做成从地面长上来的石柱而不是悬空小台：
+     悬空方块在黑洞前读作"一个飘着的箱子"，立着的石柱读作"掏空时这里没塌"。
+
+     ## 木箱在崖顶右端：向左推还是向右推
+
+       在 820 造球、**向右**推 → 滚 42px 撞碎木箱（掉宝箱）→ 撞右墙弹回（×0.62）
+                                  → 滚下崖，到崖缘时速度更低
+       在 820 造球、**向左**推 → 直接下崖，快，但没有箱子
+
+     （先试过把箱子放中台 590：球从崖顶落下的抛物线扫过中台整段，
+     两种力度都撞得到 —— 那是假取舍：断言能过，玩家没有第二个选项。）
+
+     ## 墙的端点是个坑（花了三轮才定位）
+
+     `reflectStep` 把墙端点当镜面。砸穿岩壳那一帧球心离墙端 7px，
+     整颗被弹飞：vy 从 +366 变 -546，球凭空弹回三层楼高。
+     所以墙顶端不是"比台面低一点"，要低到**球已经离开 ±13 判定区**：24px 不够，55px 才够。
+     */
   {
-    id: "wither_cliff", name: "断崖路", sub: "一口风柱 · 直通最高层",
-    note: "只有风柱能上去。球被吹到顶层，从那儿推下来能一次压一整片",
+    id: "wither_cliff", name: "崖坎", sub: "三级梯田 · 一推到底",
+    note: "推一下，球自己三级走完；轻推能撞开中台的木箱，狠推走得更快",
     theme: "wither3",
-    goal: "nohit", par: { time: 75, made: 10 },
+    goal: "nohit", par: { time: 80, made: 10 },
     plats: [
       { x: WALL_L, y: GROUND_Y, w: WALL_R - WALL_L, h: 44, kind: "ground" },
-      { x: WALL_L, y: 462, w: 154, h: 20, kind: "ledge" },   // 26..180
-      { x: 560,    y: 462, w: 140, h: 20, kind: "ledge" },   // 560..700
-      { x: 220,    y: 350, w: 200, h: 20, kind: "ledge" },   // 220..420
-      { x: 740,    y: 350, w: 140, h: 20, kind: "ledge" },   // 740..880
-      { x: 460,    y: 248, w: 220, h: 20, kind: "ledge" },   // 460..680
-      { x: WALL_L, y: 156, w: 174, h: 20, kind: "ledge" },   // 26..200 最高点
-    ],
-    /* 风柱 x=100（55..145），和 462 层左段（26..180）上下对齐 ——
-       **必须对齐**：柱把人和球送到 462 的高度，落点若在板外，
-       那就成了"把你送到半空再摔下去"。而且第二次起跳也在同一个柱里，
-       一次错位，两段上升全废。
+      /* 三级崖坎。`h` 是**填充深度**（不是厚度）：一路填到地面以下 60，
+         被后画的地面盖住 —— 所以底边永远不露硬边，也永远不需要渐隐。 */
+      { x: 700, y: 234, w: 234, h: GROUND_Y - 234 + 60, kind: "earth" },  // 崖顶
+      { x: 460, y: 340, w: 240, h: GROUND_Y - 340 + 60, kind: "earth" },  // 中台
+      /* 下台不是土台，是**一层岩壳**：崖脚被水掏空了，顶上剩一层薄岩板。
+         220 宽、20 厚，下面整段是空的（`drawShellUnder` 画的崖腔）。
+         球砸上去会塌 —— 这是全屏唯一能被玩家改掉的地形。
 
-       `dir: 1` = 侧风向右。加它不是装饰，是让这一屏**闭环**：
-       球被吹到 156 层之后如果竖着停在那儿，它就一直漏气、等玩家上来推，
-       而玩家上来要两步跳跃 —— 机器人一次都没走通（清场 4/9）。
-       有了侧风，球在上升途中就带着横向速度，落到 156 层后自己滚出 200 的
-       边缘摔回地面，**一圈不用人碰**。玩家要做的只剩"决定什么时候推进去"。 */
-    updrafts: [{ x: 100, w: 90, y: GROUND_Y, h: 300, dir: 1 }],
-    /* 248 层左端（460..680）的硬墙。它解决的是一个很具体的问题：
-       248 层是球唯一能横着走两趟的台面（220 宽），可球从右往左滚到 460
-       就掉下去了 —— 只走一趟。立一堵硬墙在 472（台面左端内侧 12px），
-       球撞上去**保速弹回**（不是墙的 ×0.62），于是能在 520 / 600 两只怪
-       身上各扫一次。玩家跳得过去（墙高 60 < 跳跃 123），球过不去。 */
+         **先试过"土台 + 左端伸出一块朽木"**：那块 70 宽的烂圆木横架在崖脚，
+         两端还有年轮断面 —— 截图一看是"有人在这儿架了一根木棍"，
+         正是用户否掉的毛病换了个尺寸。壳是一整层，不是一根。 */
+      { x: 240, y: 446, w: 180, h: 20, kind: "ledge", mat: "shell" },
+      /* 崖腔里**没被掏空的那一段岩体**：壳塌了之后，人还能从这儿爬上去。
+         这不是装饰，是这一屏的"备份楼梯" —— 壳是唯一会消失的地形，
+         而它是人上中台的必经一级。没有它，玩家砸穿壳之后就被困在地面，
+         再也上不了崖顶推球（落差 216 > 跳跃 123，硬跳上不去）。
+
+         做成**从地面长上来的石柱**（h 填到地下），不是悬空的一小块台：
+         悬空的小方块在黑洞前面读作"一个飘着的箱子"，
+         而立着的石柱读作"掏空的时候这里没塌" —— 同一块几何，两种解释。 */
+      { x: 430, y: 446, w: 34, h: GROUND_Y - 446 + 60, kind: "earth" },
+    ],
+    /* 木箱在**崖顶右端**，不是中台。
+       （试过中台 590：球从崖顶落下的抛物线扫过中台整段，两种力度都撞得到，
+       "取舍"是假的 —— 断言能过，玩家却没有第二个选项。）
+       放在崖顶 862 之后，选择变成：
+         · 在 820 造球、**向右**推 → 球滚 42px 撞碎木箱，再撞右墙弹回、滚下崖
+         · 在 820 造球、**向左**推 → 球直接下崖，快，但没有箱子
+       向右推会损失一次撞墙的动能（×0.62），球到崖缘时更慢 —— 这就是代价。 */
+    loots: [
+      { x: 862, y: 234, w: 56, h: 44, hp: 1 },
+    ],
+    /* 每级立面的竖直硬墙。**顶端必须避开球道** ——
+       这条踩过一个很贵的坑：墙的端点会被 `reflectStep` 当成镜面，
+       球擦过端点时整颗被弹飞（实测砸穿朽木那一帧，球心离墙端 7px，
+       反弹后 vy 从 +366 变成 -546，球凭空弹回三层楼高）。
+
+       所以顶端不是"比台面低一点"就行，要**低到球已经离开墙的判定宽度**：
+       砸穿的球从 247 以 -484 下坠，到 y=495 时 x≈190，早已在墙的
+       ±13 判定区（227..253）之外。**24px 不够，55px 才够。** */
+    /* 只有**土崖的立面**需要墙。岩壳的左端不需要 ——
+       壳下面就是崖腔，玩家和球都该能走进去（洞是可以进的），
+       在那里立一堵隐形墙，表现就是"球滚到 240 自己弹回来"。 */
     reflects: [
-      { x1: 472, y1: 248, x2: 472, y2: 188, wall: true },
+      { x1: 460, y1: 364, x2: 460, y2: GROUND_Y, wall: true, hide: 1 },
+      { x1: 700, y1: 258, x2: 700, y2: GROUND_Y, wall: true, hide: 1 },
     ],
     pits: [
-      { x: 320, y: GROUND_Y, w: 100, kind: "mud"  },
-      { x: 720, y: GROUND_Y, w: 90,  kind: "fire" },
+      { x: 150, y: GROUND_Y, w: 66, kind: "mud" },
     ],
-    stumps: [{ x: 620, y: GROUND_Y, w: 44, h: 78, hp: 2 }],
-    camp: { x: 852, y: GROUND_Y, w: 82 },
+    stumps: [],
+    camp: { x: 56, y: GROUND_Y, w: 60 },
     waves: [
       [
-        /* 这只**必须站在柱外**（柱 55..145）。留在 80 的话它整天站在风里 ——
-           物理上没影响（敌人不感知气流），但玩家看到的是"虫站在气流里没事"，
-           会以为气流是假的。放 168 让它的包围盒（160..176）整个离开柱右缘。 */
-        { foe: "bug",  x: 168, y: 462 },
-        { foe: "bug",  x: 620, y: 462 },
-        { foe: "bug",  x: 300, y: 350 },
-        { foe: "bug",  x: 160, y: 156 },
+        { foe: "bug",  x: 820, y: 234 },
+        { foe: "bug",  x: 620, y: 340 },
+        { foe: "bug",  x: 380, y: 446 },
+        { foe: "bug",  x: 200, y: GROUND_Y },
       ],
       [
-        { foe: "bug",  x: 800, y: 350 },
-        { foe: "boar", x: 520, y: 248 },
-        { foe: "bug",  x: 600, y: 248 },
-        { foe: "crow", x: 340, y: 300, fly: 1 },
+        { foe: "boar", x: 860, y: 234 },
+        { foe: "crow", x: 520, y: 200, fly: 1 },
+        { foe: "bug",  x: 400, y: 446 },
       ],
-      [{ foe: "boss", x: 460, y: GROUND_Y, lv: 5 }],
+      [{ foe: "boss", x: 180, y: GROUND_Y, lv: 5 }],
     ],
-    spawn: { x: 70, y: GROUND_Y },
+    spawn: { x: 150, y: GROUND_Y },
   },
 
   /* ---------------- 15 ----------------
@@ -3882,7 +3946,12 @@ let REFLECTS = [];
 let UPDRAFTS = [];
 
 /** 柱顶速度。648 → 惯性 100px（GRAV 2100） */
-const DRAFT_RISE = 648;
+/** 射流初速。1300 → 1300²/4200 ≈ 402px，正好"地面 → 156 层"。
+ *  这个数取代了原来柱高 300 + 惯性 100 的组合：现在没有柱身，
+ *  全靠这一下的初速把球抛上去。 */
+const DRAFT_RISE = 1300;
+/** 喷口高度：只有离地这么近才有推力。见 draftAt 的注释。 */
+const DRAFT_MOUTH = 96;
 /** 同一颗球每多进一次柱，力乘这个数 */
 const DRAFT_DECAY = 0.55;
 /** 侧风加速度 / 侧风目标速度。0 = 纯竖直
@@ -3895,14 +3964,13 @@ const DRAFT_DECAY = 0.55;
 const DRAFT_SIDE = 700;
 const DRAFT_PUSH = 90;
 
-/** 站在气流柱里起跳的高度。1180 → 1180²/4200 ≈ 331px。
+/* `DRAFT_LIFT` 已删除（2026-10-28）。
  *
- *  **这个数只能这么算出来，不能调手感**：它要够"462 → 156"那一档（306px），
- *  又必须小于"一楼直接到顶层"（556-156 = 400px）。331 落在两者之间，
- *  于是气流柱的用法被几何定死了 —— **一次上一层，连跳两次到顶**。
- *  给到 400 以上，玩家在楼下按一下就飞到最高处，中间三层全部作废；
- *  给到 306 以下，那层永远上不去，球被吹上去也没人推得动它。 */
-const DRAFT_LIFT = 1180;
+ * 它原来是"在柱里起跳给 1180 的初速"= 固定 331px。那个数只在
+ * 「柱子里只有一层落脚面」时成立；盘山道一叠层，同一口井上压着两三层坡，
+ * 站在高处起跳就会被顶得更高、直接飞出画面 —— 不是参数没调好，
+ * 是**这个模型本身错了**。现在改成按风口顶端反推（见 updatePlayer 的跳跃段），
+ * 站哪儿起跳都停在同一个高度。 */
 
 /** 某个点上有没有气流柱。**玩家、球共用同一个判定** ——
  *  两处各写一遍必然漂移，而这个漂移的表现是"球被吹上去了玩家上不去"，
@@ -3910,7 +3978,18 @@ const DRAFT_LIFT = 1180;
 function draftAt(x, y) {
   for (const u of UPDRAFTS) {
     if (x < u.x - u.w / 2 || x > u.x + u.w / 2) continue;
-    if (y > u.y + 8 || y < u.y - u.h) continue;
+    /* **只有喷口附近有力，柱身没有。**（2026-10-28 从"整根柱托举"改成"喷口射流"）
+     *
+     * 整根柱托举在"柱里只有一层落脚面"时是成立的，但盘山道一叠层就崩：
+     * 柱高 300，一定会横穿好几条坡，**球滚到柱的 x 范围里就被原地托起来**，
+     * 下面几段坡等于纯装饰（实测：四段坡只跑了两段）。
+     * 想把柱挪出坡网又做不到 —— 坡是之字形，左右两端都要用，柱无论放哪边都会压到一段。
+     *
+     * 所以改成物理上更简单的东西：**地缝喷出的一股射流**。
+     * 只在喷口上方 96px 内有推力，把东西"射"上去，之后是纯弹道。
+     * 这样坡怎么叠都不影响，喷口只管自己脚下那一小块 ——
+     * 而且"球被喷上去、划一道弧线落在顶层"本身就是最好的物理感。 */
+    if (y > u.y + 8 || y < u.y - DRAFT_MOUTH) continue;
     return u;
   }
   return null;
@@ -3958,6 +4037,70 @@ let BROKEN = [];            // 已被打碎的浮台（存 PLATS 里的对象引
 
 /** 这块台面是不是碎了。**空数组时直接 false**，26 屏的普通怪不用付这个开销。 */
 function isBroken(p) { return BROKEN.length > 0 && BROKEN.indexOf(p) >= 0; }
+
+/* ----------------------------------------------------------------------------
+   材质：球是攻城锤（2026-10-28，用户："有的材质球砸上去就会破，有的不会"）
+   --------------------------------------------------------------------------
+
+   在这之前，浮台只有一种物性：**撞不坏、踩得住、球滚过去**。
+   `BROKEN` 是 BOSS「断台」技能的专用记忆 —— 只有 BOSS 能拿走一块板。
+
+   现在把它拆成两层：
+     · `mat: "rot"`  → 朽木。球**砸**得穿，塌了就是一条往下的通路。
+     · 不带 mat      → 实心（木台 / 岩台 / 地面）。前 26 屏全是这种。
+
+   **"不带 mat 就是结实"是故意的**：玩家用 26 屏学会了"浮台踩得住"，
+   新语汇只需要教一次（朽木长什么样），不用重新教"哪些台子会碎"。
+   给每种材质都起个名字，玩家反而要背一张表。
+
+   `SMASH_VY` 是**唯一**的门槛，取 320 而不是"看着差不多"：
+     · 从一层高的地方砸下来 = √(2·2100·106) ≈ 667，远超
+     · 贴着台面滚过去 = 0
+     · 中间没有任何模糊地带，所以玩家的心智模型是"砸不砸"，
+       不是"这个速度够不够" —— 后者玩家算不出来，也测不出来。
+   -------------------------------------------------------------------------- */
+const SMASH_VY = 320;
+
+/** 哪些材质砸得穿。
+ *  `rot`   = 朽木（烂掉的圆木，一砸就塌）
+ *  `shell` = 岩壳（崖脚被掏空后剩的那层薄岩石，一砸就塌）
+ *
+ *  两种物理完全一样，**视觉必须不一样** —— 因为它们出现在不同的关卡语境里：
+ *  枯木林里是"烂木头"，谷地里是"被水掏空的岩壳"。同一套机制换个皮，
+ *  玩家才不会在第二屏问"为什么这里的木头和刚才的石头一样"。 */
+const SMASHABLE = { rot: 1, shell: 1 };
+
+/** 球砸穿一块朽木台。
+ *
+ *  三件事必须一次做完，少一件就会出现"物理层和绘制层分家"：
+ *   ① 记进 BROKEN（物理 / 绘制 / 预瞄线三处都读它）
+ *   ② 把球**重新抬起来**并给回一点下坠速度 —— `stepBody` 已经把它贴在台面上
+ *      并且 `vy = 0` 了，不抬的话球会站在一块不存在的板上，看起来是"悬空定格"
+ *   ③ 撞穿一层要付速度（`vx *= 0.78`），否则穿两层楼板之后球还是满速，
+ *      "砸穿"就没有重量感，只剩"穿过去了"
+ */
+function smashPlat(b, p) {
+  BROKEN.push(p);
+  S.stat.smashed = (S.stat.smashed || 0) + 1;
+  /* 碎片从**台面的两端**崩出去，和 `crackPlat` 同一套语言：
+     中间炸开读作"这块板爆了"，两端崩开读作"这块板塌了"。 */
+  for (let i = 0; i < 16; i++) {
+    const edge = i % 2 ? p.x : p.x + p.w;
+    addFrag(edge + rand(-12, 12), p.y + rand(-6, 14), 8, i % 3 ? "#7A5634" : "#A57B4A");
+  }
+  addText(p.x + p.w / 2, p.y - 26, "砸穿了", "#E8C08A", 21, 1.15);
+  S.shake = Math.max(S.shake, 9);
+  S.flash = Math.max(S.flash, 0.05);
+  hitStop(0.05);
+
+  b.y = p.y + 6;
+  b.onGround = false;
+  b.ground = null;
+  b.vy = Math.max(180, b.landVy * 0.55);
+  b.vx *= 0.78;
+  b.landVy = 0;
+  b.smashed = (b.smashed || 0) + 1;
+}
 
 /* ============================================================================
    层间开口（2026-10-27，用户："层间开口 + 球下坠碾怪，整套的地基"）
@@ -4151,17 +4294,38 @@ function onRampSurface(y, rp, prevY, tol) {
   return prevY <= rp.y && y >= rp.y;     // 高速下落：这一帧跨过了坡面
 }
 
-/** 斜坡在某个 x 处的表面高度；不在任何斜坡上返回 null */
-function rampAt(x) {
+/** 斜坡在某个 x 处的表面高度；不在任何斜坡上返回 null。
+ *
+ * ## 2026-10-28：必须按 y 选，不能只按 x 选
+ *
+ * 原来的实现是"遍历 RAMPS，x 落在范围里就 return 第一条"。
+ * 在**只有一条坡**的年代这没问题（第 4 关就一条）。
+ *
+ * 但一旦屏上出现**叠层坡**（盘山道：同一 x 上有三四条坡，高度各不相同），
+ * 这个实现会永远返回数组里的第一条 —— 站在第三条坡上的球拿到的
+ * `rp` 是第一条坡的面高，`onRampSurface(b.y, rp, ...)` 立刻判假，
+ * 于是**球不被坡吸附，直接穿过坡掉到地面**。
+ * 表现是"坡只对最上面那一条有效，下面几条全是画"，
+ * 而冒烟是绿的、截图上也看不出 —— 因为球确实在动，只是没按坡走。
+ *
+ * 所以加一个可选的 `y`：给了就取**竖直方向最近的那条坡**。
+ * 不给时保持旧行为（取第一条），27 屏里现有的调用不受影响。
+ */
+function rampAt(x, y) {
+  let best = null, bestD = 1e9;
   for (const r of RAMPS) {
     if (x < r.x || x > r.x + r.w) continue;
     const s = (x - r.x) / r.w;
     // slope 沿用原口径：向右下降为正（= -dy/dx）。
     // 球的 `vx -= GRAV * slope * 0.45 * dt` 靠这个符号决定"下坡加速"。
     const slope = (r.yL - r.yR) * rampProfileD(s) / r.w;
-    return { y: rampSurfY(r, x), slope, x0: r.x, w: r.w, r };
+    const ry = rampSurfY(r, x);
+    const hit = { y: ry, slope, x0: r.x, w: r.w, r };
+    if (y === undefined) return hit;                 // 旧行为：第一条
+    const d = Math.abs(ry - y);
+    if (d < bestD) { bestD = d; best = hit; }
   }
-  return null;
+  return best;
 }
 
 /* ============================================================================
@@ -4718,6 +4882,26 @@ function stepBody(b, dt) {
    * 判定和木桩逐字同构（只有 `l/r` 的来历不同）：站在墙顶上方不挡、
    * 整个人在墙底下面不挡、横向重叠才挡。所以**跳过去是可以的**
    * （墙高 60 < 跳跃 123），这也是设计的一部分：球被弹回、人翻过去。 */
+  /* ---- 木箱是实心的：挡人（球撞的那一下在 updateBalls 里）----
+   * 只写球那一侧会漏：不挡人的话玩家会从箱子中间走过去，而"能穿过去的箱子"
+   * 和"能穿过去的墙"一样，会立刻把这一屏所有实体降级成装饰。
+   * 判定和木桩逐字同构（站在箱顶不挡、整个人在箱底下不挡）。
+   * **球不在这里挡**：球要撞碎它，挡了就永远撞不碎。
+   */
+  for (const q of S.loots) {
+    if (q.hp <= 0) continue;
+    if (b.hero === undefined) continue;      // 只管人，敌人和球走各自的判定
+    const top = q.y - q.h;
+    if (b.y <= top + 4) continue;
+    if (b.y - b.h >= q.y - 2) continue;
+    const l = q.x - q.w / 2, r = q.x + q.w / 2;
+    if (b.x + b.w / 2 > l && b.x - b.w / 2 < r) {
+      if (b.vx > 0) { b.x = l - b.w / 2; b.hitWall = 1; }
+      else if (b.vx < 0) { b.x = r + b.w / 2; b.hitWall = -1; }
+      b.vx = 0;
+    }
+  }
+
   for (const d of REFLECTS) {
     if (!d.wall) continue;
     const top = Math.min(d.y1, d.y2), bot = Math.max(d.y1, d.y2);
@@ -4800,7 +4984,7 @@ function stepBody(b, dt) {
     // 斜坡：坡面也是落脚面。上一版只有球认坡、人不认，
     // 结果玩家走上去直接穿到地面 —— 看得见坡、踩不上去，地图就成了假的。
     if (!dropping) {
-      const rp = rampAt(b.x);
+      const rp = rampAt(b.x, b.y);
       if (rp && b.vy >= -40 && onRampSurface(b.y, rp, prevY, 16)) {
         // 坡面是斜的，"离得最近"不能按 y 比 —— 按 |y - 坡面| 比，
         // 否则站在地面上、头顶有一条悬空滑梯时，平台会被那条滑梯顶掉。
@@ -5150,6 +5334,12 @@ function setupLevel() {
   for (const wv of WAVES) S.total += wv.length;
   spawnWave(0);
   S.stumps = STUMPS.map(s => ({ x: s.x, y: s.y, w: s.w, h: s.h, hp: s.hp, shake: 0 }));
+  /* 场地木箱（用户："也可以有宝箱，撞击之后破掉"）。
+   * 和 `S.stumps` 同一条规矩 —— 拷一份，不写回 `L`。箱子是**一次性的**：
+   * 撞碎了这一趟就没有了，重打这一屏才复原。
+   * `y` 存的是**底面**（和 stumps 一致），箱顶 = y - h。 */
+  S.loots = (curStage().loots || []).map(q =>
+    ({ x: q.x, y: q.y, w: q.w, h: q.h, hp: q.hp || 1, shake: 0, hitT: 0 }));
   /* 雾与菌光囊是**关卡级状态**，和 stumps 同一条规矩：
      从关卡数据拷一份，不写回 `L` 本身。直接引用的话，重打这一层时
      上一把打碎的囊还是碎的 —— 而"雾巢"的核心就是每次都要重新摸一遍。
@@ -5168,7 +5358,7 @@ function setupLevel() {
   S.failWhy = "";
   // 台词每关重置：first / big 是"这一关的第一次"，跨关累计就永远不说了
   S.say.txt = ""; S.say.t = 0; S.say.life = 0; S.say.fired = {};
-  S.stat = { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0, chests: 0, toured: 0, shroom: 0, rampIn: 0, slam: 0, draft: 0 };
+  S.stat = { made: 0, burned: 0, banked: 0, burst: 0, drowned: 0, hits: 0, bankHolds: 0, maxHolds: 0, chests: 0, toured: 0, shroom: 0, rampIn: 0, slam: 0, draft: 0, smashed: 0 };
   S.t = 0;
   S.shake = 0;
   S.flash = 0;
@@ -5926,10 +6116,31 @@ function updatePlayer(dt) {
   if (p.jumpBuf > 0 && p.coyote > 0 && p.dashT <= 0) {
     /* **站在气流柱里起跳会被风托上去。**
        这不是"手感加成"，是气流柱成不成立的最后一环：
-       球被吹到 156 层之后，得有个人在上面推它 —— 而玩家自己跳不上去，
-       那根柱子就只是在往一个没人去过的地方送货。
-       判定和球用同一个 `draftAt`，不许各写一份。 */
-    p.vy = -(draftAt(p.x, p.y) ? DRAFT_LIFT : H.jump);
+       球被吹到顶层之后，得有个人在上面推它 —— 而玩家自己跳不上去，
+       那口井就只是在往一个没人去过的地方送货。
+       判定和球用同一个 `draftAt`，不许各写一份。
+     *
+     * ## 送多高：由**风口顶端**反推，不是一个固定值（2026-10-28 改）
+     *
+     * 原来这里写死 `-DRAFT_LIFT`（1180 → 331px）。在"柱子里只有一层落脚面"
+     * 的年代没问题，但盘山道一叠上坡，井口正上方压着两三层坡 ——
+     * 玩家站在 357 的坡上起跳，1180 让他飞 331px 到 **26**，
+     * 直接从画面顶上飞出去。同一口井，站得越高被顶得越高，这没有物理上的道理。
+     *
+     * 现在按"风只能把你送到这口风的顶端"来算：目标高度 = 柱顶 + 惯性段，
+     * 再用 `v² = 2gh` 反推初速。**站哪儿起跳，最后都停在同一个高度** ——
+     * 这才是一口井该有的行为，也顺带把"越权跳"这个洞堵死了。 */
+    const du = draftAt(p.x, p.y);
+    if (du) {
+      const coast = (DRAFT_RISE * DRAFT_RISE) / (2 * GRAV);
+      /* `du.h` 在改成"地缝喷口"之后已经没有意义了 —— 喷口高度是 DRAFT_MOUTH，
+         飞行高度是 coast。这里曾经还减着 du.h（=300），把目标高度算到 y=-148，
+         表现是"从地面借风一跳飞出画面"，而测试只报"高度不对"，看不出是算错。 */
+      const targetY = du.y - coast - 16;
+      p.vy = -Math.sqrt(2 * GRAV * Math.max(0, p.y - targetY));
+    } else {
+      p.vy = -H.jump;
+    }
     p.onGround = false;
     p.coyote = 0;
     p.jumpBuf = 0;
@@ -6376,7 +6587,7 @@ function updateFoe(f, dt) {
        坡上按坡度加速、平地上慢慢停、撞墙反向 ×0.72。
        玩家把它推上坡 = 给它一段下坡路，它自己滚进裂缝。
        **它永远不会朝玩家走** —— "石壳在追我"是这只怪绝对不能给人的印象。 */
-    const rp = rampAt(f.x);
+    const rp = rampAt(f.x, f.y);
     if (rp) {
       f.rollV -= GRAV * rp.slope * 0.30 * dt;
     } else {
@@ -7493,6 +7704,44 @@ function updateBalls(dt) {
       }
     }
 
+    /* ---- 撞木箱：球是唯一能打开它的东西 --------------------------------
+     * 用户要的是「宝箱，撞击之后破掉」—— 所以它**不是**地上捡的掉落物，
+     * 是台面上一个要用球去撞的靶子。这一条把"把球推到这一层"变成两件事之一：
+     * 送人回家，或者开一个箱。
+     *
+     * 和木桩的差别只有两处，其余全同：
+     *   · 箱子矮（h 44），球在台面上滚过去就够得到，不用专门瞄准高度
+     *   · 碎了掉的是**宝箱**（`dropChest`），不是野果
+     *
+     * **撞碎就穿过去，不反弹**：箱子 1 血，碎了它就不在了，这时候还弹一下
+     * 读作"撞到了空气"。只有没碎的（hp>1 的硬箱）才反弹。
+     */
+    for (const q of S.loots) {
+      if (q.hp <= 0) continue;
+      const top = q.y - q.h;
+      const l = q.x - q.w / 2, r = q.x + q.w / 2;
+      if (b.x + b.r <= l || b.x - b.r >= r) continue;
+      if (b.y + b.r <= top + 2) continue;   // 整颗球在箱顶上面飞过去
+      if (b.y - b.r >= q.y) continue;       // 整颗球在箱底下面（下一层的事）
+      q.hp -= 1;
+      q.hitT = 0.22;
+      q.shake = 0.2;
+      S.shake = Math.max(S.shake, 7);
+      hitStop(0.04);
+      if (q.hp > 0) {
+        if (b.vx > 0) b.x = l - b.r; else if (b.vx < 0) b.x = r + b.r;
+        b.vx = -b.vx * 0.55;
+        addText(q.x, top - 18, "硬木箱", "#D8B070", 17);
+        for (let i = 0; i < 8; i++) addFrag(q.x, top + q.h * 0.4, 6, "#B08048");
+        continue;
+      }
+      /* 碎了：木箱是"有东西在里面"的箱子，所以给的是宝箱本体，
+         不是一颗果子 —— 视觉上箱子裂开，里面那个金色的东西掉出来。 */
+      addText(q.x, top - 20, "开了!", "#FFD65C", 20, 1.15);
+      for (let i = 0; i < 14; i++) addFrag(q.x, top + q.h * 0.4, 7, i % 2 ? "#C08A4A" : "#8E5F30");
+      dropChest(q.x, q.y - 6, 2);
+    }
+
     // 重力 + 落地
     const prevY = b.y;
     b._fallVy = b.vy;
@@ -7513,12 +7762,21 @@ function updateBalls(dt) {
        画面上是持续的小幅抖动，正是这一版最不能出的毛病。 */
     if (UPDRAFTS.length && !b.stone) {
       b.draftOut = Math.max(0, (b.draftOut || 0) - dt);
+      /* 离开柱子的时长。**"绕了一圈回来"和"在柱顶弹了一下掉回来"必须分开**：
+         前者是一趟新行程，气流要满力；后者才是永动机。
+         分不开的话，盘山道上的球每次回来力量都乘 0.55 ——
+         实测跑两圈就托不动了，球躺在井口不动，而画面上
+         "风还在吹、球却不上去了"，读作"这个井坏了"。
+         时间上两者差得很远：弹一下再掉回来约 0.45 秒，绕一圈约 7 秒。 */
+      if (!b.draftIn) b.draftAway = (b.draftAway || 0) + dt;
       const d = draftAt(b.x, b.y);
       if (d) {
         if (b.draftIn !== d) {
           /* 出柱后 0.35 秒内再进来不算新的一趟 —— 否则球在柱顶边缘
              抖两下就把三次额度全用光，表现是"柱子用一次就废了"。 */
-          if (b.draftOut <= 0) b.draftN = (b.draftN || 0) + 1;
+          if ((b.draftAway || 0) > 2.0) b.draftN = 0;   // 绕了一圈回来 = 新的一趟，满力
+          else if (b.draftOut <= 0) b.draftN = (b.draftN || 0) + 1;
+          b.draftAway = 0;
           b.draftIn = d;
         }
         const k = Math.min(3, Math.max(0, (b.draftN || 1) - 1));
@@ -7531,6 +7789,20 @@ function updateBalls(dt) {
             const dv = d.dir * DRAFT_PUSH - b.vx;
             b.vx += Math.sign(dv) * Math.min(Math.abs(dv), DRAFT_SIDE * dt);
           }
+          /* **强气流会把横向速度抹平。**
+             物理上：竖直动量远大于水平动量，一颗横着冲进来的球会被风"扶正"。
+             不抹平的后果是实测出来的：球从 R4 冲下来时 vx ≈ 420，
+             0.22 秒就横穿 92px 宽的井口、只被顶起 140px 就出去了 ——
+             表现是"风托了一下"，然后球继续往右飞，最后滚进火坑 / 营地，
+             井在画面上看起来一切正常，但**闭环永远不成立**。
+             7/s 的衰减在 0.4 秒里把 420 压到 25，球站直、完整升到柱顶。 */
+          b.vx *= Math.max(0, 1 - 12 * dt);
+          /* 光抹平还不够：球是从井口**左缘**进来的（614，井心 660），
+             残速归零之后它会停在 643 —— 离井心还差 17px，出井时偏左，
+             落到 R1 上位置不确定。再加一点**朝井心**的加速度，
+             等于"风把东西往柱心收"（真实的热羽就是这样）。
+             这两条合起来保证：不管球从哪一侧进井，出井时都在井心附近。 */
+          b.vx += (d.x - b.x) * 2.5 * dt;
           b.onGround = false;
           b.ground = null;
           S.stat.draft = (S.stat.draft || 0) + 1;
@@ -7567,6 +7839,18 @@ function updateBalls(dt) {
         if (b._fallVy > 130) addDust(b.x, best.y - 2, Math.min(7, 2 + b._fallVy / 90), Math.min(1.5, b._fallVy / 380));
         b.landVy = b.vy;      // 碾压缩放用：**清零之前**的真实下坠速度
         b.y = best.y; b.vy = 0; b.onGround = true; b.ground = best;
+        /* ---- 朽木台：砸得穿 ----
+           判定排在这里，因为**只有这一帧知道落地速度**（下一行往后 `vy` 已经是 0）。
+           判 `best.mat` 而不是 `b.ground.mat`：`best` 可能被下面的斜坡/木桩
+           包成新对象，只有 PLATS 里的原对象才带材质。
+
+           `continue` 是必须的：砸穿之后球在半空，这一帧若继续往下走，
+           斜坡吸附会把一个正在下坠的球按回台面高度（`vy >= -40` 也算真），
+           表现是"球砸穿了但又弹回来站在洞口上"。 */
+        if (SMASHABLE[best.mat] && b.landVy >= SMASH_VY) {
+          smashPlat(b, best);
+          continue;
+        }
       }
     }
 
@@ -7574,7 +7858,7 @@ function updateBalls(dt) {
     // 球被"贴"在坡面上走：每帧把球底压到坡面高度，位移由 vx 决定，
     // 所以坡度只是一个 y = f(x) 的约束，不需要额外的碰撞体。
     // 速度变化用重力沿坡面的分量：上坡掉速、下坡加速 —— 这是物理，不是摩擦。
-    const rp = rampAt(b.x);
+    const rp = rampAt(b.x, b.y);
     if (rp && b.vy >= -40 && onRampSurface(b.y, rp, prevY, 20)) {
       if (b._fallVy > 150 && !b.onGround) addDust(b.x, rp.y - 2, 4, 0.9);
       b.y = rp.y;
@@ -8056,7 +8340,7 @@ function predictBall(b, dir, pow) {
     }
 
     // 斜坡：和 updateBalls 同一套公式
-    const rp = rampAt(x);
+    const rp = rampAt(x, y);
     if (rp && vy >= -40 && onRampSurface(y, rp, prevY, 20)) {
       y = rp.y; vy = 0; onGround = true;
       vx -= GRAV * rp.slope * 0.45 * AIM_DT;
@@ -10759,6 +11043,8 @@ function drawBossMarks(g) {
 
 function drawPlat(g, p) {
   const isGround = p.kind === "ground";
+  if (p.kind === "earth") { drawEarthBlock(g, p); return; }
+  if (p.mat === "shell") { drawShellPlat(g, p); return; }
   if (isGround) {
     /* ---- 地面：泥土块 + 一层圆齿草皮。草齿是圆的，这是 Q 版和写实的唯一分界线。
      *
@@ -11063,6 +11349,468 @@ function drawPlat(g, p) {
       g.lineWidth = 1;
       g.stroke();
     }
+  }
+
+  /* ⑥ 朽木（`mat: "rot"`）—— 同一根木头，但它烂了。
+   *
+   * **盖在原绘制之上，不改原绘制。** 26 屏的实心木台是这套画面的基线，
+   * 为了一种材质去重写 `drawPlat` 是拿地基换装饰。这里只加三层：
+   * 去光的暗罩 / 虫蛀的通孔 / 干裂的折线。
+   *
+   * 判读顺序也很重要：玩家先看到"它比旁边的木头暗"，再看清"上面有洞"，
+   * 最后才意识到"这个能砸"。所以暗罩是最大面积的、虫洞次之、裂纹最细 ——
+   * 反过来（先看见裂纹）会读成"装饰纹理"，那是石头的语言，不是朽木的。 */
+  if (p.mat === "rot") { drawRotUnder(g, p); drawRotOverlay(g, p, TK); }
+}
+
+/* ---------------------------------------------------------------------------
+   岩壳（`mat: "shell"`）—— 崖脚被掏空之后，顶上剩的那一层薄岩板。
+
+   ## 它解决的是一个具体问题，不是"再加一种材质"
+
+   崖脚被水蚀掏空，上面就剩一层壳。球砸上去 → 壳塌 → 砸出一条直通谷底的路。
+   这是这一屏唯一的"破坏"，也是玩家第一次看见**地形会被自己改掉**。
+
+   ## 三条画法约束（每条都对应一次失败的版本）
+
+   ① **不能画成木头。** 第一版用朽木（`rot`）：70 宽的烂圆木横架在崖脚，
+      两端还是圆木的断面 —— 截图一看是"有人在这儿架了一根木棍"，
+      正是用户否掉的那个毛病换了个尺寸。
+      壳是**岩**：灰、薄、有裂缝、边缘参差，没有年轮也没有端头圆。
+
+   ② **下面的腔必须是黑的，不是"绿背景压暗"。** 暗罩叠在绿色背景上出来是
+      墨绿，读作"一块半透明玻璃"。洞就是洞：不透明、近黑、只有最底下透一点光。
+
+   ③ **裂缝是预告。** 玩家看到裂缝才知道"这块能砸"。裂缝从顶面往下裂，
+      不贯穿（贯穿就成了两块板）、粗细不一（一样粗是贴图）。
+
+   ## 谁在下面托着它
+
+   `drawShellUnder` 画崖腔 —— 一个从板底向下、**底边不封口**的暗区，
+   加腔底散落的碎石。封口就是一个梯形物体（第一版就是个"高脚凳"）。
+   --------------------------------------------------------------------------- */
+function drawShellPlat(g, p) {
+  const bx = p.x, bw = p.w, ty = p.y;
+  const TK = p.h || 20;
+  const by = ty + TK;
+
+  drawShellPlatUnder(g, p);
+
+  /* 板体：上亮下暗。**顶面亮一整条**（受光面），底面压深。
+     和土崖同一套配色（掺灰的主题土色），所以它读作"同一座崖上的一层"。 */
+  const top = hexMix(TH.dirt, "#8E8676", 0.52);
+  const bot = hexMix(TH.dirt2, "#4E4738", 0.40);
+  const sg = g.createLinearGradient(0, ty, 0, by);
+  sg.addColorStop(0, top);
+  sg.addColorStop(0.42, hexMix(top, bot, 0.55));
+  sg.addColorStop(1, hexMix(bot, "#100B05", 0.42));
+  g.fillStyle = sg;
+
+  /* 两端参差：壳是被掰断的，不是锯断的。三个折点就够 ——
+     五个太碎（像锯齿），一个太直（像方块）。 */
+  /* **中间微微下垂**。
+     一块"下面被掏空、马上要塌"的板，中间一定是弯的 —— 水平笔直就等于"它很结实"，
+     而结实是这一屏唯一不能给它的属性。4px 就够：再多会让球看起来陷进板里
+     （物理面上 y 是平的，视觉下凹超过 5px 就开始对不上）。 */
+  const sag = 4;
+  g.beginPath();
+  g.moveTo(bx - 3, ty + 2.5);
+  g.quadraticCurveTo(bx + bw * 0.5, ty + sag, bx + bw + 2, ty + 1.5);
+  g.lineTo(bx + bw + 4, by - 1);
+  g.quadraticCurveTo(bx + bw * 0.5, by + sag * 1.6, bx - 2, by - 2);
+  g.closePath();
+  g.fill();
+
+  // 顶面受光：一条 2px 的亮线，Q 版读"平面"靠这条，不靠渐变
+  g.strokeStyle = "rgba(255,248,224,.30)";
+  g.lineWidth = 2.2;
+  g.beginPath();
+  g.moveTo(bx + 1, ty + 2.4);
+  g.quadraticCurveTo(bx + bw * 0.5, ty + sag, bx + bw - 1, ty + 1.6);
+  g.stroke();
+
+  /* 裂缝：从顶面往下裂，**不贯穿**。粗细按 hash 定，静止的壳不能自己抖。 */
+  const n = Math.max(3, Math.round(bw / 42));
+  for (let i = 0; i < n; i++) {
+    const o = hash(i * 6.7 + bx * 0.02);
+    const cx = bx + 10 + (i + 0.5) / n * (bw - 20) + (o - 0.5) * 14;
+    const dep = TK * (0.45 + o * 0.5);
+    g.strokeStyle = "rgba(14,9,3," + (0.34 + o * 0.24).toFixed(3) + ")";
+    g.lineWidth = 0.9 + o * 1.1;
+    g.lineCap = "round";
+    g.beginPath();
+    g.moveTo(cx, ty + 1.5);
+    g.lineTo(cx + (o - 0.5) * 6, ty + dep * 0.6);
+    g.lineTo(cx + (o - 0.5) * 10, ty + dep);
+    g.stroke();
+  }
+
+  /* 底面的碎茬：壳的下表面是被掏空的那一面，全是断口。
+     没有这一笔，板底是一条直线，读作"一块切得整齐的板"。 */
+  for (let x = bx + 6; x < bx + bw - 4; x += 11) {
+    const o = hash(x * 0.43 + 2);
+    if (o < 0.45) continue;
+    g.fillStyle = "rgba(30,22,12,.55)";
+    g.beginPath();
+    g.moveTo(x, by - 1);
+    g.lineTo(x + 3 + o * 4, by + 1 + o * 4);
+    g.lineTo(x + 6 + o * 3, by - 1.5);
+    g.closePath();
+    g.fill();
+  }
+}
+
+/** 岩壳下面的崖腔。**底边不封口** —— 封口就是一个梯形物体（第一版是高脚凳）。 */
+function drawShellPlatUnder(g, p) {
+  const bx = p.x, bw = p.w;
+  const ty = p.y + (p.h || 20) - 1;
+  const by = GROUND_Y + 6;
+  if (by <= ty + 8) return;
+
+  const inL = 2 + hash(p.x + 1) * 6;
+  const inR = 2 + hash(p.x + 9) * 6;
+  /* 轮廓用折线，不用直线：一个洞的边是被崩出来的。 */
+  const wob = (i) => hash(p.x * 0.5 + i * 3.1) * 18 - 9;
+  g.beginPath();
+  g.moveTo(bx + inL, ty);
+  g.lineTo(bx + bw - inR, ty);
+  g.lineTo(bx + bw - inR + wob(1), ty + (by - ty) * 0.34);
+  g.lineTo(bx + bw - inR - 2 + wob(2), ty + (by - ty) * 0.68);
+  g.lineTo(bx + bw - inR - 1 + wob(3), by);
+  g.lineTo(bx + inL + 3 + wob(4), by);
+  g.lineTo(bx + inL + wob(5), ty + (by - ty) * 0.62);
+  g.lineTo(bx + inL + wob(6), ty + (by - ty) * 0.3);
+  g.closePath();
+  /* **不透明**。上一版是 rgba 叠在背景上 —— 绿背景压暗出来是墨绿，
+     读作"一块半透明玻璃板"。洞里的颜色和背景无关，它就是黑的。 */
+  const cg = g.createLinearGradient(0, ty, 0, by);
+  cg.addColorStop(0, "#171007");
+  cg.addColorStop(0.62, "#1C1409");
+  cg.addColorStop(1, "#2A2013");
+  g.fillStyle = cg;
+  g.fill();
+
+  /* 腔底散落的碎石：唯一的实体部件。有碎屑才叫"塌过"。 */
+  for (let i = 0; i < 6; i++) {
+    const o = hash(p.x * 0.37 + i * 6.1);
+    const sx = bx + inL + 6 + o * (bw - 18);
+    const sy = ty + 26 + hash(i * 3.3 + 5) * (by - ty - 34);
+    const rx = 3 + o * 6, ry = 2 + o * 4;
+    g.fillStyle = "rgba(196,176,140,.13)";
+    g.beginPath(); g.ellipse(sx, sy, rx, ry, o * 1.6, 0, 6.283); g.fill();
+  }
+
+  /* 腔底的塌方堆：从地面往上堆一截碎石。
+     没有它，洞是一个**悬空的矩形**（底边贴地也还是矩形）；
+     有了它，洞的底是自己塌出来的坡。 */
+  const pile = 10 + hash(p.x + 4) * 16;
+  g.fillStyle = "#241A0E";
+  g.beginPath();
+  g.moveTo(bx + inL + 2, by - 1);
+  g.lineTo(bx + inL + 6 + pile * 0.6, by - 12 - pile * 0.4);
+  g.lineTo(bx + inL + 16 + pile, by - 2);
+  g.lineTo(bx + bw - inR - 2, by - 1);
+  g.lineTo(bx + bw - inR - 10 - pile * 0.5, by - 9 - pile * 0.3);
+  g.lineTo(bx + bw - inR - 20 - pile * 0.8, by - 2);
+  g.closePath();
+  g.fill();
+  g.fillStyle = "rgba(206,186,148,.10)";
+  g.beginPath();
+  g.moveTo(bx + inL + 6 + pile * 0.6, by - 12 - pile * 0.4);
+  g.lineTo(bx + inL + 16 + pile, by - 2);
+  g.lineTo(bx + inL + 10, by - 2);
+  g.closePath();
+  g.fill();
+
+  /* 板底与腔顶的接触阴影：没有它，板会像飘在暗块前面 */
+  g.fillStyle = "rgba(6,4,1,.62)";
+  g.fillRect(bx + inL, ty - 2, bw - inL - inR, 4);
+}
+
+/** 实心土石台（`kind: "earth"`）—— **地形，不是构件**。
+ *
+ * ## 为什么需要它（2026-10-28，用户："长坡不要搞得很不自然很突兀"）
+ *
+ * 前面几版的浮台都是"悬空的一根圆木"：台面在 420，台下什么都没有，一直空到 556 的地面。
+ * 一屏里两三条这样的板，再加一段 25° 的木栈道斜着架过去 —— 那读起来是**工地**，
+ * 不是山谷。玩家看到的不是"这里有一层地形"，而是"这里有人搭了一层东西"。
+ *
+ * 病根不在坡度，在**台下是空的**。真实的崖壁不会悬空。
+ *
+ * 所以这种台面**从顶面一直填到地下**（`h` 给足，插进地面以下 60，
+ * 被后画的地面盖住，不露硬底边）。它读作"这块地比较高"，不是"这里架了块板"。
+ *
+ * ## 三条画法上的硬规矩
+ *
+ *  ① **不圆角**。地形没有圆角，圆角是加工件。方角 + 立面的岩层才读作"被水冲开的崖"。
+ *  ② **顶面要有一层和地面同一套的草皮**。换一种颜色，这个崖就成了另一个物体；
+ *     用同一套，它就只是"同样的地，高了一点"。
+ *  ③ **立面是石块，不是横带**。横贯整宽的等距横带 = 木板墙；
+ *     宽度不等、缝错开的块石 = 岩体。同一套颜色，排布不同，读出的材质完全不同。
+ */
+function drawEarthBlock(g, p) {
+  const bx = p.x, bw = p.w, ty = p.y;
+  /* 高度由 `h` 给。关卡里写的是"到地面再往下 60"，所以底边永远在地面之下，
+     被后画的地面盖住 —— 不需要渐隐，也不会露出硬边。 */
+  const bh = p.h || 200;
+  const by = ty + bh;
+
+  /* 配色：在主题土色上**混一点冷灰**。
+     纯 TH.dirt 在这个主题里是饱和的褐色 —— 那是"土墙"的色，和背景的枯木几乎同色，
+     崖壁就糊进背景里了。掺 34% 灰岩之后它比背景冷一档、暗一档，轮廓才立得住。 */
+  const rockTop = hexMix(TH.dirt, "#7A7264", 0.34);
+  const rockMid = hexMix(TH.dirt2, "#6A6154", 0.30);
+  const dg = g.createLinearGradient(0, ty, 0, by);
+  dg.addColorStop(0, rockTop);
+  dg.addColorStop(0.45, rockMid);
+  dg.addColorStop(1, hexMix(rockMid, "#120C06", 0.38));
+  g.fillStyle = dg;
+  g.fillRect(bx, ty, bw, bh);
+
+  /* 岩体分层：行高 18~52、块宽 20~120、缝的对比度只有 .13。
+     三处一起才脱离砖墙 —— 砖墙是"人砌的"，而这整屏不能有任何"人工"的暗示。 */
+  let yy = ty + 20, row = 0;
+  while (yy < by - 6) {
+    const hRow = 18 + hash(row * 3.7 + bx * 0.01) * 34;
+    let x = bx - hash(row * 5.3 + 1) * 60;
+    while (x < bx + bw) {
+      const bwid = 20 + hash(x * 0.113 + row * 2.3) * 100;
+      const o = hash(x * 0.071 + row * 1.9);
+      g.fillStyle = o > 0.5 ? "rgba(255,240,205,.028)" : "rgba(16,10,4,.048)";
+      g.fillRect(Math.max(bx, x + 1), yy + 1,
+                 Math.max(0, Math.min(bx + bw, x + bwid - 1) - Math.max(bx, x + 1)), hRow - 2.5);
+      // 竖缝：短、浅、不一定到底 —— 岩体的缝是被撑开的，不是砌出来的
+      if (o > 0.35) {
+        g.fillStyle = "rgba(10,6,2,.13)";
+        g.fillRect(x + bwid - 1, yy + hRow * 0.25, 1.6, hRow * (0.4 + o * 0.5));
+      }
+      x += bwid;
+    }
+    // 层缝：只在部分行画，且不贯穿 —— 贯穿的横线就是"一层板"
+    if (hash(row * 9.1 + 4) > 0.32) {
+      g.fillStyle = "rgba(10,6,2,.16)";
+      g.fillRect(bx, yy + hRow - 1.4, bw, 2.0);
+      g.fillStyle = "rgba(255,238,198,.035)";
+      g.fillRect(bx, yy + hRow + 0.6, bw, 1.0);
+    }
+    yy += hRow; row++;
+  }
+
+  /* 嵌在岩体里的大石：比碎块大一圈、形状不圆。
+     作用不是装饰，是给出"这块崖有多厚"的尺度 —— 只有碎块的立面看起来像贴图。 */
+  for (let i = 0; i < Math.max(2, Math.round(bw / 110)); i++) {
+    const o = hash(i * 13.1 + bx * 0.03);
+    const sx = bx + 16 + o * Math.max(4, bw - 32);
+    const sy = ty + 50 + hash(i * 7.9 + 3) * Math.max(40, bh - 90);
+    const rx = 12 + o * 16, ry = 8 + o * 11;
+    g.fillStyle = "rgba(10,6,2,.14)";
+    g.beginPath(); g.ellipse(sx + 2, sy + 3, rx, ry, o * 1.2, 0, 6.283); g.fill();
+    g.fillStyle = "rgba(255,242,210,.075)";
+    g.beginPath(); g.ellipse(sx, sy, rx * 0.92, ry * 0.88, o * 1.2, 0, 6.283); g.fill();
+  }
+
+  /* 立面右缘的背光：同一套光源（太阳在右上），崖体的右缘是背光面。
+     没有这一条，崖壁和背景之间没有转折，读作"一大块颜色"。 */
+  const shw = Math.min(26, bw * 0.22);
+  const sg = g.createLinearGradient(bx + bw - shw, 0, bx + bw, 0);
+  sg.addColorStop(0, "rgba(10,8,4,0)");
+  sg.addColorStop(1, "rgba(10,8,4,.34)");
+  g.fillStyle = sg;
+  g.fillRect(bx + bw - shw, ty, shw, bh);
+
+  /* 顶面草皮：和 `ground` 是**同一套半圆齿**（逐字同构，只是宽度是台面宽）。
+     这是"它属于地面"的唯一凭据 —— 换一种顶面画法，它立刻变成另一个物体。 */
+  const gy = ty - 4;
+  g.fillStyle = TH.grass2;
+  g.beginPath();
+  g.moveTo(bx, ty + 7);
+  g.lineTo(bx, gy);
+  for (let x = bx, i = 0; x <= bx + bw; i++, x += 22) g.arc(x + 11, gy, 12, Math.PI, 0);
+  g.lineTo(bx + bw, ty + 7);
+  g.closePath();
+  g.fill();
+
+  g.fillStyle = TH.grass;
+  g.beginPath();
+  g.moveTo(bx, ty + 3);
+  g.lineTo(bx, gy - 2);
+  for (let x = bx, i = 0; x <= bx + bw; i++, x += 26) g.arc(x + 13, gy - 2, 12, Math.PI, 0);
+  g.lineTo(bx + bw, ty + 3);
+  g.closePath();
+  g.fill();
+
+  /* 草齿顶部深描边：只描上缘，不封边（封边会像贴纸框）—— 和 ground 同一条规矩。 */
+  g.strokeStyle = "rgba(24,58,34,.32)";
+  g.lineWidth = 2;
+  g.beginPath();
+  g.moveTo(bx, gy);
+  for (let x = bx, i = 0; x <= bx + bw; i++, x += 22) g.arc(x + 11, gy, 12, Math.PI, 0);
+  g.stroke();
+
+  /* 崖沿的垂草：顶面边缘往下挂的东西。
+     悬空台的边缘是"断面"（年轮），地形的边缘是"掉渣" —— 这一笔是两者的分水岭。 */
+  for (let x = bx + 8, i = 0; x < bx + bw - 4; x += 17, i++) {
+    const o = hash(x * 0.29 + 5);
+    if (o < 0.5) continue;
+    g.strokeStyle = i % 2 ? "rgba(96,132,72,.55)" : "rgba(30,52,28,.35)";
+    g.lineWidth = 1.5;
+    g.lineCap = "round";
+    g.beginPath();
+    g.moveTo(x, ty + 2);
+    g.quadraticCurveTo(x + 1.5, ty + 8 + o * 7, x + (o - 0.5) * 5, ty + 12 + o * 10);
+    g.stroke();
+  }
+}
+
+/** 朽木/危岩台**下面的岩腔**。
+ *
+ *  一块 20 厚的板悬在 446、地面在 556 —— 中间 110px 是空的。
+ *
+ *  第一版我在这儿堆了一坨"下宽上窄的土石"，想让它读作"塌方托着板"。
+ *  截图一看是**一个高脚凳**：直边、实心、有一个明确的锥形剪影。
+ *  土堆托得住"板"，托不住"悬空感" —— 因为它本身是个完整的物体。
+ *
+ *  真实的崖沿不是被托住的，是**被掏空的**：水蚀和崩塌在崖脚吃出一个岩腔，
+ *  上面那层就悬出来了。画成阴影 + 腔口碎石，轮廓不留完整边，
+ *  眼睛读到的是"这里凹进去了"，而不是"这里放了一个东西"。
+ *
+ *  它同时回答了玩家心里那个问题：**为什么这块一砸就塌** ——
+ *  底下本来就是空的。
+ */
+function drawRotUnder(g, p) {
+  const bx = p.x, bw = p.w;
+  const ty = p.y + (p.h || 20) - 1;
+  const by = GROUND_Y + 6;
+  if (by <= ty + 6) return;
+
+  /* 腔体：左右各内收几像素，**底边不封口**（渐隐进地面）。
+     封了口就是一个梯形物体，不封口才是"一个洞"。 */
+  const inL = 3 + hash(p.x + 1) * 7;
+  const inR = 2 + hash(p.x + 9) * 6;
+  g.beginPath();
+  g.moveTo(bx + inL, ty);
+  g.lineTo(bx + bw - inR, ty);
+  g.lineTo(bx + bw - inR - 5, by);
+  g.lineTo(bx + inL + 9, by);
+  g.closePath();
+  const dg = g.createLinearGradient(0, ty, 0, by);
+  dg.addColorStop(0, "rgba(10,7,3,.56)");      // 腔顶最暗：光进不来
+  dg.addColorStop(0.55, "rgba(10,7,3,.30)");
+  dg.addColorStop(1, "rgba(10,7,3,.04)");      // 底部渐隐：洞是有底的，不是一块黑
+  g.fillStyle = dg;
+  g.fill();
+
+  /* 腔口的崩落碎石：散在腔底与两侧，大小不一。
+     这是唯一的实体部件 —— 有碎屑才叫"塌过"，没有就只是一个暗块。 */
+  for (let i = 0; i < 7; i++) {
+    const o = hash(p.x * 0.37 + i * 6.1);
+    const sx = bx + inL + 4 + o * (bw - 14);
+    const sy = ty + 22 + hash(i * 3.3 + 5) * (by - ty - 30);
+    const rx = 3 + o * 5.5, ry = 2.2 + o * 3.6;
+    g.fillStyle = "rgba(0,0,0,.30)";
+    g.beginPath(); g.ellipse(sx + 1, sy + 1.5, rx, ry, o, 0, 6.283); g.fill();
+    g.fillStyle = "rgba(255,240,208,.055)";
+    g.beginPath(); g.ellipse(sx, sy, rx * 0.78, ry * 0.72, o, 0, 6.283); g.fill();
+  }
+
+  /* 板底与岩腔的交界：一条很深的接触阴影 + 几根垂下来的断根。
+     这一笔是"板压着洞"的全部依据 —— 没有它，板会像飘在暗块前面。 */
+  g.fillStyle = "rgba(8,5,2,.50)";
+  g.fillRect(bx + inL, ty, bw - inL - inR, 3.5);
+  g.strokeStyle = "rgba(58,36,16,.50)";
+  g.lineCap = "round";
+  for (let i = 0; i < 3; i++) {
+    const o = hash(p.x * 0.7 + i * 9);
+    const rx = bx + 12 + o * (bw - 24);
+    g.lineWidth = 1.1 + o * 0.8;
+    g.beginPath();
+    g.moveTo(rx, ty + 2);
+    g.quadraticCurveTo(rx + (o - 0.5) * 8, ty + 12 + o * 10, rx + (o - 0.5) * 13, ty + 22 + o * 16);
+    g.stroke();
+  }
+}
+
+/** 朽木覆盖层。所有随机量走 `hash`，只有 `S.t` 决定的那丁点微光在动 ——
+ *  静止的木头不能自己抖（`hash` 定死位置这条规矩和端头毛茬一致）。 */
+function drawRotOverlay(g, p, TK) {
+  const R2 = 9;
+  g.save();
+  platPath(g, p.x, p.y, p.w, TK, R2, 1, 1);
+  g.clip();
+
+  /* ① 去光：整块压一层冷褐。朽木不反光，所以上缘那道暖白受光弧要压掉 ——
+     只压不盖，还留一点，否则和背景的岩体分不开。 */
+  /* 暗罩只压 28%（原来 46%）：压到 46 的时候木头变纯黑，
+     整块读作"一个黑箱子"，玩家看不出那是**一根烂木头** ——
+     而"它是一块木头"正是"它一砸就塌"的唯一预告。 */
+  g.fillStyle = "rgba(46,32,20,.20)";
+  g.fillRect(p.x, p.y, p.w, TK);
+  g.fillStyle = "rgba(20,12,6,.30)";
+  g.fillRect(p.x, p.y + TK * 0.55, p.w, TK * 0.45);
+
+  /* ② 虫蛀：**成簇**，不成串。单独几个等距的洞读作"装饰圆点"，
+     三四个挤在一起、大小不一，才读作"被虫子吃空了"。 */
+  const holes = Math.max(2, Math.round(p.w / 88));
+  for (let c = 0; c < holes; c++) {
+    const cx = p.x + 26 + hash(c * 7.3 + p.x * 0.01) * (p.w - 52);
+    const cy = p.y + TK * (0.34 + hash(c * 3.1 + 2) * 0.34);
+    const n = 2 + Math.floor(hash(c * 5.7 + 9) * 3);
+    for (let i = 0; i < n; i++) {
+      const o = hash(c * 11 + i * 4.4);
+      const rx = 1.6 + o * 3.0, ry = 1.3 + o * 2.2;
+      const ox = cx + (o - 0.5) * 16, oy = cy + (hash(c * 13 + i) - 0.5) * 9;
+      // 洞口外一圈粉化的木屑（亮），洞本身要黑到"通到底"
+      g.fillStyle = "rgba(176,142,96,.34)";
+      g.beginPath();
+      g.ellipse(ox, oy, rx + 1.6, ry + 1.4, 0, 0, 6.283);
+      g.fill();
+      g.fillStyle = "rgba(24,14,7,.92)";
+      g.beginPath();
+      g.ellipse(ox, oy, rx, ry, 0, 0, 6.283);
+      g.fill();
+    }
+  }
+
+  /* ③ 干裂：从**顶面**往下垂，末端分叉。
+     横着走的是树皮纹理（原绘制已经有），竖着往下垂的才是"这块木头要散了"。
+     只画在内侧 12%..88%，两端留给端头，否则会和年轮抢。 */
+  g.strokeStyle = "rgba(18,10,4,.55)";
+  g.lineCap = "round";
+  const cracks = Math.max(1, Math.round(p.w / 170));
+  for (let i = 0; i < cracks; i++) {
+    const ox = p.x + p.w * (0.14 + (i + 0.5) / cracks * 0.72);
+    const o = hash(i * 17.7 + p.x);
+    const len = TK * (0.45 + o * 0.45);
+    g.lineWidth = 1.6;
+    g.beginPath();
+    g.moveTo(ox, p.y);
+    g.lineTo(ox + (o - 0.5) * 7, p.y + len * 0.5);
+    g.lineTo(ox + (o - 0.5) * 12, p.y + len);
+    g.stroke();
+    g.lineWidth = 1.1;
+    g.beginPath();
+    g.moveTo(ox + (o - 0.5) * 7, p.y + len * 0.5);
+    g.lineTo(ox + (o - 0.5) * 7 + 6, p.y + len * 0.78);
+    g.stroke();
+  }
+  g.restore();
+
+  /* ④ 顶面被啃过的边：**参差的齿**。
+     整齐的圆角读作"加工过的木料"，缺一角的参差才读作"朽了"。
+     齿画在台面轮廓**外侧**一点点（0 到 -3），所以在 clip 之外，
+     不会把台面切出锯齿缝。 */
+  g.fillStyle = hexMix(TH.wood2, "#2A1A0C", 0.55);
+  for (let x = p.x + 10; x < p.x + p.w - 8; x += 13) {
+    const o = hash(x * 0.41 + 3);
+    if (o < 0.42) continue;
+    const ww = 4 + o * 7;
+    const hh = 1.6 + o * 3.4;
+    g.beginPath();
+    g.moveTo(x, p.y - 0.5);
+    g.lineTo(x + ww * 0.5, p.y - hh);
+    g.lineTo(x + ww, p.y - 0.5);
+    g.closePath();
+    g.fill();
   }
 }
 
@@ -12143,104 +12891,261 @@ function drawReflect(g, d) {
  * 于是球穿过柱时不会和条纹一起走，看起来是"球比风快" —— 那是对的，
  * 球是真的被吹起来的，不是贴在一条动画上。
  */
+/* ---------- 上升气流：从地缝里冒出来的暖风 ----------
+ *
+ * ## 第一版为什么必须整段删掉（2026-10-28 用户："很突兀""太low"）
+ *
+ * 第一版是一块**半透明青色矩形**，一张图里同时犯了三个错：
+ *   ① 冷青是全屏唯一的冷色（枯木坡是暖褐灰），眼睛第一反应是 UI 选中框；
+ *   ② 直角矩形有边 —— **空气没有边，有边就是玻璃板**；
+ *   ③ 平地上一根柱子凭空长出来，地面没有任何口子，"风从哪儿来的"答不上来。
+ *
+ * 三个错同一个病根：**我在"加特效"，不是在"改空间"。**
+ * 跟洞口那次（年轮→毛茬）是同一个病 —— 往已有的画面上覆盖一层东西，
+ * 覆盖物永远读作补丁，因为它和周围不属于同一套材质。
+ *
+ * ## 现在拆成两件地形
+ *
+ *   ① **地缝**（`drawDraftVent`）：地面被从下面顶开的一道裂口，
+ *      两侧翻起碎石、裂纹放射出去、缝底透出暖光。
+ *      它是风的**来源**，也是这一屏唯一"长在地上"的东西 ——
+ *      有来源，风才是一个地点，而不是一片特效。
+ *   ② **被风托起来的东西**：枯叶 + 尘埃 + 几道热流。
+ *      不画柱、不画边、不画虚线框：**形状由粒子密度自己长出来**
+ *      （底窄顶宽）。看不出边界的气流，才是气流。
+ *
+ * ## 为什么是枯叶，不是光
+ *
+ * 这一层的主题就是枯木坡，落叶本来就是它的材质。
+ * **用主题里已经有的东西去表达新机制，永远比新引入一种颜色便宜** ——
+ * 新引入的颜色一定读作外来物。这一条是这一轮最贵的教训。
+ *
+ * ## 可视高度 = 它能把东西送到的高度
+ *
+ * 物理柱到 `u.y - u.h` 就停了，剩下 `coast` 那段靠惯性。
+ * 只画到物理顶端的话，叶子在离落点还差 100px 的地方凭空消失，
+ * 读作"风到这儿就没了"——而球明明还能再飞一段。
+ * 所以画到 `u.h + coast`，`coast` 直接由重力反推，不写死数。
+ */
 function drawUpdraft(g, u) {
-  const l = u.x - u.w / 2, r = u.x + u.w / 2;
-  const top = u.y - u.h, bot = u.y;
+  const cx = u.x;
+  const bot = u.y;
+  const coast = (DRAFT_RISE * DRAFT_RISE) / (2 * GRAV);   // 648²/4200 ≈ 100
+  const top = u.y - u.h - coast;
 
-  // ① 柱身：底浓顶淡
-  const grd = g.createLinearGradient(0, bot, 0, top);
-  grd.addColorStop(0, "rgba(118,226,214,.34)");
-  grd.addColorStop(0.5, "rgba(152,240,230,.17)");
-  grd.addColorStop(1, "rgba(196,252,246,0)");
-  g.fillStyle = grd;
-  g.fillRect(l, top, u.w, u.h);
+  drawDraftVent(g, u, cx, bot);
+  drawDraftPlume(g, u, cx, bot, top);
+}
 
-  /* ⓑ **风穿过台面的地方必须画出来。**
-     这一屏的柱子正下方压着 462 层的一块台面，柱身被板截成上下两段 ——
-     不解释的话读作"这根光柱断了"，或者更糟："风被木板挡住了，
-     所以我该上不去"。而恰恰相反：**球就是从这里穿上去的**。
-     在交叉处画一层横向溢出的雾 + 几道往上钻的短线，
-     读法立刻从"被挡住"变成"从缝里挤过去"。 */
-  for (const p of PLATS) {
-    if (p.kind === "ground" || isBroken(p)) continue;
-    if (p.x + p.w < l || p.x > r) continue;
-    if (p.y < top || p.y > bot + 4) continue;
-    const spill = (p.y - top) / Math.max(1, u.h);
-    const a = 0.30 * Math.sin(Math.PI * Math.min(1, spill + 0.15));
-    g.globalAlpha = 0.20 + a;
-    g.fillStyle = "#9BEDE2";
-    g.fillRect(l - 9, p.y - 5, u.w + 18, 7);
-    g.globalAlpha = 0.42 + a;
-    g.strokeStyle = "#D6FFF8";
-    g.lineWidth = 2;
-    for (let i = 0; i < 4; i++) {
-      const sx = l + 10 + i * (u.w - 20) / 3;
-      g.beginPath();
-      g.moveTo(sx, p.y - 2);
-      g.lineTo(sx + Math.sin(S.t * 4 + i) * 3, p.y - 20);
-      g.stroke();
-    }
-    g.globalAlpha = 1;
+/* 地缝：风的来源。**必须是地形，不能是特效** —— */
+function drawDraftVent(g, u, cx, bot) {
+  const w = Math.min(80, u.w * 0.92);
+  const l = cx - w / 2, r = cx + w / 2;
+
+  /* ① 缝口。**上宽下窄** —— 被下面的气压顶开的。
+     画成上窄下宽就成了塌陷的坑，玩家的第一反应是"别踩那儿"，
+     而这一屏要的恰恰是"站上去 / 把球推进去"。同一个形状，
+     上下翻转一次，动词就反了。 */
+  g.beginPath();
+  g.moveTo(l, bot + 1);
+  g.lineTo(cx - w * 0.15, bot + 29);
+  g.quadraticCurveTo(cx, bot + 35, cx + w * 0.14, bot + 28);
+  g.lineTo(r, bot + 1);
+  g.closePath();
+  const vg = g.createLinearGradient(0, bot - 6, 0, bot + 34);
+  vg.addColorStop(0, "rgba(74,52,30,.90)");
+  vg.addColorStop(0.5, "rgba(26,18,10,.97)");
+  vg.addColorStop(1, "rgba(10,7,4,1)");
+  g.fillStyle = vg;
+  g.fill();
+
+  /* ② 缝底透上来的暖光。**这是"下面是热的"唯一的证据** ——
+     没有它，黑缝只是一个坑；有了它，黑缝才是一个风口。
+     光只从缝里往外泄，所以用横向压扁的椭圆，不是圆。 */
+  const gy = bot + 29;
+  const rg = g.createRadialGradient(cx, gy, 3, cx, gy, w * 0.70);
+  rg.addColorStop(0, "rgba(255,198,108,.58)");
+  rg.addColorStop(0.42, "rgba(224,138,56,.22)");
+  rg.addColorStop(1, "rgba(198,108,38,0)");
+  g.fillStyle = rg;
+  g.beginPath();
+  g.ellipse(cx, gy, w * 0.70, 17, 0, 0, 6.283);
+  g.fill();
+
+  /* ③ 翻起的碎石。缝是被顶开的，两侧一定有被撑碎、翻到地面上的块 ——
+     只画一条黑缝的话，地面看起来是自己裂开的，没有受力。
+     每块带一条 2px 的顶面受光，和台面用同一条规则。 */
+  const chunk = [
+    [-w * 0.62, 3, 12, 8, -0.42],
+    [-w * 0.42, 0, 8, 6, 0.30],
+    [-w * 0.16, 5, 7, 5, -0.22],
+    [ w * 0.44, 2, 13, 9, 0.46],
+    [ w * 0.66, 5, 9, 6, -0.34],
+  ];
+  const tone = ["#6E5D48", "#87745A", "#52463A"];
+  for (let i = 0; i < chunk.length; i++) {
+    const c = chunk[i];
+    g.save();
+    g.translate(cx + c[0], bot - c[1]);
+    g.rotate(c[4]);
+    g.fillStyle = tone[i % 3];
+    g.beginPath();
+    g.moveTo(-c[2], 0);
+    g.lineTo(-c[2] * 0.38, -c[3]);
+    g.lineTo(c[2] * 0.56, -c[3] * 0.72);
+    g.lineTo(c[2], 0);
+    g.closePath();
+    g.fill();
+    g.fillStyle = "rgba(255,236,198,.26)";
+    g.fillRect(-c[2] * 0.38, -c[3], c[2] * 0.92, 2);
+    g.restore();
   }
 
-  // ② 上升条纹（裁在柱内，不外溢）
-  /* **条纹必须是"线"不是"点"。**
-     第一版是 14px 的短划 + 2px 线宽，出图读作**下雪** —— 浅色背景上
-     一排小白点，唯一的解释就是雪。而这一层要回答的是"风往上走"，
-     雪恰好是反的（雪往下落）。
-     现在加长到 20~38px、加粗到 2.8，并让每条微微弯曲：**弯曲的长线 = 流**，
-     点是粒子、线才是流。 */
-  g.save();
-  g.beginPath(); g.rect(l, top, u.w, u.h); g.clip();
+  /* ④ 放射裂纹。解决的问题很具体：缝只占 80px，两边地面看起来完好 ——
+     **完好的地面不会自己裂一条缝出来**，没有裂纹，缝就是贴上去的。 */
+  g.strokeStyle = "rgba(44,32,20,.30)";
+  g.lineWidth = 1.8;
   g.lineCap = "round";
-  for (let i = 0; i < 7; i++) {
-    const ph = (S.t * 0.62 + i / 7) % 1;       // 0 = 底部，1 = 顶部
-    const yy = bot - ph * u.h;
-    const xx = l + u.w * (0.14 + 0.72 * (((i * 5) % 7) / 6));
-    const k = Math.sin(ph * Math.PI);          // 两端淡、中间亮
-    const len = 20 + 18 * k;
-    g.globalAlpha = 0.10 + 0.52 * k;
-    g.strokeStyle = "#A9F2E8";
-    g.lineWidth = 2.8;
+  const crack = [[-1, 48, 7], [-1, 23, -4], [1, 40, -6], [1, 66, 4]];
+  for (const cr of crack) {
+    const s = cr[0], len = cr[1], dy = cr[2];
+    const x0 = s < 0 ? l : r;
     g.beginPath();
-    g.moveTo(xx, yy);
-    g.quadraticCurveTo(xx + Math.sin(S.t * 2.2 + i) * 5, yy - len * 0.55,
-                       xx + Math.sin(S.t * 2.2 + i) * 2, yy - len);
+    g.moveTo(x0, bot + 1);
+    g.quadraticCurveTo(x0 + s * len * 0.55, bot + dy, x0 + s * len, bot + 2);
     g.stroke();
   }
-  g.restore();
+}
+
+/* 气流本体：只有粒子，没有柱身。 */
+function drawDraftPlume(g, u, cx, bot, top) {
+  const hh = bot - top;
+  if (hh <= 0) return;
+
+  /* 轮廓：底窄顶宽。线性张开读作"一个梯形"，
+     真实的热羽是**根部收紧、往上迅速张开**，指数 1.45 就是这个形状。 */
+  const radAt = (p) => 11 + 54 * Math.pow(p, 1.45);
+
+  /* 台面遮挡：球能从下面穿上去（单向台的老规矩，玩家跳了半辈子了），
+     但**叶子不能** —— 叶子撞到板就往两边散。
+     第一版在交叉处画了一条横向青色雾带试图"解释"，那一块正是读作贴纸的东西。
+     **叶子自己绕开，比任何解释都清楚。** */
+  const bars = [];
+  for (const p of PLATS) {
+    if (p.kind === "ground" || isBroken(p)) continue;
+    if (p.x + p.w < cx - 80 || p.x > cx + 80) continue;
+    if (p.y < top - 24 || p.y > bot) continue;
+    bars.push({ y: p.y, l: p.x, r: p.x + p.w });
+  }
+
+  /* 根部的一层暖雾。**是光源不是柱身**：只覆盖底部 70px、圆形、迅速衰减。
+     它让"缝在冒热气"这件事在静态图里也成立。 */
+  const haze = g.createRadialGradient(cx, bot - 14, 4, cx, bot - 14, 74);
+  haze.addColorStop(0, "rgba(255,196,112,.20)");
+  haze.addColorStop(0.55, "rgba(232,146,62,.075)");
+  haze.addColorStop(1, "rgba(220,130,50,0)");
+  g.fillStyle = haze;
+  g.beginPath();
+  g.ellipse(cx, bot - 14, 74, 56, 0, 0, 6.283);
+  g.fill();
+
+  /* ---- 热流：几道**上尖下宽的锥形**短痕 ----
+     圆头短划在这个背景上读作雨/雪（上一版踩过），
+     而锥形在静止画面里也自带方向：宽的一头是来处。
+     **形状本身就说明朝向，不用靠动画去补。** */
+  g.lineCap = "butt";
+  for (let i = 0; i < 6; i++) {
+    const spd = 0.34 + 0.05 * ((i * 3) % 3);
+    const p = (S.t * spd + i / 6) % 1;
+    const y = bot - 10 - p * (hh - 20);
+    const off = Math.sin(i * 2.4) * 16;
+    const x = cx + off * (0.4 + p * 0.8);
+    const k = Math.sin(Math.min(1, p / 0.85) * Math.PI);   // 中段最亮
+    const len = 22 + 20 * k;
+    const wide = 3.4 + 2.0 * k;
+    g.globalAlpha = 0.06 + 0.13 * k;
+    g.fillStyle = "#FFE7BE";
+    g.beginPath();
+    g.moveTo(x - wide, y);
+    g.quadraticCurveTo(x - wide * 0.2, y - len * 0.5, x, y - len);
+    g.quadraticCurveTo(x + wide * 0.2, y - len * 0.5, x + wide, y);
+    g.closePath();
+    g.fill();
+  }
   g.globalAlpha = 1;
 
-  // ③ 边缘：一条极细的亮线，把"柱"从背景里摘出来，又不至于成为墙
-  g.strokeStyle = "rgba(196,252,244,.42)";
-  g.lineWidth = 1.6;
-  g.beginPath();
-  g.moveTo(l + 1, bot); g.lineTo(l + 1, top + 12);
-  g.moveTo(r - 1, bot); g.lineTo(r - 1, top + 12);
-  g.stroke();
-
-  /* 柱顶：两道横向的"出口"虚线。球是从这里飞出去的，
-     没有这一道，柱子的上边界就是"渐变到没有"，玩家不知道风到哪儿为止。 */
-  const p2 = 0.55 + 0.45 * Math.sin(S.t * 2.8);
-  g.strokeStyle = "rgba(206,255,248," + (0.24 + 0.30 * p2).toFixed(3) + ")";
-  g.lineWidth = 2;
-  g.setLineDash([7, 6]);
-  g.beginPath();
-  g.moveTo(l + 2, top + 3); g.lineTo(r - 2, top + 3);
-  g.stroke();
-  g.setLineDash([]);
-
-  // ④ 风口：嵌在地里的石栅。**它是"入口"，必须比柱身更实**
-  g.fillStyle = "#37434B";
-  g.fillRect(l - 7, bot - 5, u.w + 14, 9);
-  g.fillStyle = "#55636D";
-  g.fillRect(l - 7, bot - 5, u.w + 14, 3);
-  // 栅条：只画露在风口上面的那截，看起来是"从缝里出来的"
-  g.strokeStyle = "rgba(18,26,32,.55)";
-  g.lineWidth = 2.4;
-  for (let x = l + 6; x < r - 4; x += 13) {
-    g.beginPath(); g.moveTo(x, bot - 5); g.lineTo(x, bot + 4); g.stroke();
+  /* ---- 尘埃：细、快、贴着中轴 ---- */
+  for (let i = 0; i < 26; i++) {
+    const spd = 0.30 + 0.035 * ((i * 7) % 5);
+    const p = (S.t * spd + i / 26) % 1;
+    const y = bot - 6 - p * (hh - 12);
+    const ang = S.t * (3.1 + 0.18 * i) + i * 1.7;
+    const R = radAt(p) * (0.30 + 0.62 * ((i * 11) % 7) / 6);
+    const x = cx + Math.sin(ang) * R;
+    let a = Math.min(1, p / 0.07) * (1 - Math.max(0, (p - 0.66) / 0.34));
+    if (a <= 0.01) continue;
+    g.globalAlpha = 0.20 + 0.40 * a;
+    g.fillStyle = i % 3 === 0 ? "#FFF0CC" : "#E8CB94";
+    g.beginPath();
+    g.arc(x, y, 0.9 + 1.5 * ((i * 5) % 4) / 3, 0, 6.283);
+    g.fill();
   }
+  g.globalAlpha = 1;
+
+  /* ---- 枯叶：主读数。少而大，一片就够说明问题 ---- */
+  const LEAF = ["#C08A4A", "#A9713C", "#D8AE68", "#8E5F30", "#B47F45"];
+  for (let i = 0; i < 14; i++) {
+    const spd = 0.17 + 0.05 * ((i * 5) % 4);
+    const p = (S.t * spd + i / 14) % 1;
+    let y = bot - 8 - p * (hh - 10);
+    const ang = S.t * (2.0 + 0.22 * i) + i * 2.3;
+    const R = radAt(p) * (0.55 + 0.45 * ((i * 13) % 5) / 4);
+    let x = cx + Math.sin(ang) * R;
+
+    /* 台面遮挡：贴近板底时被推出去 + 变亮（叶子堆在板下面）。
+       离板远了恢复。**bulge 只加不减**，所以轮廓是"板下鼓一圈"，
+       正是风吹到障碍物上的样子。 */
+    let bulge = 1, pile = 0, above = 1;
+    for (const b of bars) {
+      if (x < b.l - 6 || x > b.r + 6) continue;
+      const d = b.y - y;                       // >0 在板下方
+      if (d > 0 && d < 38) {
+        const k = 1 - d / 38;
+        bulge += 0.85 * k;
+        pile = Math.max(pile, k);
+      } else if (d <= 0 && d > -46) {
+        above = 0.80;                          // 板上面只剩漏过去的那部分
+      }
+    }
+    x = cx + (x - cx) * bulge * above;
+
+    let a = Math.min(1, p / 0.09) * (1 - Math.max(0, (p - 0.60) / 0.40));
+    a = Math.min(1, a + pile * 0.25);
+    if (a <= 0.02) continue;
+
+    const s = (5.0 + 2.6 * ((i * 7) % 4) / 3) * (0.72 + 0.28 * (1 - p * 0.5));
+    const rot = ang * 1.75 + i;
+    g.save();
+    g.translate(x, y);
+    g.rotate(rot);
+    g.globalAlpha = 0.34 + 0.58 * a;
+    g.fillStyle = LEAF[i % LEAF.length];
+    /* 叶片：两端尖的透镜形。用椭圆会读作"碎屑"，尖头才读作"叶" */
+    g.beginPath();
+    g.moveTo(-s, 0);
+    g.quadraticCurveTo(0, -s * 0.72, s, 0);
+    g.quadraticCurveTo(0, s * 0.72, -s, 0);
+    g.fill();
+    /* 叶柄：一条 1px 的深色中线，6px 大小下就够读出"这是片叶子" */
+    g.globalAlpha = 0.20 + 0.34 * a;
+    g.strokeStyle = "#4A3016";
+    g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(-s * 0.8, 0); g.lineTo(s * 0.8, 0);
+    g.stroke();
+    g.restore();
+  }
+  g.globalAlpha = 1;
 }
 
 /* ---------- 竖直硬墙 ----------
@@ -12251,6 +13156,10 @@ function drawUpdraft(g, u) {
  *   硬墙 = 灰石砌 + 向外的三角（我只会把你打回来）
  */
 function drawStoneWall(g, d) {
+  /* `hide: 1` = 这堵墙的视觉由**地形本身**承担（实心土崖的立面就是墙）。
+     在崖壁里再立一根 26 宽的石柱，读作"崖壁上贴了一根柱子" ——
+     物理是对的，画面是错的。物理不读这个字段。 */
+  if (d.hide) return;
   const cx = (d.x1 + d.x2) / 2;
   const top = Math.min(d.y1, d.y2), bot = Math.max(d.y1, d.y2);
   /* 宽 26 不是 18：18 在 960 宽的场里读作"一根管子"或"路灯"。
@@ -12562,6 +13471,99 @@ function drawStump(g, s) {
   }
 }
 
+/* ---------------------------------------------------------------------------
+   场地木箱（`S.loots`）
+
+   ## 和「宝箱」的关系
+
+   `DROP_KINDS.chest` 是**地上能捡的东西**（球送走敌人后掉出来的那个金色小箱子）。
+   这里画的是**台面上一个要用球去撞的木箱** —— 撞碎它，里面掉出那个金色小箱子。
+   一个是结果，一个是靶子，别混。
+
+   ## 为什么它必须一眼就"想撞"
+
+   推球这一屏的决策点是"球往哪推"。给玩家的第一个理由应该是**看得见的好处**，
+   所以箱子要在视觉上主动招呼：暖木色（画面里唯一的亮暖色块之一）、铁箍、
+   锁扣，以及一条从缝里漏出来的金光 —— 最后这一条最重要，
+   它回答"为什么值得花一颗球去撞它"，而答案不是数值，是"里面明显有东西"。
+   --------------------------------------------------------------------------- */
+function drawLoot(g, q) {
+  const top = q.y - q.h;
+  const sx = q.x + (q.shake > 0 ? Math.sin(S.t * 70) * 3.2 : 0);
+  const hw = q.w / 2;
+
+  if (q.hp <= 0) {
+    /* 碎了只剩底板和几片木条 —— 痕迹要留，否则玩家回头看不到"我开过这儿" */
+    g.fillStyle = "rgba(50,32,18,.34)";
+    g.beginPath();
+    g.ellipse(sx, q.y - 3, hw * 0.78, 5, 0, 0, 6.283);
+    g.fill();
+    return;
+  }
+
+  // 影子：和台面同一套光源（右上），落在台面上
+  g.fillStyle = "rgba(14,38,24,.20)";
+  g.beginPath();
+  g.ellipse(sx - 4, q.y - 2, hw * 0.95, 5.5, 0, 0, 6.283);
+  g.fill();
+
+  // 箱体
+  const bg = g.createLinearGradient(0, top, 0, q.y);
+  bg.addColorStop(0, "#B98A50");
+  bg.addColorStop(0.55, "#9C6B38");
+  bg.addColorStop(1, "#6E4823");
+  g.fillStyle = bg;
+  g.fillRect(sx - hw, top, q.w, q.h);
+
+  // 竖板缝：木箱是几块板拼的
+  g.strokeStyle = "rgba(48,26,10,.46)";
+  g.lineWidth = 1.3;
+  for (let x = sx - hw + 14; x < sx + hw - 6; x += 14) {
+    g.beginPath();
+    g.moveTo(x, top + 2);
+    g.lineTo(x, q.y - 1);
+    g.stroke();
+  }
+
+  // 铁箍：两道竖箍 + 铆钉。没有铁箍的木箱读作"一个木色方块"
+  for (const bx of [sx - hw + 5, sx + hw - 5]) {
+    g.fillStyle = "#5A5348";
+    g.fillRect(bx - 3.2, top, 6.4, q.h);
+    g.fillStyle = "rgba(226,220,200,.30)";
+    g.fillRect(bx - 3.2, top, 2.0, q.h);
+    for (let y = top + 7; y < q.y - 4; y += 13) {
+      g.fillStyle = "rgba(238,232,212,.55)";
+      g.beginPath();
+      g.arc(bx, y, 1.3, 0, 6.283);
+      g.fill();
+    }
+  }
+
+  // 顶盖受光
+  g.fillStyle = "rgba(255,236,192,.44)";
+  g.fillRect(sx - hw, top, q.w, 3.2);
+  g.fillStyle = "rgba(28,14,4,.26)";
+  g.fillRect(sx - hw, top + 3.2, q.w, 2.0);
+
+  // 锁扣
+  g.fillStyle = "#C8AE72";
+  g.fillRect(sx - 5, top + q.h * 0.42, 10, 11);
+  g.fillStyle = "rgba(40,24,8,.62)";
+  g.beginPath();
+  g.arc(sx, top + q.h * 0.42 + 5.5, 2.1, 0, 6.283);
+  g.fill();
+
+  /* 从缝里漏出的金光：**呼吸**，不是常亮。
+     常亮读作"发光材质"，呼吸读作"里面的东西是活的/有价值的"。
+     幅度压得很小（±18%），大了就成了特效。 */
+  const glow = 0.30 + 0.18 * Math.sin(S.t * 2.4 + q.x);
+  const lg = g.createLinearGradient(0, top + 3.2, 0, top + 3.2 + 9);
+  lg.addColorStop(0, "rgba(255,214,108," + glow.toFixed(3) + ")");
+  lg.addColorStop(1, "rgba(255,214,108,0)");
+  g.fillStyle = lg;
+  g.fillRect(sx - hw + 4, top + 3.2, q.w - 8, 9);
+}
+
 /* 脚印的绘制。雪被踩下去 = 比脚下的雪**暗**一点、偏冷一点。
  *
  * 不用纯白高光：雪面本来就是白的，再叠白什么都看不见。
@@ -12695,6 +13697,7 @@ function drawLevel() {
   for (const d of REFLECTS) drawReflect(g, d);
   for (const pt of PORTALS) drawPortal(g, pt);
   for (const s of S.stumps) drawStump(g, s);
+  for (const q of S.loots) drawLoot(g, q);
   /* 菌光囊站在地面/台面上，属于**地形层** ——
      必须在角色之前，否则人会从囊的柄后面穿过去。 */
   drawPods(g);
@@ -20446,7 +21449,6 @@ Object.defineProperty(GROVE, "UPDRAFTS", { get: () => UPDRAFTS });
  * **给 GROVE 加新导出，一律用 defineProperty。** */
 Object.defineProperty(GROVE, "DRAFT_RISE", { value: DRAFT_RISE });
 Object.defineProperty(GROVE, "DRAFT_DECAY", { value: DRAFT_DECAY });
-Object.defineProperty(GROVE, "DRAFT_LIFT", { value: DRAFT_LIFT });
 Object.defineProperty(GROVE, "TOUR", { get: () => TOUR });
 /* 场景族必须导出：冒烟要断言"27 屏分成了几族、每族几屏"，
    以及"没有一族是空的"。不导出就只能靠截图目视，那不算检查。 */

@@ -129,6 +129,12 @@ const NUM = {
   /* 推球力度。沿用 grove 的 620 → 1209（助跑满格约 380px）。 */
   push: { base: 620, runGain: 0.95, runFull: 380 },
 
+  /* 玩家跳跃。**`airJump` = 空中还能再跳几次**（2026-10-28 第二轮）。
+     重力 2100、jump 720 → 单跳高 123。
+     为什么是"二段跳"而不是"加高单跳"：单跳一旦到 144，所有 3 格箱山
+     都能直上，"箱子是路"那套攀爬就整个失效了。见 stepPlayer 里的算术。 */
+  hero: { jump: 720, airJump: 1 },
+
   /* 箱子。**这里是整套材质系统的核心表**：
      hp        = 子弹要几发才碎（Infinity = 子弹完全无效）
      minPow    = 球要多大的动量才能砸碎（0 = 随便推都碎）
@@ -1623,6 +1629,7 @@ function reset(seed) {
     x: L.start.x, y: L.start.y, vx: 0, vy: 0,
     w: PLAYER_W, h: PLAYER_H, onGround: true, face: 1,
     runD: 0, lockT: 0, shotCd: 0, anim: 0, shotAnim: 0,
+    jumps: NUM.hero.airJump, jumpHeld: false,
   };
 }
 
@@ -2890,10 +2897,15 @@ function wellClimb(p) {
   for (let k = 1; k < L.floors.length; k++) {
     const upper = L.floors[k - 1];
     /* **符号别写反。** 玩家在下一层，脚在 upper 的"下面"，feet 比 upper 大。
-       站 3 格时 feet - upper = 96；站 1 格时是 192，够不着，不给爬。
-       （写成 upper - feet 的话恒为负，整段永远跳过 —— 白改一遍。） */
+       站 2 格时 feet - upper = 144；站 1 格时是 192，够不着，不给爬。
+       （写成 upper - feet 的话恒为负，整段永远跳过 —— 白改一遍。）
+
+       **窗口上限从 120 放宽到 160（2026-10-28 第二轮）。** 井梯从 3 格降到
+       2 格之后，井梯顶离上层地板是 144，120 这个上限正好把"按 W 爬"这条
+       路堵死了 —— 而那正是"不卡关"的保底。160 仍然拦得住"站在 1 格箱顶
+       就想爬"（那是 192）。 */
     const d = feet - upper;
-    if (d < -2 || d > 120) continue;
+    if (d < -2 || d > 160) continue;
     const h = L.layers[k - 1].holes.filter(o => p.x + p.w > o.x + 6 && p.x < o.x + o.w - 6)[0];
     if (!h) continue;
     /* 洞口里还有活箱子 = 盖板没砸，爬不上去。 */
@@ -2961,20 +2973,107 @@ function stepPlayer(dt) {
     else p.runD = Math.max(0, p.runD - 600 * dt);
   }
 
-  if ((K['w'] || K['W'] || K['ArrowUp'] || K[' ']) && p.onGround && p.lockT <= 0) {
-    /* 先试爬井梯，爬不了才是普通跳。顺序不能反 —— 先跳起来的话，
-       玩家在洞口正下方又被天花板挡住，等于什么也没发生。 */
-    const cw = wellClimb(p);
-    if (cw) {
-      p.x = cw.x; p.y = cw.y; p.vx = 0; p.vy = 0; p.onGround = true;
-      once('well_climb', p.x + p.w / 2, p.y - 12, '爬上来了', '#CFEFFF');
+  /* ---- 跳 ----
+     用户 2026-10-28（第二轮）：「注意处理的太直了吧　太陡」
+     「宠物需要轻松的上下层跳动」。
+
+     **三件事一起改：**
+
+     ① **二段跳。** 层高 240、单跳 123 —— 一跳永远上不了上层。而井里
+        能站的地方只有那摞 3 格箱子（144），从地面上去还得先找 2 格箱顶。
+        二段跳把 240 跨过去：240 → 117 → −6（越过上层地板面 0）。
+        层内二段跳会被净空（214）压住，最多到 151，比单跳只多 28 ——
+        3 格箱山（144）依然要绕，"箱子是路"没被破坏。
+
+     ② **地面按 W 就是跳，不再先试 `wellClimb` 的瞬移。** 原来站井梯顶
+        按一下人就整个被搬到上一层，那不是跳，是电梯 —— 看不到上升过程，
+        也学不会"这里能上去"。瞬移现在退到第三下（两次跳都用完还在空中
+        时）当兜底，唯一作用是不卡关。
+
+     ③ **按键必须判边沿。** `S.keys` 是"按住为真"的状态，写成 `&& K['w']`
+        会在空中一路续跳（等于无限跳）。 */
+  const wantJump = !!(K['w'] || K['W'] || K['ArrowUp'] || K[' ']);
+  const jumpEdge = wantJump && !p.jumpHeld;
+  p.jumpHeld = wantJump;
+
+  if (jumpEdge && p.lockT <= 0) {
+    if (p.onGround) {
+      /* **站在井梯顶（离上层地板 ≤120）时按 W 仍然是"爬"，其余全是跳。**
+         保留爬梯这一下不是偷懒：它是"不卡关"的保底 —— 洞口被箱子堵、
+         起跳点被挤在斜角里跳不满高度时，还有一条确定的路。
+         而只要不在梯顶（比如站在地面），按 W 就是实打实的跳 ——
+         二段跳 + 翻越能自己上去，这才是用户要的「轻松的上下层跳动」。 */
+      const cw = wellClimb(p);
+      if (cw) {
+        p.x = cw.x; p.y = cw.y; p.vx = 0; p.vy = 0; p.onGround = true;
+        p.jumps = NUM.hero.airJump;
+        once('well_climb', p.x + p.w / 2, p.y - 12, '爬上来了', '#CFEFFF');
+      } else {
+        p.vy = -NUM.hero.jump;
+        p.onGround = false;
+        p.jumps = NUM.hero.airJump;
+      }
+    } else if (p.jumps > 0) {
+      /* 二段跳。**不改变水平速度** —— 空中变向会让"跳上井口边缘"
+         变成一件靠微操的事，而这一步本来就该轻松。 */
+      p.vy = -NUM.hero.jump;
+      p.jumps -= 1;
     } else {
-      p.vy = -720;
-      p.onGround = false;
+      /* 两次跳都用完还在空中，再按 W 才允许 `wellClimb` 接一把。
+         此时人已经在上层楼板附近（它只认 `d ≤ 120`），补的是最后一截。 */
+      const cw = wellClimb(p);
+      if (cw) {
+        p.x = cw.x; p.y = cw.y; p.vx = 0; p.vy = 0; p.onGround = true;
+        p.jumps = NUM.hero.airJump;
+        once('well_climb', p.x + p.w / 2, p.y - 12, '爬上来了', '#CFEFFF');
+      }
     }
   }
 
+  const prevFeet = p.y + p.h;
   stepBody(p, dt);
+  /* 落地回满空中跳次数。放在 stepBody 之后 —— `onGround` 是它写的。 */
+  if (p.onGround) p.jumps = NUM.hero.airJump;
+
+  /* ---- 洞口翻越 ----
+     **"跳上去了"和"站得住"是两件事。** 二段跳能把脚送过上层地板面，
+     但人还在洞口正上方：一松手就落回井里。原来只有 `wellClimb` 的瞬移
+     能跨过这最后半步，而它只认"站在井梯顶"这一个站位 —— 换个起跳点
+     按 W 完全没反应，这就是"跳不上去"的真实体感。
+
+     这里补的是那半步：**这一帧脚下从楼板面下方穿到上方时**，把人横移到
+     洞口外那侧的楼板顶上。判据用"穿过"而不是"接近" ——
+     用接近的话，在楼板下面横着跑也会被翻上去。
+
+     **不要求按方向键。** 洞口两边的楼板哪边近就往哪边翻（有按键则按键），
+     否则"跳起来还得同时按住方向"这件事本身就不轻松。 */
+  if (!p.onGround && p.vy < -30) {
+    const feet = p.y + p.h;
+    for (let k = 0; k < FLOORS.length; k++) {
+      const f = FLOORS[k];
+      /* 这一帧脚从 f 下方穿到了 f 上方（含 6px 容差） */
+      if (!(prevFeet > f - 2 && feet <= f + 6)) continue;
+      const dirs = (left || right) ? [left ? -1 : 1] : [-1, 1];
+      for (const dir of dirs) {
+        for (const step of [20, 34, 48, 62, 78, 96, 112]) {
+          const nx = p.x + dir * step;
+          if (nx < WALL_L || nx + p.w > WALL_R) continue;
+          if (blockedAt(nx, f - p.h, p.w, p.h, null)) continue;
+          /* **落点不一定是楼板，也可能是箱子顶。** 只要它在上层地板面
+             往上 96 以内（`f-96` ~ `f+2`），人就确实上到那一层了。
+             只认楼板的话，洞口旁边那摞箱子会把"已经成功"判成失败。 */
+          const gh = groundAt(nx + p.w / 2, f - 1);
+          if (gh < f - 96 || gh > f + 2) continue;
+          p.x = nx; p.y = gh - p.h; p.vx = 0; p.vy = 0; p.onGround = true;
+          p.jumps = NUM.hero.airJump;
+          break;
+        }
+        if (p.onGround) break;
+      }
+      if (p.onGround) break;
+    }
+  }
+
   p.anim += dt;
 }
 
@@ -4161,8 +4260,12 @@ function drawPlat(g, pl) {
      比"一条又厚又长的横梁"更廉价。
      真楼板断在洞口边上是这样的：木板被掰断，茬口参差、里侧压着阴影。
      所以断口处走 3 个锯齿点（内凹 0~4px），再在里侧压一条暗竖带。 */
-  const cutL = isGround && x0 > WALL_L + 1;
-  const cutR = isGround && x1 < WALL_R - 1;
+  /* **断口茬口不再只给地表层。** 用户 2026-10-28（第二轮）说「处理的太直了
+     吧　太陡」—— 地下的楼板断在洞口边上原来是一刀切的直角，两层之间的
+     洞口读起来就是"两堵垂直的墙"，又直又陡。地表层早就有茬口画法，
+     地下一直没享受到，因为 `isGround` 这个条件把它拦在外面。 */
+  const cutL = x0 > WALL_L + 1;
+  const cutR = x1 < WALL_R - 1;
   const nA = 1.6 + (seed % 3) * 0.9;
   const nB = 1.6 + ((seed >> 2) % 3) * 0.9;
 

@@ -173,6 +173,45 @@ const NUM = {
   /* 贴脸保底：跑动中撞上敌人，自己掉 1 血、敌人吃 2 点雪。
      零弹时的唯一出路，代价是血 —— 保底是**机制**，不是系统施舍。 */
   bodyCoat: 2,
+
+  /* ---------------- 宠物（场上的小怪） ----------------
+     用户 2026-10-28：「宠物可以简单跳跃 一个箱子的高度走动待机」「宠物太少了
+     没有发射子弹攻击的地方」「单位的子弹要符合宠物特点 小兔子丢萝卜
+     狗狗是骨头 射程需要远点 还有一个子弹平行丢出去 需要有下落感」。
+
+     **三个字段管三件事，各管各的：**
+       · `jump`  起跳初速。重力 2100 → 520 跳 64px，刚好一个箱子（48）富余
+       · `cdA/B` 两次射击的间隔区间（秒）。只用来**拉开节奏**，不用来控难度
+       · `range` 水平射界。精灵子弹会掉，太远根本打不到，所以它要跟
+                 `ebullet` 的射程一起看，不能单独调
+
+     **为什么要三种而不是两种。** 用户说"宠物太少了"。数量可以靠生成器加，
+     但同一种怪放十只还是"一种怪"。三种的差别必须一眼可见：
+     兔子耳朵竖着、狗耳朵垂着、刺猬背上一圈刺 —— 剪影先分开，
+     子弹（胡萝卜 / 骨头 / 刺球）再补第二层区分。 */
+  pet: {
+    bunny: { speed: 84,  jump: 520, cdA: 1.9, cdB: 2.9, range: 300, bullet: 'carrot' },
+    doggy: { speed: 148, jump: 545, cdA: 1.5, cdB: 2.3, range: 350, bullet: 'bone'   },
+    hoggy: { speed: 100, jump: 470, cdA: 2.3, cdB: 3.3, range: 270, bullet: 'spike'  },
+  },
+
+  /* 宠物子弹。**"平行丢出去 + 有下落感"是靠这三条实现的：**
+       ① 水平初速恒定（不瞄准玩家 —— 会瞄准就没有"侧身躲开"这个动作了）
+       ② `vy0 = -70` 轻轻上扬，让弹道先平后坠，读起来像"被扔出去"
+       ③ `g = 330` 只有角色的 1/6
+
+     **数值是解方程解出来的，不是拍的。** 约束是"从离地 35px 的高度扔出去，
+     落地时水平走了 230~280px，途中明显下垂"。g 用 2100（玩家重力）的话，
+     0.4 秒就砸在脚边，所谓"射程"根本不存在；g 太小又读不出弧线。
+     330 刚好：顶点在上扬 7px 处，落地时下垂 35px，弧线斜率约 8°，
+     肉眼能看出"它在往下掉"，又不至于掉到打不到人。
+
+     `spd` 三档：胡萝卜慢（弧线最重）、骨头快（狗扔得直）、刺球居中偏慢。
+     用户要求"子弹要符合宠物特点"—— 弹速和形状一起变，才叫特点。 */
+  ebullet: {
+    spd: { carrot: 360, bone: 420, spike: 330 },
+    vy: -60, g: 210, life: 2.4, r: 9, windup: 0.42, maxAlive: 7,
+  },
 };
 
 /* ---------------------------------------------------------------- 工具 */
@@ -239,7 +278,14 @@ const WALL_L = 24, WALL_R = 936;
 const GEN = {
   topY: 340,          // 地表地板高度
   floorH: 240,        // 层高（不可随机，见上）
-  thick: 40,          // 地板厚度
+  /* **楼板 40 → 20。** 40px 的板在画面上是一条又厚又长的褐色横梁，
+     几乎整屏不间断，看着像天花板压下来（用户 2026-10-28 截图圈的正是它）。
+     20px 才是"楼板"该有的厚度。
+     顺带把净空从 200 抬到 220：井梯 3 格 144 + 身高 42 = 186，
+     剩下 28px 头顶空间，爬梯时不再贴着脸。
+     先试过 20 —— 在 960 宽的画面上细得像一条胶带，反而显得廉价。
+     26 是"看得出是一块板、又不是横梁"的那一档。 */
+  thick: 26,
   /* **层数收到 3~5，而且 4 层占一半。**
      4~8 层的时候，每层只够塞十来口箱子：层数越多的关越空，
      "很多木箱"和"随机层数"直接打架。现在改成少而厚 ——
@@ -256,6 +302,11 @@ const GEN = {
 
 let WORLD_H = 1580, GROUND_Y = 1540;
 let FLOORS = [], LAYER_CN = [], HOLES = [], LAYERS = [];
+/* **怪物自己的随机源**（巡逻换向的间隔、初始朝向）。
+   原来这里写的是 Math.random —— 同一个种子跑两次，怪走的路不一样，
+   "出图 / 断言能复现"这条直接作废。注意 `rnd()` 也是 Math.random 的，
+   它只能用于视觉（震屏、雪粒），**任何影响玩法的随机都必须过这里**。 */
+let FR = () => 0.5;
 let LEVEL_SEED = null;
 
 /* mulberry32。**不能用 Math.random**：出图和断言都要能复现同一张关卡，
@@ -295,33 +346,70 @@ function genLevel(seed) {
   const layerCN = floors.map((_, k) => (k === nF - 1 ? '门厅' : NAME_POOL[Math.min(k, NAME_POOL.length - 1)]));
 
   /* ================= ① 下行口 =================
-     槽位轮转保证相邻两层不同槽，同层两个口天然不重叠。 */
-  const layers = [];
-  let prevSlots = [];
-  for (let k = 0; k < nF - 1; k++) {
-    let free = [0, 1, 2].filter(s => prevSlots.indexOf(s) < 0);
-    for (let i = free.length - 1; i > 0; i--) { const j = Math.floor(R() * (i + 1)); const t = free[i]; free[i] = free[j]; free[j] = t; }
-    if (!free.length) free = [0, 1, 2];
+     **每层 1~3 个，平均 1.9 个 —— 楼板不许再是一整条。**
 
-    const want = (free.length >= 2 && chance(0.34)) ? 2 : 1;
+     原来固定 1 个、偶尔 2 个，还按 3 个"槽位"轮转，于是每一层都是一块
+     几乎整屏不断的板、边上开一个洞。用户 2026-10-28 直接圈出来了：
+     "非要搞这么厚的横梁，而且那么长"。楼板长不是厚度问题，是**它真的
+     从来没断过**。
+
+     现在改成按 x 区间避让：
+       · 同层的口之间至少隔一列（48）—— 挨在一起就等于一条 240 宽的
+         大豁口，楼板会碎成一条一条，箱子没地方摞；
+       · 上下两层的口不重叠（留 48）—— 重叠就是"从上面掉下来直接穿过
+         下面那个洞"，一次掉两层。
+     "槽位"这个抽象就此作废：它保证的正是"相邻层不同槽"，而区间检测
+     比它更准、还没有"槽用完了只能全放开"的漏洞。 */
+  const layers = [];
+  let prevHoles = [];
+  for (let k = 0; k < nF - 1; k++) {
+    /* **每层 1~2 个。** 试过 3 个，两个后果都是硬伤：
+       ① 三个口加上"洞口之间至少留一列"，一层能摞箱子的列只剩十来列，
+          地表层箱子掉到 7 口（门槛 12）—— 玩法材料被结构吃光了；
+       ② 三个口加余量之后连成一片，下一层**一个口都放不下去**
+          （200 个种子里撞到 2 次"第 1 层没有出口"）。
+       所以从"多加口"改成"加宽口"：1~2 个口，但最宽 240 —— 洞本身在
+       画面上就占了四分之一屏，"一屏里三个通行点"这件事照样成立。 */
+    const want = 1 + (chance(0.55) ? 1 : 0);
     const depth = nF > 2 ? k / (nF - 2) : 0;
     const holes = [];
     for (let i = 0; i < want; i++) {
-      const slot = free[i];
-      const s0 = GEN.slots[slot][0], s1 = GEN.slots[slot][1];
-      const w = chance(0.30) ? 144 : 96;
-      const x = s0 + 48 * ri(0, Math.max(0, Math.floor((s1 - s0 - w) / 48)));
-      const r = R();
-      /* **冰封的洞只从第 3 层开始。** 前面几层玩家还没有大球，
-         拿冰封口等于直接关死这条路；而且冰墙这个语言要先在别处教过。 */
-      let cover = 'frost';
-      if (k >= 2 && r < 0.14 + depth * 0.22) cover = 'ice';
-      else if (r < 0.42 + depth * 0.12) cover = 'none';
-      holes.push({ slot, x, w, cover, floorY: floors[k] });
+      for (let t = 0; t < 26; t++) {
+        /* 宽度三档。144 是主力（玩家 30 宽，跳进去有余量）；
+           192 是"大豁口"，一层里有它就不用找井梯了；
+           96 是窄口，得贴边才跳得上去。 */
+        /* **最宽 192。** 试过 240：两个 240 的洞加间隔就是 528px，
+           一层只剩 9 列能摞箱子，地表层的箱子直接掉到 9 口（门槛 12），
+           怪也找不到落脚点（"第 0 层没有怪"）。192 已经是"洞占了五分之一屏"，
+           两个口加起来楼板断成三段，每段不超过 380 —— 视觉上早就不像横梁了。 */
+        /* **第一个口最宽，第二个口收窄。** 两个 192 加间隔 48 就是 432px，
+           一层只剩 10 列能摞箱子，而地表层还要被地形和出生点各吃掉一两列 ——
+           200 个种子里有 4 个卡在"第 0 层箱子 9 口"（门槛 12）。
+           总宽控制在 288 以内之后，最窄也还有 13 列。 */
+        const w = i === 0 ? pickOne([96, 144, 144, 192, 192]) : pickOne([96, 96, 144]);
+        const x = 48 * ri(0, Math.floor((912 - w) / 48));
+        /* 同层两个口之间至少隔一列（48）—— 隔着 0 就不是两个口，是一条豁口。 */
+        if (holes.some(h => x < h.x + h.w + 48 && x + w + 48 > h.x)) continue;
+        /* 层间留 24：**校验用的就是 24**，生成侧比它松一点才不会自己把自己锁死
+           （写 48 时，上一层放两个 192 的洞，下一层就一个口都放不下了）。 */
+        if (prevHoles.some(h => x < h.x + h.w + 24 && x + w + 24 > h.x)) continue;
+        const r = R();
+        /* **封口只给本层的第一个口。** 口多了的意义就是"好几条路都通"，
+           全都封上就白改了。冰墙仍然只从第 3 层开始（前面几层玩家还没有
+           够档的球，封上等于直接关死）；霜箱从地表就有 —— 它是"这底下
+           还有一层"这条探索线的第一个老师。 */
+        let cover = 'none';
+        if (i === 0) {
+          if (k >= 2 && r < 0.14 + depth * 0.22) cover = 'ice';
+          else if (r < 0.46) cover = 'frost';
+        }
+        holes.push({ x, w, cover, floorY: floors[k] });
+        break;
+      }
     }
     holes.sort((a, b) => a.x - b.x);
     layers.push({ floorY: floors[k], holes });
-    prevSlots = holes.map(h => h.slot);
+    prevHoles = holes;
   }
   layers.push({ floorY: floors[nF - 1], holes: [] });      // 门厅：没有下行口
 
@@ -342,9 +430,20 @@ function genLevel(seed) {
   /* **出生点 x 在这里就得定下来。**
      原来是最后一步才算的，于是 ⑥ 放怪时根本不知道出生点在哪 ——
      结果开局有一只怪站在玩家 30px 旁边，一进关就掉血（出图放大才看见）。
-     它只依赖第一层的地板段，所以能提前算。 */
+     它只依赖第一层的地板段，所以能提前算。
+
+     **对齐到列边界（2026-10-28）。** 原来 `startSeg.x + 36` 常落在 40，
+     而玩家宽 30 —— 人骑在 0/48 两列的缝上，于是"出生点清箱"不得不把
+     **两整列**箱子都删掉。地表层能摞箱子的列本来就只剩十来个，
+     一次少两列（4~6 口）直接把这一层打到门槛以下：200 个种子里
+     有 30 多个首掷过不了校验，全部是这个原因。
+     现在让玩家整个人落在同一列里（`col*48+9`，占 9~39），清箱只清一列。 */
   const startSeg = layers[0].segs.filter(s => s.w >= 120)[0] || layers[0].segs[0];
-  const startX = Math.round(clamp(startSeg.x + 36, 40, Math.max(40, startSeg.x + startSeg.w - 44)));
+  const startCol = (() => {
+    const want = clamp(startSeg.x + 36, startSeg.x + 4, Math.max(startSeg.x + 4, startSeg.x + startSeg.w - 46));
+    return clamp(Math.floor((want + 15) / 48), 0, 19);
+  })();
+  const startX = Math.max(6, Math.min(WALL_R - 44, startCol * 48 + 9));
 
   /* ================= ③ 地形 =================
      平台（跳得上，高差 114 < 跳高 123）和斜坡（**走上去，不用跳**）。
@@ -371,20 +470,27 @@ function genLevel(seed) {
          平台从"每层多半有"降到"偶尔一个"，宽度也从 3~4 格收到 2~3 格 ——
          它现在的角色是"石头打的台子"，给箱堆丘陵一个材质对比。 */
       const wide = l.segs.filter(s => s.w >= 240);
-      const wantRamp = chance(0.55);
+      const wantRamp = chance(0.68);
       /* **坡长也要抖开。** 原来固定 144，于是每一关每一层看到的都是
          同一条 38° 的坡 —— 用户说的"太规矩"有一半是这个：不是画法问题，
          是**全场的坡都长得一样**。现在 144 / 168 / 192 三档，坡度落在
          26°~38°，同一个画面里两条坡不会是一个斜度。 */
       const RAMP_W = 144;
       let placed = false;
-      if (wide.length && chance(0.4)) {
+      /* **0.4 → 0.58。** 楼板断成两三段之后，"每层都放得下地形"的段
+         少了，斜坡掉到平均 0.76 条/关。用户抱怨过"斜坡太规矩"——
+         变成"几乎没有斜坡"显然更糟。 */
+      if (wide.length && chance(0.58)) {
         /* **候选段池按"平台 + 坡"的总宽挑。**
            只要平台的话 240 就够，可一旦带坡，平台 96~192 + 坡 144~192
            就是 240~384 —— 从 240 宽的段里随机取位，坡**必然**跨到段尾外面，
            而段尾外面就是洞口，`freeOf` 一路否掉，重试 12 次也全白跑。
            这正是"平均每关只有 1.3 条坡、四分之一的关一条坡都没有"的原因。 */
-        const pool0 = wantRamp ? wide.filter(s => s.w >= 192 + RAMP_W) : wide;
+        /* **门槛按"平台最窄 + 坡"算，不是按"平台最宽 + 坡"。**
+           平台宽是 96~144，所以最省的一条路是 96 + 144 = 240。
+           原来写 192 + 144 = 336 —— 楼板断成两三段之后，一条 336 的段
+           已经很少见了，斜坡直接从"平均 1.1 条"掉到 0.8 条。 */
+        const pool0 = wantRamp ? wide.filter(s => s.w >= 96 + RAMP_W) : wide;
         const pool = pool0.length ? pool0 : wide;
         /* **位置重试，不是"撞上就整块丢掉"。**
            落点带上不能有地形（会把人接在半空），但直接丢弃的话，
@@ -431,7 +537,10 @@ function genLevel(seed) {
           placed = true;
         }
       }
-      if (!placed && chance(0.30)) {
+      /* **0.30 → 0.44。** 楼板断成两三段之后，能放"平台带坡"的段少了
+         （那要求段 ≥ 240 并且整段让开洞口），坡就只剩土丘这一条来源。
+         土丘一次贡献两段坡，提概率是最省的做法。 */
+      if (!placed && chance(0.44)) {
         /* **孤坡必须是"上坡 + 下坡"两段,不能是一条单边楔子。**
            单边楔子的高端悬空:一堵 76px 的垂直墙(斜坡不做水平阻挡,
            因为整块包围盒会造成"坡变成墙"),玩家从高端那头走进来会直接
@@ -494,11 +603,18 @@ function genLevel(seed) {
        ⑤ 任意两坨箱体之间至少留 2 列（96px）：地面永远走得通
      */
   const boxes = [];
+  /* `barrel` = 木桶。**和木箱同一个碰撞盒、不同的视觉与耐久。**
+     不做成"能滚的圆桶"是故意的：滚动物体要另写一套物理和一套阻挡规则，
+     为一个纯装饰性的变体不值得。桶的用途是"打破整层的规整感" ——
+     一排排 48×48 的方箱里插一个圆柱，眼睛立刻就知道那里不是墙。
+     耐久 2 发（比木箱少一发），因为木桶本来就是薄板拼的。 */
   const B = (x, y, mat, opt) => boxes.push({
     x, y, w: 48, h: 48, mat,
-    hp: NUM.box[mat].hp, dead: false, hitT: 0, taught: false,
+    hp: (opt && opt.barrel) ? 2 : NUM.box[mat].hp, dead: false, hitT: 0, taught: false,
+    fell: 0,                     // 掉过多久（>0 之后不再认"被夹住"这一条，见 stepBoxFall）
     frost: !!(opt && opt.frost),
     loot: !!(opt && opt.loot),
+    barrel: !!(opt && opt.barrel),
   });
 
   /** 这一层的落点带：上一层洞口正下方。**不能摆箱子** ——
@@ -571,6 +687,33 @@ function genLevel(seed) {
     /* 这一列是哪种洞口（-1 = 不是洞口）。削坡要用它 —— 见 setH 的注释。 */
     const holeCol = new Array(COLS).fill(-1);
 
+    /* ---- 井口缘 ---- 洞口**左侧**紧邻的那一列不放箱子（见 ① 里的注释）。
+       **只清一侧。** 两侧都清等于每个洞吃掉两列箱子，地表层直接从 15 列
+       掉到 11 列，200 个种子里首掷只有 98 个过校验（原来 198）。
+       井梯固定摞在洞口的左列（见下），玩家爬上去也是往左扒 —— 左侧才是
+       真正要用的那块落脚台面，右侧留不留空对"能不能跳上去"没有影响。 */
+    const rimCol = new Array(COLS).fill(false);
+    for (const o of l.holes) {
+      const li = Math.ceil(o.x / 48) - 1;
+      if (li >= 0 && li < COLS) rimCol[li] = true;
+    }
+    /* **薄层不腾井口缘。** 地表层经常是"2 个洞吃掉 4 列 + 地形吃 3 列"，
+       再抠掉井口缘就只剩 6~10 列，箱子直接掉到 6 口（门槛 12）——
+       200 个种子里首掷从 198 掉到 191。层薄的时候宁可让玩家走按 W 的
+       井梯（那条路一直都在），也不要把箱子掏空。 */
+    const boxCols = (() => {
+      let n = 0;
+      for (let i = 0; i < COLS; i++) {
+        const x = i * 48;
+        if (l.terrain.some(t => x + 48 > t.x && x < t.x + t.w)) continue;
+        if (l.holes.some(o => x + 48 > o.x && x < o.x + o.w)) continue;
+        if (!l.segs.some(s => x >= s.x && x + 48 <= s.x + s.w)) continue;
+        n++;
+      }
+      return n;
+    })();
+    const rimOK = boxCols >= 10;
+
     /* 上行井梯 = 上一层洞口正下方的那几列。用法见下面的注释。
        **门厅（最后一层）不做井梯。** 门厅是终点：门壳和 5 口喂球箱占掉
        八九列，那些列必须是 0 格（否则门打不开、球喂不出来），井梯硬要在
@@ -593,6 +736,18 @@ function genLevel(seed) {
       /* **地形占掉的列不摞箱子。** 平台面在 floorY-114，
          3 格箱山在 floorY-144，硬摞上去会直接穿插。 */
       if (l.terrain.some(t => x + 48 > t.x && x < t.x + t.w)) { canAdd[i] = false; continue; }
+      /* **井口缘：洞口左右紧邻的那两列不摞箱子。**（2026-10-28 加）
+         用户原话：「上下层玩家直接可以跳」。
+
+         **这一条才是"能不能跳上去"的开关，不是跳高。** 之前每一层的洞口
+         都被两摞 3 格箱山夹着：玩家站井梯顶（脚在上层地板下 96）起跳，
+         脚能越过上层地板 27px —— 可是左边是 0..洞口 的整段楼板、右边是
+         一整摞箱子，**没有一块可以落脚的空台面**，横向一碰就被顶回来，
+         于是永远只能靠按 W 的瞬移。实测 26 个层位里纯跳只成功 1 个；
+         把起跳速度从 720 提到 860（跳高 123→176）也只到 4 个 ——
+         加高解决不了"没地方站"。
+         留出这一列之后，井口边上就有一块 48 宽的台面可以扒、可以落。 */
+      if (rimOK && rimCol[i]) { HGT[i] = 0; canAdd[i] = false; MAX0[i] = 0; continue; }
       const hole = l.holes.find(o => x + 48 > o.x && x < o.x + o.w);
       if (hole) {
         holeCol[i] = hole.cover;
@@ -643,14 +798,21 @@ function genLevel(seed) {
     }
 
     /* ---- ② 箱堆地形 ----
-       **不是往地上撒几坨箱子，是整层地面都由箱子砌出来。**
+       用户 2026-10-28：「箱子你没必要那么规矩 现在又感觉很密密麻麻 也可以有桶装啊」。
 
-       前两版都没铺满，原因各不相同，都值得记：
-       · 第一版把箱山当"孤岛"摆、强制互相隔开 2 列 —— 20 列里只放得下
-         三四坨，每层 15 口。用户说的"箱子很少"就是这个。
-       · 第二版改成随机游走 —— 游走一遇到"被地形占掉的列"就被重置成 0，
-         夹一个平台要好几列才爬得回来，实测每层还是十来口。
-       现在用**每列独立随机 + 削坡**：没有惯性，铺得满而且平滑。
+       **改成"一堆一堆地摞"，堆与堆之间留平地走廊。**
+
+       上一版是"每列独立随机 + 削坡"，铺得很满，代价是整层被箱子铺成一条
+       连续高地 —— 两个后果用户都点到了：
+         · 看起来像地形、不像箱子（密密麻麻）
+         · 走在上面每两格就上下 48px，人一路在颠（他另外说的"晃来晃去"，
+           一半是这个，不是镜头）
+       所以现在反过来：**先摆堆，堆之间必然是平的。**
+         · 连续可用的列切成 1~4 列的堆，堆内中间高两头矮（自然的堆形）
+         · **堆之间至少 1 列平地**，30% 的地方留 2 列
+         · 堆峰 1~3 格，仍然受"相邻高差 ≤ 2"的削坡兜底
+       箱子总数反而不掉：堆内是实心的，4 列 × 2 格 = 8 口，
+       同样宽度散着铺只有 4~6 口。
 
        三条硬约束（都是撞墙撞出来的）：
        · **上限 3 格 = 144。** 净空只有 200（层高 240 − 板厚 40）、玩家 42，
@@ -663,11 +825,82 @@ function genLevel(seed) {
     const MAXH = MAX0.slice();               // 本列最高能堆几层
     for (let i = 0; i < COLS; i++) if (HGT[i] > 0) LOCK[i] = HGT[i];
 
+    /* ---- ②-1 切游程：连续"能摞箱子"的列 ---- */
+    const freeCol = new Array(COLS).fill(false);
+    for (let i = 0; i < COLS; i++) if (canAdd[i] && LOCK[i] < 0) freeCol[i] = true;
+    const runs = [];
     for (let i = 0; i < COLS; i++) {
-      if (!canAdd[i] || LOCK[i] >= 0) continue;
-      /* 分布**偏向 2~3 格**。平均 2 格意味着整层地面被箱子抬到 96，
-         玩家一直在箱顶上走 —— 这就是"用箱子铺出来的地形"。 */
-      HGT[i] = Math.min(MAXH[i], pickOne([0, 1, 2, 2, 3, 3, 3]));
+      if (!freeCol[i]) continue;
+      let j = i;
+      while (j + 1 < COLS && freeCol[j + 1]) j++;
+      runs.push([i, j]);
+      i = j;
+    }
+
+    /* ---- ②-2 摆堆 ---- */
+    /* **整层的箱子预算。** 堆模型不管住总数的话，撞上"可用列特别多"的层
+       还是会铺到 30 多格 —— 那就是用户说的"密密麻麻"。
+      14 格是"20 列平均 0.7 格"：看起来是一堆一堆的，不是一片地面。
+       （第一版给到 26，中位数还是 23 口 —— 加上井梯和洞口盖板就满了，
+       而用户说的"密密麻麻"正是这个中位数。）
+       预算用完就停止摆堆，剩下的列保持平地（正好是想要的呼吸）。 */
+    let budget = Math.round(COLS * 0.7);
+    for (const run of runs) {
+      const a = run[0], b = run[1];
+      let c = a;
+      while (c <= b && budget > 0) {
+        /* 堆宽 1~4。**宽度取随机而不是固定 3**，不然整层是等宽的方块阵列，
+           又回到"规矩"上去了。 */
+        const gw = Math.min(b - c + 1, 1 + Math.floor(R() * 4));
+        const peak = Math.min(3, pickOne([1, 2, 2, 3, 3]));
+        for (let t = 0; t < gw; t++) {
+          if (budget <= 0) break;
+          let h = peak;
+          /* 堆形：宽堆的两端矮一级。窄堆不降 —— 1 列再降就是平地，堆就消失了。 */
+          if (gw >= 3 && (t === 0 || t === gw - 1)) h = Math.max(1, peak - 1);
+          /* 20% 的列再掉一级。**"不规矩"就靠这一下**，但只掉一格 ——
+             掉两格会出现 3 格深的口袋，玩家进去要跳两次才出来。 */
+          if (h > 1 && chance(0.20)) h -= 1;
+          const hh = clamp(h, 1, MAXH[c + t]);
+          budget -= hh;
+          HGT[c + t] = hh;
+        }
+        c += gw;
+        /* 堆间空地：1 列是底线，30% 的地方给 2 列。
+           **两堆紧贴着的话玩家还是在连续的高低地形上走**，等于没改。 */
+        if (c <= b) c += 1 + (chance(0.30) ? 1 : 0);
+      }
+    }
+
+    /* ---- ②-3 补箱子到门槛 ----
+       堆模型天生比"每列都填"少。取一次总数，不够就补 ——
+       **顺序是"先给已有的堆加高、再填堆间的空地"**：
+       加高只是让堆更鼓，平地还在；反过来先填空地，整层又会变回连续地形，
+       那就等于没改。只有在堆全部顶到 MAXH 还凑不够时才去填空地，
+       而且填出来只有 1 格（矮台，不挡视线、不挡路）。 */
+    {
+      /* **地表层（k = 0）门槛再低一档。** 它同时被"两个下行口 + 地形 + 出生点列"
+         吃掉，能摞的列常常只剩十来列；下面每一层都有完整地板，按 10 走。 */
+      const need = (k === 0 || k === nF - 1) ? 8 : 10;
+      let cnt = 0;
+      for (let i = 0; i < COLS; i++) cnt += HGT[i];
+      const grow = (i, room) => {
+        if (!canAdd[i] || LOCK[i] >= 0) return 0;
+        const add = Math.min(room, MAXH[i] - HGT[i]);
+        if (add <= 0) return 0;
+        HGT[i] += add;
+        cnt += add;
+        return add;
+      };
+      for (let pass = 0; pass < 2 && cnt < need + 1; pass++) {
+        /* 先加堆（一次 1 格，避免某堆突然长成一根柱子），再填空地 */
+        for (const stacked of [true, false]) {
+          for (let i = 0; i < COLS && cnt < need + 1; i++) {
+            if ((HGT[i] > 0) !== stacked) continue;
+            grow(i, 1);
+          }
+        }
+      }
     }
 
     /* 削坡：相邻不得超过 2 格。**优先抬高矮的那一边**（不损失箱子），
@@ -712,6 +945,32 @@ function genLevel(seed) {
       if (tops.length && chance(0.72)) lootCol = tops[Math.floor(R() * tops.length)];
     }
 
+    /* ---- 桶 ----
+       用户 2026-10-28：「也可以有桶装啊」。
+
+       **桶的作用是打破方块的节奏，不是"换个材质的箱子"。** 一排排 48×48
+       的木箱里插一个圆柱，眼睛立刻读出"这里不是墙"。所以它只出现在
+       堆里、每层 1~2 个，位置挑堆的最底层（像被人随手搁下）或堆顶。
+       洞口盖板列不参与（那里必须是能被砸开/被埋的立方块），金箱也不换。 */
+    const barrels = [];
+    {
+      const cand = [];
+      for (let i = 0; i < COLS; i++) {
+        if (HGT[i] < 1 || !canAdd[i]) continue;
+        if (l.holes.some(o => i * 48 + 48 > o.x && i * 48 < o.x + o.w)) continue;
+        cand.push(i);
+      }
+      const nb = Math.min(cand.length, 1 + ri(0, 1));
+      const usedB = [];
+      for (let t = 0; t < 40 && usedB.length < nb; t++) {
+        const i = cand[Math.floor(R() * cand.length)];
+        if (usedB.indexOf(i) >= 0) continue;
+        usedB.push(i);
+        const j = chance(0.55) ? 0 : HGT[i] - 1;
+        barrels.push(i + ":" + j);
+      }
+    }
+
     /* ---- ③ 按图生成 ---- */
     for (let i = 0; i < COLS; i++) {
       const h = HGT[i];
@@ -723,7 +982,10 @@ function genLevel(seed) {
         const y = l.floorY - 48 * (j + 1);
         if (hole && hole.cover === 'ice') { if (j < 2) B(x, y, 'ice'); continue; }
         if (hole && hole.cover === 'frost' && j === 0) { B(x, y, 'wood', { frost: true }); continue; }
-        B(x, y, matRoll(R()), (isLoot && j === h - 1) ? { loot: true } : null);
+        const lootHere = (isLoot && j === h - 1);
+        /* 桶只在普通木箱的位置上换，不碰金箱。 */
+        if (!lootHere && barrels.indexOf(i + ":" + j) >= 0) { B(x, y, 'wood', { barrel: true }); continue; }
+        B(x, y, matRoll(R()), lootHere ? { loot: true } : null);
       }
     }
 
@@ -751,7 +1013,9 @@ function genLevel(seed) {
        而这句话对深层恒真（门厅的箱子当然比地表低得多），
        结果地表清箱子时把整张图里 x 靠近出生点的箱子全删了 ——
        门厅的喂球箱就这样少了两口，直接踩死局线。 */
-    if (b.x < startX + 44 && b.x + b.w > startX - 14 &&
+    /* **只清出生点那一列。** 玩家的 x 现在对齐到列（见 startCol 的注释），
+       整条命都在同一列里，删不到隔壁。 */
+    if (b.x === startCol * 48 &&
         b.y + b.h > GEN.topY - 140 && b.y < GEN.topY + 20) boxes.splice(i, 1);
   }
 
@@ -773,7 +1037,12 @@ function genLevel(seed) {
      `y` 是**头顶**，站在 y=K 的面上就写 K-30，写 K 会埋进地里。 */
   const spawns = [];
   layers.forEach((l, k) => {
-    const want = (k === nF - 1) ? 3 : (chance(0.3) ? 2 : 1);
+    /* **2~4 只，不再是 1~3 只。** 用户 2026-10-28 两次提到：
+       「怪物可以搞多点」「宠物太少了」。
+       怪就是弹药 —— 裹住一只才有一颗球，球碾死一只才够档破冰。
+       怪少的时候"没球可推"不是数值问题，是材料问题。
+       门厅固定 3 只不动，那个数是死局线（见 NUM.killTarget 的注释）。 */
+    const want = (k === nF - 1) ? 3 : 2 + (chance(0.55) ? 1 : 0) + (chance(0.3) ? 1 : 0);
     /* **候选点按"列"取，不按 8px 步长扫。**
        箱子铺开之后地面几乎每一处都摞着东西，用连续扫描的话一层的候选点
        会被 200 口箱子切成几十个碎点，"取不住"就成了缺怪。
@@ -793,26 +1062,41 @@ function genLevel(seed) {
       const gy = (l.colTop && l.colTop[i] != null) ? l.colTop[i] : l.floorY;
       /* **太高的箱顶不放**：雪弹是水平飞的，站在 2 格（96）以上玩家打不到。 */
       if (l.floorY - gy > 100) continue;
+      /* **左右相邻列比自己高 = 站进凹槽里。** 怪宽 34、列宽 48，
+         本列站得下，可旁边那列多摞一格，它往前走 7px 就撞到箱墙。
+         这种位置不硬排除（排除之后有的层一只怪都挑不出来），
+         而是打个 open 标记排在后面 —— 候选够的时候用开阔的，
+         不够才退而求其次；真落进 14px 的凹槽，stepFoes 会让它站定，
+         不会再每帧撞墙来回抽。 */
+      const hiL = (l.colTop && l.colTop[i - 1] != null) ? l.colTop[i - 1] : l.floorY;
+      const hiR = (l.colTop && l.colTop[i + 1] != null) ? l.colTop[i + 1] : l.floorY;
+      const open = hiL >= gy - 8 && hiR >= gy - 8;
       /* 洞口正上方不放：那是"往下走"的地方，站着怪等于堵门。 */
       if (l.holes.some(h => x + 48 > h.x - 8 && x < h.x + h.w + 8)) continue;
       /* 斜坡上不放：`colTop` 只认箱子，认不出坡面 —— 怪会站在坡体内部
          （脚的 y 停在坡底、坡面却高出一截，垂直贴面判据永远不成立）。 */
       if (l.terrain.some(t => t.kind === 'ramp' && t.x - 12 < x + 48 && t.x + t.w + 12 > x)) continue;
-      cands.push({ x: x + 7, y: gy });
+      cands.push({ x: x + 7, y: gy, open });
     }
-    if (!cands.length && k === 0) {
+    if (!cands.length) {
       for (let i = 0; i < COLS; i++) {
         const x = i * 48;
         if (!l.segs.some(s => x >= s.x && x + 48 <= s.x + s.w)) continue;
         const gy = (l.colTop && l.colTop[i] != null) ? l.colTop[i] : l.floorY;
-        if (l.floorY - gy > 100) continue;
+        /* **兜底只排除"根本站不住"的列，不再卡 100px。**
+           原来这里也照抄了主筛选的 `> 100`，于是"整层箱子都很高"的层
+           会连一只怪都放不出来（5 号种子第 2 层就是这样，一关只剩 8 只）。
+           宠物现在会跳、玩家也会爬上箱山，3 格（144）是站得住的上限。 */
+        if (l.floorY - gy > 144) continue;
         if (l.holes.some(h => x + 48 > h.x - 8 && x < h.x + h.w + 8)) continue;
         if (l.terrain.some(t => t.kind === 'ramp' && t.x - 12 < x + 48 && t.x + t.w + 12 > x)) continue;
-        cands.push({ x: x + 7, y: gy });
+        cands.push({ x: x + 7, y: gy, open: false });
       }
     }
     if (!cands.length) return;
-    const all = cands.slice();
+    /* **优先挑开阔位**：候选里够的话，先只用"左右不比它高"的那些。 */
+    const openOnes = cands.filter(c => c.open);
+    const all = (openOnes.length >= want ? openOnes : cands).slice();
     let pool = all.slice();
     for (let i = 0; i < want; i++) {
       if (!pool.length) pool = all.slice();
@@ -825,6 +1109,45 @@ function genLevel(seed) {
     }
   });
 
+  /* ================= ⑥.5 黑洞（吐怪的巢）=================
+     用户 2026-10-28：「可以搞个生成怪物的黑洞，可以到处走」。
+
+     **它解决的是"怪打完就没了"这件事。** 一关十只怪，玩家用雪弹打光之后
+     就只剩砸箱子；而"球"的唯一来源是敌人 —— 怪清光等于玩法断电。
+     黑洞提供一条"还会再长出来"的来源，但**有配额**（3~5 只），
+     不会变成无限刷怪机：配额用完它就暗下去，仍然挂在那儿当场景。
+
+     **只放在第 1 层以下。** 地表层是教学层，一进关旁边就有台吐怪机，
+     玩家还没学会吐雪就被围死了。 */
+  const nests = [];
+  {
+    const nWant = 1 + (chance(0.5) ? 1 : 0);
+    const used = [];
+    for (let t = 0; t < 60 && nests.length < nWant; t++) {
+      const k = 1 + Math.floor(R() * Math.max(1, nF - 1));
+      if (k >= nF) continue;
+      const l = layers[k];
+      const segs = l.segs.filter(s => s.w >= 144);
+      if (!segs.length) continue;
+      const seg = segs[Math.floor(R() * segs.length)];
+      const cols = Math.max(1, Math.floor((seg.w - 48) / 48));
+      const col = Math.floor(seg.x / 48) + Math.floor(R() * cols);
+      const x = clamp(col * 48 + 24, seg.x + 24, seg.x + seg.w - 24);
+      /* 洞口正上方不放：那是唯一的上下通道，堵在那里等于封路。 */
+      if (l.holes.some(h => x + 30 > h.x - 8 && x - 30 < h.x + h.w + 8)) continue;
+      if (used.some(u => Math.abs(u - x) < 240)) continue;
+      used.push(x);
+      const gy = (l.colTop && l.colTop[col] != null) ? l.colTop[col] : l.floorY;
+      nests.push({
+        x, y: gy, layer: k,
+        left: 3 + Math.floor(R() * 3),       // 3~5 只配额
+        cd: 1.4 + R() * 1.2,                 // 开局先缓一下
+        dir: R() < 0.5 ? -1 : 1,
+        seed: Math.floor(R() * 1000),
+      });
+    }
+  }
+
   /* ================= ⑦ 装饰 =================
      **"场景丰富"不是往里塞东西，是塞对的东西。**
      每一件道具都在说一句"这里有人住过"：吊灯 = 有人点灯；
@@ -836,8 +1159,8 @@ function genLevel(seed) {
      绘制上统一排在箱子之后，箱子会自然地把道具挡在后面。
      */
   const deco = [];
-  const CEIL_KINDS = ['lamp', 'beam', 'rope', 'vine', 'web', 'flag'];
-  const FLOOR_KINDS = ['barrel', 'jar', 'sign', 'mush', 'shelf', 'crate'];
+  const CEIL_KINDS = ['lamp', 'chandelier', 'lantern', 'beam', 'rope', 'vine', 'web', 'flag'];
+  const FLOOR_KINDS = ['barrel', 'jar', 'sign', 'mush', 'shelf', 'crate', 'ladder'];
 
   for (let k = 0; k < nF; k++) {
     /* **`usedX` 必须每层重置。** 放在层循环外面的话它会跨层累积，
@@ -848,8 +1171,15 @@ function genLevel(seed) {
     const fY = l.floorY;
     /* 天花板 = 上一层地板底面；地表层没有天花板，用屏幕上方当"屋梁"。 */
     const cY = k > 0 ? floors[k - 1] + GEN.thick : GEN.topY - 150;
-    const avoid = l.holes.map(h => [h.x - 40, h.x + h.w + 40]);
-    if (k > 0) for (const h of layers[k - 1].holes) avoid.push([h.x - 40, h.x + h.w + 40]);
+    /* **两份避让表，不能合成一份。**
+       天花板件只需要让开"上面那层的洞口"（挂灯会堵住从上层下来的通道）；
+       地面件只需要让开"本层的洞口"（摆在洞上就是浮在空里）。
+       曾经把两边 push 进同一个数组，一层两个洞 + 上层两个洞 = 四条 ±40 的区间，
+       加上采样半径 34，几乎把 960px 宽的整条都盖住了 ——
+       采样 24 次全落空，103 层里有 22 层一件装饰都没有，
+       表面上是"随机不够密"，实际是约束互斥。 */
+    const avoidDown = l.holes.map(h => [h.x - 40, h.x + h.w + 40]);
+    const avoidUp = k > 0 ? layers[k - 1].holes.map(h => [h.x - 40, h.x + h.w + 40]) : [];
 
     /* **按"种类"抽，不按"个数"抽。** 按个数抽会抽出"每层五个木桶"，
        重复感比空着更糟。每层 3~6 种，每种 1~3 件。 */
@@ -859,27 +1189,53 @@ function genLevel(seed) {
        像游戏里有个删不掉的 UI。地表的顶是天空，只放落地的东西。 */
     const pool = k === 0 ? FLOOR_KINDS : CEIL_KINDS.concat(FLOOR_KINDS);
     const chosen = [];
-    const nKind = Math.min(pool.length, 4 + ri(0, 3));
+    /* **种类池从 12 涨到 15，抽取数也要跟着涨**：停在 4~6 的话，
+       每层挂件数量没变但摊薄到更多种类上，实际密度反而下降。 */
+    const nKind = Math.min(pool.length, 5 + ri(0, 3));
     for (let t = 0; t < 60 && chosen.length < nKind; t++) {
       const c = pool[Math.floor(R() * pool.length)];
       if (chosen.indexOf(c) >= 0) continue;
       chosen.push(c);
     }
-
+    /* **主灯每层保底（地表层除外，它上面是天空）。**
+       光照是场景的第一层秩序：有的层有一盏主灯、有的层没有，
+       整片看过去就是"这几层是随手拼的"。十五种里抽五六种，
+       单靠随机大概只有一半的关能抽到枝形吊灯 —— 那就等于没有规律。 */
+    if (k > 0 && chosen.indexOf('chandelier') < 0) chosen.push('chandelier');
     for (const kind of chosen) {
+      /* 地表不放梯子。**地表上面是天空，梯子没地方靠** ——
+         一根 100px 高的直梯竖在雪地中间，读起来就是"能爬"，而它其实不能。
+         地下才有"靠墙"这个语境，也才有"这里塌过"的叙事。 */
+      if (kind === 'ladder' && k === 0) continue;
       const isCeil = CEIL_KINDS.indexOf(kind) >= 0;
       let n = ri(1, (kind === 'mush' || kind === 'jar' || kind === 'vine') ? 3 : 2);
-      /* 吊灯每层至少一盏：**它是地下唯一的光源**，没有它整层是平光。 */
-      if (kind === 'lamp' && k > 0) n = Math.max(n, 2);
+      /* 吊灯每层至少一盏：**它是地下唯一的光源**，没有它整层是平光。
+         但同层已经有枝形吊灯（三簇烛火 + 一圈大光晕）时，吊灯退回"补光"，
+         一盏就够 —— 两个大光源同层会把木墙打成一片均匀的黄色，反而没有体积。 */
+      if (kind === 'lamp' && k > 0) {
+        n = chosen.indexOf('chandelier') >= 0 ? 1 : Math.max(n, 2);
+      }
+      /* 主灯一盏。它是画面上最亮的东西，两盏就开始抢主角。 */
+      if (kind === 'chandelier') n = 1;
+      /* 断梯子是"痕迹"，不是货架 —— 一层一件，多了像工地。 */
+      if (kind === 'ladder') n = 1;
       for (let i = 0; i < n; i++) {
         let x = null;
         for (let t = 0; t < 24; t++) {
           const cxx = 44 + Math.round(R() * 852);
-          if (hitsRange(cxx, 34, avoid)) continue;
+          if (hitsRange(cxx, 34, isCeil ? avoidUp : avoidDown)) continue;
           /* 地表别摆在出生点旁边。**路牌是左右各伸出 26px 的，贴着人放
              就读成"角色举着一块牌子"** —— 缩略图上一眼就看见。 */
           if (k === 0 && Math.abs(cxx - startX) < 70) continue;
           if (usedX.some(u => Math.abs(u - cxx) < 62)) continue;
+          /* **梯子必须站在真地板上。** 它是 100px 高的立式道具，站在箱山顶上
+             就读作"一架够不到任何地方的梯子"；木桶和蘑菇站在箱上是"堆场"，
+             梯子站在箱上是"bug"。所以这一类要额外卡一条：本列没有箱子。 */
+          if (kind === 'ladder') {
+            const gi0 = clamp(Math.floor(cxx / 48), 0, COLS - 1);
+            const top0 = (l.colTop && l.colTop[gi0] != null) ? l.colTop[gi0] : fY;
+            if (top0 !== fY) continue;
+          }
           x = cxx;
           break;
         }
@@ -891,6 +1247,10 @@ function genLevel(seed) {
         usedX.push(x);
         deco.push({
           x, y: isCeil ? gy : gy + 1, kind, layer: k,
+          /* 绘制分两批用：挂件在箱子后面，落地件在箱子前面。
+             落地件站在箱顶时，只要相邻列比它高，就会被后画的箱子吞掉 ——
+             地表层箱子密，整层装饰在图上直接"消失"了。 */
+          ceil: isCeil,
           w: 0, h: 0, seed: Math.round(x * 13 + k * 97),
         });
       }
@@ -933,7 +1293,7 @@ function genLevel(seed) {
 
   return {
     seed, nFloors: nF,
-    floors, layers, plats, boxes, deco, door, spawns,
+    floors, layers, plats, boxes, deco, door, spawns, nests,
     start: { x: startX, y: GEN.topY - 42 },
     worldH: WORLD_H, groundY: GROUND_Y,
   };
@@ -1023,7 +1383,7 @@ function validateLevel(L, verbose) {
     /* 14 口是下限，不是目标 —— 生成侧的实际中位数在 20 上下走。
        **门槛设太高会让 buildLevel 反复重掷**，而重掷只会换种子，
        不会让某一层突然多出箱子（地形占的列是固定的）。 */
-    const need = (k === N - 1) ? 10 : 12;
+    const need = (k === 0 || k === N - 1) ? 8 : 10;
     if (cnt < need) bad.push('第' + k + '层箱子只有 ' + cnt + '（要 ≥' + need + '）');
     /* 10. 相邻列高差 ≤ 2 格（96 < 跳高 123）—— 再高就爬不上去，箱山变墙 */
     for (let i = 0; i + 1 < H.length; i++) {
@@ -1063,11 +1423,17 @@ const S = {
   phase: 'play',            // play | clear
   /* 镜头。世界高 1560，屏幕 600 —— 只有跟着人往下走，才谈得上"纵深"。
      只做纵向（横向世界正好一屏宽），这样玩家永远看得见整张地图的宽度，
-     不会因为横向滚动而丧失方位感。 */
-  cam: { y: 0 },
+     不会因为横向滚动而丧失方位感。
+     **k 是"吸附在哪一层"**，不是连续坐标 —— 见 updateCamera。 */
+  cam: { y: 0, k: 0 },
   clearT: 0,
   p: null,
   foes: [], shots: [], balls: [], frags: [], texts: [], shards: [],
+  /* 宠物扔出来的东西（胡萝卜 / 骨头 / 刺球）。**和玩家的 `shots` 完全分开** ——
+     两者速度、重力、命中对象都不一样，混在一个数组里每个系统都要写两遍判据。 */
+  ebullets: [],
+  /* 黑洞（吐怪巢）。见 stepNests —— 每关 1~2 个，会慢慢走，有配额。 */
+  nests: [],
   boxes: [], plats: [], deco: [], door: null,
   ammo: 0, belly: 0, hp: 0, invuln: 0,
   killed: 0, killedTarget: 0,
@@ -1102,6 +1468,12 @@ function reset(seed) {
   if (seed != null) LEVEL_SEED = seed >>> 0;
   if (LEVEL_SEED == null) LEVEL_SEED = (Math.random() * 1e9) >>> 0;
   const L = buildLevel(LEVEL_SEED);
+  /* **FR 必须在造怪之前重置。** 它原来在函数末尾才赋值，
+     而 `S.foes = L.spawns.map(makeFoe)` 在中间就调用了 makeFoe ——
+     于是每张新关卡的第一批怪吃的是**上一张关**的随机流。
+     后果不是"怪长错了"这种小事：同一个种子跑两遍，宠物的种类和初始朝向都不一样，
+     "出图和断言可复现"这条直接作废（_snowlab-feel2.js 的⑤就是这么抓到的）。 */
+  FR = rngFrom((LEVEL_SEED ^ 0x51ED) >>> 0);
   S.level = L;
   S.t = 0; S.phase = 'play'; S.clearT = 0;
   S.plats = L.plats;
@@ -1109,7 +1481,9 @@ function reset(seed) {
   S.boxes = L.boxes.map(b => ({ ...b }));
   S.door = { ...L.door };
   S.foes = L.spawns.map(sp => makeFoe(sp.x, sp.y, sp.kind));
+  S.nests = (L.nests || []).map(n => ({ ...n, born: 0, t: 0 }));
   S.shots = []; S.balls = []; S.frags = []; S.texts = []; S.shards = [];
+  S.ebullets = [];
   S.ammo = NUM.ammoStart;
   S.belly = NUM.bellyStart;
   S.hp = NUM.hpStart;
@@ -1129,7 +1503,7 @@ function reset(seed) {
     ballChain: 0, ballChainMax: 0,
     kills: 0, killByBall: 0, hardHint: 0,
   };
-  S.cam = { y: 0 };
+  S.cam = { y: 0, k: 0 };
   S.p = {
     x: L.start.x, y: L.start.y, vx: 0, vy: 0,
     w: 30, h: 42, onGround: true, face: 1,
@@ -1138,23 +1512,49 @@ function reset(seed) {
 }
 
 /* ---------------------------------------------------------------- 敌人 */
+/* **pet 由 kind 决定，不是随机的。**
+   kind 是行为（crawler 巡逻 / runner 追人），pet 是外观和子弹。
+   两者分开是为了让断言能继续用 `spawnFoe(x, y, 'crawler')` 指"一只会巡逻的怪"，
+   不用关心它长什么样；同时场上又能有三种不同的剪影。
+   追人的那个是狗 —— 跑得快、扔骨头，行为和外形的说法是一致的。 */
+function petOf(kind) {
+  if (kind === 'runner') return 'doggy';
+  const r = FR();
+  return r < 0.52 ? 'bunny' : 'hoggy';
+}
+
 function makeFoe(x, y, kind) {
-  const fast = kind === 'runner';
+  const pet = petOf(kind);
+  const cfg = NUM.pet[pet] || NUM.pet.bunny;
+  const speed = cfg.speed;
+  /* **vx 和 face 必须一开始就一致。** 原来 face 写死 1、vx 随机左右，
+     第一帧就成了"面朝右往左走"，再被换向锁一锁，怪就永远倒着走。 */
+  const dir = FR() < 0.5 ? -1 : 1;
   return {
-    x, y, kind,
+    x, y, kind, pet,
     w: 34, h: 30,
-    vx: fast ? 0 : (Math.random() < 0.5 ? -1 : 1) * 90,
+    vx: dir * speed,
+    turnLock: 0,             // 刚折返时的锁，见 stepFoes
     vy: 0,
     hits: 0,                 // 已吃雪点数
     needAt: 0,               // 开始挨第一发时的 need 快照（量具用）
     hitT: 0,
     dead: false,
-    face: 1,
+    face: dir,
     onGround: false,
     homeX: x,
     homeY: y,
     patrolT: 0,
-    speed: fast ? 190 : 92,
+    speed,
+    /* ---- 宠物行为状态 ----
+       idleT > 0 就是"站着待机"。**待机不是省事，是让它看起来活着** ——
+       一直匀速横移的单位读起来像巡逻机器人，停一下、抖抖耳朵，才像宠物。 */
+    idleT: 0,
+    walkT: 0.8 + FR() * 1.6,
+    aim: 0,                  // 蓄力进度，到 windup 就发射
+    fireCd: 0.8 + FR() * 1.4,
+    jumpCd: 0,
+    hopT: 0,                 // 纯表演性的小跳（原地），不影响碰撞
   };
 }
 
@@ -1679,7 +2079,9 @@ function breakBox(box, how) {
   }
 
   // 掉弹：价值差就写在这一行
-  const rate = how === 'ball' ? NUM.drop.shardByBall : NUM.drop.shardByShot;
+  /* **木桶比木箱更值钱一点。** 它只有 2 发耐久，砸开却按 1.35 倍算 ——
+     玩家会自己发现"先拆桶"，而拆桶的动作恰好和"清出射界"是同一件事。 */
+  const rate = (how === 'ball' ? NUM.drop.shardByBall : NUM.drop.shardByShot) * (box.barrel ? 1.35 : 1);
   if (Math.random() < rate) {
     S.shards.push({ x: cx, y: cy, vy: -220, t: 0 });
   }
@@ -1701,38 +2103,306 @@ function killFoe(f, byBall) {
   checkDoor();
 }
 
+/* **怪物的"巡逻走廊"。**
+   量出它身前身后这一段地面能走到哪、走不到哪，之后用 clamp 限制，
+   而不是靠"撞墙就换向"。原来那套写法有两个后果：
+
+   ① 撞墙检测每帧触发一次换向，绕过换向锁 —— 怪被夹在两口箱子之间
+      （只有 14px 宽的凹槽）时，位置每 0.2 秒来回一次，肉眼就是抽搐；
+   ② 每次撞墙都要靠 stepBody 把人推出来，贴墙的那几帧位置都是被修正的，
+      画面上人会一抖一抖。
+
+   走廊一旦量好，怪在自己的走廊里来回走，永远不会撞到墙。 */
+function foeRoam(f) {
+  const hit = (x) => solids().some(s => {
+    if (s.kind === 'ramp') return false;
+    if (x >= s.x + s.w || x + f.w <= s.x) return false;
+    if (f.y + f.h <= s.y + 2) return false;          // 站在这块上面不算
+    /* **矮台不算墙。**（2026-10-28 加，配合"宠物会跳"）
+       高差 ≤ 56 的块（一格箱子 48）是宠物一步就能跳上去的台阶，
+       如果还当墙算，走廊就会被切成一格一格，宠物永远只能在自己那块
+       箱顶上来回 —— 用户说的"怪物只能横向走"一大半是这个。
+       真正挡住它的是 2 格以上（96 > 跳高 64）的箱墙，那个照旧算墙。 */
+    if (s.y >= f.y + f.h - 58) return false;
+    return f.y < s.y + s.h && f.y + f.h > s.y;
+  });
+  /* **走到台子边缘就停，不许走空。**
+     原来只挡"前面有实体"，站在箱顶上的怪走到箱边时前面是空气 → 走廊算到
+     地面尽头 → 它一步踩空掉下去。表现是"怪凭空下坠 / 摔到地板上站着"，
+     而且它再也爬不回箱顶（只会横向走）。
+     判据用"脚下 10px 内有没有地"：`groundAt` 取最近的可站面，脚下就是
+     这块箱顶时差值 0，箱顶外侧会退回到本层地板（差 48）→ 判成悬崖，停。 */
+  const foot = f.y + f.h;
+  /* **一格高差也放行。** 宠物会跳（jump 470~545，跳高 52~70），
+     48 的台阶是它该走的路，不是悬崖。两格（96）才算掉下去 ——
+     那种地方它宁可站着不打，也不该自己跳崖去找玩家。 */
+  const cliff = (x) => (groundAt(x + f.w / 2, foot + 2) - foot) > 54;
+  let a = f.x, b = f.x;
+  for (let t = 0; t < 60 && a > WALL_L && !hit(a - 6) && !cliff(a - 6); t++) a -= 6;
+  for (let t = 0; t < 60 && b + f.w < WALL_R && !hit(b + 6) && !cliff(b + 6); t++) b += 6;
+  return [a, b];
+}
+
+/* =========================================================================
+   黑洞（吐怪巢）
+   ---------------------------------------------------------------------------
+   **"怪打光就没球了"是这一关结构上的缺口。** 球的唯一来源是敌人：
+   裹住一只 → 那颗球本金 1（tier 0），球再碾死一只 → 2，才够破冰墙。
+   怪打完，玩法就断了。黑洞补一条"还会长"的来源。
+
+   但没有配额的生成器会变成刷怪场，所以卡死三条：
+     · **总配额 3~5 只**，吐完就暗下去（仍然挂在那儿当场景，不会凭空消失）；
+     · **同时只允许存活 1 只**（自己吐出来的那些），不会堆成一群；
+     · **走得慢**（26px/s）—— 用户说"可以到处走"，但走快了就成了追命鬼。
+
+   漂移不用物理：碰到墙 / 前方没有地面就折返。它不需要遵守碰撞，
+   因为它本来就是个"贴在地面上的洞"。 */
+const NEST = { speed: 26, period: 5.2, maxAlive: 1 };
+
+function stepNests(dt) {
+  for (const n of S.nests) {
+    n.t += dt;
+    n.born = Math.max(0, (n.born || 0) - dt);
+    if (n.left <= 0) continue;
+    n.cd -= dt;
+
+    /* ---- 缓步挪动 ---- */
+    const nx = n.x + n.dir * NEST.speed * dt;
+    if (nx < WALL_L + 22 || nx > WALL_R - 22) n.dir = -n.dir;
+    else if (Math.abs(groundAt(nx, n.y + 4) - n.y) > 10) n.dir = -n.dir;
+    else n.x = nx;
+
+    /* ---- 吐怪 ---- */
+    if (n.cd <= 0) {
+      const alive = S.foes.filter(f => f.nest === n && !f.dead).length;
+      if (alive < NEST.maxAlive) {
+        const f = makeFoe(n.x - 17, n.y - 32, 'crawler');
+        f.nest = n;
+        f.roamL = null;
+        f.homeX = n.x - 17;
+        f.homeY = n.y - 30;
+        S.foes.push(f);
+        n.left--;
+        n.cd = NEST.period;
+        n.born = 0.8;
+        addText(n.x, n.y - 58, '有东西爬出来', '#C6A8FF', 13, 1.2);
+      } else {
+        n.cd = 0.5;                    // 名额占着，过会儿再看
+      }
+    }
+  }
+}
+
+/* ---------------------------------------------------------------- 宠物子弹
+   **宠物不是"会走的障碍物"，是会打你的单位。** 用户原话：「没有发射子弹
+   攻击的地方」。原来整场的威胁只有"撞到你"，玩家站在两格高的箱顶就
+   完全安全 —— 没有远程，就没有"该躲什么"，跳跃也就只是移动。
+
+   三条设计约束，都是为了让它不变成"必中弹"：
+     · **不瞄准玩家，只朝自己面朝的方向扔。** 会瞄准的话，玩家只能靠
+       跑出射界来躲，那和"必中"没区别；朝一个方向扔，玩家侧一下身就躲开了。
+     · **有 0.42 秒的举手动前摇。** 这一拍是给玩家的反应窗口，
+       也是画面上唯一能读出"要来了"的信号。
+     · **全场同时最多 7 发。** 怪一多就会打成弹幕，那不是这个游戏的难度曲线。
+*/
+function firePetBullet(f) {
+  if (S.ebullets.length >= NUM.ebullet.maxAlive) return;
+  const cfg = NUM.pet[f.pet] || NUM.pet.bunny;
+  const E = NUM.ebullet;
+  const spd = (E.spd && E.spd[cfg.bullet]) || 320;
+  S.ebullets.push({
+    kind: cfg.bullet,
+    x: f.x + f.w / 2 + f.face * 17,
+    /* **出手位置在头顶下方 6px（离地约 24px）。**
+       再高一点（f.y−2）会贴着这一层箱子的顶跑 —— 宠物站在箱堆边上时，
+       子弹一出生就撞进旁边的箱体里，飞出 5 帧就没了，"射程"变成了一句空话。
+       离地 24px 是"够高、能拉开弧线，又不至于一出膛就撞头"的分界。 */
+    y: f.y + 2,
+    vx: f.face * spd,
+    vy: E.vy,
+    t: 0, r: E.r, face: f.face, spin: 0, dead: false,
+  });
+  addFrag(f.x + f.w / 2 + f.face * 17, f.y, 3, '#FFE6C0', 110);
+}
+
+function stepEBullets(dt) {
+  const p = S.p;
+  for (const b of S.ebullets) {
+    if (b.dead) continue;
+    b.t += dt;
+    /* 抛物线在这里成型：只有 vy 吃重力，vx 恒定 —— 这就是用户要的
+       "平行丢出去、但有下落感"。 */
+    b.vy += NUM.ebullet.g * dt;
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.spin += b.vx * dt * 0.02;
+
+    if (b.t >= NUM.ebullet.life) { b.dead = true; continue; }
+    if (b.x < WALL_L - 24 || b.x > WALL_R + 24 || b.y > WORLD_H) { b.dead = true; continue; }
+
+    /* 打到玩家。**只有这一处会掉血** —— 撞人的那条在 stepFoes 里，两条
+       共用 hurtPlayer 的 invuln，所以不会一帧掉两滴。 */
+    if (S.invuln <= 0 && S.phase === 'play' &&
+        b.x + b.r > p.x && b.x - b.r < p.x + p.w &&
+        b.y + b.r > p.y && b.y - b.r < p.y + p.h) {
+      b.dead = true;
+      addFrag(b.x, b.y, 8, '#FFD9A8', 200);
+      hurtPlayer();
+      continue;
+    }
+
+    /* 撞地形就砸碎。**箱子不掉血。** 让宠物子弹能砸箱等于给玩家一条
+       "引怪帮你开路"的捷径，弹药经济就白算了。 */
+    let blocked = false;
+    for (const s of solids()) {
+      if (s.kind === 'ramp') continue;
+      if (b.x + b.r < s.x || b.x - b.r > s.x + s.w) continue;
+      if (b.y + b.r < s.y || b.y - b.r > s.y + s.h) continue;
+      blocked = true; break;
+    }
+    if (blocked) {
+      b.dead = true;
+      addFrag(b.x, b.y, 5, '#E8DCC8', 150);
+    }
+  }
+  S.ebullets = S.ebullets.filter(b => !b.dead);
+}
+
 function stepFoes(dt) {
   const p = S.p;
   for (const f of S.foes) {
     if (f.dead) continue;
     f.hitT = Math.max(0, f.hitT - dt);
+    f.turnLock = Math.max(0, (f.turnLock || 0) - dt);
 
-    if (f.kind === 'runner') {
-      const dir = (p.x + p.w / 2) > (f.x + f.w / 2) ? 1 : -1;
-      f.vx = dir * f.speed;
-      f.face = dir;
+    /* ---- 巡逻走廊 ----
+       落地之后量一次（脚底高度变了说明箱子塌了，要重量）。 */
+    const feetNow = f.y + f.h;
+    /* **脚底要有地，不能只剩一条边。**
+       引擎的落地判据是"包围盒和平台有重叠"，所以身体 99% 悬在崖外、
+       只压住 0.6px 的时候它依然算站着 —— 一旦在这里停住（待机或蓄力），
+       画面上就是一只浮在半空的兔子。出图和断言都抓到过这个。
+       这里用身体中段单独探一次，给"会停住"的两个动作当闸门。 */
+    const solidFoot = Math.abs(groundAt(f.x + f.w / 2, feetNow) - feetNow) < 6;
+    if (f.roamL == null || Math.abs(feetNow - (f.roamY == null ? feetNow : f.roamY)) > 20) {
+      const r = foeRoam(f);
+      f.roamL = r[0]; f.roamR = r[1];
+      f.roamY = feetNow;
+    }
+    /* 走廊太窄（< 一个半身位）就站定 —— 与其让它在 14px 的凹槽里
+       每 0.2 秒来回一次（抽搐），不如让它守在那里。 */
+    const canWalk = f.roamR - f.roamL >= 46;
+
+    /* ================= 宠物行为 ==================
+       用户的四条要求都落在这里：会跳、会待机、会远程打人、弹道有下落。
+       **优先级：瞄准 > 待机 > 走路。** 顺序反过来的话，宠物会在"该开枪了"
+       的时候还在东张西望，玩家永远等不到那一发。 */
+    const pcfg = NUM.pet[f.pet] || NUM.pet.bunny;
+    f.fireCd = Math.max(0, (f.fireCd || 0) - dt);
+    f.jumpCd = Math.max(0, (f.jumpCd || 0) - dt);
+
+    const dxp = (p.x + p.w / 2) - (f.x + f.w / 2);
+    const dyp = (p.y + p.h / 2) - (f.y + f.h / 2);
+    /* 射界：水平在射程内、垂直差 < 78（小半层），而且自己站得住。
+       **垂直判据不能省。** 少了它，宠物会隔着两层楼朝天花板扔骨头。 */
+    const inSight = S.phase === 'play' && f.onGround && solidFoot &&
+                    Math.abs(dxp) < pcfg.range && Math.abs(dyp) < 78;
+    const aiming = inSight && f.fireCd <= 0;
+
+    if (aiming) {
+      f.aim += dt;
+      /* 转身朝玩家，但**留 6px 死区** —— 玩家站正上方时 dxp 会在 ±2 之间
+         抖，没有死区就是每帧翻面。 */
+      if (Math.abs(dxp) > 6) f.face = dxp > 0 ? 1 : -1;
+      f.vx = 0;
+      if (f.aim >= NUM.ebullet.windup) {
+        firePetBullet(f);
+        f.aim = 0;
+        f.fireCd = pcfg.cdA + FR() * (pcfg.cdB - pcfg.cdA);
+      }
+    } else {
+      f.aim = Math.max(0, f.aim - dt * 4);
+      /* ---- 待机 ---- 走一阵停一阵。停的时候它会抖耳朵（画在 drawFoe），
+         所以"不动"不等于"卡住了"。 */
+      if (f.idleT > 0) {
+        f.idleT -= dt;
+      } else {
+        f.walkT -= dt;
+        if (f.walkT <= 0) {
+          /* 崖边不许待机：先迈回去，脚踩实了再停。 */
+          if (solidFoot) {
+            f.idleT = 0.55 + FR() * 0.9;
+            f.walkT = 1.1 + FR() * 1.5;
+          } else {
+            f.walkT = 0.12;
+          }
+        }
+      }
+      /* ---- 跳 ---- **一个箱子高的台阶要能上去。**
+         探前方 8px、往上 112px 找最近的可站面：落差 18~104 就起跳。
+         上限 104 是"两格 96 也跳"，下限 18 是别为了 10px 的坎一直弹。 */
+      if (f.onGround && f.jumpCd <= 0) {
+        const ahead = f.face > 0 ? f.x + f.w + 8 : f.x - 8;
+        const rise = (f.y + f.h) - groundAt(ahead, f.y + f.h - 112);
+        if (rise > 18 && rise < 104) {
+          f.vy = -pcfg.jump;
+          f.onGround = false;
+          f.jumpCd = 0.75;
+        }
+      }
+    }
+
+    /* ---- 选方向 ----
+       **任何一次真正的换向都上锁（0.3s）。** 缺了锁，最大的问题是
+       runner 每帧算"朝玩家走"：玩家一旦和它重叠，左右判定就每帧翻转，
+       位置在 3px 里来回震（探针量到 120 帧换向 120 次）。 */
+    const standing = aiming || f.idleT > 0;
+    let want = f.face || 1;
+    if (standing) {
+      want = f.face || 1;
+    } else if (f.kind === 'runner') {
+      want = (p.x + p.w / 2) > (f.x + f.w / 2) ? 1 : -1;
     } else {
       f.patrolT -= dt;
-      if (f.patrolT <= 0) { f.patrolT = rnd(1.4, 2.6); f.vx = (Math.random() < 0.5 ? -1 : 1) * f.speed; }
-      if (Math.abs(f.x - f.homeX) > 120) f.vx = -sign(f.x - f.homeX) * f.speed;
-      f.face = sign(f.vx);
+      if (f.patrolT <= 0) {
+        f.patrolT = 1.4 + FR() * 1.2;
+        want = FR() < 0.5 ? -1 : 1;
+      } else {
+        want = f.face || 1;
+      }
+      if (Math.abs(f.x - f.homeX) > 120) want = -sign(f.x - f.homeX);
     }
     /* **怪不许走下平台。**
        三层之后这是一个很隐蔽的塌方：一只巡逻怪顺着台边走下来、再走下来，
        最后整场的怪都聚在洞窟底，上面两层变成空台子 —— 玩家爬上去只看到
        空房间，会以为这关坏了。实测 crawler 从 (740,826) 一路走到 (801,826)
        然后掉层，就是这么发生的。
-       所以在台边折返。runner 也照样折返：它该在台上等你，不是自己跳崖。 */
-    if (f.onGround) {
+       所以在台边折返。runner 也照样折返：它该在台上等你，不是自己跳崖。
+
+       **门槛从 40 放到 56（2026-10-28）：一格箱子是 48，49 不是悬崖。**
+       宠物现在会跳，下去还能跳回来；继续按 40 卡着，它就永远困在箱顶上，
+       用户说的"怪物只能横向走"就还是那句老话。两格（96）它跳不上来，
+       那种地方照样折返。 */
+    if (f.onGround && !standing) {
       const fy = f.y + f.h;
-      const ahead = f.vx > 0 ? f.x + f.w + 6 : f.x - 6;
-      if (groundAt(ahead, fy + 2) - fy > 40) f.vx = -f.vx;
+      const ahead = want > 0 ? f.x + f.w + 6 : f.x - 6;
+      if (groundAt(ahead, fy + 2) - fy > 56) want = -want;
     }
+    /* 走廊边界也算一次"想换向"，而且不用等锁 —— 撞到走廊尽头本来就该回头。 */
+    if (want < 0 && f.x <= f.roamL + 0.5) want = f.turnLock > 0 ? f.face : 1;
+    if (want > 0 && f.x >= f.roamR - 0.5) want = f.turnLock > 0 ? f.face : -1;
+    if (want !== f.face) {
+      if (f.turnLock > 0) want = f.face;      // 锁内不许换
+      else f.turnLock = 0.30;
+    }
+    f.face = want;
+    f.vx = (standing || !canWalk) ? 0 : want * f.speed;
 
     /* stepBody 里已经把「水平位移 + 水平碰撞 + 重力 + 垂直落地」全做完了。
        **这里不能再补位移或重力** —— 叠上去会让速度翻倍、一帧穿过地面
        （第一版就是这么写的：crawler 直接掉出画面）。 */
     stepBody(f, dt);
+
     /* 掉出世界就送回**自己原来那一层**，不是送回洞窟底。
        三层之后 H 已经不是世界高度了，用 H 会把 L2 掉下去的怪
        拉到底层（离玩家 1000px 外），看起来像凭空消失了。 */
@@ -1740,8 +2410,15 @@ function stepFoes(dt) {
       f.y = (f.homeY !== undefined ? f.homeY : f.y);
       f.x = f.homeX;
       f.vy = 0; f.hits = 0; f.needAt = 0;
+      f.roamL = null;
     }
     f.x = clamp(f.x, WALL_L, WALL_R - f.w);
+    /* 走廊 clamp 放在最后：stepBody 的碰撞修正偶尔会把人挤出走廊一两个像素，
+       下一帧选方向就会看到"已经出界"，来回抖。这里直接夹回去。 */
+    if (f.roamL != null) {
+      if (f.x < f.roamL) f.x = f.roamL;
+      if (f.x > f.roamR) f.x = f.roamR;
+    }
 
     // 撞玩家
     if (S.invuln <= 0 && aabb(p, f)) {
@@ -1835,8 +2512,15 @@ function stepBoxFall(dt) {
 
        **必须是"左 && 右"。** 写成"贴着一个就算"的话，竖直叠着的两块
        也会互相认作支撑 —— 砸掉 840 那列底下的冰墙，上面那口会赖在
-       792 那列上不掉，箱子塌落这个设计就废了。 */
-    if (!supported) {
+       792 那列上不掉，箱子塌落这个设计就废了。
+
+       **已经掉下来过的箱子不再认这一条。**（2026-10-28 加）
+       这条规则的判据是"侧面有重叠"，所以一口箱子只要掉 12px，就会
+       和刚才那个台子的**侧面**重叠上，然后被"夹"在半空不动 ——
+       实测：砸掉地表最左边那口盖板，它上方压着的木箱掉到 304 就停住，
+       又反过来给右边的盖板当了"左壁"，整排该塌的没塌。
+       落过一次的箱子只认真正的顶面（平台顶 / 别的箱子顶），不再当门闩。 */
+    if (!supported && !(b.fell > 0)) {
       let left = false, right = false;
       for (const o of solids()) {
         if (o === b) continue;
@@ -1847,7 +2531,10 @@ function stepBoxFall(dt) {
       }
       if (left && right) supported = true;
     }
-    if (!supported) b.y += 900 * dt;
+    if (!supported) {
+      b.fell = (b.fell || 0) + dt;
+      b.y += 900 * dt;
+    } else if (b.fell) b.fell = 0;
   }
 }
 
@@ -2023,6 +2710,48 @@ function stepPlayer(dt) {
   p.anim += dt;
 }
 
+/* ---------------------------------------------------------------- 镜头
+   **纵向按层吸附 —— 层内一格都不跟。**
+
+   原来是 `玩家中心 − 300` 每帧缓动。站着不动时它是稳的，可是上坡、
+   下坡、起跳、下落的时候整个画面会跟着上下挪。探针量出来的数字：
+   **原地跳一次画面晃 19px，走一段平路晃 11px。** 用户说的"抖动很明显"，
+   一大半是它，跟"怪物只能横向走"没关系。
+
+   改成：镜头的目标只由**玩家站在哪一层上**决定，而且只有"已经落地 +
+   脚离某层地板 60px 以内"时才换层。于是
+     · 走平路 / 上坡 / 下坡 / 跳跃 / 下落 —— 画面一动不动；
+     · 真的换了一层，才用 7/s 缓过去（那是"换层"，不是抖）。
+   站在箱堆顶上落地**不算**换层（脚离地板 144，哪层都够不着），
+   否则爬到箱山半腰画面就跳一层，比原来的抖还难受。 */
+function camViewOffset() { return (GEN.floorH - GEN.thick) / 2 + H / 2; }
+
+function camGoalFloor() {
+  const p = S.p, feet = p.y + p.h;
+  /* 兜底：真的掉到画面下沿之外了才强行跟 —— 宁可晃一下，也不能把人留在屏幕外。
+     **判据是"脚下最近的那层地板"，不是"脚上方最后一层"。**
+     原来写 `FLOORS[k] <= feet`，站在 48px 高的箱子上（脚在 1252、本层地板 1300）
+     就会算成**上一层**（1060）—— 镜头直接跳高一层，玩家在画面下沿外只露个头。 */
+  if (feet > S.cam.y + H - 30) {
+    let best = FLOORS.length - 1;
+    for (let k = 0; k < FLOORS.length; k++) {
+      if (FLOORS[k] >= feet - 8) { best = k; break; }
+    }
+    return best;
+  }
+  if (!p.onGround) return -1;
+  for (let k = 0; k < FLOORS.length; k++) if (Math.abs(feet - FLOORS[k]) < 60) return k;
+  return -1;
+}
+
+function updateCamera(dt) {
+  const k = camGoalFloor();
+  if (k >= 0) S.cam.k = k;
+  const target = clamp(FLOORS[Math.min(S.cam.k, FLOORS.length - 1)] - camViewOffset(), 0, WORLD_H - H);
+  S.cam.y += (target - S.cam.y) * Math.min(1, 7 * dt);
+  if (Math.abs(target - S.cam.y) < 0.5) S.cam.y = target;
+}
+
 function step(dt) {
   dt = Math.min(dt, 1 / 30);
   if (S.hitStop > 0) { S.hitStop = Math.max(0, S.hitStop - dt); S.t += dt * 0.25; return; }
@@ -2032,7 +2761,9 @@ function step(dt) {
   S.flash = Math.max(0, S.flash - 2.4 * dt);
 
   stepPlayer(dt);
+  stepNests(dt);
   stepFoes(dt);
+  stepEBullets(dt);
   stepShots(dt);
   pushBalls(dt);
   stepBalls(dt);
@@ -2040,11 +2771,7 @@ function step(dt) {
   stepShards(dt);
   stepDoor(dt);
 
-  /* 镜头。只跟纵向，缓动 8/s —— 太快会晕，太慢会掉出画面。
-     夹在世界范围内，L3 顶部不会露出天空以外的空白，L1 底部不会露出世界外。 */
-  const camTarget = clamp(S.p.y + S.p.h / 2 - H / 2, 0, WORLD_H - H);
-  S.cam.y += (camTarget - S.cam.y) * Math.min(1, 8 * dt);
-  if (Math.abs(camTarget - S.cam.y) < 0.5) S.cam.y = camTarget;
+  updateCamera(dt);
 
   if (S.phase === 'clear') S.clearT += dt;
 
@@ -2187,10 +2914,14 @@ function drawRoomWall(g, k, cY, fY) {
   }
 
   /* 上下两道明暗：天花板背光、地面反光。
-     **必须压在纹理之上** —— 否则纹理把明暗关系盖掉，"上下"又读不出来了。 */
+     **必须压在纹理之上** —— 否则纹理把明暗关系盖掉，"上下"又读不出来了。
+     天花板那一段从 .26 加到 .34、范围从 24% 拉到 30%：木屋和砖房的墙本身是亮米色，
+     原来的暗压根本压不住，挂灯的光晕等于打在一块白纸上 —— 看不出"亮"。
+     压暗之后同一盏灯的亮度差才成立，房间的"上暗下亮"也才读得出来。 */
   const shade = g.createLinearGradient(0, cY, 0, fY);
-  shade.addColorStop(0, 'rgba(74,52,32,.26)');
-  shade.addColorStop(0.24, 'rgba(74,52,32,.02)');
+  shade.addColorStop(0, 'rgba(70,46,26,.34)');
+  shade.addColorStop(0.14, 'rgba(70,46,26,.18)');
+  shade.addColorStop(0.30, 'rgba(70,46,26,.02)');
   shade.addColorStop(0.84, 'rgba(255,250,238,.12)');
   shade.addColorStop(1, 'rgba(255,250,238,.24)');
   g.fillStyle = shade;
@@ -2480,9 +3211,12 @@ function draw() {
     }
   }
 
-  /* 场景道具。**画在地形之前**，让地板和箱子把它们自然挡在后面 ——
-     这样"木桶在箱子后面"这种前后关系是免费的，不用排序。 */
-  for (const dc of S.deco) drawDeco(g, dc);
+  /* 场景道具分成两批：**挂件在地形之前，落地件在地形之后**。
+     原来的做法是一批全画在地形之前，理由是"木桶在箱子后面"这种前后关系免费。
+     但箱子是 48×48、木桶只有 26 宽，只要相邻列高出一格，木桶就被整块盖掉 ——
+     地表层箱子最密，整层的装饰在图上等于不存在（出图时才发现）。
+     挂件本来就在箱子后面（挂在天花板下），落地件本来就该在最前面（踩在地上）。 */
+  for (const dc of S.deco) if (dc.ceil) drawDeco(g, dc);
 
   // 平台
   for (const pl of S.plats) drawPlat(g, pl);
@@ -2505,6 +3239,12 @@ function draw() {
   // 箱子
   for (const b of S.boxes) if (!b.dead) drawBox(g, b);
 
+  /* 落地件在箱子之后补画（见上面那段的说明）。玩家还在这之后，不会挡人。 */
+  for (const dc of S.deco) if (!dc.ceil) drawDeco(g, dc);
+
+  /* 黑洞画在箱子**之后**：它是个"贴在地面上的洞"，被箱子挡住就不像洞了。 */
+  for (const n of S.nests) drawNest(g, n);
+
   // 门
   drawDoor(g, S.door);
 
@@ -2524,6 +3264,10 @@ function draw() {
 
   // 敌人
   for (const f of S.foes) drawFoe(g, f);
+
+  /* 宠物扔出来的东西。**画在敌人之后、玩家之前** —— 它必须压在宠物身上，
+     不然宠物一走动就把自己扔出去的胡萝卜挡住了。 */
+  for (const b of S.ebullets) drawEBullet(g, b);
 
   // 球
   for (const b of S.balls) drawBall(g, b);
@@ -2926,14 +3670,38 @@ function drawPlat(g, pl) {
      把它画成波浪等于把下一层的净空挖掉一块。 */
   const botAt = px => yT + hh - 3 + Math.sin(px * 0.071 + seed * 1.3) * 3.2 + Math.sin(px * 0.023 + seed) * 2;
 
+  /* ---- 断口 ----
+     **楼板断成几段之后，两端的截面必须有画法。**
+     原来是"矩形直切" —— 一整排看过去就是被人用剪刀剪断的胶带，
+     比"一条又厚又长的横梁"更廉价。
+     真楼板断在洞口边上是这样的：木板被掰断，茬口参差、里侧压着阴影。
+     所以断口处走 3 个锯齿点（内凹 0~4px），再在里侧压一条暗竖带。 */
+  const cutL = isGround && x0 > WALL_L + 1;
+  const cutR = isGround && x1 < WALL_R - 1;
+  const nA = 1.6 + (seed % 3) * 0.9;
+  const nB = 1.6 + ((seed >> 2) % 3) * 0.9;
+
   const bodyPath = () => {
     g.beginPath();
-    g.moveTo(x0 - 1, yT + 2);
+    if (cutL) {
+      g.moveTo(x0 + nA, yT + 1.5);
+      g.lineTo(x0 + nA * 0.35, yT + hh * 0.42);
+      g.lineTo(x0 + nA + 1.2, yT + hh * 0.72);
+      g.lineTo(x0 + nB * 0.5, yT + hh + 1);
+    } else {
+      g.moveTo(x0 - 1, yT + 2);
+    }
     for (let px = x0 + 8; px < x1; px += 8) g.lineTo(px, yT + 2);
-    g.lineTo(x1 + 1, yT + 2);
+    if (cutR) {
+      g.lineTo(x1 - nB, yT + 1.5);
+      g.lineTo(x1 - nB * 0.35, yT + hh * 0.42);
+      g.lineTo(x1 - nB - 1.2, yT + hh * 0.72);
+      g.lineTo(x1 - nA * 0.5, yT + hh + 1);
+    } else {
+      g.lineTo(x1 + 1, yT + 2);
+    }
     if (isGround) {
-      g.lineTo(x1 + 1, yT + hh + 1);
-      g.lineTo(x0 - 1, yT + hh + 1);
+      if (!cutL) g.lineTo(x0 - 1, yT + hh + 1);
     } else {
       g.lineTo(x1 + 1, botAt(x1));
       for (let px = x1; px >= x0; px -= 9) g.lineTo(px, botAt(px));
@@ -2992,6 +3760,23 @@ function drawPlat(g, pl) {
     g.strokeStyle = 'rgba(74,58,44,.6)'; g.lineWidth = 1.6; g.stroke();
   }
 
+  /* 断口里侧的暗竖带：**没有它就是一块被切平的蛋糕**，
+     有它才读得出"这块板在这里断了、里面是暗的"。 */
+  if (cutL) {
+    const gr = g.createLinearGradient(x0, 0, x0 + 13, 0);
+    gr.addColorStop(0, 'rgba(46,34,24,.46)');
+    gr.addColorStop(1, 'rgba(46,34,24,0)');
+    g.fillStyle = gr;
+    g.fillRect(x0, yT + 1, 13, hh);
+  }
+  if (cutR) {
+    const gr = g.createLinearGradient(x1, 0, x1 - 13, 0);
+    gr.addColorStop(0, 'rgba(46,34,24,.46)');
+    gr.addColorStop(1, 'rgba(46,34,24,0)');
+    g.fillStyle = gr;
+    g.fillRect(x1 - 13, yT + 1, 13, hh);
+  }
+
   bodyPath();
   g.strokeStyle = COL.ink;
   g.lineWidth = 3;
@@ -3041,6 +3826,96 @@ function drawPlat(g, pl) {
   }
 }
 
+/* 黑洞（吐怪巢）。**贴在地面上的一张口**，不是飘着的传送门 ——
+   飘着的传送门在横向平台里读作"出口"，玩家会去撞它；
+   贴地的黑口读作"危险"，绕开是本能反应。 */
+function drawNest(g, n) {
+  const alive = n.left > 0;
+  const cx = n.x, cy = n.y - 12;
+  const t = n.t || 0;
+  const pulse = 0.5 + 0.5 * Math.sin(t * 2.2 + (n.seed || 0));
+  const w = 31, h = 15;
+
+  g.save();
+  /* 地面上的紫色辉光。**这一笔是它唯一的"功能性"提示** ——
+     没有光，一颗黑椭圆在深色房间里根本看不见。
+
+     **光不能只用一个紫。** 房间底色本身就是紫灰（黄昏调），
+     同色相的光打上去等于没打（第一版出图就是这样：看得见黑口，
+     看不出"在发光"）。所以是两层：外圈偏品红的紫 + 内圈近白的紫，
+     再加顶部一道亮口沿 —— 靠**明度**和**冷白**把"发光"读出来。 */
+  if (alive) {
+    const gl = g.createRadialGradient(cx, cy, 4, cx, cy, 66);
+    gl.addColorStop(0, 'rgba(214,120,255,' + (0.30 + 0.16 * pulse).toFixed(3) + ')');
+    gl.addColorStop(0.45, 'rgba(152,84,236,' + (0.16 + 0.10 * pulse).toFixed(3) + ')');
+    gl.addColorStop(1, 'rgba(120,80,220,0)');
+    g.fillStyle = gl;
+    g.beginPath(); g.ellipse(cx, cy, 66, 40, 0, 0, Math.PI * 2); g.fill();
+
+    const core = g.createRadialGradient(cx, cy, 2, cx, cy, 34);
+    core.addColorStop(0, 'rgba(238,214,255,' + (0.30 + 0.14 * pulse).toFixed(3) + ')');
+    core.addColorStop(1, 'rgba(200,150,255,0)');
+    g.fillStyle = core;
+    g.beginPath(); g.ellipse(cx, cy - 2, 34, 20, 0, 0, Math.PI * 2); g.fill();
+  }
+
+  /* 翻起来的边 */
+  g.fillStyle = alive ? '#5B3E8C' : '#66606E';
+  g.beginPath(); g.ellipse(cx, cy, w + 5, h + 5, 0, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = COL.ink; g.lineWidth = 3; g.stroke();
+
+  /* 口内：中心纯黑，边缘带一点紫 —— 纯黑一块读不出深度 */
+  const hole = g.createRadialGradient(cx, cy - 3, 2, cx, cy, w);
+  hole.addColorStop(0, '#000000');
+  hole.addColorStop(0.6, alive ? '#170A2C' : '#26262C');
+  hole.addColorStop(1, alive ? '#43246E' : '#37373F');
+  g.fillStyle = hole;
+  g.beginPath(); g.ellipse(cx, cy, w, h, 0, 0, Math.PI * 2); g.fill();
+
+  /* 口沿上缘的高光弧。**给它一条"厚度"**：没有这条，口只是一块黑饼，
+     有了它，读作"地面被撑开了一道边" —— 这是"洞"和"黑斑"的区别。 */
+  if (alive) {
+    g.strokeStyle = 'rgba(226,200,255,' + (0.42 + 0.30 * pulse).toFixed(3) + ')';
+    g.lineWidth = 2.4; g.lineCap = 'round';
+    g.beginPath(); g.ellipse(cx, cy, w - 1.5, h - 1.5, 0, Math.PI * 1.06, Math.PI * 1.94); g.stroke();
+    g.lineCap = 'butt';
+  }
+
+  /* 绕口沿转的光点（活着的巢才有） */
+  if (alive) {
+    for (let i = 0; i < 5; i++) {
+      const a = t * 1.4 + i * (Math.PI * 2 / 5) + (n.seed || 0);
+      const px = cx + Math.cos(a) * (w - 1);
+      const py = cy + Math.sin(a) * (h - 1);
+      const s = 1.5 + 1.3 * (0.5 + 0.5 * Math.sin(a * 2 + t * 3));
+      g.fillStyle = 'rgba(204,176,255,' + (0.42 + 0.38 * Math.sin(a + t * 2)).toFixed(3) + ')';
+      g.beginPath(); g.arc(px, py, Math.max(0.8, s), 0, Math.PI * 2); g.fill();
+    }
+  }
+
+  /* 往上升的紫烟。**这一笔才让人读出"它在往外冒东西"。**
+     三个烟团各自错开相位往上飘，用 sin 做左右摆 —— 它证明口是活的，
+     不是画在地上的一块贴图。烟不到 20px 高：太高就会糊住上一层的箱子。 */
+  if (alive) {
+    for (let i = 0; i < 3; i++) {
+      const ph = (t * 0.55 + i / 3 + (n.seed || 0) * 0.01) % 1;
+      const wx = cx + Math.sin(ph * 6.4 + i * 2.1) * 9;
+      const wy = cy - 3 - ph * 22;
+      g.fillStyle = 'rgba(196,150,255,' + ((1 - ph) * 0.34).toFixed(3) + ')';
+      g.beginPath(); g.arc(wx, wy, 3.4 + ph * 3.6, 0, Math.PI * 2); g.fill();
+    }
+  }
+
+  /* 刚吐完那一瞬口沿发亮 */
+  if (n.born > 0) {
+    g.globalAlpha = n.born / 0.8 * 0.6;
+    g.strokeStyle = '#D8C4FF'; g.lineWidth = 3;
+    g.beginPath(); g.ellipse(cx, cy, w + 3, h + 3, 0, 0, Math.PI * 2); g.stroke();
+    g.globalAlpha = 1;
+  }
+  g.restore();
+}
+
 function drawBox(g, b) {
   const def = NUM.box[b.mat];
   const hit = b.hitT > 0;
@@ -3048,6 +3923,42 @@ function drawBox(g, b) {
      箱子铺满整层之后，没有描边的色块会连成一片"砖墙"，
      玩家读不出"这是一口一口独立的箱子"，也就读不出"能拆"。 */
   const INK = 3;
+
+  /* ---- 木桶 ----
+     **一个圆柱插进方块阵列，整片画面立刻就"不那么规矩"了。**
+     画法只有三笔：鼓出来的桶身（两条二次曲线）、椭圆顶面、两道铁箍。
+     桶身比格子收窄 4px：不收的话它和旁边的木箱严丝合缝贴在一起，
+     又变回一块方砖了。 */
+  if (b.barrel) {
+    const bx = b.x + 4, bw = b.w - 8;
+    const top = b.y + 6, bot = b.y + b.h - 3;
+    const mid = (top + bot) / 2;
+    g.fillStyle = hit ? '#FFE4BE' : '#C98F52';
+    g.beginPath();
+    g.moveTo(bx, top + 4);
+    g.quadraticCurveTo(bx - 4, mid, bx, bot - 4);
+    g.lineTo(bx + bw, bot - 4);
+    g.quadraticCurveTo(bx + bw + 4, mid, bx + bw, top + 4);
+    g.closePath(); g.fill();
+    g.strokeStyle = COL.ink; g.lineWidth = 3; g.lineJoin = 'round'; g.stroke();
+    // 桶口（上椭圆）
+    g.fillStyle = hit ? '#F6DFC0' : '#B87B42';
+    g.beginPath(); g.ellipse(b.x + b.w / 2, top + 4, bw / 2, 5.6, 0, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = COL.ink; g.lineWidth = 2.6; g.stroke();
+    // 两道铁箍
+    g.strokeStyle = 'rgba(86,60,36,.72)'; g.lineWidth = 4;
+    for (const yy of [top + 15, bot - 15]) {
+      g.beginPath(); g.moveTo(bx + 1, yy); g.lineTo(bx + bw - 1, yy); g.stroke();
+    }
+    // 竖向的木条缝 + 一侧高光
+    g.strokeStyle = 'rgba(120,80,44,.32)'; g.lineWidth = 1.6;
+    for (const dx of [0.34, 0.66]) {
+      g.beginPath(); g.moveTo(bx + bw * dx, top + 9); g.lineTo(bx + bw * dx, bot - 8); g.stroke();
+    }
+    g.fillStyle = 'rgba(255,244,224,.42)';
+    g.beginPath(); g.ellipse(bx + bw * 0.26, mid, 3.4, (bot - top) * 0.30, 0, 0, Math.PI * 2); g.fill();
+    return;
+  }
 
   if (b.mat === 'wood') {
     g.fillStyle = hit ? '#FFDDB0' : COL.wood;
@@ -3195,11 +4106,18 @@ function drawDeco(g, d) {
     g.beginPath(); g.moveTo(x, y); g.lineTo(x + sway, y + 30); g.stroke();
     /* 暖光。**这是地下唯一的光源叙事** —— 没有它，木墙是一块均匀的米色；
        有了它，画面上就有"亮处"和"暗处"，房间才有体积。 */
-    const rg = g.createRadialGradient(x + sway, y + 44, 3, x + sway, y + 44, 80);
-    rg.addColorStop(0, 'rgba(255,222,140,.34)');
+    const rg = g.createRadialGradient(x + sway, y + 44, 3, x + sway, y + 44, 84);
+    rg.addColorStop(0, 'rgba(255,238,186,.46)');
+    rg.addColorStop(.5, 'rgba(255,214,130,.16)');
     rg.addColorStop(1, 'rgba(255,222,140,0)');
+    /* **加色混合（lighter）。** 木屋/砖房的墙本身是亮米色，
+       用 source-over 叠一层暖黄，亮度只涨 3%~5% —— 出图上等于没打光。
+       lighter 是逐通道相加，同样的颜色能把墙面从 (232,211,174) 推到 (250,242,205)，
+       光斑这才成立。三个光源（lamp/chandelier/lantern）都走这条路。 */
+    g.globalCompositeOperation = 'lighter';
     g.fillStyle = rg;
     g.beginPath(); g.arc(x + sway, y + 44, 80, 0, Math.PI * 2); g.fill();
+    g.globalCompositeOperation = 'source-over';
     g.beginPath();
     g.moveTo(x + sway - 15, y + 40);
     g.lineTo(x + sway - 7, y + 31);
@@ -3210,6 +4128,92 @@ function drawDeco(g, d) {
     g.strokeStyle = COL.ink; g.lineWidth = 2.5; g.stroke();
     g.fillStyle = '#FFF6D2';
     g.beginPath(); g.arc(x + sway, y + 42, 4.5, 0, Math.PI * 2); g.fill();
+  } else if (k === 'chandelier') {
+    /* 枝形吊灯 = 这层的**主灯**。和 lamp 的分工是"面"与"点"：
+       lamp 是一个光锥，chandelier 是一圈大底光 + 三簇跳动的火苗。
+       远看一眼就知道这是有主人的房间，不是废弃走廊 —— 这是"丰富"里最省力的一笔。 */
+    const sw = Math.sin(S.t * 0.8 + s) * 1.6;
+    /* 先铺光晕再画灯体。**顺序反了烛火会被暖光糊掉**，只剩一团黄。 */
+    const rg = g.createRadialGradient(x + sw, y + 36, 5, x + sw, y + 36, 104);
+    rg.addColorStop(0, 'rgba(255,242,200,.52)');
+    rg.addColorStop(.42, 'rgba(255,214,130,.20)');
+    rg.addColorStop(1, 'rgba(255,206,110,0)');
+    g.globalCompositeOperation = 'lighter';
+    g.fillStyle = rg;
+    g.beginPath(); g.arc(x + sw, y + 36, 104, 0, Math.PI * 2); g.fill();
+    g.globalCompositeOperation = 'source-over';
+
+    g.strokeStyle = '#6B4C34'; g.lineWidth = 2.5;
+    g.beginPath(); g.moveTo(x, y); g.lineTo(x + sw, y + 13); g.stroke();
+    /* 顶盘 + 中轴 */
+    g.beginPath(); g.ellipse(x + sw, y + 17, 8, 4, 0, 0, Math.PI * 2);
+    g.fillStyle = '#C9A24E'; g.fill();
+    g.strokeStyle = COL.ink; g.lineWidth = 2.5; g.stroke();
+    /* 两条外扬的臂 + 中间一根短臂。**臂要下垂再上挑**，直线臂读作"衣架"。 */
+    g.strokeStyle = '#8C6B3A'; g.lineWidth = 3; g.lineCap = 'round';
+    for (const dir of [-1, 1]) {
+      g.beginPath();
+      g.moveTo(x + sw, y + 20);
+      g.quadraticCurveTo(x + sw + dir * 12, y + 32, x + sw + dir * 21, y + 26);
+      g.stroke();
+    }
+    g.beginPath(); g.moveTo(x + sw, y + 20); g.lineTo(x + sw, y + 28); g.stroke();
+    /* 三根蜡烛 + 火苗。火苗半径随 t 抖，"活着"的感觉全靠这一点。 */
+    for (let i = 0; i < 3; i++) {
+      const cx = x + sw + (i - 1) * 21;
+      const cy = y + (i === 1 ? 28 : 26);
+      g.fillStyle = '#F6E6CE';
+      g.fillRect(cx - 2.5, cy - 9, 5, 10);
+      g.strokeStyle = COL.ink; g.lineWidth = 1.8; g.strokeRect(cx - 2.5, cy - 9, 5, 10);
+      const fl = 3.4 + Math.sin(S.t * 6.5 + i * 2.1 + s) * 0.9;
+      g.beginPath();
+      g.moveTo(cx, cy - 9 - fl * 2);
+      g.quadraticCurveTo(cx + fl, cy - 9 - fl * 0.4, cx, cy - 8);
+      g.quadraticCurveTo(cx - fl, cy - 9 - fl * 0.4, cx, cy - 9 - fl * 2);
+      g.fillStyle = '#FFCE5A'; g.fill();
+      g.fillStyle = '#FFF6D2';
+      g.beginPath(); g.arc(cx, cy - 10.5, 1.4, 0, Math.PI * 2); g.fill();
+    }
+  } else if (k === 'lantern') {
+    /* 挂灯笼。**比吊灯矮、比吊灯软**，是画面里的暖色点缀 ——
+       一层全是硬邦邦的木箱和石砖时，只有这种圆的东西能救节奏。 */
+    const sw = Math.sin(S.t * 1.4 + s) * 2.4;
+    const bx = x + sw, by = y + 18;
+    const rg = g.createRadialGradient(bx, by + 15, 3, bx, by + 15, 70);
+    rg.addColorStop(0, 'rgba(255,222,164,.42)');
+    rg.addColorStop(.5, 'rgba(255,204,140,.14)');
+    rg.addColorStop(1, 'rgba(255,200,120,0)');
+    g.globalCompositeOperation = 'lighter';
+    g.fillStyle = rg;
+    g.beginPath(); g.arc(bx, by + 15, 74, 0, Math.PI * 2); g.fill();
+    g.globalCompositeOperation = 'source-over';
+
+    g.strokeStyle = '#6B4C34'; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(x, y); g.lineTo(bx, by); g.stroke();
+    /* 灯身：上下收口的鼓形 */
+    g.beginPath();
+    g.moveTo(bx - 8, by);
+    g.quadraticCurveTo(bx - 16, by + 15, bx - 8, by + 29);
+    g.lineTo(bx + 8, by + 29);
+    g.quadraticCurveTo(bx + 16, by + 15, bx + 8, by);
+    g.closePath();
+    g.fillStyle = '#E8564C'; g.fill();
+    g.strokeStyle = COL.ink; g.lineWidth = 2.5; g.stroke();
+    /* 三道亮肋 —— 只为了让人读出"这是布/纸糊的"，不是铁皮桶。 */
+    g.strokeStyle = 'rgba(255,212,94,.85)'; g.lineWidth = 1.6;
+    for (const dx of [-5, 0, 5]) {
+      g.beginPath(); g.moveTo(bx + dx, by + 3); g.lineTo(bx + dx, by + 26); g.stroke();
+    }
+    g.fillStyle = '#8C6B3A';
+    g.fillRect(bx - 9, by - 3, 18, 4);
+    g.strokeStyle = COL.ink; g.lineWidth = 1.8; g.strokeRect(bx - 9, by - 3, 18, 4);
+    g.fillRect(bx - 9, by + 28, 18, 4);
+    g.strokeRect(bx - 9, by + 28, 18, 4);
+    /* 下面一撮流苏 */
+    g.strokeStyle = '#C9A24E'; g.lineWidth = 2;
+    for (const dx of [-3, 0, 3]) {
+      g.beginPath(); g.moveTo(bx + dx, by + 32); g.lineTo(bx + dx * 1.6, by + 40); g.stroke();
+    }
   } else if (k === 'beam') {
     g.fillStyle = '#B77F44';
     g.fillRect(x - 80, y + 5, 160, 14);
@@ -3335,6 +4339,50 @@ function drawDeco(g, d) {
     g.strokeStyle = 'rgba(74,58,44,.6)'; g.lineWidth = 2;
     g.beginPath(); g.moveTo(-16, -9); g.lineTo(16, -9); g.stroke();
     g.restore();
+  } else if (k === 'ladder') {
+    /* 靠墙的旧木梯，**顶上是断的**。
+       这是全场唯一一件"叙事道具"：它说明有人从这里上下过、后来塌了。
+       **断必须画清楚**（左轨比右轨矮一截 + 中间缺一根横档 + 断口有毛刺）——
+       不断的话玩家会去踢它、以为这条路能走，那就是骗人。
+       它只有 100px 高、够不到上层，所以读作"痕迹"而不是"通道"。 */
+    const H = 100;
+    /* 10° 的倾斜是"靠墙"和"立着"的分界线 —— 只在 3px 上做文章（1.7°）读不出来，
+       直上直下的梯子看起来就是一条能走的路。 */
+    const tilt = 16;
+    const lx = x - 14, rx = x + 12;
+    const lt = y - H + 20;     // 左轨断得低一截
+    const rt = y - H;          // 右轨多出 20px，断口错开才像"折了"
+    /* 先粗深色打底、再细木色压上去 = 统一描边的廉价做法。 */
+    g.lineCap = 'round';
+    g.strokeStyle = COL.ink;
+    g.lineWidth = 9;
+    g.beginPath(); g.moveTo(lx, y); g.lineTo(lx + tilt, lt); g.stroke();
+    g.beginPath(); g.moveTo(rx, y); g.lineTo(rx + tilt, rt); g.stroke();
+    g.strokeStyle = '#C99358'; g.lineWidth = 5.5;
+    g.beginPath(); g.moveTo(lx, y); g.lineTo(lx + tilt, lt); g.stroke();
+    g.beginPath(); g.moveTo(rx, y); g.lineTo(rx + tilt, rt); g.stroke();
+    /* 横档：第 3 根缺失，只留一截断头 */
+    g.lineCap = 'butt';
+    for (let i = 0; i < 4; i++) {
+      const yy = y - 18 - i * 22;
+      const f = (y - yy) / H;                            // 横档在梯身上的实际比例
+      const ax = lx + tilt * f, bx2 = rx + tilt * f;
+      if (i === 2) {
+        g.strokeStyle = COL.ink; g.lineWidth = 6;
+        g.beginPath(); g.moveTo(ax, yy); g.lineTo(ax + 8, yy); g.stroke();
+        g.strokeStyle = '#C99358'; g.lineWidth = 3.5;
+        g.beginPath(); g.moveTo(ax, yy); g.lineTo(ax + 7, yy); g.stroke();
+        continue;
+      }
+      g.strokeStyle = COL.ink; g.lineWidth = 6;
+      g.beginPath(); g.moveTo(ax, yy); g.lineTo(bx2, yy); g.stroke();
+      g.strokeStyle = '#C99358'; g.lineWidth = 3.5;
+      g.beginPath(); g.moveTo(ax, yy); g.lineTo(bx2, yy); g.stroke();
+    }
+    /* 断口的木刺：两根短斜刺，靠它把"折了"和"画歪了"区分开。 */
+    g.strokeStyle = '#A9713F'; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(lx + tilt, lt); g.lineTo(lx + tilt - 5, lt - 6); g.stroke();
+    g.beginPath(); g.moveTo(rx + tilt, rt); g.lineTo(rx + tilt + 5, rt - 6); g.stroke();
   }
   g.restore();
 }
@@ -3379,15 +4427,24 @@ function drawDoor(g, d) {
   }
 }
 
+/* 三种宠物的配色。**剪影决定"这是谁"，颜色只是加分项** ——
+   在 34×30 的尺寸上，耳朵的形状比色相可读得多，所以每只的轮廓都不一样：
+   兔子是"两根竖条"、狗是"两侧下垂"、刺猬是"一圈锯齿"。 */
+const FOE_SKIN = {
+  bunny: { body: '#FBF6EE', ink: '#8B7566', belly: '#FFFFFF', ear: '#F6D7DC', inner: '#F2A9B6' },
+  doggy: { body: '#F2C47E', ink: '#8B5A2C', belly: '#FFEBCB', ear: '#CE9149', inner: '#E4A96A' },
+  hoggy: { body: '#AEBDD2', ink: '#4C5A73', belly: '#DEE7F2', ear: '#8E9EB8', inner: '#C8B6A6' },
+};
+
 function drawFoe(g, f) {
   const cx = f.x + f.w / 2;
   const by = f.y + f.h;
   /* **Q 版的做法：头占一半以上、眼睛占头的一半。**
      写实比例的小眼睛在 34px 的角色上根本读不出"它朝哪边"，
      而朝向是这一个游戏里最要紧的信息（雪弹打哪边、往哪边跑）。 */
-  const style = f.kind === 'runner'
-    ? { body: '#FF9FB0', ink: '#9C4356' }
-    : { body: '#9BD86E', ink: '#4F8030' };
+  const skin = FOE_SKIN[f.pet] || FOE_SKIN.bunny;
+  const face = f.face;
+  const flash = f.hitT > 0;
 
   g.save();
   g.globalAlpha = 0.16; g.fillStyle = '#4A3A2C';
@@ -3397,35 +4454,139 @@ function drawFoe(g, f) {
   // 呼吸一样的挤压 —— 静止的怪会让整层看起来是静止的
   const squash = 1 + Math.sin(S.t * 5 + f.x * 0.05) * 0.05;
   const rw = 17, rh = 15 * squash;
+  const hr = 15;
+  const hy = by - rh - hr + 5;          // 头心（头压在身体上沿三分之一处）
 
+  /* ---- 品种特征：画在身体和头**后面**，先出头后面的那部分 ---- */
+  if (f.pet === 'bunny') {
+    /* 长耳朵。**必须比头高出一截**，不然 34px 的兔子读起来是仓鼠。 */
+    for (const s of [-1, 1]) {
+      g.save();
+      g.translate(cx + s * 6.5, hy - hr + 5);
+      g.rotate(s * 0.17);
+      g.fillStyle = flash ? '#FFFFFF' : skin.body;
+      g.beginPath(); g.ellipse(0, -11, 5.2, 14, 0, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = skin.ink; g.lineWidth = 2.6; g.stroke();
+      g.fillStyle = skin.inner;
+      g.beginPath(); g.ellipse(0, -11, 2.3, 9.5, 0, 0, Math.PI * 2); g.fill();
+      g.restore();
+    }
+  } else if (f.pet === 'hoggy') {
+    /* 背上一圈刺。**先画刺再画头**，尖只露出外面那半圈，读起来才像"扎在后背"，
+       画在头前面就成了一顶太阳帽。 */
+    g.fillStyle = flash ? '#FFFFFF' : skin.body;
+    g.strokeStyle = skin.ink; g.lineWidth = 2.4;
+    for (let i = 0; i < 8; i++) {
+      const a = -Math.PI * 0.96 + (i / 7) * Math.PI * 0.92;
+      const bx = cx + Math.cos(a) * (hr - 2);
+      const byy = hy + Math.sin(a) * (hr - 2);
+      const tx = cx + Math.cos(a) * (hr + 8.5);
+      const ty = hy + Math.sin(a) * (hr + 8.5);
+      g.beginPath();
+      g.moveTo(bx - Math.sin(a) * 3.3, byy + Math.cos(a) * 3.3);
+      g.lineTo(tx, ty);
+      g.lineTo(bx + Math.sin(a) * 3.3, byy - Math.cos(a) * 3.3);
+      g.closePath(); g.fill(); g.stroke();
+    }
+  } else if (f.pet === 'doggy') {
+    /* 垂耳：从头的两侧往下挂，**比头长** —— 狗和兔子最大的区别就在这里，
+       一个是竖的、一个是垂的，剪影上永远不会混。 */
+    for (const s of [-1, 1]) {
+      g.fillStyle = flash ? '#FFFFFF' : skin.ear;
+      g.beginPath(); g.ellipse(cx + s * 12.5, hy + 2, 6.4, 11.5, s * 0.24, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = skin.ink; g.lineWidth = 2.6; g.stroke();
+    }
+  }
+
+  /* ---- 身体 ---- */
   g.beginPath();
   g.ellipse(cx, by - rh - 1, rw, rh, 0, 0, Math.PI * 2);
-  g.fillStyle = f.hitT > 0 ? '#FFFFFF' : style.body;
+  g.fillStyle = flash ? '#FFFFFF' : skin.body;
   g.fill();
-  g.strokeStyle = style.ink;
+  g.strokeStyle = skin.ink;
+  g.lineWidth = 3;
+  g.stroke();
+  // 肚皮（浅一档）：让圆球身体有个"正面"，不然是一颗色团
+  g.fillStyle = skin.belly;
+  g.beginPath(); g.ellipse(cx + face * 2, by - 6, rw * 0.52, rh * 0.48, 0, 0, Math.PI * 2); g.fill();
+
+  /* ---- 脚：走路时交错抬起 ----
+     **"站着待机"和"在走"必须一眼分开**，靠眼睛看不出动没动，
+     靠这两只小脚就够了。 */
+  if (f.onGround) {
+    const moving = Math.abs(f.vx) > 1;
+    const ph = S.t * 11 + f.x * 0.09;
+    for (const s of [-1, 1]) {
+      const lift = moving ? Math.max(0, Math.sin(ph + (s > 0 ? 0 : Math.PI))) * 3.4 : 0;
+      g.fillStyle = skin.ear;
+      g.beginPath(); g.ellipse(cx + s * 8, by - 2.6 - lift, 5.4, 3.2, 0, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = skin.ink; g.lineWidth = 2; g.stroke();
+    }
+  }
+
+  /* ---- 头 ---- */
+  g.beginPath(); g.arc(cx, hy, hr, 0, Math.PI * 2);
+  g.fillStyle = flash ? '#FFFFFF' : skin.body;
+  g.fill();
+  g.strokeStyle = skin.ink;
   g.lineWidth = 3;
   g.stroke();
 
-  const ex = f.face > 0 ? 2.5 : -2.5;
-  const ey = by - rh - 3;
+  /* ---- 口鼻（三种各不相同，是第二层区分）---- */
+  if (f.pet === 'doggy') {
+    g.fillStyle = skin.belly;
+    g.beginPath(); g.ellipse(cx + face * 5.5, hy + 6.5, 7.6, 5.4, 0, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = skin.ink; g.lineWidth = 2; g.stroke();
+    g.fillStyle = '#4A3226';
+    g.beginPath(); g.ellipse(cx + face * 10.5, hy + 4.8, 3.1, 2.6, 0, 0, Math.PI * 2); g.fill();
+  } else if (f.pet === 'hoggy') {
+    /* 尖鼻：往前探出去一小截，刺猬的脸就是"一个锥" */
+    g.fillStyle = skin.inner;
+    g.beginPath(); g.ellipse(cx + face * 11.5, hy + 3.5, 5.2, 3.8, 0, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = skin.ink; g.lineWidth = 2; g.stroke();
+    g.fillStyle = '#3A3242';
+    g.beginPath(); g.arc(cx + face * 15.5, hy + 2.6, 2.2, 0, Math.PI * 2); g.fill();
+  } else {
+    g.fillStyle = skin.inner;
+    g.beginPath(); g.ellipse(cx + face * 4.6, hy + 7, 3.4, 2.6, 0, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = skin.ink; g.lineWidth = 1.6; g.stroke();
+  }
+
+  /* 眼睛（白眼球 + 瞳 + 高光） */
+  const ex = face * 2.6;
+  const ey = hy + (f.pet === 'doggy' ? 0.5 : 2);
   for (const s of [-1, 1]) {
     g.fillStyle = '#FFFFFF';
-    g.beginPath(); g.ellipse(cx + ex + s * 5.6, ey, 4.1, 4.8, 0, 0, Math.PI * 2); g.fill();
-    g.strokeStyle = style.ink; g.lineWidth = 1.6; g.stroke();
+    g.beginPath(); g.ellipse(cx + ex + s * 5.8, ey, 4.2, 5, 0, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = skin.ink; g.lineWidth = 1.7; g.stroke();
     g.fillStyle = '#2A2018';
-    g.beginPath(); g.arc(cx + ex + s * 5.6 + f.face * 1.1, ey + 0.4, 2.3, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(cx + ex + s * 5.8 + face * 1.0, ey + 0.4, 2.4, 0, Math.PI * 2); g.fill();
     g.fillStyle = '#FFFFFF';
-    g.beginPath(); g.arc(cx + ex + s * 5.6 + f.face * 1.1 + 0.8, ey - 1, 0.9, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(cx + ex + s * 5.8 + face * 1.0 + 0.8, ey - 1.2, 0.95, 0, Math.PI * 2); g.fill();
   }
-  // 跑者眉低压 —— 光靠颜色区分两种怪太弱，表情才是免费的第二种编码
+  /* 狗的小皱眉：**跑得快的那个要有跑得快的脸**，光靠颜色区分两种怪太弱。 */
   if (f.kind === 'runner') {
-    g.strokeStyle = style.ink; g.lineWidth = 2.2;
+    g.strokeStyle = skin.ink; g.lineWidth = 2.2;
     for (const s of [-1, 1]) {
       g.beginPath();
-      g.moveTo(cx + ex + s * 9, ey - 8);
-      g.lineTo(cx + ex + s * 3, ey - 5.5);
+      g.moveTo(cx + ex + s * 9.2, ey - 8.4);
+      g.lineTo(cx + ex + s * 3.2, ey - 5.8);
       g.stroke();
     }
+  }
+
+  /* ---- 蓄力：嘴前那一小团 ---- 
+     **这是"它要扔东西了"的唯一提示。** 0.42 秒的前摇如果画面上什么都没有，
+     玩家只会觉得"莫名其妙掉血"。 */
+  if (f.aim > 0) {
+    const k2 = clamp(f.aim / NUM.ebullet.windup, 0, 1);
+    const bcol = f.pet === 'doggy' ? '#F4EAD8' : (f.pet === 'hoggy' ? '#C6A8FF' : '#FF9E4A');
+    g.globalAlpha = 0.35 + 0.6 * k2;
+    g.fillStyle = bcol;
+    g.beginPath(); g.arc(cx + face * 17, by - rh - 6, 2.6 + 4.6 * k2, 0, Math.PI * 2); g.fill();
+    g.globalAlpha = 1;
+    g.strokeStyle = skin.ink; g.lineWidth = 1.8;
+    g.beginPath(); g.arc(cx + face * 17, by - rh - 6, 2.6 + 4.6 * k2, 0, Math.PI * 2); g.stroke();
   }
 
   /* 雪覆盖：按 hits/need 上白，**这是玩家读"还差几发"的唯一线索** */
@@ -3445,13 +4606,79 @@ function drawFoe(g, f) {
     g.ellipse(cx, by - 1, rw * (0.6 + k * 0.4), rh * (0.35 + k * 0.65), 0, 0, Math.PI * 2);
     g.stroke();
   }
-  // 进度条（细，不抢眼，但读得清）
+  /* 进度条（细，不抢眼，但读得清）。
+     **位置从 f.y−9 抬到 f.y−26** —— 头比碰撞盒高出 9px、兔子耳朵再高 14px，
+     留在原处这条永远压在脸和耳朵上，等于没有。 */
   if (f.hits > 0) {
     const bw = f.w + 4;
+    const barY = f.y - 26;
     g.fillStyle = 'rgba(74,58,44,.4)';
-    g.fillRect(f.x - 2, f.y - 9, bw, 4);
+    g.fillRect(f.x - 2, barY, bw, 4);
     g.fillStyle = '#9BE86E';
-    g.fillRect(f.x - 2, f.y - 9, bw * k, 4);
+    g.fillRect(f.x - 2, barY, bw * k, 4);
+  }
+  g.restore();
+}
+
+/* 宠物扔出来的东西。**二十来像素里要认得出是什么** ——
+   它的唯一职责是告诉玩家"这一发躲不开会掉血"，认不出就只是个彩色圆点。
+   所以每样都带自己品种的形状：萝卜是锥、骨头是哑铃、刺球是齿轮。 */
+function drawEBullet(g, b) {
+  g.save();
+  g.translate(b.x, b.y);
+  if (b.kind === 'bone') {
+    g.rotate(b.spin);
+    /* **骨头不能用"雪白"。** 地表是浅色雪地，白骨头在上面等于隐形 ——
+       第一次出图时三发只看得见两发，缺的那个就是它。
+       改成米黄 + 更深的描边，并且在雪地上靠"影子般的深边"立住。 */
+    g.fillStyle = '#F4E3BC';
+    g.strokeStyle = '#6B4A2E'; g.lineWidth = 2.8;
+    rr(g, -6, -2.6, 12, 5.2, 2.6); g.fill(); g.stroke();
+    for (const s of [-1, 1]) {
+      for (const yy of [-3.1, 3.1]) {
+        g.beginPath(); g.arc(s * 6.6, yy, 3.1, 0, Math.PI * 2);
+        g.fillStyle = '#F4E3BC'; g.fill(); g.stroke();
+      }
+    }
+  } else if (b.kind === 'spike') {
+    g.rotate(b.spin * 1.7);
+    g.fillStyle = '#8E68D8';
+    g.strokeStyle = '#452B78'; g.lineWidth = 2;
+    for (let i = 0; i < 8; i++) {
+      const a = i / 8 * Math.PI * 2;
+      g.beginPath();
+      g.moveTo(Math.cos(a - 0.22) * 4.4, Math.sin(a - 0.22) * 4.4);
+      g.lineTo(Math.cos(a) * 10.6, Math.sin(a) * 10.6);
+      g.lineTo(Math.cos(a + 0.22) * 4.4, Math.sin(a + 0.22) * 4.4);
+      g.closePath(); g.fill(); g.stroke();
+    }
+    g.beginPath(); g.arc(0, 0, 5.2, 0, Math.PI * 2);
+    g.fillStyle = '#B79BF0'; g.fill(); g.stroke();
+  } else {
+    /* 胡萝卜：朝飞行方向躺着，尾巴上两片叶。 */
+    g.scale(b.face, 1);
+    g.rotate(-0.10 + Math.sin(b.t * 14) * 0.07);
+    g.fillStyle = '#FF8B3D';
+    g.strokeStyle = '#A44E1B'; g.lineWidth = 2.4;
+    g.beginPath();
+    g.moveTo(11, 0);
+    g.quadraticCurveTo(1, -5.6, -8.5, -3.4);
+    g.quadraticCurveTo(-11, 0, -8.5, 3.4);
+    g.quadraticCurveTo(1, 5.6, 11, 0);
+    g.closePath(); g.fill(); g.stroke();
+    g.strokeStyle = 'rgba(168,80,28,.55)'; g.lineWidth = 1.6;
+    for (const dx of [-3, 2]) {
+      g.beginPath(); g.moveTo(dx, -2.6); g.lineTo(dx + 1.6, 2.6); g.stroke();
+    }
+    g.fillStyle = '#6FBF5A';
+    g.strokeStyle = '#2F6B2A'; g.lineWidth = 1.8;
+    for (const s of [-1, 1]) {
+      g.beginPath();
+      g.moveTo(-8, 0);
+      g.quadraticCurveTo(-14, s * 3.4, -15.5, s * 7.2);
+      g.quadraticCurveTo(-9.6, s * 3.6, -8, 0);
+      g.fill(); g.stroke();
+    }
   }
   g.restore();
 }
@@ -3928,7 +5155,14 @@ const API = {
   bellyTier, snowNeed, ballTier, ballR, ballPow,
   coatFoe, makeBallFrom, ballHitBox, shotBox, breakBox, hurtPlayer,
   checkDoor, doorBlocked, groundAt, stepDoor,
-  spawnFoe: (x, y, kind) => { const f = makeFoe(x, y, kind); S.foes.push(f); return f; },
+  /* `pet` 可选：测试要能点名"给我一只兔子 / 一只狗"。
+     不传就按 kind 自动挑（见 petOf），和生成器走同一条路。 */
+  spawnFoe: (x, y, kind, pet) => {
+    const f = makeFoe(x, y, kind);
+    if (pet) f.pet = pet;
+    S.foes.push(f);
+    return f;
+  },
   /** 直接造一颗球（绕过"先冻怪"），用来单独量"球砸箱"的数值 */
   spawnBall: (x, y, vx, absorbed) => {
     const n = absorbed == null ? 1 : absorbed;

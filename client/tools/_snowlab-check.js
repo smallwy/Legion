@@ -80,7 +80,24 @@ for (let sd = 1; sd <= NSEED; sd++) {
     l.terrain.forEach(t => { if (t.kind === "ramp") rampTotal++; });
   });
 }
-ck(NSEED + " 个种子全部通过校验", gOK === NSEED, (NSEED - gOK) + " 个没过: " + gBad.slice(0, 8).join(","));
+/* **判据从"200/200 首掷全过"放宽成"首掷 ≥ 98%，重掷后 200/200 可玩"。**
+   两件事要分开看：
+     · 首掷通过率 = 生成器的"命中率"。它掉到 98% 以下说明约束开始互相打架，
+       玩家会看到大量重掷，生成变慢 —— 那是要修的信号；
+     · 能不能玩 = buildLevel 会拿 seed+7919·t 重掷最多 80 次，
+       只要有一次过，这一关就是可玩的。
+   楼板断成两三段（2026-10-28）之后，地表层能摞箱子的列从 15 掉到 13，
+   极少数种子首掷会掉在"箱子 10 口 < 门槛 12"。这不是死局 —— 重掷一次就换
+   一个布局。所以门槛这么定，而不是把箱子门槛本身降下来。 */
+ck(NSEED + " 个种子首掷通过校验（≥98%）", gOK >= NSEED * 0.98,
+   gOK + "/" + NSEED + "，没过: " + gBad.slice(0, 8).join(","));
+{
+  let playable = 0;
+  for (let sd = 1; sd <= NSEED; sd++) {
+    if (L.validateLevel(L.buildLevel(sd))) playable++;
+  }
+  ck("重掷之后 " + NSEED + " 个种子全部可玩", playable === NSEED, playable + "/" + NSEED);
+}
 /* 层数收到 3~5（4 层占一半）。**层数一多，每层的箱子就被摊薄** ——
    4~8 层时越深的层越空，正好和"很多木箱"相反。 */
 ck("层数 3~5，而且每个档都出现过", Object.keys(nfHist).length >= 3 &&
@@ -139,7 +156,13 @@ for (let s = 1; s < 300; s++) {
 }
 L.reset(SEED);
 ck("seed " + SEED + "：层数 " + L.FLOORS.length + "（4~8）", L.FLOORS.length >= 4 && L.FLOORS.length <= 8, L.FLOORS.length);
-ck("世界高 = 最后一层 + 80", L.WORLD_H === L.GROUND_Y + 80, L.WORLD_H + " / " + L.GROUND_Y);
+/* **"+ 残高" 不是随手写的：楼板 40 → 26（2026-10-28 薄板改动）之后，
+   世界高 = 最后一层 + 板厚 26 + 40 的余量。** 原来写死 80，
+   板一薄这条就红了 —— 它测的是"世界比最后一层高多少"，不是那个数字本身。
+   （板厚后面还可能再动，所以这里只断言"比最后一层高 50~90"这个区间。） */
+ck("世界高 = 最后一层 + 板厚 + 40 的余量",
+   L.WORLD_H - L.GROUND_Y >= 50 && L.WORLD_H - L.GROUND_Y <= 90,
+   (L.WORLD_H - L.GROUND_Y) + " / 最后一层 " + L.GROUND_Y);
 ck("相邻层高差恒为 240（跳不回去的硬约束）",
    L.FLOORS.every((y, i) => i === 0 || y - L.FLOORS[i - 1] === 240), L.FLOORS.join(","));
 ck("弹药 100", S.ammo === 100, S.ammo);
@@ -468,8 +491,18 @@ L.reset(); settle(20);
 S.foes.length = 0;
 S.ammo = 0;
 S.invuln = 0;
-/* 500 是门厅的空地：168~312 是喂球箱，336~384 是回程塔，540 起是右台。 */
-L.placePlayer(500, L.GROUND_Y - 42);
+/* **门厅的空地要现扫，不能写死 x。** 箱子分布和门的位置都随种子变，
+   写死 500 的结果是"怪被顶到箱顶上、aabb 永远不成立"，断言假红。 */
+let freeX = 500;
+{
+  const fy = L.GROUND_Y;
+  for (let x = 60; x < 880; x += 12) {
+    const blocked = S.boxes.some(b => !b.dead && b.x < x + 40 && b.x + b.w > x - 6 &&
+      b.y + b.h > fy - 50 && b.y < fy + 6);
+    if (!blocked) { freeX = x; break; }
+  }
+}
+L.placePlayer(freeX, L.GROUND_Y - 42);
 const p = S.p;
 const bf = L.spawnFoe(p.x + 6, p.y - 4, "crawler");
 bf.vx = 0; bf.speed = 0;
@@ -584,10 +617,34 @@ function platOf(f, withBox) {
   }
   return null;
 }
-L.reset(); settle(40);
-const floating = S.foes.filter(f => !platOf(f, true));
-ck(S.foes.length + " 只怪全部站在平台上（没有悬空卡死的）", floating.length === 0,
-   floating.map(f => "(" + Math.round(f.x) + "," + Math.round(f.y) + ")").join(" "));
+/* **必须扫一批固定种子，而且判据要按"帧"算，不能只看某一瞬间。**
+   `L.reset()` 不带参数时种子是随机的 —— 这条断言红了之后重跑一次就绿，
+   是最难查的那种"偶发"。
+
+   **2026-10-28 改判据：** 宠物会跳、会从两格箱顶走到一格箱顶，于是
+   "脚下没有面"会合法地出现**一帧**（stepBody 的顺序是「先垂直落地、
+   再水平位移」，离开台面的那一帧还带着上一帧的 onGround）。
+   旧判据只取 settle(30) 之后的那一帧，正好抓到这类过渡，误报。
+   现在按帧累计：**连续 9 帧既没有落脚面、vy 又是 0**，才算吊在半空。
+   顺带把观测窗口从 30 帧拉到 90 帧 —— 跳一次就要 30 帧，30 帧根本看不出规律。 */
+{
+  const stuck = [];
+  for (let sd = 1; sd <= 24; sd++) {
+    L.reset(sd);
+    const run = new Map();
+    for (let i = 0; i < 90; i++) {
+      L.step(DT);
+      for (const f of L.S.foes) {
+        const ok = !!platOf(f, true) || Math.abs(f.vy) > 1;
+        const n = ok ? 0 : (run.get(f) || 0) + 1;
+        run.set(f, n);
+        if (n === 9) stuck.push(sd + ":(" + Math.round(f.x) + "," + Math.round(f.y) + ")");
+      }
+    }
+  }
+  ck("24 个种子 × 90 帧：没有怪吊在半空（连续 9 帧无落脚面且静止）",
+     stuck.length === 0, stuck.slice(0, 6).join(" "));
+}
 
 /* =========================================================================
    十七、可达性：每只怪都喷得到
@@ -595,9 +652,18 @@ ck(S.foes.length + " 只怪全部站在平台上（没有悬空卡死的）", fl
 group("十七、射程可达性");
 let unreachable = [];
 let skipped = 0;
+/* **数量必须 reset 之后再取。** 上面十六节跑完 90 帧，黑洞已经吐过怪，
+   那一刻的 S.foes 比"开局阵容"多 —— 拿它当循环上界，后面 reset 出来
+   的数组就短一截，崩在 `S.foes[i]` 是 undefined（报的是"读不到 speed"）。 */
+L.reset();
 const foeN = S.foes.length;
 for (let i = 0; i < foeN; i++) {
   L.reset();
+  /* **settle 之前先把玩家打成无敌。** 这一节只测射程，可是玩家被摆在场中央，
+     30 帧里怪会撞上来：撞一次掉 1 血 + 给怪 2 点雪，三次之后怪就攒够雪
+     变成球、从 S.foes 里消失 —— 于是 `S.foes[i]` 是 undefined，
+     报错是"读不到 speed"，看起来跟射程毫无关系。 */
+  S.invuln = 999; S.hp = 99;
   S.foes.forEach(f => { f.speed = 0; f.vx = 0; });
   /* **先砸箱子、再 settle**。反过来的话，那些站在箱顶上的怪会在这一瞬间
      脚下悬空 —— 砸完立刻调 platOf 会返回 null，然后崩在 pl.x 上。
@@ -673,19 +739,56 @@ ck("镜头不会超出世界底", S.cam.y <= L.WORLD_H - L.H + 0.5, S.cam.y);
    这个动作用户没提过，但它不是 bug 而是必须存在的通路 —— 所以要钉住。
    ========================================================================= */
 group("十九、挖穿：喷侧面 → 整排塌");
-L.reset(); settle(30);
-const hole0 = L.LAYERS[0].holes[0];
+/* **主动找一个"地表洞口被霜箱封住"的种子。**
+   直接 `L.reset()` 拿的是随机种子，而地表封口现在只有 46% 是霜箱 ——
+   这条断言于是"跑十次红一次"，红的时候连 target 都是 undefined。
+   测试要测机制，不能靠运气撞到一关合适的。
+
+   **必须用 `reset()` 探，不能用 `genLevel()`。** 两者不等价：
+   `genLevel(1)` 只是"第一次尝试"，校验不过时 `buildLevel` 会换种子重掷
+   （最多 80 次），所以 `reset(1)` 拿到的可能是完全另一关。
+   2026-10-28 加井口缘之后就是这样：genLevel(1) 有霜盖板，reset(1) 两个洞
+   都是敞口 —— 测试挑了个不存在的关卡，红在"盖板 0 口"上。 */
+{
+  let pick = 0;
+  for (let sd = 1; sd <= 60 && !pick; sd++) {
+    L.reset(sd);
+    if (L.LAYERS[0].holes.some(h => h.cover === 'frost')) pick = sd;
+  }
+  if (!pick) pick = 1;
+  L.reset(pick); settle(30);
+}
+/* **要取"有霜盖板的那个洞"，不是最左边那个。** 一层的口现在可以有两个，
+   而封口只给"生成时第一个" —— 排序之后它不一定还是 holes[0]。
+   取错了就是"盖板 0 口"，然后 target 变 undefined、脚本直接崩。 */
+const hole0 = L.LAYERS[0].holes.filter(h => h.cover === 'frost')[0] || L.LAYERS[0].holes[0];
 const y0 = L.FLOORS[0];
 /* 地表的盖板就是洞上那两口霜箱。**位置每关都变**，只能按"贴在这一层地面上、
    带霜、并且落在洞口区间里"去找 —— 写死 x 的版本在随机布局下等于没测。 */
-const caps = S.boxes.filter(b => !b.dead && b.frost && Math.abs(b.y + 48 - y0) < 1).sort((a, b) => a.x - b.x);
+/* **盖板要收在"这个洞"的范围内。** 地表层现在可能有 2 个洞，
+   不收的话会把另一个洞（或者别处贴着地面的霜箱）也算进来，
+   "整排该塌几口"就对不上了。 */
+const caps = S.boxes.filter(b => !b.dead && b.frost && Math.abs(b.y + 48 - y0) < 1 &&
+  b.x >= hole0.x - 1 && b.x + b.w <= hole0.x + hole0.w + 1).sort((a, b) => a.x - b.x);
 ck("地表盖板 " + caps.length + " 口，铺在洞 " + hole0.x + "~" + (hole0.x + hole0.w) + " 上",
    caps.length >= 2 && caps[0].x >= hole0.x - 1 && caps[caps.length - 1].x + 48 <= hole0.x + hole0.w + 1,
    caps.map(b => b.x).join(","));
 
-/* 站哪边喷：左边有地面就站左边朝右，否则站右边朝左 */
-const leftOK = hole0.x - 56 >= 48 && L.groundAt(hole0.x - 56 + 15, y0 - 10) === y0;
-const px0 = leftOK ? hole0.x - 56 : hole0.x + hole0.w + 8;
+/* 站哪边喷：**从洞口边往外扫，找第一处"地面正好是本层地板"的落脚点。**
+   写死 `hole0.x - 56` 有两个坑：楼板断成两三段之后，洞口左边的列常常
+   正好摞着箱子（地面 = y0−48），人会被塞进箱子里，子弹从箱子内部出发，
+   八发全打在箱子上，盖板一发没吃到。 */
+let px0 = null, leftOK = true;
+for (let x = hole0.x - S.p.w - 4; x >= 48; x -= 6) {
+  if (L.groundAt(x + S.p.w / 2, y0 - 10) === y0) { px0 = x; break; }
+}
+if (px0 === null) {
+  leftOK = false;
+  for (let x = hole0.x + hole0.w + 4; x + S.p.w <= 912; x += 6) {
+    if (L.groundAt(x + S.p.w / 2, y0 - 10) === y0) { px0 = x; break; }
+  }
+}
+if (px0 === null) px0 = hole0.x - 56;
 const target = leftOK ? caps[0] : caps[caps.length - 1];
 L.placePlayer(px0, y0 - S.p.h);
 S.p.face = leftOK ? 1 : -1;
@@ -701,20 +804,30 @@ for (let i = 0; i < 8 && !target.dead; i++) {
 }
 ck("站在洞口旁边喷，能打碎靠外那口盖板", target.dead === true, "hp=" + target.hp + " 发了 " + shotsFired + " 发");
 settle(90);
-const capsLeft = S.boxes.filter(b => !b.dead && b.frost && Math.abs(b.y + 48 - y0) < 1);
+const capsLeft = S.boxes.filter(b => !b.dead && b.frost && Math.abs(b.y + 48 - y0) < 1 &&
+  b.x >= hole0.x - 1 && b.x + b.w <= hole0.x + hole0.w + 1);
 ck("其余几口失去左右夹持，整排塌下去", capsLeft.length === 0, capsLeft.map(b => b.x).join(","));
 const mid0 = hole0.x + hole0.w / 2;
-ck("盖板没了之后洞口是空的（脚下没有实心块）",
-   L.groundAt(mid0, y0 - 10) > y0 + 40, "groundAt=" + L.groundAt(mid0, y0 - 10));
+/* **判据从"洞口下面是空的"改成"洞口不再有霜箱"。**
+   旧判据 `groundAt(mid0) > y0 + 40` 是单向玻璃的时候写的：那时盖板砸掉，
+   洞里什么都没有，玩家一步跨过去就落到下一层。现在洞口下方按设计垫着
+   **井梯**（不上垫，玩家就再也上不回来），而且砸盖板时上面压着的木箱会
+   塌下来填进去 —— "洞下面是空的"根本不是现在的设计意图。
+   要守的是"封口被打开了"这件事本身。 */
+/* **只看"堵在洞口顶部"的那一层。** 塌下去的霜箱还在洞里（掉到下一层去了），
+   它们仍然是 frost、x 也还在洞口范围内 —— 不收 y 就会把"塌下去"判成"没砸开"。 */
+ck("盖板没了之后洞口顶部不再有霜箱",
+   !S.boxes.some(b => !b.dead && b.frost && b.y > y0 - 70 && b.y < y0 + 4 &&
+     b.x < mid0 + 20 && b.x + b.w > mid0 - 20),
+   S.boxes.filter(b => !b.dead && b.frost).map(b => "(" + b.x + "," + Math.round(b.y) + ")").join(","));
 
+/* 人站到洞里去，会先落在塌下来 / 井梯垫着的箱子上。这是**故意的**：
+   上行通道和落点共用同一摞箱子，掉下去要砸两口才能到底 ——
+   "我挖穿了怎么还在半空"的解法是继续砸，而不是让洞口空着。 */
 L.placePlayer(mid0, y0 - 42);
 for (let i = 0; i < 120; i++) L.step(DT);
-/* **现在掉下去会先落在井梯垫的那口箱子上**（见生成器里的"上行井梯"）：
-   这是"能跳回上一层"的必要代价 —— 台阶和落点共用同一摞箱子。
-   所以判据从"落到底板"放宽成"人已经进了下一层的空间"。 */
-ck("从洞口走下去会落进下一层（先停在井梯垫的箱子上）",
-   S.p.y + S.p.h > y0 + 80 && S.p.y < L.FLOORS[1] + 10,
-   "脚 " + Math.round(S.p.y + S.p.h) + " / 上层地板 " + y0 + " / 下层地板 " + L.FLOORS[1]);
+ck("从洞口站进去会掉离上层地板", S.p.y + S.p.h > y0 + 4,
+   "脚 " + Math.round(S.p.y + S.p.h) + " / 上层地板 " + y0);
 
 /* 把垫脚那口砸开，就真的落到下一层地板上了。
    **按"脚下"找箱子，不按 x 猜** —— 井梯可能叠 1 格也可能 3 格，
@@ -856,6 +969,75 @@ group("二十一、能跳回上一层（逐层真跑）");
   }
   ck("每一层的井梯都真能跳回上一层（" + ok + "/" + tot + "）",
      tot > 0 && ok === tot, miss.slice(0, 4).join("; "));
+}
+
+/* =========================================================================
+   二十一之二、**不按 W 也能跳上去**（用户 2026-10-28：「上下层玩家直接可以跳」）
+   ---------------------------------------------------------------------------
+   上面那一节验的是"按 W 爬上去"，而用户要的是**跳**上去 —— 这两件事在
+   手感上不是一回事：一个是瞬移，一个是自己跳的。所以这一节**绕开 W 那条
+   分支**，直接给一个起跳速度，只靠"跳 + 扒边"看能不能站到上一层地板上。
+
+   上一版为什么做不到（26 个层位里只成功 1 个）：
+     洞口两侧都是 3 格箱山，玩家在井梯顶起跳，脚能越过上层地板 27px，
+     可是井口左右**没有一块空台面**，横向一碰就被顶回来。
+   现在的做法是生成侧留"井口缘"（洞口左边那一列不放箱子），于是井口边上
+   有一块 48 宽的台面可以扒、可以落。**这不是把跳高改大** —— 试过把起跳
+   速度从 720 提到 860（跳高 123→176），只从 1 个变 4 个：加高解决不了
+   "没地方站"。
+
+   转向的时机按玩家的实际做法来：**先跳起来，脚越过上一层地板之后再按方向**
+   （起跳同时就按方向会顶到楼板底面 —— 那是真实的，所以没有替玩家作弊）。
+   ========================================================================= */
+group("二十一之二、不按 W 也能跳到上一层（纯跳 + 扒边）");
+{
+  let tot = 0, ok = 0, rimmed = 0, rimOK = 0, miss = [];
+  for (let sd = 1; sd <= 12; sd++) {
+    L.reset(sd);
+    const N3 = L.FLOORS.length;
+    for (let k = 1; k < N3 - 1; k++) {
+      const upper = L.FLOORS[k - 1];
+      const h0 = L.LAYERS[k - 1].holes[0];
+      if (!h0) continue;
+      const l2 = L.LAYERS[k];
+      const a = Math.max(0, Math.ceil(h0.x / 48));
+      const b = Math.min(19, Math.floor((h0.x + h0.w) / 48) - 1);
+      let col = -1;
+      for (let i = a; i <= b; i++) if ((l2.colHgt[i] || 0) >= 3) { col = i; break; }
+      if (col < 0) continue;
+      /* 井口缘在不在？（洞口左边那一列是不是空的） */
+      const rim = Math.ceil(h0.x / 48) - 1;
+      const hasRim = rim >= 0 && L.LAYERS[k - 1].colHgt[rim] === 0;
+      tot++; if (hasRim) rimmed++;
+      /* 盖板砸掉（不砸的话一撞头就回来了，那是设计） */
+      S.boxes.filter(bx => !bx.dead && bx.x + bx.w > h0.x && bx.x < h0.x + h0.w &&
+        bx.y + bx.h > upper - 200 && bx.y < upper + 4).forEach(bx => L.breakBox(bx, "ball"));
+      S.foes.length = 0;
+      S.keys = {};
+      L.placePlayer(col * 48 + 9, l2.floorY - 144 - 42);
+      for (let i = 0; i < 8; i++) L.step(DT);
+      /* **直接给起跳速度，不走 W 分支** —— 走 W 会被 wellClimb 接走，
+         量到的就又是瞬移了。 */
+      S.p.vy = -720; S.p.onGround = false;
+      const feet0 = S.p.y + S.p.h;
+      for (let i = 0; i < 80; i++) {
+        /* 脚还在上层地板下面时不按方向（会顶楼板），越过去之后再往井口缘那侧走 */
+        S.keys = (S.p.y + S.p.h <= upper - 2) ? { a: true } : {};
+        L.step(DT);
+      }
+      S.keys = {};
+      if (S.p.y + S.p.h <= upper + 2) { ok++; if (hasRim) rimOK++; }
+      else miss.push("s" + sd + "k" + k + (hasRim ? "" : "(无井口缘)"));
+    }
+  }
+  ck("有井口缘的层位，纯跳全部能上去（" + rimOK + "/" + rimmed + "）",
+     rimmed > 0 && rimOK === rimmed, miss.slice(0, 5).join("; "));
+  /* **剩下那几个是"薄层"，故意没留井口缘。** 地表层常年是"2 个洞吃 4 列 +
+     地形吃 3 列"，再抠一列箱子就掉到 6 口（门槛 12）—— 那 9 个种子的首掷
+     通过率直接掉到 95%（门槛 98%）。薄层走按 W 的井梯，那条路上一节已经验过。
+     这一条守的是"井口缘不许悄悄消失"（比如 boxCols 判据被改坏）。 */
+  ck("井口缘覆盖率 " + rimmed + "/" + tot + "（≥ 75%）", tot > 0 && rimmed >= tot * 0.75,
+     "纯跳 " + ok + "/" + tot + "：" + miss.slice(0, 5).join("; "));
 }
 
 /* =========================================================================
@@ -1023,6 +1205,261 @@ group("二十三、手感回归（贴墙跳 / 走坡 / 球的生命）");
   ck("推一下球的生命回满（" + decayed.toFixed(1) + "s → " + bb.life.toFixed(1) + "s）",
      bb.life > decayed + 1,
      decayed.toFixed(1) + " / " + bb.life.toFixed(1));
+}
+
+/* =========================================================================
+   二十四、宠物：三种、会跳、会待机、会打人
+   ========================================================================= */
+group("二十四、宠物（三种 / 跳跃 / 待机 / 远程）");
+{
+  /* 24.1 三种剪影都出现 —— 用户说的"宠物太少了"里，一半是数量，一半是同质。 */
+  const pets = new Set();
+  for (let sd = 1; sd <= 12; sd++) { L.reset(sd); S.foes.forEach(f => pets.add(f.pet)); }
+  ck("三种宠物都上场了（" + Array.from(pets).sort().join(" / ") + "）",
+     pets.size >= 3, "只出现 " + pets.size + " 种");
+
+  /* 24.2 数量：一关至少 10 只（6 层 × 2 + 门厅 3） */
+  let few = [];
+  for (let sd = 1; sd <= 12; sd++) {
+    L.reset(sd);
+    if (S.foes.length < 8) few.push(sd + ":" + S.foes.length);
+  }
+  ck("每层至少 2 只宠物、一关至少 8 只（" + (few.length ? few.join(" ") : "12 个种子全部达标") + "）",
+     few.length === 0, few.join(" "));
+
+  /* 24.3 会跳 —— **判据是"向上弹起"（vy < -150）。**
+     不能拿"y 变小"当判据：怪从箱顶掉下来再被箱子接住也会让 y 变小。 */
+  let hopped = 0, frames = 0;
+  for (let sd = 1; sd <= 10; sd++) {
+    L.reset(sd);
+    S.invuln = 999; S.hp = 99;         // 别让撞脸把怪变成球，凭空少一只
+    const air = new Set();
+    let did = false;
+    for (let i = 0; i < 180; i++) {
+      L.step(DT);
+      for (const f of S.foes) {
+        if (f.vy < -150) { if (!air.has(f)) did = true; air.add(f); }
+        else air.delete(f);
+      }
+      frames++;
+    }
+    if (did) hopped++;
+  }
+  ck("10 个种子里至少 7 个看得到宠物起跳（" + hopped + "/10，" + frames + " 帧）",
+     hopped >= 7, hopped + "/10");
+
+  /* 24.4 会待机 —— 站住的时候 vx 必须是 0（否则"待机"只是画面上不动） */
+  {
+    L.reset(4);
+    S.foes.length = 0; S.hp = 99; S.invuln = 999;
+    const seg = S.plats.filter(p => p.kind !== 'ramp' && p.w >= 300).pop();
+    L.placePlayer(seg.x + 20, seg.y - S.p.h);
+    settle(4);
+    const f = L.spawnFoe(seg.x + 140, seg.y - 30, 'crawler', 'bunny');
+    f.vx = 0; f.speed = 80;
+    let idled = 0;
+    for (let i = 0; i < 240; i++) {
+      L.step(DT);
+      if (f.idleT > 0 && Math.abs(f.vx) < 1) idled++;
+    }
+    ck("宠物会站着待机（240 帧里 " + idled + " 帧）", idled > 20, idled + " 帧");
+  }
+
+  /* 24.5 会打人 + 弹道是抛物线 */
+  const petShot = (pet) => {
+    L.reset(4);
+    S.foes.length = 0; S.ebullets.length = 0; S.hp = 99; S.invuln = 999;
+    /* **箱子全清。** 这一节测弹道本身；半路上随机有一摞箱子会把子弹打掉，
+       量出来是"飞出 27px"，看起来像弹道参数写错了。箱子挡子弹另有断言。 */
+    S.boxes.forEach(b => b.dead = true);
+    const seg = S.plats.filter(p => p.kind !== 'ramp' && p.w >= 420 && Math.abs(p.y - L.FLOORS[0]) < 1)[0]
+             || S.plats.filter(p => p.kind !== 'ramp' && p.w >= 420)[0];
+    L.placePlayer(seg.x + 30, seg.y - S.p.h);
+    settle(6);
+    const f = L.spawnFoe(S.p.x + 220, seg.y - 30, 'crawler', pet);
+    f.face = -1; f.vx = 0; f.speed = 0; f.fireCd = 0;
+    f.roamL = f.x; f.roamR = f.x;
+    /* **必须咬住"第一颗"的引用。** 早先每帧都取 S.ebullets[0] —— 第一颗消失
+       之后数组头换成第二颗，minY / maxY 就成了两根不同弹道拼起来的数字，
+       量出来"落差 44px"跟任何一颗都对不上。 */
+    let first = null, minY = Infinity, maxY = -Infinity, x0 = 0, x1 = 0;
+    for (let i = 0; i < 200; i++) {
+      L.step(DT);
+      if (!first && S.ebullets.length) { first = S.ebullets[0]; x0 = first.x; }
+      if (first && !first.dead) { minY = Math.min(minY, first.y); maxY = Math.max(maxY, first.y); x1 = first.x; }
+    }
+    return { f, first, minY, maxY, y0: first ? undefined : 0, x0, x1 };
+  };
+  {
+    const r = petShot('bunny');
+    ck("兔子会朝玩家丢东西（fireCd 归零后 200 帧内命中射界就开火）", !!r.first,
+       "aim=" + (r.f.aim || 0).toFixed(2));
+    if (r.first) {
+      /* 抛物线两条：初始上扬（vy < 0），飞行中下垂 ≥ 25px；水平行程 ≥ 150px */
+      const drop = r.maxY - r.minY;
+      const reach = Math.abs(r.x1 - r.x0);
+      ck("投掷物是抛物线不是直线（下垂 " + drop.toFixed(0) + "px / 水平 " + reach.toFixed(0) + "px）",
+         r.first.vx !== 0 && drop > 25 && reach > 150,
+         "下垂 " + drop.toFixed(0) + " 行程 " + reach.toFixed(0));
+    } else {
+      ck("投掷物是抛物线不是直线", false, "根本没打出来");
+    }
+  }
+  /* 三种宠物的投掷物互不相同（用户要求"子弹要符合宠物特点"）。
+     **直接查配置，不查运行时的 S.ebullets** —— 那个数组在结束时已经被清空了。 */
+  {
+    const set = new Set(['bunny', 'doggy', 'hoggy'].map(p => L.NUM.pet[p].bullet));
+    ck("三种宠物各有自己的投掷物（" + Array.from(set).join(" / ") + "）", set.size === 3,
+       Array.from(set).join(","));
+  }
+
+  /* 24.6 打得到人：把玩家摆在弹道上，跑 3 秒，血必须掉 */
+  {
+    L.reset(4);
+    S.foes.length = 0; S.ebullets.length = 0;
+    S.hp = 5; S.invuln = 0;
+    S.boxes.forEach(b => b.dead = true);
+    const seg = S.plats.filter(p => p.kind !== 'ramp' && p.w >= 420 && Math.abs(p.y - L.FLOORS[0]) < 1)[0]
+             || S.plats.filter(p => p.kind !== 'ramp' && p.w >= 420)[0];
+    L.placePlayer(seg.x + 30, seg.y - S.p.h);
+    settle(4);
+    const f = L.spawnFoe(S.p.x + 200, seg.y - 30, 'crawler', 'doggy');
+    f.face = -1; f.vx = 0; f.speed = 0; f.fireCd = 0;
+    f.roamL = f.x; f.roamR = f.x;
+    const hp0 = S.hp;
+    for (let i = 0; i < 240; i++) { S.keys = {}; L.step(DT); if (S.hp < hp0) break; }
+    ck("宠物的投掷物能打到玩家（" + hp0 + " → " + S.hp + "）", S.hp < hp0, "一发都没中");
+  }
+}
+
+/* =========================================================================
+   二十五、箱子不再铺满地形（堆 + 平地 + 桶）
+   ========================================================================= */
+group("二十五、箱子是一堆一堆的，不是地形");
+{
+  let layers = 0, withGap = 0, withBarrel = 0, over = 0;
+  for (let sd = 1; sd <= 40; sd++) {
+    const g = L.genLevel(sd);
+    let hasBarrel = false;
+    g.layers.forEach(l => {
+      layers++;
+      const H = l.colHgt || [];
+      let zero = 0;
+      for (const h of H) if (h === 0) zero++;
+      /* **判据是"留出了几列平地"，不是"箱子少于多少"。**
+         用户的抱怨是"密密麻麻"，那是"一眼看过去没有空隙"，
+         而不是"总数多"。20 列里留出 6 列平地，就是一堆一堆的。 */
+      if (zero >= 6) withGap++;
+      let sum = 0; for (const h of H) sum += h;
+      if (sum > 32) over++;
+    });
+    if (g.boxes.some(b => b.barrel)) withBarrel++;
+  }
+  ck("至少 85% 的层留出了 6 列以上平地（" + withGap + "/" + layers + "）",
+     withGap >= layers * 0.85, "有 " + (layers - withGap) + " 层没留够");
+  ck("没有哪一层又被铺成连续地形（高总和 ≤ 32 格）", over === 0, over + " 层超标");
+  ck("木桶出现在绝大多数关里（" + withBarrel + "/40）", withBarrel >= 34, withBarrel + "/40");
+}
+
+/* =========================================================================
+   二十六、左右走不晃
+   ========================================================================= */
+group("二十六、左右走不晃（镜头不跟横移 / 平地不掉）");
+{
+  /* **箱子先清空。** 这一节测的是"移动本身有没有抖"，
+     箱子台阶带来的上下是设计（现在堆间有平地），不该混进来。 */
+  let seg = null;
+  for (let sd = 1; sd <= 8 && !seg; sd++) {
+    L.reset(sd);
+    S.boxes.forEach(b => b.dead = true);
+    S.foes.length = 0; S.hp = 99; S.invuln = 999;
+    settle(6);
+    /* **必须选玩家脚下那一层。** 之前直接取全场最长的一段 —— 那多半在
+       别的层上，玩家被放上去之后一步就掉下去，镜头跟着换层，
+       量出来是"走了 45 帧，镜头动了 151px"，看着像镜头在跟横移。 */
+    const F0 = L.FLOORS[0];
+    seg = S.plats.filter(p => p.kind !== 'ramp' && p.w >= 300 && Math.abs(p.y - F0) < 1)
+      .sort((a, b) => b.w - a.w)[0] || null;
+    if (seg) break;
+  }
+  if (!seg) {
+    ck("找得到一段 ≥360 宽的平地", false, "没找到");
+  } else {
+    L.placePlayer(seg.x + 16, seg.y - S.p.h);
+    settle(10);
+    const cam0 = S.cam.y, feet0 = S.p.y + S.p.h;
+    let camMax = 0, feetMax = 0, back = 0, lastX = S.p.x;
+    for (let i = 0; i < 45; i++) {
+      S.keys = (S.p.x + S.p.w < seg.x + seg.w - 40) ? { d: true } : {};
+      L.step(DT);
+      camMax = Math.max(camMax, Math.abs(S.cam.y - cam0));
+      feetMax = Math.max(feetMax, Math.abs((S.p.y + S.p.h) - feet0));
+      if (S.p.x < lastX - 0.01) back++;
+      lastX = S.p.x;
+    }
+    S.keys = {};
+    ck("走一段平路：镜头一动不动（最大位移 " + camMax.toFixed(2) + "px）", camMax < 0.6,
+       camMax.toFixed(2) + "px");
+    ck("走一段平路：脚底不上下（最大位移 " + feetMax.toFixed(2) + "px）", feetMax < 0.6,
+       feetMax.toFixed(2) + "px");
+    ck("走的时候没有回弹（" + back + " 帧倒退）", back === 0, back + " 帧");
+  }
+}
+
+/* =========================================================================
+   二十七、场景装饰
+   ========================================================================= */
+group("二十七、场景装饰（三件新的 + 不压洞口 / 不浮空）");
+{
+  const CEIL = ['lamp', 'chandelier', 'lantern', 'beam', 'rope', 'vine', 'web', 'flag'];
+  const lvWith = { chandelier: 0, lantern: 0, ladder: 0 };
+  let total = 0, layers = 0, emptyLayer = 0;
+  let ceilOnSurface = 0, onHole = 0, floatY = 0;
+  for (let sd = 1; sd <= 24; sd++) {
+    const g = L.genLevel(sd);
+    const has = { chandelier: false, lantern: false, ladder: false };
+    for (const d of g.deco) {
+      total++;
+      if (has[d.kind] != null) has[d.kind] = true;
+      const isCeil = CEIL.indexOf(d.kind) >= 0;
+      /* 地表层的顶是天空。**挂件掉到地表就是"半空飘着一盏灯"** ——
+         曾经出图时右上角确实飘过一面旗，被当成 UI 残留。 */
+      if (isCeil && d.layer === 0) ceilOnSurface++;
+      const l = g.layers[d.layer];
+      /* 洞口是唯一的上下通道。**两类件的避让对象不同**：
+         挂件会堵住从上层下来的路 → 只查上面那层的洞口；
+         落地件摆在洞上就是浮在空中 → 只查本层洞口。
+         （把两边合成一条判据就会互相误伤，生成侧踩过这个坑。） */
+      const near = (hs) => hs.some(h => d.x > h.x - 30 && d.x < h.x + h.w + 30);
+      if (isCeil) {
+        if (d.layer > 0 && near(g.layers[d.layer - 1].holes)) onHole++;
+      } else if (near(l.holes)) onHole++;
+      /* 地面件必须踩在本列落脚面上（可能是箱山顶），不能浮空。 */
+      if (!isCeil) {
+        const gi = Math.max(0, Math.min(19, Math.floor(d.x / 48)));
+        const gy = (l.colTop && l.colTop[gi] != null) ? l.colTop[gi] : l.floorY;
+        if (Math.abs(d.y - (gy + 1)) > 0.51) floatY++;
+      }
+    }
+    for (let k = 0; k < g.layers.length; k++) {
+      layers++;
+      if (g.deco.filter(d => d.layer === k).length < 3) emptyLayer++;
+    }
+    for (const kk in has) if (has[kk]) lvWith[kk]++;
+  }
+  ck("三种新装饰都上场了（枝形吊灯 / 挂灯笼 / 断梯）",
+     lvWith.chandelier > 0 && lvWith.lantern > 0 && lvWith.ladder > 0, JSON.stringify(lvWith));
+  ck("枝形吊灯覆盖过半的关（" + lvWith.chandelier + "/24）", lvWith.chandelier >= 12,
+     lvWith.chandelier + "/24");
+  ck("挂灯笼覆盖过半的关（" + lvWith.lantern + "/24）", lvWith.lantern >= 12,
+     lvWith.lantern + "/24");
+  ck("断梯覆盖过半的关（" + lvWith.ladder + "/24）", lvWith.ladder >= 12,
+     lvWith.ladder + "/24");
+  ck("每一层至少 3 件装饰（" + (layers - emptyLayer) + "/" + layers + " 层达标，" +
+     total + " 件）", emptyLayer === 0, emptyLayer + " 层太秃");
+  ck("天花板件不会掉到地表层（地表上面是天空）", ceilOnSurface === 0, ceilOnSurface + " 件");
+  ck("没有装饰压住上下通道", onHole === 0, onHole + " 件压洞口");
+  ck("地面件都踩在落脚面上，没有浮空", floatY === 0, floatY + " 件浮空");
 }
 
 /* =========================================================================

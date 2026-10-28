@@ -136,6 +136,99 @@ for (let k = 0; k < NF; k++) {
   shot("floor" + (k + 1), () => { freezeFoes(); standOn(k); });
 }
 
+/* 3.6) 宠物对战：**三只不同的宠物同时开火，三条抛物线要一起读得出来。**
+     这一张是用来看"子弹有没有下落感"的 —— 数字上量得到（断言里有），
+     但"像不像被扔出去的东西"只有图能判断。 */
+shot("petfight", () => {
+  /* **这张图单独挑种子。** 主种子（7）的地表层被两个下行口切成 336 宽的小块，
+     摆不下"三只宠物 + 三条弹道"这条横向叙事 —— 硬塞的结果是宠物掉进洞里、
+     图上一只都不剩。这张图要看的只有宠物和子弹，换关不影响它要说明的事。 */
+  let picked = null;
+  for (let sd = 1; sd <= 60 && !picked; sd++) {
+    L.reset(sd);
+    const gy0 = L.FLOORS[0];
+    const seg = S.plats.filter(p => p.kind !== 'ramp' && Math.abs(p.y - gy0) < 1)
+      .sort((a, b) => b.w - a.w)[0];
+    if (seg && seg.w >= 520) picked = { sd, seg, gy: gy0 };
+  }
+  if (!picked) {
+    const gy0 = L.FLOORS[0];
+    const seg = S.plats.filter(p => p.kind !== 'ramp' && Math.abs(p.y - gy0) < 1)
+      .sort((a, b) => b.w - a.w)[0] || S.plats[0];
+    picked = { sd: SEED, seg, gy: gy0 };
+  }
+  console.log("  petfight → 种子 " + picked.sd + "，平台 " + picked.seg.x + ".." +
+    (picked.seg.x + picked.seg.w));
+  /* **箱子全清。** 这一张要看的是"宠物长什么样、子弹怎么飞"；
+     箱子会挡住宠物、也会把子弹半路打掉。箱子堆另有 floorN 那几张。 */
+  S.boxes.forEach(b => b.dead = true);
+  /* **地表层的地面装饰也清掉。** 路牌左右各伸 26px，随机落在两只宠物中间时
+     就读成"它俩中间插了块牌子"，正好把"三只宠物 + 三发弹道"这条横向叙事切断。
+     装饰密度由 floorN / hall 那几张图来证明，不靠这一张。 */
+  S.deco = S.deco.filter(d => d.layer !== 0);
+  S.foes.length = 0;
+  S.hp = 99; S.invuln = 999;
+  const gy = picked.gy;
+  const px = picked.seg.x + picked.seg.w - 46;
+  L.placePlayer(px, gy - 42);
+  for (let i = 0; i < 4; i++) L.step(DT);
+  /* 从右往左：狗（最近）、兔子、刺猬。子弹插在它们和玩家之间的空档里。 */
+  [['hoggy', 100], ['bunny', 200], ['doggy', 300]].forEach(([pet, dx]) => {
+    const f = L.spawnFoe(px - dx, gy - 30, 'crawler', pet);
+    f.face = 1; f.fireCd = 99; f.aim = 0.22;    // 蓄力到一半：嘴前有那团光
+    f.speed = 0; f.vx = 0;
+    f.roamL = f.x; f.roamR = f.x;
+  });
+  /* **这一张是摆拍，说清楚：三发投掷物是直接放上去的，不是真打出来的。**
+     原因很实在：三只宠物的射界是 270~350，屏幕只有 960 宽 ——
+     想让三只同时朝同一个人开火，它们必须站得比这更近，
+     一张图里就会挤成一团。**数值和形状都是真的**（和 firePetBullet
+     出来的完全一样，连 vy/自旋都在），只是位置是摆的。
+     真弹道由第二十四节的断言来守。 */
+  /* **每一发都紧跟在自己的宠物右边**，这样"谁扔的"一眼可读；
+     排成"三发挤一团"的话，看图的人得靠猜。 */
+  [
+    ['bone',   px - 245, gy - 46, 420, 0.55],   // 狗（px−300）扔的
+    ['carrot', px - 145, gy - 54, 360, 0.30],   // 兔子（px−200）扔的
+    ['spike',  px - 50,  gy - 38, 330, 0.20],   // 刺猬（px−100）扔的
+  ].forEach(([kind, x, y, vx, spin]) => {
+    S.ebullets.push({ kind, x, y, vx, vy: 40, t: 0.4, r: 9, face: 1, spin, dead: false });
+  });
+});
+
+/* 3.5) 黑洞：吐怪的巢。**要能读出"这是个会冒东西的洞"，不是一块黑斑。** */
+{
+  const nst = S.nests[0];
+  if (nst) {
+    shot("nest", () => {
+      /* 让它吐一只出来，画面里才有"刚爬出来"那一刻。 */
+      nst.cd = 0; nst.left = Math.max(nst.left, 2);
+      for (let i = 0; i < 40; i++) L.step(DT);
+      /* **站到"和黑洞同高度"的地面上**，不能只按 x 减 150 放 ——
+         黑洞所在的层未必在那一侧有地面，人一放就掉到楼下去，
+         出出来的图是"门厅"，黑洞在画面外（这张图第一次就是这么废的）。 */
+      let px = Math.max(48, nst.x - 150);
+      for (let x = px; x < nst.x - 50; x += 8) {
+        if (Math.abs(L.groundAt(x + 15, nst.y - 4) - nst.y) < 4) { px = x; break; }
+      }
+      L.placePlayer(px, nst.y - 42);
+      for (let i = 0; i < 6; i++) L.step(DT);
+      /* **相机是按层吸附的，所以这里必须把层号直接指定过去。**
+         黑洞常坐在某摞箱子的顶上（`colTop` 不是地板），人站上去脚离地板
+         早就超过 60px，`camGoalFloor` 判不出层号 → 镜头留在上一张图的层，
+         黑洞在画面外。出图工具不能依赖"人站的位置刚好在层里"。 */
+      S.cam.k = nst.layer;
+      /* 镜头是按 7/s 缓动的，**6 帧只挪了一小半**，黑洞还在画面外。
+         多跑 40 帧让它到位（0.67s，巢只挪 17px，不影响构图）。 */
+      for (let i = 0; i < 40; i++) L.step(DT);
+      console.log("  nest: x=" + nst.x + " y=" + nst.y + " layer=" + nst.layer +
+        " cam=" + Math.round(S.cam.y) + " k=" + S.cam.k + " px=" + px);
+      console.log("  FLOORS=" + JSON.stringify(L.FLOORS) + " WORLD_H=" + L.WORLD_H +
+        " feet=" + Math.round(S.p.y + S.p.h) + " onGround=" + S.p.onGround);
+    });
+  }
+}
+
 /* 4) 斜坡特写：坡能不能读成"可以直接走上去" */
 let rampInfo = null;
 for (let k = 0; k < NF && !rampInfo; k++) {

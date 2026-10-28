@@ -859,6 +859,63 @@ group("二十一、能跳回上一层（逐层真跑）");
 }
 
 /* =========================================================================
+   二十二、弹药经济：门厅那几只怪到底够不够破冰墙（用户 2026-10-28 提问）
+   ---------------------------------------------------------------------------
+   用户的直觉是"怪少了会不会没球可推"。这条链不能靠感觉答，要算：
+
+       裹住敌人  → 那只敌人变成球，本金 absorbed = 1（tier 0）
+       球撞死另一只敌人 → absorbed += 2
+       冰墙要 tier ≥ 1，也就是 absorbed ≥ 2
+
+   ⇒ **一颗能破冰的球要吃 2 只怪**（1 裹 + 1 撞），门厅固定 3 只 → 余 1 只。
+   要求 tier 2（absorbed ≥ 4）就变成"一颗球吃 3 只"，门厅刚好够、容错为零：
+   玩家先用雪弹打死一只，或者一只怪掉进洞里，就直接死局，而且门上没有任何补救。
+   所以 2026-10-28 把冰墙的 minTier 从 2 降到 1。
+
+   这一节**真造一次球**（不走 spawnBall 那条测试捷径），把链条验到底。
+   ========================================================================= */
+group("二十二、弹药经济（真造球，不 spawnBall）");
+{
+  L.reset(201);
+  const nF2 = L.FLOORS.length;
+  const hallY = L.FLOORS[nF2 - 1];
+  /* 只留门厅的怪 —— 玩家"一路不杀直接挖到底"就是这个局面，是最坏情况 */
+  S.foes = S.foes.filter(f => f.y > hallY - 220);
+  ck("门厅自带怪 ≥ 3 只（最坏情况也够造球）", S.foes.length >= 3, S.foes.length);
+
+  const f0 = S.foes[0], f1 = S.foes[1];
+  /* 先别让怪乱走，把它们钉在原地，免得"够不够"被位移搅乱 */
+  f0.x = 120; f0.y = hallY - 30; f0.vx = 0;
+  f1.x = 300; f1.y = hallY - 30; f1.vx = 0;
+  S.balls.length = 0;
+  L.hitFoeN(f0, 24);
+  const ball = S.balls[0];
+  ck("裹住一只怪 → 造出一颗球", !!ball);
+  ck("新球本金 = 1，只有 tier 0（不够破冰）",
+     ball && ball.absorbed === 1 && L.ballTier(ball.absorbed) === 0 &&
+     L.ballTier(ball.absorbed) < L.NUM.box.ice.minTier,
+     ball && ("absorbed=" + ball.absorbed + " tier=" + L.ballTier(ball.absorbed)));
+
+  /* 让这颗球去撞死第二只怪 */
+  ball.x = f1.x - ball.r - 3; ball.y = f1.y + 12; ball.vx = 700; ball.vy = 0;
+  for (let i = 0; i < 30 && !f1.dead; i++) L.step(DT);
+  ck("球碾过第二只怪 → 体积 +2", f1.dead && ball.absorbed === 3, ball.absorbed);
+  ck("吞掉 1 只之后够档了（tier ≥ 冰墙门槛）",
+     L.ballTier(ball.absorbed) >= L.NUM.box.ice.minTier,
+     "tier " + L.ballTier(ball.absorbed) + " vs 门槛 " + L.NUM.box.ice.minTier);
+
+  /* 满速助跑时动量够不够（pow = |vx| × r/baseR） */
+  const maxVx = L.NUM.push.base * (1 + L.NUM.push.runGain);
+  const powFull = maxVx * (ball.r / L.NUM.ball.baseR);
+  ck("满速推这颗球，动量过冰墙门槛", powFull >= L.NUM.box.ice.minPow,
+     Math.round(powFull) + " vs " + L.NUM.box.ice.minPow);
+  /* 破一格之后速度只剩 keepSpeed，第二格必须重新助跑 —— 这是有意的设计 */
+  const powAfter = powFull * L.NUM.box.ice.keepSpeed;
+  ck("破一格之后掉速，第二格要重新助跑（不是一球通吃）",
+     powAfter < L.NUM.box.ice.minPow, Math.round(powAfter) + " vs " + L.NUM.box.ice.minPow);
+}
+
+/* =========================================================================
    汇总
    ========================================================================= */
 console.log("\n" + "=".repeat(56));

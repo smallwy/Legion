@@ -1540,6 +1540,59 @@ group("二十八、打击感（碎片形状 / 冲停 / 冲击环）+ 容器是�
        ['moss', 'fang', 'grub'].every(b => cfg[b] && L.NUM.ebullet.spd[cfg[b].bullet] > 0),
        JSON.stringify(Object.keys(cfg || {})));
   }
+
+  /* 28.5 **"看着能撞的，就真能撞"**（用户 2026-10-28 的原话：
+     「又不形成阻挡啥的 就是个图贴上去」）。
+     木桶 / 陶罐 / 小木箱曾经是纯装饰 —— 画得和能推的箱子一模一样，
+     却穿得过去。现在整类搬进了 boxes。这条断言守着"别再搬回来"：
+     装饰池里只要出现这四个名字，就说明又有一件"假实体"混进去了。 */
+  {
+    const FAKE_SOLID = ['barrel', 'jar', 'crate', 'shelf'];
+    let seen = 0, kinds = {};
+    for (let sd = 1; sd <= 6; sd++) {
+      L.reset(sd);
+      for (const d of S.deco) {
+        kinds[d.kind] = 1;
+        if (FAKE_SOLID.indexOf(d.kind) >= 0) seen++;
+      }
+    }
+    ck("装饰层里没有'看着像容器'的假实体（" + seen + " 件）", seen === 0,
+       Object.keys(kinds).filter(k => FAKE_SOLID.indexOf(k) >= 0).join(","));
+  }
+}
+
+/* =========================================================================
+   二十九、怪物不会原地抽搐
+   ---------------------------------------------------------------------------
+   **这一条是"看图看不出来、但玩起来一下就烦"的典型。**
+   runner 的朝向每帧由"玩家在哪边"重算，人一旦走到它身上，左右判定就翻；
+   换向锁把它掐成"每 0.3 秒翻一次"，148×0.3 = 44px 的来回 —— 画面上是
+   一只绕着玩家抽搐的怪。2026-10-28 探针量到 2 秒换向 6 次就是这么来的。
+   判据只看"真正的方向反转"（两边都非零、符号相反），待机时的 vx=0 不算，
+   否则这个数字量的是"宠物有多勤快"，不是"它有没有在原地抽"。
+   阈值 3：巡逻换向每 1.4~2.6 秒一次，2 秒里最多 2 次是正常节奏，3 是上限。
+   ========================================================================= */
+group("二十九、怪物不会原地抽搐（帧间换向次数）");
+{
+  const DT = 1 / 60;
+  let worst = 0, worstName = "", worstSeed = 0;
+  for (let s = 0; s < 12; s++) {
+    const seed = 2000 + s * 31;
+    L.reset(seed);
+    for (let i = 0; i < 20; i++) L.step(DT);          // 先让场景落定
+    L.placePlayer(60, L.FLOORS[0] - S.p.h);           // 把人挪远，别让怪追人
+    for (const f of S.foes) {
+      let prev = f.vx, flips = 0;
+      for (let i = 0; i < 120; i++) {                 // 2 秒
+        L.step(DT);
+        if (f.vx !== 0 && prev !== 0 && Math.sign(f.vx) !== Math.sign(prev)) flips++;
+        prev = f.vx;
+      }
+      if (flips > worst) { worst = flips; worstName = f.kind; worstSeed = seed; }
+    }
+  }
+  ck("12 个种子里，怪物 2 秒最多换向 3 次（实测 " + worst + " 次，" + worstName +
+     " @seed " + worstSeed + "）", worst <= 3, worst + " 次");
 }
 
 /* =========================================================================

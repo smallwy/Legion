@@ -2418,9 +2418,13 @@ function stepFoes(dt) {
       f.roamL = r[0]; f.roamR = r[1];
       f.roamY = feetNow;
     }
-    /* 走廊太窄（< 一个半身位）就站定 —— 与其让它在 14px 的凹槽里
-       每 0.2 秒来回一次（抽搐），不如让它守在那里。 */
-    const canWalk = f.roamR - f.roamL >= 46;
+    /* 走廊太窄就站定 —— 与其让它在凹槽里每 0.2 秒来回一次（抽搐），
+       不如让它守在那里。
+       **门槛必须跟着走速走，不能是常数 46。** runner 是 148，47px 的走廊
+       0.32 秒就横穿一趟，而换向锁正好是 0.3s —— 锁一解锁就翻，探针量到
+       「2 秒换向 6 次」，画面上是一只贴着玩家原地抽搐的怪。
+       46 + speed/2 的意思：走廊至少要够它走半秒多，否则原地待命。 */
+    const canWalk = f.roamR - f.roamL >= 46 + f.speed * 0.5;
 
     /* ================= 敌方行为 ==================
        用户的四条要求都落在这里：会跳、会待机、会远程打人、弹道有下落。
@@ -2486,11 +2490,21 @@ function stepFoes(dt) {
        runner 每帧算"朝玩家走"：玩家一旦和它重叠，左右判定就每帧翻转，
        位置在 3px 里来回震（探针量到 120 帧换向 120 次）。 */
     const standing = aiming || f.idleT > 0;
+    /* 钉住：**runner 被地形卡住时不来回走，站住等**（理由见走廊边界那一段）。 */
+    let pinned = false;
     let want = f.face || 1;
     if (standing) {
       want = f.face || 1;
     } else if (f.kind === 'runner') {
-      want = (p.x + p.w / 2) > (f.x + f.w / 2) ? 1 : -1;
+      /* **贴身死区。** runner 的朝向每帧由"玩家在哪边"重算：一旦走到玩家
+         中心线上，左右判定就翻；turnLock 掐住以后变成"每 0.3 秒翻一次"，
+         148×0.3 = 44px 的来回 —— 画面上是一只绕着玩家抽搐的怪
+         （探针前 40 帧的 x 在 42px 里来回，就是这个数）。
+         进了 30px（两个身位贴住）就保持原朝向并且站定，
+         等玩家走开再追。30 远小于它的射击距离（350），"够得着就打"不受影响。 */
+      const dx = (p.x + p.w / 2) - (f.x + f.w / 2);
+      if (Math.abs(dx) < 30) { want = f.face || 1; pinned = true; }
+      else want = dx > 0 ? 1 : -1;
     } else {
       f.patrolT -= dt;
       if (f.patrolT <= 0) {
@@ -2515,17 +2529,39 @@ function stepFoes(dt) {
     if (f.onGround && !standing) {
       const fy = f.y + f.h;
       const ahead = want > 0 ? f.x + f.w + 6 : f.x - 6;
-      if (groundAt(ahead, fy + 2) - fy > 56) want = -want;
+      if (groundAt(ahead, fy + 2) - fy > 56) {
+        /* crawler 在崖边回头是巡逻；runner 回头就是"朝玩家冲 → 撞崖 →
+           回头 → 再冲"的来回，1 秒三次。它该在台边等人，不是原地抽。 */
+        if (f.kind === 'runner') pinned = true;
+        else want = -want;
+      }
     }
-    /* 走廊边界也算一次"想换向"，而且不用等锁 —— 撞到走廊尽头本来就该回头。 */
-    if (want < 0 && f.x <= f.roamL + 0.5) want = f.turnLock > 0 ? f.face : 1;
-    if (want > 0 && f.x >= f.roamR - 0.5) want = f.turnLock > 0 ? f.face : -1;
+    /* ---- 撞到走廊边界 ----
+       **runner 撞边不是"回头"，是"站住等"。**
+       crawler 的 want 由巡逻计时器给，在边上回头就是它该做的事；
+       但 runner 的 want 每帧由"玩家在哪边"重算 —— 玩家在走廊外面时，
+       它撞 Left 边 → 反弹 0.3s（148×0.3 = 44px）→ 锁一解又朝玩家 →
+       再撞。探针量到"2 秒换向 6 次"，前 40 帧的 x 在 44px 里来回，
+       画面上就是一只贴着墙原地抽搐的怪（44 这个数字就是这么来的）。
+       所以 runner 在这里改成钉住 + 停步，朝向保持指向玩家那一侧。 */
+    if (want < 0 && f.x <= f.roamL + 0.5) {
+      if (f.kind === 'runner') { pinned = true; want = 1; }
+      else want = f.turnLock > 0 ? f.face : 1;
+    }
+    if (want > 0 && f.x >= f.roamR - 0.5) {
+      if (f.kind === 'runner') { pinned = true; want = -1; }
+      else want = f.turnLock > 0 ? f.face : -1;
+    }
     if (want !== f.face) {
       if (f.turnLock > 0) want = f.face;      // 锁内不许换
       else f.turnLock = 0.30;
     }
     f.face = want;
-    f.vx = (standing || !canWalk) ? 0 : want * f.speed;
+    /* **窄台面上走慢点。** 巡逻走廊只有 70px 时，84px/s 的宠物 0.4 秒就横穿
+       一趟，来回的频率和"抽搐"没有区别。按走廊长度衰减到 0.35 倍，
+       看起来才像"在台边小心地踱步"，而不是原地抖。 */
+    const paceK = clamp((f.roamR - f.roamL) / 260, 0.35, 1);
+    f.vx = (standing || !canWalk || pinned) ? 0 : want * f.speed * paceK;
 
     /* stepBody 里已经把「水平位移 + 水平碰撞 + 重力 + 垂直落地」全做完了。
        **这里不能再补位移或重力** —— 叠上去会让速度翻倍、一帧穿过地面
@@ -2975,14 +3011,98 @@ function drawRoomWall(g, k, cY, fY) {
   const h = fY - cY;
   if (h <= 0) return;
 
+  /* ================= 房间是个盒子，不是一块墙纸 =================
+     原来是 WALL_L..WALL_R 铺满一整块，纹理一直画到边上。
+     出图上的结果是"一张壁纸贴在屏幕后面"：没有进深、没有角落，
+     墙上挂的每件东西都像贴纸（用户 2026-10-28：「就是个图贴上去」）。
+     现在按盒子来画：
+       ① 整幅先铺房间的底色（原来外侧是裸露的世界底色，一圈深棕框）；
+       ② 左右两条**侧墙**，垂直板缝向内角**压缩**（等距缝读不出透视）；
+       ③ 后墙内收 DI 之后画纹理；
+       ④ 内角一条亮缝 + 一道 AO 暗边 —— "内角亮、拐角暗"是画盒子最省的两笔；
+       ⑤ 后墙整体压一层极淡的暖灰（空气透视），和前景的箱子拉开对比度。
+     DI 定 54：小于 40 读不出透视，大于 70 会吃掉一整列箱子（列宽 48）。 */
+  const DI = 54, DY = 11;
+  const BX0 = WALL_L + DI, BX1 = WALL_R - DI;
+  const BCY = cY + DY;
+
   const bg = g.createLinearGradient(0, cY, 0, fY);
   bg.addColorStop(0, r.bg1);
   bg.addColorStop(1, r.bg2);
   g.fillStyle = bg;
-  g.fillRect(WALL_L, cY, WALL_R - WALL_L, h);
+  g.fillRect(0, cY, W, h);
 
+  /* ---- ② 侧墙 ----
+     **材质必须跟着房间主题走。** 木屋画竖板缝，砖房画横砖缝 ——
+     第一版所有房间都画竖板缝，出图上砖房的墙角变成"一截木板接在砖墙上"，
+     等于当场把"这是同一间屋子"这件事打掉。
+     木屋的竖缝位置按 1-(1-t)^1.55 分布，**越靠内角越密**。
+     方向反了（越靠内角越疏）看起来像"墙越往里越宽"，比等距更假 ——
+     等距至少读作"栅栏"，反着的透视读作"画错了"。 */
+  /* 消失点。**镜头停在这一层时，正好落在房间的竖直中线上** ——
+     camViewOffset() 把 FLOORS[k]-214..FLOORS[k] 这段居中在屏幕 300，
+     所以这里直接用房间中点，不必读 S.cam.y：镜头平移时几何关系不跟着抖。
+     SIDE_K 是"前框相对后墙的放大比"（近大远小）。1.22 是能看出收敛、
+     又不会让最上面那两道砖缝提前冲出天花板的档位。 */
+  const vpY = (cY + fY) / 2;
+  const SIDE_K = 1.22;
+  const fanY = yy => vpY + (yy - vpY) * SIDE_K;
+
+  for (const side of [0, 1]) {
+    const xc = side ? BX1 : BX0;
+    const xe = side ? W : 0;
+    const span = Math.abs(xc - xe);
+    const x0 = Math.min(xe, xc);
+    g.save();
+    g.beginPath(); g.rect(x0, cY, span, h); g.clip();
+    if (r.key === 'wood') {
+      for (let i = 1; i <= 7; i++) {
+        const px = xe + (xc - xe) * (1 - Math.pow(1 - i / 8, 1.55));
+        g.strokeStyle = 'rgba(58,40,24,.28)'; g.lineWidth = 1.5;
+        g.beginPath(); g.moveTo(px, cY); g.lineTo(px, fY); g.stroke();
+        g.strokeStyle = 'rgba(255,244,222,.09)';
+        g.beginPath(); g.moveTo(px + 1.6, cY); g.lineTo(px + 1.6, fY); g.stroke();
+      }
+    } else if (r.key === 'brick') {
+      /* 砖房画**朝消失点收的横砖缝**，不画竖缝（78px 宽的侧墙上排竖缝只是格子纸）。
+         两个讲究：
+         ① 起始相位和后墙一致（都是 cY-42 起步、步长 42），墙角两侧的缝
+            在 BX 处**接得上** —— 这一笔比任何描边都更能说明"墙拐过去了"；
+         ② 缝必须斜，不能是平行横线。平行横线读作"砖缝画歪了"，
+            斜线才读作"这条缝顺着墙往后退"。 */
+      for (let yy = cY - 42; yy < fY + 42; yy += 42) {
+        const yf = fanY(yy);
+        g.strokeStyle = 'rgba(60,40,26,.22)'; g.lineWidth = 1.4;
+        g.beginPath(); g.moveTo(xc, yy); g.lineTo(xe, yf); g.stroke();
+        g.strokeStyle = 'rgba(255,246,228,.08)';
+        g.beginPath(); g.moveTo(xc, yy + 1.6); g.lineTo(xe, yf + 1.6); g.stroke();
+      }
+    } else if (r.key === 'rock') {
+      /* 石头房两道顺墙延伸的裂缝。同样必须朝消失点收 ——
+         石墙上的平行横线会被读成"砖缝"，和石头对不上。 */
+      for (let i = 0; i < 2; i++) {
+        const yy = cY + h * (0.34 + i * 0.34) + ((k * 37 + i * 61) % 15);
+        const yf = fanY(yy);
+        g.strokeStyle = 'rgba(44,31,20,.34)'; g.lineWidth = 2.2;
+        g.beginPath(); g.moveTo(xc, yy);
+        g.quadraticCurveTo((xc + xe) / 2, (yy + yf) / 2 + 5, xe, yf);
+        g.stroke();
+      }
+    }
+    /* AO：两面墙的夹角本来就照不到光。靠屏幕边缘那头也压暗一档 ——
+       侧墙是"斜着被看到"的，落到它上面的光本来就比后墙少。 */
+    const ao = g.createLinearGradient(xe, 0, xc, 0);
+    ao.addColorStop(0, 'rgba(44,29,17,.34)');
+    ao.addColorStop(0.55, 'rgba(44,29,17,.17)');
+    ao.addColorStop(1, 'rgba(34,22,12,.62)');
+    g.fillStyle = ao;
+    g.fillRect(x0, cY, span, h);
+    g.restore();
+  }
+
+  /* ---- ③ 后墙 ---- */
   g.save();
-  g.beginPath(); g.rect(WALL_L, cY, WALL_R - WALL_L, h); g.clip();
+  g.beginPath(); g.rect(BX0, BCY, BX1 - BX0, fY - BCY); g.clip();
 
   if (r.key === 'wood') {
     /* 竖木板，每 64 一条，板缝 3px。**钉子画在板的两端** ——
@@ -3058,29 +3178,55 @@ function drawRoomWall(g, k, cY, fY) {
      天花板那一段从 .26 加到 .34、范围从 24% 拉到 30%：木屋和砖房的墙本身是亮米色，
      原来的暗压根本压不住，挂灯的光晕等于打在一块白纸上 —— 看不出"亮"。
      压暗之后同一盏灯的亮度差才成立，房间的"上暗下亮"也才读得出来。 */
-  const shade = g.createLinearGradient(0, cY, 0, fY);
+  const shade = g.createLinearGradient(0, BCY, 0, fY);
   shade.addColorStop(0, 'rgba(70,46,26,.34)');
   shade.addColorStop(0.14, 'rgba(70,46,26,.18)');
   shade.addColorStop(0.30, 'rgba(70,46,26,.02)');
   shade.addColorStop(0.84, 'rgba(255,250,238,.12)');
   shade.addColorStop(1, 'rgba(255,250,238,.24)');
   g.fillStyle = shade;
-  g.fillRect(WALL_L, cY, WALL_R - WALL_L, h);
+  g.fillRect(BX0, BCY, BX1 - BX0, fY - BCY);
+
+  /* ---- ⑤ 空气透视 ----
+     **往后退的东西不能和前景一个对比度。** 箱子和玩家的颜色原封不动，
+     后墙只降一档，前后就分开了 —— 这比"糊一层黑"干净，也不会把木色压脏。 */
+  g.fillStyle = 'rgba(230,219,199,.10)';
+  g.fillRect(BX0, BCY, BX1 - BX0, fY - BCY);
   g.restore();
 
-  /* 侧壁：左右各一条"墙厚"。**不加这一笔，房间就是一个没边的矩形。** */
-  for (const side of [0, 1]) {
-    const wx = side ? WALL_R : WALL_L - 60;
-    const ww = side ? (W + 60 - WALL_R) : 60;
-    const wg = g.createLinearGradient(side ? WALL_R : WALL_L, 0, side ? WALL_R + 34 : WALL_L - 34, 0);
-    wg.addColorStop(0, 'rgba(74,52,32,.34)');
-    wg.addColorStop(1, 'rgba(74,52,32,.04)');
-    g.fillStyle = wg;
-    g.fillRect(wx, cY, ww, h);
+  /* ---- ④ 内角亮缝 ----
+     侧墙压暗之后后墙那头就"亮"了，但只靠明暗对比还不够硬 —— 墙角要有一条真缝。
+     **上淡下亮**：地面反光照在墙角的下半截。画在两侧墙之外会被后墙盖住，
+     所以必须在 restore 之后画。 */
+  for (const bx of [BX0, BX1]) {
+    const cg = g.createLinearGradient(0, BCY, 0, fY);
+    cg.addColorStop(0, 'rgba(255,246,226,.07)');
+    cg.addColorStop(0.50, 'rgba(255,246,226,.20)');
+    cg.addColorStop(1, 'rgba(255,250,236,.42)');
+    g.fillStyle = cg;
+    g.fillRect(bx - 1.6, BCY, 3.2, fY - BCY);
   }
-  // 天花板底面：一条厚板，把"上下两层"分开
-  g.fillStyle = 'rgba(74,52,32,.30)';
-  g.fillRect(WALL_L, cY, WALL_R - WALL_L, 9);
+
+  /* ---- ⑥ 天花板背光 ----
+     一条横向的渐变压暗，**横跨整幅** —— 只压后墙的话，两块侧墙的顶上是亮的，
+     天花板就"飞"起来了。用渐变而不是硬边的一条黑带：硬边读成"又一根横梁"。 */
+  const cap = g.createLinearGradient(0, cY, 0, cY + 16);
+  cap.addColorStop(0, 'rgba(52,35,21,.46)');
+  cap.addColorStop(0.60, 'rgba(52,35,21,.18)');
+  cap.addColorStop(1, 'rgba(52,35,21,0)');
+  g.fillStyle = cap;
+  g.fillRect(0, cY, W, 16);
+
+  /* ---- ⑦ 侧墙脚下的地面反光 ----
+     后墙那段在 shade 里已经有了，这里只补两侧 —— 补满整幅会把后墙下沿再提亮一遍。 */
+  for (const x0 of [0, BX1]) {
+    const w0 = x0 === 0 ? BX0 : W - BX1;
+    const bot = g.createLinearGradient(0, fY - 30, 0, fY);
+    bot.addColorStop(0, 'rgba(255,250,238,0)');
+    bot.addColorStop(1, 'rgba(255,250,238,.16)');
+    g.fillStyle = bot;
+    g.fillRect(x0, fY - 30, w0, 30);
+  }
 }
 
 /* ---- 背景立绘 ----
@@ -4437,7 +4583,58 @@ function drawBox(g, b) {
    吊灯 = 有人点灯；木桶罐子 = 有人存货；路牌 = 有人留过路；
    蛛网 = 很久没人来了。**每一件都必须有描边** —— 和箱子同一套视觉语言，
    不描边的道具在卡通画面里读作"贴纸"。 */
+/* ================= 挂在墙上的东西要"退到墙里去" =================
+   原来挂件和箱子用同一套描边（COL.ink 2.5px）、同样的饱和度，
+   在画面上读起来和"能撞的东西"是同一层 —— 用户 2026-10-28 的原话是
+   「有一些和战斗无关的凸显出来 …… 就是个图贴上去」。
+   两件事解决：
+   ① 先垫一片贴墙的柔影。**贴纸没有影子**，有影子才会被读成"挂在墙上的实体"；
+   ② 整体降到 66% 不透明度，颜色自动混向墙色 —— 这就是最廉价的空气透视，
+      不用改任何一支笔画里的颜色。
+   **自发光的三件（吊灯 / 枝形吊灯 / 灯笼）不做降透明**：光不跟着距离变淡，
+   把光也压掉会变成"屋里点着灯却一片黑"。它们只吃影子那一笔（其实也没有，
+   光源不给自己投影下方）。 */
+const DECO_LIGHT = ['lamp', 'chandelier', 'lantern'];
+/* 影子尺寸按"这件东西在墙上的占地"给：[半宽, 半高, 中心偏移x, 中心偏移y]。
+   没有表项的（三盏灯）就不画影子。 */
+const DECO_SHADOW = {
+  beam: [84, 13, 0, 12],
+  rope: [15, 33, 0, 30],
+  vine: [14, 42, -4, 40],
+  web: [26, 26, 18, 20],
+  flag: [22, 18, 16, 24],
+};
+function drawDecoShadow(g, d) {
+  const sh = DECO_SHADOW[d.kind];
+  if (!sh) return;
+  const rx = sh[0], ry = sh[1], cx = d.x + sh[2], cy = d.y + sh[3];
+  const rr0 = Math.max(rx, ry);
+  const rg = g.createRadialGradient(cx, cy, 1, cx, cy, rr0);
+  rg.addColorStop(0, 'rgba(50,32,18,.32)');
+  rg.addColorStop(0.55, 'rgba(50,32,18,.15)');
+  rg.addColorStop(1, 'rgba(50,32,18,0)');
+  g.save();
+  g.translate(cx, cy);
+  g.scale(1, ry / rr0);
+  g.translate(-cx, -cy);
+  g.fillStyle = rg;
+  g.beginPath(); g.arc(cx, cy, rr0, 0, Math.PI * 2); g.fill();
+  g.restore();
+}
+/* 退后的程度**按"它像不像能站的东西"分档**，不是一刀切。
+   横梁最像平台（一整条水平线、还带描边），压得最狠；
+   蛛网本来就该是半透明的，跟着压一档；其余 0.66。 */
+const DECO_FAR = { beam: 0.54, web: 0.56 };
 function drawDeco(g, d) {
+  if (!d.ceil) { drawDecoBody(g, d); return; }
+  drawDecoShadow(g, d);
+  if (DECO_LIGHT.indexOf(d.kind) >= 0) { drawDecoBody(g, d); return; }
+  g.save();
+  g.globalAlpha = (DECO_FAR[d.kind] != null) ? DECO_FAR[d.kind] : 0.66;
+  drawDecoBody(g, d);
+  g.restore();
+}
+function drawDecoBody(g, d) {
   const k = d.kind;
   const s = d.seed || 0;
   const x = d.x, y = d.y;

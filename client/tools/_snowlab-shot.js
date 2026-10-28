@@ -60,21 +60,17 @@ try {
   console.log("（背景立绘未加载 → 走程序化天空：" + e.message + "）");
 }
 
-/* 宠物贴图。**不注入就会静默走代码图形** —— 图上是一只"看着也还行的小橙猫"，
-   和贴图版差着一大截，但不会报错，很容易把"没加载上"当成"就长这样"。
-   所以加载失败要吭声，和背景那条一样的规矩。 */
+/* 贴图（主角六只 + 敌人三只）。**不注入就会静默走代码图形** ——
+   图上是一只"看着也还行的小橙猫"，和贴图版差着一大截，但不会报错，
+   很容易把"没加载上"当成"就长这样"。所以加载失败要吭声。
+   清单在 `_snowlab-art.js`，三个出图工具共用一份 —— 各抄一段的话，
+   加了敌人贴图就有三处要改，漏一处就是"这张图上有、那张没有"。 */
 try {
-  const petDir = path.join(ROOT, "assets", "resources", "grove", "pet");
-  const { loadImage } = require("@napi-rs/canvas");
-  const map = {};
-  for (const f of fs.readdirSync(petDir)) {
-    if (!f.endsWith(".png")) continue;
-    map["pet-" + f.replace(/\.png$/, "")] = await loadImage(path.join(petDir, f));
-  }
-  L.setArt(map);
-  console.log("宠物贴图：" + Object.keys(map).length + " 张（" + Object.keys(map).join(" ") + "）");
+  const art = await require("./_snowlab-art").loadArt();
+  L.setArt(art.map);
+  console.log("贴图：" + art.report);
 } catch (e) {
-  console.log("（宠物贴图未加载 → 走代码图形：" + e.message + "）");
+  console.log("（贴图未加载 → 走代码图形：" + e.message + "）");
 }
 
 /* ---------------------------------------------------------------- 挑种子

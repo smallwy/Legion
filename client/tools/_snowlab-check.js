@@ -1681,6 +1681,93 @@ group("三十、形象与碰撞同尺度");
 }
 
 /* =========================================================================
+   三十六、内嵌角色贴图：不许过期、不许比箱子大
+   =========================================================================
+   贴图改成"内嵌 base64"之后，**改了 png 忘了重新生成**是最容易发生、也
+   最不吭声的事故：浏览器里只是继续显示上一版，没有任何提示。
+   所以这里比字节，不比"大概对不对"。
+
+   顺带守一条**只能算不能看**的规矩：敌人形象宽度 ≤ 0.85 × 箱子。
+   用户原话「敌方体态都超过了箱子　是不是不太好」—— 图上"看着差不多"
+   和实际超没超，差 6px 眼睛根本分不出来。贴图宽高比在这里直接从 PNG
+   文件头读（IHDR 第 16~23 字节），不需要解码，jsdom 里也跑得动。 */
+group("三十六、内嵌角色贴图");
+{
+  const crypto = require("crypto");
+  const sha = (b) => crypto.createHash("sha256").update(b).digest("hex");
+  const FILES = {
+    "pet-cat": path.join(ROOT, "assets", "resources", "grove", "pet", "cat.png"),
+    "foe-moss": path.join(ROOT, "assets", "snowlab", "foe", "moss.png"),
+    "foe-fang": path.join(ROOT, "assets", "snowlab", "foe", "fang.png"),
+    "foe-grub": path.join(ROOT, "assets", "snowlab", "foe", "grub.png"),
+  };
+  const pngSize = (buf) => ({ w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) });
+
+  for (const key in FILES) {
+    const re = new RegExp('<script id="art-' + key + '" type="text/plain">data:[^;]+;base64,([A-Za-z0-9+/=]+)</script>');
+    const mm = html.match(re);
+    ck("内嵌 art-" + key + " 存在", !!mm);
+    if (!mm) continue;
+    const disk = fs.readFileSync(FILES[key]);
+    ck("内嵌 art-" + key + " 与磁盘 png 完全一致（" + Math.round(disk.length / 1024) + "KB）",
+      sha(Buffer.from(mm[1], "base64")) === sha(disk),
+      "改完图要重跑 node tools/_inline-art.js");
+  }
+
+  /* 形象宽度：h × (图宽 / 图高)，h 来自 FOE_ART（世界像素） */
+  /* 形象宽度 = h × (图宽 / 图高)，h 取自 FOE_ART（世界像素）。
+     `BOX` 在上面那一节的块作用域里，这一段自己取一次。 */
+  const BOX = 48;
+  for (const b of ["moss", "fang", "grub"]) {
+    const A = L.FOE_ART[b];
+    ck("FOE_ART." + b + " 有配图", !!A && !!A.key);
+    if (!A) continue;
+    const f = FILES[A.key];
+    if (!f) { ck("FOE_ART." + b + " 指向的图在内嵌表里", false, A.key); continue; }
+    const z = pngSize(fs.readFileSync(f));
+    const drawW = A.h * (z.w / z.h);
+    ck("敌人「" + b + "」形象宽 " + drawW.toFixed(1) + " ≤ 0.85 箱（" + (BOX * 0.85).toFixed(1) + "）",
+      drawW <= BOX * 0.85, drawW.toFixed(2));
+    /* 形象高不许离碰撞框太远：多出来的部分靠的是耳朵/叶子/冰棱，
+       超过 1.5 倍就说明"图里有一半是空白"，画上去会飘。 */
+    ck("敌人「" + b + "」形象高 " + A.h + " ≤ 1.5 × 碰撞高（" + (L.FOE_H * 1.5).toFixed(1) + "）",
+      A.h <= L.FOE_H * 1.5, (A.h / L.FOE_H).toFixed(2));
+  }
+}
+
+/* =========================================================================
+   三十七、出手有反馈：后坐力
+   =========================================================================
+   §6② 那条「出手没有动作反馈」的验收。后坐力是纯视觉的，但它有数值出口
+   （`recoilOffset`），所以能守：
+     · 朝哪边打，就往反方向退；
+     · 幅度够大（< 3px 在 600px 的画面上等于没有）；
+     · 计时结束要**收回 0** —— 收不回去就是"人一直往后仰"。
+   ========================================================================= */
+group("三十七、出手有反馈（后坐力）");
+{
+  L.reset(1);
+  const S = L.S;
+  S.p.shotCd = 0; S.p.shotAnim = 0; S.p.face = 1;
+  const idle = L.recoilOffset();
+  ck("没出手时没有偏移", idle.dx === 0 && idle.dy === 0, JSON.stringify(idle));
+
+  L.shoot();
+  ck("出手会起计时（shotAnim > 0）", S.p.shotAnim > 0, S.p.shotAnim);
+  const R = L.recoilOffset();
+  ck("朝右出手时身体往左退 ≥ 3px（" + R.dx.toFixed(1) + "）", R.dx <= -3, R.dx.toFixed(2));
+  ck("同时往下压一点（" + R.dy.toFixed(2) + "px）", R.dy >= 0.8, R.dy.toFixed(2));
+
+  S.p.face = -1;
+  const Rl = L.recoilOffset();
+  ck("朝左出手时方向翻过来（" + Rl.dx.toFixed(1) + "）", Rl.dx >= 3, Rl.dx.toFixed(2));
+
+  S.p.shotAnim = 0;
+  const done = L.recoilOffset();
+  ck("计时归零后偏移收回 0", done.dx === 0 && done.dy === 0, JSON.stringify(done));
+}
+
+/* =========================================================================
    汇总
    ========================================================================= */
 console.log("\n" + "=".repeat(56));

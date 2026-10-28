@@ -47,15 +47,13 @@ const SEED = 2;
     L.setBackdrop(null);
     console.log("（背景未加载：" + e.message + "）");
   }
+  /* 贴图清单走共用入口（主角 + 敌人一起）—— 各抄一段的话，加了敌人贴图
+     就会出现"这张图上有、那张没有"，而且不报错。 */
   try {
-    const petDir = path.join(ROOT, "assets", "resources", "grove", "pet");
-    const map = {};
-    for (const f of fs.readdirSync(petDir)) {
-      if (f.endsWith(".png")) map["pet-" + f.replace(/\.png$/, "")] = await loadImage(path.join(petDir, f));
-    }
-    L.setArt(map);
+    const art = await require("./_snowlab-art").loadArt();
+    L.setArt(art.map);
   } catch (e) {
-    console.log("（宠物贴图未加载：" + e.message + "）");
+    console.log("（贴图未加载：" + e.message + "）");
   }
 
   /** 把玩家放到第 0 层最宽那段的中部，造一颗球让它落上去，返回球 */

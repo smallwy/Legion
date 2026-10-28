@@ -212,7 +212,7 @@ group("三、包裹发数三档（6 / 4 / 10）");
 function coatCountFor(belly) {
   L.reset(); settle(20);
   S.belly = belly;
-  const f = L.spawnFoe(400, L.GROUND_Y - 30, "crawler");
+  const f = L.spawnFoe(400, L.GROUND_Y - 45, "crawler");
   const need = L.snowNeed();
   for (let i = 0; i < need - 1; i++) L.coatFoe(f, 1);
   const aliveBefore = !f.dead;
@@ -330,7 +330,7 @@ S.boxes.forEach(b => { b.dead = true; });
 /* **位置要挑门壳左边的空地。** 门壳在 doorX-48 ~ doorX+48，每关不同；
    球生在壳里会被顶出来，测出来就是"球没动、怪没死"。 */
 const runX = Math.max(80, Math.min(360, S.door.x - 380));
-let tf = L.spawnFoe(runX + 90, L.GROUND_Y - 30, "crawler");
+let tf = L.spawnFoe(runX + 90, L.GROUND_Y - 45, "crawler");
 tf.vx = 0; tf.speed = 0;
 const killedBefore = S.killed;
 let mb = L.spawnBall(runX, L.GROUND_Y - L.ballR(1), 700, 1);
@@ -344,7 +344,7 @@ ck("击杀后球变大（吸收）", mb.absorbed >= 2, mb.absorbed);
 group("七、子弹不杀生");
 L.reset(); settle(20);
 S.boxes.forEach(b => { b.dead = true; });
-let nf = L.spawnFoe(620, L.GROUND_Y - 30, "crawler");
+let nf = L.spawnFoe(620, L.GROUND_Y - 45, "crawler");
 S.belly = 100;
 for (let i = 0; i < 5; i++) L.coatFoe(nf, 1);
 ck("敌人吃 5 层雪仍未被杀", nf.dead === false && S.killed === 0, "dead=" + nf.dead + " killed=" + S.killed);
@@ -367,7 +367,7 @@ const blocker = S.boxes.filter(b => !b.dead && b.mat === "wood" && b.y === hallY
 ck("场上还有木箱可测", !!blocker);
 S.boxes.forEach(b => { if (b !== blocker) b.dead = true; });
 S.foes.length = 0;                       // 场上的怪会替箱子吃子弹，必须清掉
-const behind = L.spawnFoe(blocker.x + blocker.w + 6, blocker.y + blocker.h - 30, "crawler");
+const behind = L.spawnFoe(blocker.x + blocker.w + 6, blocker.y + blocker.h - 45, "crawler");
 behind.vx = 0; behind.speed = 0;
 const hitsBefore = behind.hits;
 const hpBefore2 = blocker.hp;
@@ -444,14 +444,14 @@ ck("露出时给了「找到门了」的飘字", S.texts.some(t => String(t.s).i
    S.texts.map(t => t.s).join("|"));
 ck("露出不等于解锁（击杀不够）", S.door.open === false, S.killed + "/" + S.killedTarget);
 
-L.placePlayer(S.door.x + 4, L.GROUND_Y - 42);
+L.placePlayer(S.door.x + 4, L.GROUND_Y - S.p.h);
 for (let i = 0; i < 14; i++) L.step(DT);
 ck("锁着时碰门不过关", S.phase === "play", S.phase);
 
 S.killed = S.killedTarget;
 L.checkDoor();
 ck("击杀达标 → 门自动解锁", S.door.open === true);
-L.placePlayer(S.door.x + 4, L.GROUND_Y - 42);
+L.placePlayer(S.door.x + 4, L.GROUND_Y - S.p.h);
 for (let i = 0; i < 14 && S.phase === "play"; i++) L.step(DT);
 ck("碰门 → phase = clear", S.phase === "clear", S.phase);
 
@@ -462,7 +462,7 @@ group("十二、箱子挡路 / 可站 / 塌落");
 L.reset(); settle(20);
 /* 从门左边 300px 往右走，撞在门壳左列上。**起点必须动态** ——
    门的位置每关都变，写死 700 的话有时会站在门壳右边，一路畅通走到底。 */
-L.placePlayer(Math.max(48, S.door.x - 300), L.GROUND_Y - 42);
+L.placePlayer(Math.max(48, S.door.x - 300), L.GROUND_Y - S.p.h);
 S.keys = { d: true };
 for (let i = 0; i < 120; i++) L.step(DT);
 S.keys = {};
@@ -502,7 +502,7 @@ let freeX = 500;
     if (!blocked) { freeX = x; break; }
   }
 }
-L.placePlayer(freeX, L.GROUND_Y - 42);
+L.placePlayer(freeX, L.GROUND_Y - S.p.h);
 const p = S.p;
 const bf = L.spawnFoe(p.x + 6, p.y - 4, "crawler");
 bf.vx = 0; bf.speed = 0;
@@ -710,7 +710,7 @@ ck(foeN + " 只怪全部喷得到（" + skipped + " 只站在箱顶上跳过）"
 L.reset(); settle(20);
 /* 全清：从门左边 200px 走到门，路上任何一口箱子都会让"走到门"这条测不准。 */
 S.boxes.forEach(b => { b.dead = true; });
-L.placePlayer(Math.max(60, S.door.x - 200), L.GROUND_Y - 42);
+L.placePlayer(Math.max(60, S.door.x - 200), L.GROUND_Y - S.p.h);
 S.keys = { d: true };
 for (let i = 0; i < 90; i++) L.step(DT);
 S.keys = {};
@@ -722,7 +722,7 @@ ck("冰墙砸开后玩家能走到门", S.p.x + S.p.w >= S.door.x, Math.round(S.
 group("十八、镜头跟随");
 L.reset(); settle(30);
 ck("出发点镜头在最上面（地表）", S.cam.y < 200, Math.round(S.cam.y));
-L.placePlayer(200, L.GROUND_Y - 42);
+L.placePlayer(200, L.GROUND_Y - S.p.h);
 for (let i = 0; i < 90; i++) L.step(DT);
 ck("下到底层后镜头跟着下去", S.cam.y > L.WORLD_H - L.H - 2, Math.round(S.cam.y));
 ck("镜头不会超出世界底", S.cam.y <= L.WORLD_H - L.H + 0.5, S.cam.y);
@@ -824,7 +824,7 @@ ck("盖板没了之后洞口顶部不再有霜箱",
 /* 人站到洞里去，会先落在塌下来 / 井梯垫着的箱子上。这是**故意的**：
    上行通道和落点共用同一摞箱子，掉下去要砸两口才能到底 ——
    "我挖穿了怎么还在半空"的解法是继续砸，而不是让洞口空着。 */
-L.placePlayer(mid0, y0 - 42);
+L.placePlayer(mid0, y0 - S.p.h);
 for (let i = 0; i < 120; i++) L.step(DT);
 ck("从洞口站进去会掉离上层地板", S.p.y + S.p.h > y0 + 4,
    "脚 " + Math.round(S.p.y + S.p.h) + " / 上层地板 " + y0);
@@ -862,7 +862,7 @@ for (let k = 0; k < NF - 1; k++) {
   /* 砸掉这一层洞口上方 100px 内的所有箱子：霜箱盖板、冰封、或者什么都不用砸 */
   S.boxes.filter(b => !b.dead && b.x >= h.x - 1 && b.x < h.x + h.w && b.y >= yk - 100 && b.y < yk)
          .forEach(b => L.breakBox(b, "ball"));
-  L.placePlayer(h.x + h.w / 2, yk - 42);
+  L.placePlayer(h.x + h.w / 2, yk - S.p.h);
   for (let i = 0; i < 150; i++) L.step(DT);
   const next = L.FLOORS[k + 1];
   ck("第 " + (k + 1) + " 层挖穿 → 落在第 " + (k + 2) + " 层（只掉 240，不是一坠到底）",
@@ -911,7 +911,7 @@ L.checkDoor();
 ck("⑧ 门解锁", S.door.open === true);
 
 // ⑨ 碰门过关
-L.placePlayer(S.door.x + 4, L.GROUND_Y - 42);
+L.placePlayer(S.door.x + 4, L.GROUND_Y - S.p.h);
 for (let i = 0; i < 20 && S.phase === "play"; i++) L.step(DT);
 ck("⑨ 碰门过关", S.phase === "clear", S.phase);
 
@@ -954,7 +954,7 @@ group("二十一、能跳回上一层（逐层真跑）");
         .forEach(bx => L.breakBox(bx, "ball"));
       S.foes.length = 0;
       S.keys = {};
-      L.placePlayer(col * 48 + 9, l2.floorY - 144 - 42);
+      L.placePlayer(col * 48 + 9, l2.floorY - 144 - S.p.h);
       for (let i = 0; i < 8; i++) L.step(DT);        // 落稳
       /* **只按一帧。** 按住 W 六十帧的话，玩家爬上去之后会接着在原地
          一直跳，跳到最高点又落回洞里 —— 看起来像"爬梯失败"，其实是
@@ -1014,7 +1014,7 @@ group("二十一之二、不按 W 也能跳到上一层（纯跳 + 扒边）");
         bx.y + bx.h > upper - 200 && bx.y < upper + 4).forEach(bx => L.breakBox(bx, "ball"));
       S.foes.length = 0;
       S.keys = {};
-      L.placePlayer(col * 48 + 9, l2.floorY - 144 - 42);
+      L.placePlayer(col * 48 + 9, l2.floorY - 144 - S.p.h);
       for (let i = 0; i < 8; i++) L.step(DT);
       /* **直接给起跳速度，不走 W 分支** —— 走 W 会被 wellClimb 接走，
          量到的就又是瞬移了。 */
@@ -1190,6 +1190,13 @@ group("二十三、手感回归（贴墙跳 / 走坡 / 球的生命）");
   /* 找一个**空地**：出生点右边可能就是一摞箱子，人在那儿走不动，
      球自然推不到 —— 第一版就踩了这个空，白看了两轮"没推上"。 */
   L.reset(1000); settle(30);
+  /* **先清场。** 这一条测的是"推一下 life 回满"，不是"能不能绕过箱子"。
+     角色从 30 宽提到 45 之后，原来那段空地上挤不下 —— 玩家被右侧的箱子
+     顶住，12 帧里一步没挪（实测 vx 在 0 和 -260 之间抖），于是断言量到的是
+     "球自然衰减了 0.2 秒"，看着像推球坏了，其实是路被堵了。
+     清场之后这条路只连着地形，量的就是推球本身。 */
+  S.boxes.forEach(b => { b.dead = true; });
+  S.foes.forEach(f => { f.dead = true; });
   const seg = S.plats.filter(pl => pl.kind !== 'ramp' && pl.w >= 260 && pl.y === L.FLOORS[0])[0];
   const px0 = (seg ? seg.x : 60) + 40;
   L.placePlayer(px0, L.FLOORS[0] - S.p.h);
@@ -1197,7 +1204,7 @@ group("二十三、手感回归（贴墙跳 / 走坡 / 球的生命）");
   for (let i = 0; i < 120; i++) L.step(DT);            // 放 2 秒
   const decayed = bb.life;
   S.keys = { d: true };
-  for (let i = 0; i < 12; i++) L.step(DT);             // 走过去顶一下
+  for (let i = 0; i < 20; i++) L.step(DT);             // 走过去顶一下
   S.keys = {};
   /* **不要比"是否等于满值"**：推完之后还在继续 step，life 每帧都在掉。
      比"推之前涨了一截"就行 —— 第一版写成 `|life − 满值| < 0.01`，
@@ -1257,7 +1264,7 @@ group("二十四、敌方三种（跳跃 / 待机 / 远程 / 侧视）");
     const seg = S.plats.filter(p => p.kind !== 'ramp' && p.w >= 300).pop();
     L.placePlayer(seg.x + 20, seg.y - S.p.h);
     settle(4);
-    const f = L.spawnFoe(seg.x + 140, seg.y - 30, 'crawler', 'moss');
+    const f = L.spawnFoe(seg.x + 140, seg.y - 45, 'crawler', 'moss');
     f.vx = 0; f.speed = 80;
     let idled = 0;
     for (let i = 0; i < 240; i++) {
@@ -1593,6 +1600,39 @@ group("二十九、怪物不会原地抽搐（帧间换向次数）");
   }
   ck("12 个种子里，怪物 2 秒最多换向 3 次（实测 " + worst + " 次，" + worstName +
      " @seed " + worstSeed + "）", worst <= 3, worst + " 次");
+}
+
+/* =========================================================================
+   三十、形象和碰撞是同一个尺度
+   ---------------------------------------------------------------------------
+   **这是"看着能过、其实过不去"的源头，所以单独守一条。**
+   绘制函数里的坐标是按 30×42 的手画比例铺的，放大靠 `ART_K` 在脚底中心
+   套一个缩放；碰撞框则是 `PLAYER_W/H`。两边**必须同比例** ——
+   只放大形象，玩家会觉得自己被空气墙挡住；只放大碰撞框，会看到自己
+   半个身子埋进箱子里。2026-10-28 就是先只改了形象，探针立刻量到
+   "站在箱沿上莫名掉下去"。
+
+   判据用乘法（30 × ART_K = PLAYER_W），不是相等 —— 以后想整体再放大
+   一档，只要两边一起改，这条照样绿。
+   ========================================================================= */
+group("三十、形象与碰撞同尺度");
+{
+  /* 30 / 34 是绘制函数里写死的基准宽度（`drawPlayer` 的椭圆半径、
+     `drawFoe` 的横向跨度都是按这两个数铺的），改绘制的基准才动这里。 */
+  ck("玩家：形象宽 30 × ART_K = 碰撞宽 " + S.p.w,
+     Math.abs(30 * L.ART_K - S.p.w) < 0.51, (30 * L.ART_K).toFixed(1) + " vs " + S.p.w);
+  ck("敌人：形象宽 34 × ART_K = 碰撞宽 " + L.FOE_W,
+     Math.abs(34 * L.ART_K - L.FOE_W) < 0.51, (34 * L.ART_K).toFixed(1) + " vs " + L.FOE_W);
+  ck("玩家高度足够立绘承载细节（≥ 56px）", S.p.h >= 56, S.p.h);
+  ck("角色占屏高 10%~16%（现在 " + (S.p.h / 600 * 100).toFixed(1) + "%）",
+     S.p.h / 600 >= 0.10 && S.p.h / 600 <= 0.16, (S.p.h / 600).toFixed(3));
+  /* 净空：站在井梯顶（3 格 = 144）时，碰撞框头顶到上一层楼板底面还剩多少。
+     **这里按碰撞框算，不按形象算。** 形象高 81.6（含耳朵和呆毛），比碰撞框
+     63 高出 18 —— 但井梯一定在洞口正下方，头顶顶到的是那个洞，不是楼板。
+     所以真正要守的是"碰撞框别撞头"，形象穿进洞口是正常且必要的
+     （不穿的话就变成"人比洞还宽"了）。 */
+  const room = L.GEN.floorH - L.GEN.thick - 144 - S.p.h;
+  ck("站在井梯顶还剩 " + Math.round(room) + "px 头顶空间（≥ 5）", room >= 5, room.toFixed(1));
 }
 
 /* =========================================================================

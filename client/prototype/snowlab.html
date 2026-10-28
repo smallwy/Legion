@@ -1362,7 +1362,7 @@ function genLevel(seed) {
   return {
     seed, nFloors: nF,
     floors, layers, plats, boxes, deco, door, spawns, nests,
-    start: { x: startX, y: GEN.topY - 42 },
+    start: { x: startX, y: GEN.topY - PLAYER_H },
     worldH: WORLD_H, groundY: GROUND_Y,
   };
 }
@@ -1578,7 +1578,7 @@ function reset(seed) {
   S.cam = { y: 0, k: 0 };
   S.p = {
     x: L.start.x, y: L.start.y, vx: 0, vy: 0,
-    w: 30, h: 42, onGround: true, face: 1,
+    w: PLAYER_W, h: PLAYER_H, onGround: true, face: 1,
     runD: 0, lockT: 0, shotCd: 0, anim: 0, shotAnim: 0,
   };
 }
@@ -1607,7 +1607,7 @@ function makeFoe(x, y, kind, breed) {
   const dir = FR() < 0.5 ? -1 : 1;
   return {
     x, y, kind, breed: br,
-    w: 34, h: 30,
+    w: FOE_W, h: FOE_H,
     vx: dir * speed,
     turnLock: 0,             // 刚折返时的锁，见 stepFoes
     vy: 0,
@@ -2980,7 +2980,11 @@ const COL = {
   snowFar: '#AECDE0', snowMid: '#C9E0EC', snowNear: '#E9F4FA',
   pine: '#54727C',
 
-  cat: '#FFA85C', catDark: '#E07A32',
+  /* ---- 主角的四个色阶 ----
+     **一个色相要铺成四档才叫"体积"，两档只能叫"明暗"。**
+     原来只有 cat / catDark 两档，画出来永远是"亮块 + 暗边"，
+     放大之后就是一张贴纸。catLight 走高光，catShade 走远侧/底面。 */
+  cat: '#FFA85C', catDark: '#E07A32', catLight: '#FFCE9C', catShade: '#C4641F',
 
   wood: '#E0A96D', woodDark: '#B77F44', woodTop: '#F8DFB6', woodInk: '#7A5127',
   stone: '#B9A992', stoneDark: '#94856F', stoneInk: '#6E655C',
@@ -2990,6 +2994,32 @@ const COL = {
   snow: '#F4FAFE',
   door: '#7FD8A8', doorInk: '#2F7A5A', doorLock: '#E8564C',
 };
+
+/* ---------------------------------------------------------------- 角色尺度
+   **这一组数字决定"画面里的东西有多大"，是 2026-10-28 那一轮的落点。**
+
+   原来玩家只有 30×42 —— 屏幕上 600 高，角色占 **7%**。比木箱（48）还矮，
+   读起来就是"小矮人站在一堆大箱子里"。用户的原话是"立绘精致""战斗空间合理"，
+   但这两件事卡在同一个前提上：**尺寸不够，细节就全被像素吃掉。**
+   实测（client/art/02-concept/03-battle-target/立绘-30px实测对比.png）：
+   立绘缩到 30px 时，草叶、牙齿、冰棱全部糊掉，"精致"无从谈起。
+
+   所以先把尺度提到 1.5 倍。三条一起改，缺一条就会露馅：
+
+     ① **形象**（`ART_K`）—— 绘制函数里全是 `by - 33` 这种硬编码坐标，
+        按 30×42 的手画比例铺的。不去逐个重写，而是在脚底中心套一个 1.5 倍
+        缩放：矢量重绘，不会糊，而且改比例只要动一个数。
+     ② **碰撞框**（`PLAYER_W/H`、`FOE_W/H`）—— **必须和形象同步放大**。
+        只放大形象、不动碰撞框，就是"看着能挤过去、其实过不去"，
+        踩在箱沿上也会莫名掉下去 —— 那正是用户说的"空间不合理"。
+     ③ **关卡里的空当** —— 洞最窄 96、走廊门槛 `46 + speed*0.5`，
+        45 宽的角色都还有余量；净空 214 对 63 高的角色也够（详见断言）。
+
+   形象比碰撞框高一点（72 vs 63），是**故意的**：头顶的呆毛、耳朵本来就该
+   允许穿进天花板一点点，卡死反而显得僵。原来也是这个比例（48 vs 42）。 */
+const ART_K = 1.5;
+const PLAYER_W = 45, PLAYER_H = 63;
+const FOE_W = 51, FOE_H = 45;
 
 /* 每层的"房间主题"。**换主题不只是换颜色 —— 形状语言也换**：
    木板是竖条、砖是错缝、石头是圆块、地窖是拱形壁龛。
@@ -4510,6 +4540,30 @@ function drawBox(g, b) {
     g.stroke();
   }
 
+  /* ---- 体积：一层斜向的明暗 ----
+     **一笔管住全部材质。** 木框、腰板、石斑、铆钉、冰晶各自的细节其实都写了，
+     但每一个都是"平涂 + 点缀" —— 一屏几十口箱子铺过去，整片就是纸片，
+     角色反倒成了画面里唯一有立体的东西，比不画还割裂。
+
+     不去逐个材质改，是因为逐改必然改出五六种不同的受光方向（木箱亮右上、
+     石箱亮左上……），那比平涂更乱。这里在统一描边**之前**压一层从左上到
+     右下的渐变：左上提亮、右下压暗，所有材质同时获得同一个光源。
+     放在描边之前，是为了让那圈 3px 的深色轮廓始终保持干净 ——
+     描边一旦被渐变盖住，箱子之间就连成一片，读不出"一口一口"了。 */
+  if (!b.jar && !b.barrel) {
+    g.save();
+    rr(g, b.x, b.y, b.w, b.h, b.mat === 'iron' ? 4 : 6);
+    g.clip();
+    const vg = g.createLinearGradient(b.x - b.w * 0.1, b.y - b.h * 0.1,
+                                      b.x + b.w * 0.95, b.y + b.h * 1.05);
+    vg.addColorStop(0, 'rgba(255,252,240,.20)');
+    vg.addColorStop(0.40, 'rgba(255,255,255,0)');
+    vg.addColorStop(1, 'rgba(58,36,16,.22)');
+    g.fillStyle = vg;
+    g.fillRect(b.x, b.y, b.w, b.h);
+    g.restore();
+  }
+
   // 统一描边（冰用蓝墨，其余用暖褐）
   g.strokeStyle = b.mat === 'ice' ? COL.iceInk : COL.ink;
   g.lineWidth = INK;
@@ -5004,11 +5058,49 @@ function drawDoor(g, d) {
    **配色偏冷偏暗。** 上一版是宠物的奶油白 / 蜂蜜黄 / 雾蓝，那是"我方"的读法；
    敌人要在浅色的木屋墙、雪地面上都能一眼拎出来，所以三只都压到中低明度，
    和场景的暖米底色形成冷暖对比 —— 玩家扫一眼就知道"那不是我的人"。 */
+/* **每只两个色阶，body 夹在中间。**
+   原来只有 body 一个主色，身上所有面都是同一个值 —— 放大看就是剪纸。
+   lit 走受光面（左上），shade 走背光面（右下），body 留在中间当过渡。
+   三档就够，再多反而会脏（Q 版卡通靠的是"少而准"，不是层次多）。 */
 const FOE_SKIN = {
-  moss: { body: '#6F8F6A', ink: '#2F4230', belly: '#A8C39B', gill: '#C9DD9E' },
-  fang: { body: '#A85C4A', ink: '#43190F', belly: '#D08E70', gill: '#F0C79E' },
-  grub: { body: '#7C90AE', ink: '#28344A', belly: '#AFC3DC', gill: '#E4F1FF' },
+  moss: { body: '#6F8F6A', ink: '#2F4230', belly: '#A8C39B', gill: '#C9DD9E',
+          lit: '#96B78C', shade: '#4C6647' },
+  fang: { body: '#A85C4A', ink: '#43190F', belly: '#D08E70', gill: '#F0C79E',
+          lit: '#C97C62', shade: '#7A3A2B' },
+  grub: { body: '#7C90AE', ink: '#28344A', belly: '#AFC3DC', gill: '#E4F1FF',
+          lit: '#A6BAD4', shade: '#556781' },
 };
+
+/** 一只敌人的"受光球"渐变。坐标在敌人的局部坐标系里（原点=脚底中点），
+    所以每个敌人每次绘制都要新建一个 —— Canvas 渐变在创建时就绑定了变换矩阵，
+    跨敌人复用会错位。数量最多十几只，这个开销可以忽略。 */
+function foeGrad(g, x, y, r, skin) {
+  const gr = g.createRadialGradient(x - r * 0.40, y - r * 0.58, r * 0.06,
+                                    x, y, r * 1.18);
+  gr.addColorStop(0, skin.lit);
+  gr.addColorStop(0.52, skin.body);
+  gr.addColorStop(1, skin.shade);
+  return gr;
+}
+
+/** 体积三件套之二三：顶部高光 + 底部接触阴影。
+    **必须 clip 在自身轮廓里** —— 高光溢到轮廓外就变成"身上长了块白斑"，
+    这跟主角腮红溢出是同一个毛病。 */
+function foeVolume(g, x, y, rx, ry) {
+  g.save();
+  g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); g.clip();
+  /* 顶光：一块偏左上、压扁的浅椭圆 */
+  g.beginPath();
+  g.ellipse(x - rx * 0.32, y - ry * 0.58, rx * 0.56, ry * 0.30, -0.28, 0, Math.PI * 2);
+  g.fillStyle = 'rgba(255,255,255,.20)';
+  g.fill();
+  /* 接触阴影：底沿一条，让它"压"在地上而不是浮着 */
+  g.beginPath();
+  g.ellipse(x, y + ry * 0.78, rx * 1.06, ry * 0.60, 0, 0, Math.PI * 2);
+  g.fillStyle = 'rgba(20,30,20,.22)';
+  g.fill();
+  g.restore();
+}
 
 /* **侧视，不是正面。**（2026-10-28 用户：「敌方和我方宠物不应该是朝向玩家
    应该是个侧视的」）
@@ -5040,6 +5132,7 @@ function drawFoe(g, f) {
 
   g.save();
   g.translate(cx, by);
+  g.scale(ART_K, ART_K);
   g.scale(f.face, 1);
 
   const leg = (lx, phase, r) => {
@@ -5078,8 +5171,12 @@ function drawFoe(g, f) {
     leg(-7.2, 0.5);
     g.beginPath();
     g.ellipse(0, -14.5, 15.4, 13.2 * breathe, 0, 0, Math.PI * 2);
-    g.fillStyle = B; g.fill();
+    g.fillStyle = flash ? '#FFFFFF' : foeGrad(g, 0, -14.5, 15.4, skin);
+    g.fill();
     g.strokeStyle = skin.ink; g.lineWidth = 3; g.stroke();
+    /* 受击闪白时不叠体积 —— 这一帧的全部信息就是"打中了"，
+       再压一层高光会把闪白读成"变亮了"而不是"被打中了"。 */
+    if (!flash) foeVolume(g, 0, -14.5, 15.4, 13.2 * breathe);
 
     /* 背面的苔斑 —— 提示"这一团是有正反的" */
     g.fillStyle = skin.gill; g.globalAlpha = 0.75;
@@ -5125,8 +5222,10 @@ function drawFoe(g, f) {
     /* 身体：横向长条，低伏 */
     g.beginPath();
     g.ellipse(-2, -12.4, 16.2, 9.4 * breathe, 0, 0, Math.PI * 2);
-    g.fillStyle = B; g.fill();
+    g.fillStyle = flash ? '#FFFFFF' : foeGrad(g, -2, -12.4, 16.2, skin);
+    g.fill();
     g.strokeStyle = skin.ink; g.lineWidth = 3; g.stroke();
+    if (!flash) foeVolume(g, -2, -12.4, 16.2, 9.4 * breathe);
     /* 腹部浅色（侧视：贴地那一条） */
     g.fillStyle = skin.belly;
     g.beginPath(); g.ellipse(-1, -8.4, 12.4, 4.4, 0, 0, Math.PI * 2); g.fill();
@@ -5134,15 +5233,26 @@ function drawFoe(g, f) {
     /* 头：比身体高、朝前偏 */
     g.beginPath();
     g.arc(11.2, -16.6, 9.4, 0, Math.PI * 2);
-    g.fillStyle = B; g.fill();
+    g.fillStyle = flash ? '#FFFFFF' : foeGrad(g, 11.2, -16.6, 9.4, skin);
+    g.fill();
     g.strokeStyle = skin.ink; g.lineWidth = 3; g.stroke();
+    if (!flash) foeVolume(g, 11.2, -16.6, 9.4, 9.4);
     /* 长口鼻：往前探出 12px，这是它和"圆团"最不像的地方 */
     g.beginPath();
     g.moveTo(15, -19.6);
     g.quadraticCurveTo(25.4, -17.4, 24.6, -12.4);
     g.quadraticCurveTo(23.8, -9.4, 16.4, -10.6);
     g.closePath();
-    g.fillStyle = B; g.fill();
+    /* 口鼻是异形，没法用圆形 clip，改用沿探出方向的线性渐变：
+       根部暗（接在头上的地方本来就该被挡住光）、尖端亮。 */
+    if (flash) { g.fillStyle = '#FFFFFF'; } else {
+      const ngr = g.createLinearGradient(15, -19.6, 25, -11);
+      ngr.addColorStop(0, skin.shade);
+      ngr.addColorStop(0.55, skin.body);
+      ngr.addColorStop(1, skin.lit);
+      g.fillStyle = ngr;
+    }
+    g.fill();
     g.strokeStyle = skin.ink; g.lineWidth = 2.6; g.stroke();
     /* 张开的嘴 + 上排牙 */
     g.fillStyle = '#3A1410';
@@ -5195,13 +5305,35 @@ function drawFoe(g, f) {
       g.beginPath(); g.moveTo(lx, -8.4); g.lineTo(lx - 1.4, -1.4 - lift); g.stroke();
       g.lineCap = 'butt';
     }
-    /* 壳：半圆拱 */
+    /* 壳：半圆拱。
+       **壳用线性渐变而不是径向** —— 硬壳的受光是"一条从左上扫到右下"的带，
+       径向会把它画成一个软球，那就不是甲虫了。 */
     g.beginPath();
     g.moveTo(-16.4, -5.6);
     g.bezierCurveTo(-16.4, -25.6, 13.6, -25.6, 15.6, -6.4);
     g.closePath();
-    g.fillStyle = B; g.fill();
+    if (flash) { g.fillStyle = '#FFFFFF'; } else {
+      const sgr = g.createLinearGradient(-14, -26, 14, -6);
+      sgr.addColorStop(0, skin.lit);
+      sgr.addColorStop(0.46, skin.body);
+      sgr.addColorStop(1, skin.shade);
+      g.fillStyle = sgr;
+    }
+    g.fill();
     g.strokeStyle = skin.ink; g.lineWidth = 3; g.stroke();
+    /* 壳下沿的接触阴影：壳和地面之间那道暗，让它"坐"在地上 */
+    if (!flash) {
+      g.save();
+      g.beginPath();
+      g.moveTo(-16.4, -5.6);
+      g.bezierCurveTo(-16.4, -25.6, 13.6, -25.6, 15.6, -6.4);
+      g.closePath();
+      g.clip();
+      g.beginPath(); g.ellipse(0, -3.4, 17, 6.2, 0, 0, Math.PI * 2);
+      g.fillStyle = 'rgba(18,28,40,.24)';
+      g.fill();
+      g.restore();
+    }
     /* 分节：三道竖弧，读作"硬壳拼片" */
     g.strokeStyle = skin.ink; g.lineWidth = 2; g.globalAlpha = 0.6;
     for (let i = 0; i < 3; i++) {
@@ -5219,8 +5351,10 @@ function drawFoe(g, f) {
 
     /* 头：小、前突、两片钳 */
     g.beginPath(); g.arc(15.2, -10.6, 6.4, 0, Math.PI * 2);
-    g.fillStyle = B; g.fill();
+    g.fillStyle = flash ? '#FFFFFF' : foeGrad(g, 15.2, -10.6, 6.4, skin);
+    g.fill();
     g.strokeStyle = skin.ink; g.lineWidth = 2.6; g.stroke();
+    if (!flash) foeVolume(g, 15.2, -10.6, 6.4, 6.4);
     g.fillStyle = '#DCEFFF'; g.strokeStyle = skin.ink; g.lineWidth = 1.8;
     g.beginPath(); g.moveTo(19.6, -12.6); g.lineTo(24.6, -13.6); g.lineTo(20.4, -9.4); g.closePath(); g.fill(); g.stroke();
     g.beginPath(); g.moveTo(19.2, -8.2); g.lineTo(23.8, -5.6); g.lineTo(19.0, -6.4); g.closePath(); g.fill(); g.stroke();
@@ -5520,60 +5654,147 @@ function drawPlayer(g, p) {
   const cx = p.x + p.w / 2;
   const by = p.y + p.h;           // 脚底
   const face = p.face;
+  /* **跑动相位只算一次，腿 / 身体起伏 / 尾巴都读它。**
+     各算各的话，腿在摆、身体纹丝不动，读起来像"下半身脱节" ——
+     这是最容易被一眼看穿的假。
+     `moveK` 把起步和刹车平滑掉：直接写 `running ? sin : 0` 的话，
+     一松键腿就从半空"啪"地弹回中位。 */
+  const moveK = clamp(Math.abs(p.vx) / 200, 0, 1);
+  const ph = S.t * 16;
+  const step = Math.sin(ph) * moveK;
+  const bob = Math.abs(Math.sin(ph)) * 1.2 * moveK + Math.sin(S.t * 2.1) * 0.4;
+
   g.save();
-  g.globalAlpha = S.invuln > 0 && Math.floor(S.invuln * 14) % 2 ? 0.5 : 1;
+  const blinkA = S.invuln > 0 && Math.floor(S.invuln * 14) % 2 ? 0.45 : 1;
+  g.globalAlpha = blinkA;
 
-  // 影子
-  g.globalAlpha *= 0.9;
-  g.fillStyle = 'rgba(74,58,44,.20)';
-  g.beginPath(); g.ellipse(cx, by - 1, 17, 4.5, 0, 0, Math.PI * 2); g.fill();
-  g.globalAlpha = S.invuln > 0 && Math.floor(S.invuln * 14) % 2 ? 0.5 : 1;
-
-  /* 尾巴：**跑起来会摆**。这一个细节让"站着"和"在跑"一眼分开，
-     成本只有一条二次曲线。 */
-  const wag = Math.sin(S.t * 7 + p.runD * 0.4) * 0.55;
-  g.strokeStyle = COL.catDark;
-  g.lineWidth = 6;
-  g.lineCap = 'round';
-  g.beginPath();
-  g.moveTo(cx - face * 11, by - 15);
-  g.quadraticCurveTo(cx - face * 27, by - 24 + wag * 9, cx - face * 22, by - 38 + wag * 7);
-  g.stroke();
-  g.strokeStyle = COL.ink;
-  g.lineWidth = 2;
-  g.stroke();
-
-  // 身体（小，圆）
-  g.beginPath();
-  g.ellipse(cx, by - 12, 14.5, 13, 0, 0, Math.PI * 2);
-  g.fillStyle = COL.cat; g.fill();
-  g.strokeStyle = COL.ink; g.lineWidth = 3; g.stroke();
-
-  // 头（大 —— Q 版的比例就是"头比身体大"）
-  const hy = by - 33;
-  g.beginPath(); g.arc(cx, hy, 15, 0, Math.PI * 2);
-  g.fillStyle = COL.cat; g.fill();
-  g.strokeStyle = COL.ink; g.lineWidth = 3; g.stroke();
-
-  // 耳朵
-  for (const s of [-1, 1]) {
+  /* ---- 影子：**永远落在地面上，不跟着人飞** ----
+     原来画在脚底（`by - 1`），一跳影子就跟着上天。可影子是玩家判断
+     "我离地多高"的唯一尺子 —— 它跟着人走，这一跳就没有参照了。
+     现在按 `groundAt` 找真正的地面，离地越远越小越淡。 */
+  const gy = groundAt(cx, by + 6);
+  const drop = clamp(gy - by, 0, 240);
+  if (drop < 232) {
+    const k = 1 - drop / 240;
+    g.globalAlpha = blinkA * 0.34 * (0.32 + 0.68 * k);
+    g.fillStyle = '#33281F';
     g.beginPath();
-    g.moveTo(cx + s * 12, hy - 7);
-    g.lineTo(cx + s * 8.5, hy - 21);
-    g.lineTo(cx + s * 1.5, hy - 12);
-    g.closePath();
-    g.fillStyle = COL.cat; g.fill();
-    g.strokeStyle = COL.ink; g.lineWidth = 3; g.stroke();
-    // 耳窝
-    g.beginPath();
-    g.moveTo(cx + s * 9.5, hy - 9);
-    g.lineTo(cx + s * 8, hy - 17);
-    g.lineTo(cx + s * 4.5, hy - 11.5);
-    g.closePath();
-    g.fillStyle = 'rgba(224,122,50,.55)'; g.fill();
+    g.ellipse(cx, gy - 1.5, 17 * k + 4, 4.8 * k + 1.4, 0, 0, Math.PI * 2);
+    g.fill();
+    g.globalAlpha = blinkA;
   }
 
-  /* 眼睛（白眼球 + 瞳 + 高光）。
+  g.translate(cx, by); g.scale(ART_K, ART_K); g.translate(-cx, -by);
+  g.lineJoin = 'round';
+  g.lineCap = 'round';
+
+  /* ---- 尾巴 ----
+     **三层叠出体积：外描边 / 主色 / 内侧亮边。**
+     只描边不上亮边时，尾巴是"一根香肠"；那一条 2px 的亮线一加，
+     它立刻变成有体积的圆柱 —— 成本只有一条二次曲线。 */
+  const wag = Math.sin(S.t * 7 + p.runD * 0.4) * 0.55;
+  const ty0 = by - 17 - bob;
+  const ty1 = by - 26 + wag * 9 - bob;
+  const ty2 = by - 41 + wag * 7 - bob;
+  g.beginPath();
+  g.moveTo(cx - face * 9, ty0);
+  g.quadraticCurveTo(cx - face * 27, ty1, cx - face * 22, ty2);
+  g.strokeStyle = COL.ink;     g.lineWidth = 10;  g.stroke();
+  g.strokeStyle = COL.catDark; g.lineWidth = 6.6; g.stroke();
+  g.beginPath();
+  g.moveTo(cx - face * 9.6, ty0 - 2.0);
+  g.quadraticCurveTo(cx - face * 26, ty1 - 2.2, cx - face * 21.4, ty2 - 1.4);
+  g.strokeStyle = 'rgba(255,222,180,.50)'; g.lineWidth = 2.0; g.stroke();
+
+  /* ---- 腿：**原来根本没有腿** ----
+     42px 的时候藏得住（身体椭圆正好贴地），放大到 63 之后，
+     "一颗圆球浮在影子上方"就露馅了。两条短腿顺便给了跑动一个能读的节奏：
+     远侧腿压暗、近侧腿用主色，前后关系立刻出来。 */
+  /* **脚掌必须露在身体外面。** 第一版腿顶在 `by - 5.2`、身体底在 `by - 2.5`，
+     只有 2.7px 露头，再被描边一压就彻底看不见了 —— 画面上是一个圆球直接
+     "坐"在地上。现在身体整体上移两格，腿从 `by - 10.8` 垂到脚底，
+     露出 5 个像素，站立时能看见两只脚掌、跑动时能看见交替抬起。 */
+  for (const L of [{ dx: -6, up: Math.max(0, step) * 2.6, dark: true },
+                   { dx: 6,  up: Math.max(0, -step) * 2.6, dark: false }]) {
+    g.beginPath();
+    g.ellipse(cx + L.dx * face, by - 5.4 - L.up, 4.6, 5.4, 0, 0, Math.PI * 2);
+    g.fillStyle = L.dark ? COL.catShade : COL.cat;
+    g.fill();
+    g.strokeStyle = COL.ink; g.lineWidth = 2.6; g.stroke();
+  }
+
+  g.save();
+  g.translate(0, -bob);
+
+  /* ---- 身体：径向渐变，光从左上来 ----
+     **整个场景共用"左上"这一个方向**（箱子顶面、球上的亮斑、敌人都是）。
+     光源不统一的时候，每个物件单独看都还行，拼在一起就是拼贴画。 */
+  const byy = by - 17;
+  const bgr = g.createRadialGradient(cx - 5.5 * face, byy - 6.5, 1.5, cx, byy, 16.5);
+  bgr.addColorStop(0, COL.catLight);
+  bgr.addColorStop(0.55, COL.cat);
+  bgr.addColorStop(1, COL.catDark);
+  g.beginPath(); g.ellipse(cx, byy, 13.4, 11.8, 0, 0, Math.PI * 2);
+  g.fillStyle = bgr; g.fill();
+  g.strokeStyle = COL.ink; g.lineWidth = 2.8; g.stroke();
+
+  /* 肚皮亮面 —— "圆球"和"有体积的小动物"之间最便宜的一笔。 */
+  g.beginPath();
+  g.ellipse(cx + face * 1.6, byy + 2.6, 7.4, 5.8, 0, 0, Math.PI * 2);
+  g.fillStyle = 'rgba(255,238,212,.40)';
+  g.fill();
+
+  /* ---- 头（Q 版的比例就是"头比身体大"） ---- */
+  const hy = by - 33;
+  const hgr = g.createRadialGradient(cx - 6 * face, hy - 7, 2, cx, hy, 17.5);
+  hgr.addColorStop(0, COL.catLight);
+  hgr.addColorStop(0.5, COL.cat);
+  hgr.addColorStop(1, COL.catDark);
+  g.beginPath(); g.arc(cx, hy, 15, 0, Math.PI * 2);
+  g.fillStyle = hgr; g.fill();
+  g.strokeStyle = COL.ink; g.lineWidth = 2.8; g.stroke();
+
+  /* 头顶高光：**不描边的亮椭圆，压在描边内侧**。有它才有"球"的感觉，没有就是圆片。 */
+  g.beginPath();
+  g.ellipse(cx - 5.5 * face, hy - 8.6, 5.4, 3.0, -0.5 * face, 0, Math.PI * 2);
+  g.fillStyle = 'rgba(255,250,238,.42)';
+  g.fill();
+
+  /* ---- 耳朵（左耳亮、右耳暗 —— 跟着左上光） ---- */
+  for (const s of [-1, 1]) {
+    g.beginPath();
+    g.moveTo(cx + s * 12.4, hy - 6.4);
+    g.lineTo(cx + s * 8.6, hy - 21.4);
+    g.lineTo(cx + s * 1.2, hy - 12.2);
+    g.closePath();
+    const egr = g.createLinearGradient(cx + s * 8.6, hy - 21.4, cx + s * 4.6, hy - 8);
+    egr.addColorStop(0, s < 0 ? COL.catLight : COL.cat);
+    egr.addColorStop(1, s < 0 ? COL.cat : COL.catShade);
+    g.fillStyle = egr; g.fill();
+    g.strokeStyle = COL.ink; g.lineWidth = 2.6; g.stroke();
+    // 耳窝
+    g.beginPath();
+    g.moveTo(cx + s * 9.6, hy - 8.6);
+    g.lineTo(cx + s * 8.2, hy - 17.2);
+    g.lineTo(cx + s * 4.6, hy - 11.4);
+    g.closePath();
+    g.fillStyle = 'rgba(212,108,52,.62)'; g.fill();
+  }
+
+  /* ---- 呆毛 + 脸侧毛毛 ----
+     **轮廓不能是完美圆弧。** 光滑圆 + 粗描边 = 橡皮糖；两三处不规则的凸起，
+     才读得出"这是一只有毛的动物"。这两笔是整张脸上性价比最高的。 */
+  g.strokeStyle = COL.ink; g.lineWidth = 2.2; g.lineCap = 'round';
+  g.beginPath();
+  g.moveTo(cx - face * 3.2, hy - 14.2);
+  g.quadraticCurveTo(cx - face * 6.4, hy - 19.6, cx - face * 1.6, hy - 20.4);
+  g.stroke();
+  g.beginPath();
+  g.moveTo(cx + face * 4.4, hy - 13.6);
+  g.quadraticCurveTo(cx + face * 8.0, hy - 17.4, cx + face * 6.2, hy - 19.8);
+  g.stroke();
+
+  /* 眼睛（白眼球 + 虹膜 + 双高光）。
      **眼心必须在头心之下 2px** —— 放头心（hy）时脑门只剩十几像素，
      缩略图下两只眼白会连成一整块白饼，读不出是眼睛。眼睛之间留 4.4px
      鼻梁，瞳孔偏移也从 1.3 收到 0.9：偏太多两只瞳都朝同侧，
@@ -5581,33 +5802,70 @@ function drawPlayer(g, p) {
   const ex = face * 3;
   const ey = hy + 2;
   for (const s of [-1, 1]) {
+    const ox = cx + ex + s * 6.6;
+    g.fillStyle = '#FFFCF6';
+    g.beginPath(); g.ellipse(ox, ey, 4.6, 5.4, 0, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = COL.ink; g.lineWidth = 1.6; g.stroke();
+    /* 虹膜：**不做纯黑瞳。** 纯黑放大之后是个洞；深棕渐变才有"玻璃珠"的厚度。 */
+    const igr = g.createRadialGradient(ox + face * 0.2, ey - 1.0, 0.5,
+                                       ox + face * 0.9, ey + 0.4, 3.4);
+    igr.addColorStop(0, '#7A5236');
+    igr.addColorStop(1, '#2A1C12');
+    g.beginPath(); g.arc(ox + face * 0.9, ey + 0.4, 3.0, 0, Math.PI * 2);
+    g.fillStyle = igr; g.fill();
     g.fillStyle = '#FFFFFF';
-    g.beginPath(); g.ellipse(cx + ex + s * 6.6, ey, 4.4, 5.2, 0, 0, Math.PI * 2); g.fill();
-    g.strokeStyle = COL.ink; g.lineWidth = 1.8; g.stroke();
-    g.fillStyle = '#3A2A20';
-    g.beginPath(); g.arc(cx + ex + s * 6.6 + face * 0.9, ey + 0.2, 2.6, 0, Math.PI * 2); g.fill();
-    g.fillStyle = '#FFFFFF';
-    g.beginPath(); g.arc(cx + ex + s * 6.6 + face * 0.9 + 0.8, ey - 1.4, 1, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(ox + face * 0.9 - 1.05, ey - 1.55, 1.15, 0, Math.PI * 2); g.fill();
+    g.fillStyle = 'rgba(255,255,255,.55)';
+    g.beginPath(); g.arc(ox + face * 0.9 + 1.25, ey + 1.6, 0.62, 0, Math.PI * 2); g.fill();
   }
-  // 腮红（眼睛下移到 ey 了，腮红跟着让位，否则糊在眼白上）
+  /* 腮红（眼睛下移到 ey 了，腮红跟着让位，否则糊在眼白上）。
+     **必须 clip 在头部轮廓里。** 腮红中心在 ±(10.5+ex)=13.5、半径 3.4，
+     外沿到了 16.9 —— 头半径才 15，于是每边都有一小块腮红溢到轮廓外面，
+     挂在脸颊上像"沾了东西"。放大到 63 之后这条溢出比腮红本身还显眼。 */
+  g.save();
+  g.beginPath(); g.arc(cx, hy, 14.1, 0, Math.PI * 2); g.clip();
   g.fillStyle = 'rgba(255,128,104,.42)';
   for (const s of [-1, 1]) {
-    g.beginPath(); g.ellipse(cx + ex + s * 10.5, hy + 8.5, 3.2, 2.1, 0, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.ellipse(cx + ex + s * 10.2, hy + 8.5, 3.6, 2.3, 0, 0, Math.PI * 2); g.fill();
   }
-  // 嘴
+  g.restore();
+
+  /* 鼻 + 嘴。**有鼻子才叫"脸"。** 原来眼和嘴之间是一片空的橙色，
+     放大之后那块空白是整张脸上最先被注意到的地方。
+
+     **五官全部居中在 `cx + ex`，不再额外偏 `face`。** 第一版鼻嘴又加了
+     一次 `face * 3`（`ex` 本身就是朝向偏移），结果整张脸朝前歪了 3px，
+     ω 嘴正好压在右眼正下方 —— 放大图里那个"糊在眼睛下面的红块"就是它。
+     ω 也不能用两条 `arc`：半圆的起止点接不上，会画成一个问号。
+     两条从中心出发的二次曲线才对。 */
+  const mx = cx + ex;
+  g.fillStyle = '#B4553F';
+  g.beginPath();
+  g.moveTo(mx - 1.7, hy + 5.2);
+  g.lineTo(mx + 1.7, hy + 5.2);
+  g.lineTo(mx, hy + 7.0);
+  g.closePath(); g.fill();
+
   if (p.shotAnim > 0) {
     g.fillStyle = '#8A3B2E';
-    g.beginPath(); g.ellipse(cx + face * 5, hy + 10, 4, 3.6, 0, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.ellipse(mx, hy + 10.2, 3.9, 3.5, 0, 0, Math.PI * 2); g.fill();
   } else {
     g.strokeStyle = '#8A3B2E';
-    g.lineWidth = 2;
+    g.lineWidth = 1.7;
+    g.lineCap = 'round';
     g.beginPath();
-    g.arc(cx + face * 3, hy + 6.5, 3.4, 0.25, Math.PI - 0.25);
+    g.moveTo(mx, hy + 7.0);
+    g.lineTo(mx, hy + 8.2);
+    g.moveTo(mx, hy + 8.2);
+    g.quadraticCurveTo(mx - 1.5, hy + 10.8, mx - 3.5, hy + 8.9);
+    g.moveTo(mx, hy + 8.2);
+    g.quadraticCurveTo(mx + 1.5, hy + 10.8, mx + 3.5, hy + 8.9);
     g.stroke();
   }
 
+  g.restore();      // 撤掉 bob
   g.globalAlpha = 1;
-  g.restore();
+  g.restore();      // 撤掉 ART_K
 }
 
 function drawHud(g) {
@@ -5852,6 +6110,11 @@ const API = {
 
 /* 关卡结构走 getter：每关重新生成，导出时必须实时取。 */
 Object.defineProperties(API, {
+  /* 角色尺度走 getter：断言要能核对"形象和碰撞是同一个尺度" */
+  ART_K: { get: () => ART_K },
+  GEN: { get: () => GEN },
+  FOE_W: { get: () => FOE_W },
+  FOE_H: { get: () => FOE_H },
   GROUND_Y: { get: () => GROUND_Y },
   WORLD_H: { get: () => WORLD_H },
   FLOORS: { get: () => FLOORS },

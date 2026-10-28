@@ -20,8 +20,12 @@
   阈值 0。tsc 那 2200+ 条 implicit-any 技术债会把真 bug 埋掉，所以单开一道）。
 - 需要 tsc 时用编辑器自带的那份：
   `C:/ProgramData/cocos/editors/Creator/3.8.8/resources/app.asar.unpacked/node_modules/typescript/bin/tsc`
-- node 用 `C:/Users/yu.wang/.workbuddy/binaries/node/versions/22.22.2-6/node.exe`；
-  渲染图需要 `NODE_PATH=C:/Users/yu.wang/.workbuddy/binaries/node/workspace/node_modules`（`@napi-rs/canvas`）。
+- node 就 `node`（PATH 里是 `C:/Users/汪宇/.workbuddy/binaries/node/versions/22.22.2-6`）。
+  **注意用户名是 `汪宇` 不是 `yu.wang`** —— 老日志里那批 `C:/Users/yu.wang/...` 是上一台机器的路径，照抄会 `No such file`。
+- 依赖统一装在 `C:/Users/汪宇/.workbuddy/binaries/node/workspace/node_modules`，
+  跑工具前带 `NODE_PATH` 指过去：`@napi-rs/canvas`（渲染图）、`jsdom`（snowlab 验收）、
+  `typescript`、`playwright`。缺包就 `cd` 到 workspace 里 `npm install <包>`，
+  不要装在仓库里（会被 .gitignore 掉，换机器又丢）。
 - **离屏渲染工具读的是编译产物，不是源码**：`tools/_home-rt-shot.js` 加载
   `tools/_rt-build/HomeRuntime.js`。改完 `.ts` 必须先
   `tsc -p tools/tsconfig.homeruntime.build.json`，否则会拿旧代码"渲染成功"，白量半天。
@@ -102,7 +106,7 @@
   `tools/_snowlab-feel2.js`（手感探针，只打印数字不判 pass/fail）、
   `tools/_snowlab-shot.js`（全量出图，种子固定 7）、
   `tools/_crop.js <图> <x,y,w,h> <倍数> <输出>`（放大看局部）。
-  都要 `NODE_PATH=C:/Users/yu.wang/.workbuddy/binaries/node/workspace/node_modules`。
+  都要 `NODE_PATH=C:/Users/汪宇/.workbuddy/binaries/node/workspace/node_modules`。
 - **房间画法是"盒子"不是"矩形"**（`drawRoomWall`）：后墙左右内收 `DI=54`、
   上下内收 `DY=11`，两侧侧墙 + AO，内角一条亮缝，后墙压一层极淡暖灰。
   `DI` 小于 40 读不出透视，大于 70 会吃掉一整列箱子（列宽 48）。

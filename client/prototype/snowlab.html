@@ -196,11 +196,31 @@ const NUM = {
        · `cdA/B` 两次射击的间隔区间（秒）。只用来**拉开节奏**，不用来控难度
        · `range` 水平射界。投掷物会掉，太远根本打不到，所以它要跟
                  `ebullet` 的射程一起看，不能单独调 */
+  /* ---- 三种敌人，**三套动法** ------------------------------------------
+     用户 2026-10-28 的原话：「不希望（上下跳动） 有的可以跳 要适配啊
+     那种很多脚的昆虫只适合爬 有的可以跳下　我只是举例子　要你自己去创新设计」。
+
+     所以 `gait` 不是一个"性格参数"，是**从体态推出来的必然结果**：
+     长着四条腿的东西才会跳，长着十几条腿的东西只能贴地爬，
+     一条腿都没有的东西既不会走也不会跳。
+
+     以前三只共用一套"走路 + 遇坎就跳"，于是**多足甲虫在箱堆上蹦来蹦去**，
+     比它的体态先出卖了自己。现在按体态分：
+
+       moss 轮状苔藓团 · slide · 无腿 → 贴地滑，靠身体前倾推进，草叶拖在后面
+       fang 四足尖牙兽 · run   · 有腿 → 跑，遇坎起跳（唯一会跳的）
+       grub 多足霜甲虫 · crawl · 多足 → 贴地爬，**不跳**；20px 以内的坎直接蹭上去
+
+     `jump: 0` 就是"这条腿不会跳"，物理层见到它就不起跳（不再有
+     "多足甲虫原地弹跳"这种和自己体态打架的动作）。 */
   breed: {
-    moss: { speed: 84,  jump: 520, cdA: 1.9, cdB: 2.9, range: 300, bullet: 'mud'   },
-    fang: { speed: 148, jump: 545, cdA: 1.5, cdB: 2.3, range: 350, bullet: 'tooth' },
-    grub: { speed: 100, jump: 470, cdA: 2.3, cdB: 3.3, range: 270, bullet: 'shard' },
+    moss: { speed: 84,  jump: 0,   gait: 'slide', cdA: 1.9, cdB: 2.9, range: 300, bullet: 'mud'   },
+    fang: { speed: 148, jump: 545, gait: 'run',   cdA: 1.5, cdB: 2.3, range: 350, bullet: 'tooth' },
+    grub: { speed: 100, jump: 0,   gait: 'crawl', cdA: 2.3, cdB: 3.3, range: 270, bullet: 'shard' },
   },
+  /* 爬行类的"蹭坎"高度：多足贴地爬，20px 以内的矮坎不需要跳，
+     身体一抬就过去了。再高就掉头 —— 甲虫翻不过一整个箱子，这是对的。 */
+  crawlStep: 20,
 
   /* 敌方投掷物。**"平行丢出去 + 有下落感"是靠这三条实现的：**
        ① 水平初速恒定（不瞄准玩家 —— 会瞄准就没有"侧身躲开"这个动作了）
@@ -1104,13 +1124,36 @@ function genLevel(seed) {
     /* **优先挑开阔位**：候选里够的话，先只用"左右不比它高"的那些。 */
     const openOnes = cands.filter(c => c.open);
     const all = (openOnes.length >= want ? openOnes : cands).slice();
-    let pool = all.slice();
+    /* **不再"候选用完就整池重来"。**
+       原来 `if (!pool.length) pool = all.slice()` —— 那一行等于允许两只怪
+       落在同一个位置上，出图上就是"蓝色甲虫压着一团绿色苔藓"，
+       看起来像一只长了两层壳的怪。用户说的"乱得没办法辨"里，这一条占了很大比重。
+       现在改成**两档间距**：先按 96（约 2.6 个身位）挑，确实不够再降到 56；
+       两档都没有空位就**少放一只**，叠在一起比少一只难看得多。
+
+       `y` 也跟着改成 `FOE_H`：原来写死 -30 是旧身高（30），
+       敌人加高到 33 之后，出生第一帧会陷进地面 3px。 */
+    const used = [];
     for (let i = 0; i < want; i++) {
-      if (!pool.length) pool = all.slice();
+      let pool = all.filter(o => used.every(u => Math.abs(o.x - u) >= 96));
+      if (!pool.length) pool = all.filter(o => used.every(u => Math.abs(o.x - u) >= 56));
+      if (!pool.length) {
+        /* 两档都不够时**挑离已有怪最远的那个位置**，而不是干脆不放。
+           直接 break 会让"箱子把这一层塞满"的种子少一只怪
+           （5 号种子就掉到 7 只，撞在"一关至少 8 只"那条上）——
+           关卡生成的基本盘不能为了排布好看而缩水，最多是"离得近一点"。 */
+        let best = null, bestD = -1;
+        for (const o of all) {
+          const d = used.reduce((m, u) => Math.min(m, Math.abs(o.x - u)), Infinity);
+          if (d > bestD) { bestD = d; best = o; }
+        }
+        if (!best) break;
+        pool = [best];
+      }
       const c = pool[Math.floor(R() * pool.length)];
-      pool = pool.filter(o => Math.abs(o.x - c.x) >= 96);
+      used.push(c.x);
       spawns.push({
-        x: Math.round(c.x), y: Math.round(c.y) - 30, layer: k,
+        x: Math.round(c.x), y: Math.round(c.y) - FOE_H, layer: k,
         kind: (k > 1 && chance(0.30 + k * 0.05)) ? 'runner' : 'crawler',
       });
     }
@@ -2305,7 +2348,7 @@ function stepNests(dt) {
     if (n.cd <= 0) {
       const alive = S.foes.filter(f => f.nest === n && !f.dead).length;
       if (alive < NEST.maxAlive) {
-        const f = makeFoe(n.x - 17, n.y - 32, 'crawler');
+        const f = makeFoe(n.x - 17, n.y - FOE_H, 'crawler');
         f.nest = n;
         f.roamL = null;
         f.homeX = n.x - 17;
@@ -2477,10 +2520,20 @@ function stepFoes(dt) {
       if (f.onGround && f.jumpCd <= 0) {
         const ahead = f.face > 0 ? f.x + f.w + 8 : f.x - 8;
         const rise = (f.y + f.h) - groundAt(ahead, f.y + f.h - 112);
-        if (rise > 18 && rise < 104) {
-          f.vy = -pcfg.jump;
-          f.onGround = false;
-          f.jumpCd = 0.75;
+        /* **会不会跳，由体态决定，不由关卡决定。**
+           多足甲虫（jump = 0）永远走这条 else：矮坎直接蹭上去、高坎掉头。
+           以前它被塞进和四足兽同一套跳跃里，一遇到箱堆就原地连蹦 ——
+           十几条腿的东西弹起来，比什么动画都出戏。 */
+        if (pcfg.jump > 0) {
+          if (rise > 18 && rise < 104) {
+            f.vy = -pcfg.jump;
+            f.onGround = false;
+            f.jumpCd = 0.75;
+          }
+        } else if (rise > 2 && rise <= NUM.crawlStep) {
+          /* 蹭坎：**位移不是跳，是贴着地往上抬**。一点点把脚落上去，
+             不做抛物线、不改 vy，读起来就是"爬过去了"。 */
+          f.y -= Math.min(rise, NUM.crawlStep);
         }
       }
     }
@@ -2593,6 +2646,56 @@ function stepFoes(dt) {
     }
   }
   S.foes = S.foes.filter(f => !f.dead);
+  separateFoes();
+}
+
+/* =========================================================================
+   敌人之间**不许互相穿过去**
+   -------------------------------------------------------------------------
+   用户说「乱的都没办法辨」—— 这三分之一来自这里：
+   出生点隔了 96px，但敌人跑起来互不碰撞，苔藓团 84px/s 三秒就能走 250px，
+   于是"蓝色甲虫压着一团绿色苔藓"，看起来像一只长了两层壳的怪。
+
+   做法是最轻的一种分离（boids 里的 separation）：
+     · **只推同一层的**（脚底高度差 > 20 视为不同层，不干预）；
+     · 需要分开到 `(w1+w2) * 0.46` —— 留 8% 重叠，贴死反而像连体；
+     · **每帧推 55% 的缺口、上限 3.2px**。第一版给的是 28% / 1.6px，
+       想着"温柔一点"，结果探针量到两只甲虫贴了 100 多帧没分开：
+       它们自己以 1.67px/帧 走近，分离力只有 1.6px/帧 —— **正好抵消**，
+       于是僵在原地互相顶着走，画面上就是两只叠在一起平移。
+       推力必须明显大于走速，才叫"挤开"；3.2px 也不会突跳（一个身位 37）。
+     · 推完的 x 会被 `roamL/roamR` 和两侧墙夹回去 —— 不能因为避让
+       把怪推进箱子里（那比重叠更糟：下一帧它会卡在箱子里抽搐）。
+
+   为什么不做真碰撞（互相挡路）：那会让"两只怪并排走"变得极难实现
+   —— 一只停下另一只就堵，然后两只一起在狭窄处原地抖。
+   分离力只在重叠时生效，不重叠时完全是零成本。 */
+function separateFoes() {
+  const list = S.foes;
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i];
+    if (a.dead) continue;
+    for (let j = i + 1; j < list.length; j++) {
+      const b = list[j];
+      if (b.dead) continue;
+      if (Math.abs((a.y + a.h) - (b.y + b.h)) > 20) continue;      // 不同层，不管
+      const dx = (b.x + b.w / 2) - (a.x + a.w / 2);
+      const ad = Math.abs(dx);
+      const need = (a.w + b.w) * 0.46;
+      if (ad >= need || ad < 0.01) continue;                       // 不重叠，零成本
+      const push = Math.min((need - ad) * 0.55, 3.2);
+      const dir = dx > 0 ? 1 : -1;
+      const clampX = (f, nx) => {
+        let v = Math.max(WALL_L, Math.min(WALL_R - f.w, nx));
+        if (f.roamL != null && f.roamR != null) {
+          v = Math.max(f.roamL, Math.min(f.roamR - f.w, v));
+        }
+        return v;
+      };
+      a.x = clampX(a, a.x - dir * push);
+      b.x = clampX(b, b.x + dir * push);
+    }
+  }
 }
 
 function hurtPlayer() {
@@ -3019,7 +3122,25 @@ const COL = {
    允许穿进天花板一点点，卡死反而显得僵。原来也是这个比例（48 vs 42）。 */
 const ART_K = 1.5;
 const PLAYER_W = 45, PLAYER_H = 63;
-const FOE_W = 51, FOE_H = 45;
+
+/* ---- 敌人：**不跟玩家共用系数** -------------------------------------------
+   **这一条是 2026-10-28 晚补的，因为一刀切把尺寸层次压塌了。**
+   第一版让敌人一起乘 `ART_K`（34×30 → 51×45），结果出图一看，
+   蓝色霜甲虫和木箱（48）几乎一样宽、红色尖牙兽比两个箱子还长 ——
+   读起来不是"小兵"，是"和箱子同级的障碍物"。用户的原话：
+   「敌方体态都超过了箱子 是不是不太好」。
+
+   根子是把一个统一系数套到了所有东西上。**三者的尺寸是三个独立问题：**
+
+     箱子 48  —— 地形单位，关卡按 48 一格生成，**永远不动**
+     玩家 45×63 —— 主角，要撑得住细节，比箱子窄、比箱子高
+     敌人 37×33 —— 小兵，**必须明显小于箱子**，才读得出"可以踩/可以打"
+
+   所以敌人单独一个 `FOE_K = 1.1`：比放大前（34×30）大一点点找回细节，
+   但 37/48 = 0.77，离箱子还差一格，层次保住了。
+   想再调只动这一个数，别去动 `ART_K` —— 那是玩家的。 */
+const FOE_K = 1.1;
+const FOE_W = 37, FOE_H = 33;
 
 /* 每层的"房间主题"。**换主题不只是换颜色 —— 形状语言也换**：
    木板是竖条、砖是错缝、石头是圆块、地窖是拱形壁龛。
@@ -5063,42 +5184,75 @@ function drawDoor(g, d) {
    lit 走受光面（左上），shade 走背光面（右下），body 留在中间当过渡。
    三档就够，再多反而会脏（Q 版卡通靠的是"少而准"，不是层次多）。 */
 const FOE_SKIN = {
-  moss: { body: '#6F8F6A', ink: '#2F4230', belly: '#A8C39B', gill: '#C9DD9E',
-          lit: '#96B78C', shade: '#4C6647' },
-  fang: { body: '#A85C4A', ink: '#43190F', belly: '#D08E70', gill: '#F0C79E',
-          lit: '#C97C62', shade: '#7A3A2B' },
-  grub: { body: '#7C90AE', ink: '#28344A', belly: '#AFC3DC', gill: '#E4F1FF',
-          lit: '#A6BAD4', shade: '#556781' },
+  /* `belly`（肚皮浅色）**必须和基色只差一档**。原来 moss 的 belly 是
+     '#A8C39B' 对 body '#6F8F6A'，差了两档多，在 37px 上读起来不是
+     "肚子受光"而是一块**贴在身上的椭圆色块** —— 放大图里那只尖牙兽
+     背上那枚明显的亮斑就是这个。Q 版的色块可以分档，但相邻两档不能差太远。 */
+  moss: { body: '#7D9E75', ink: '#2F4230', belly: '#90AE88', gill: '#C9DD9E',
+          lit: '#9DBE92', shade: '#587A52' },
+  fang: { body: '#BB6650', ink: '#43190F', belly: '#CB7C64', gill: '#F0C79E',
+          lit: '#D2876E', shade: '#8F4534' },
+  /* grub 原来 body '#7C90AE' —— 出图上是"深蓝灰"，离商业 Q 版差一截：
+     那种颜色适合"盔甲"，不适合"卡通虫子"。整组提亮一档，
+     暗面也只比基色深一点点（Q 版的明暗差本来就小）。 */
+  grub: { body: '#93AACB', ink: '#2A3A52', belly: '#C3D5EA', gill: '#EDF6FF',
+          lit: '#BDD2EA', shade: '#6B82A4' },
 };
 
 /** 一只敌人的"受光球"渐变。坐标在敌人的局部坐标系里（原点=脚底中点），
     所以每个敌人每次绘制都要新建一个 —— Canvas 渐变在创建时就绑定了变换矩阵，
     跨敌人复用会错位。数量最多十几只，这个开销可以忽略。 */
-function foeGrad(g, x, y, r, skin) {
-  const gr = g.createRadialGradient(x - r * 0.40, y - r * 0.58, r * 0.06,
-                                    x, y, r * 1.18);
-  gr.addColorStop(0, skin.lit);
-  gr.addColorStop(0.52, skin.body);
-  gr.addColorStop(1, skin.shade);
-  return gr;
-}
+/* =========================================================================
+   敌人的上色：**两层硬边色块，一个渐变都没有**
+   -------------------------------------------------------------------------
+   用户 2026-10-28 明确了风格：「我要的美术风格是 Q 版卡通」。
 
-/** 体积三件套之二三：顶部高光 + 底部接触阴影。
-    **必须 clip 在自身轮廓里** —— 高光溢到轮廓外就变成"身上长了块白斑"，
-    这跟主角腮红溢出是同一个毛病。 */
-function foeVolume(g, x, y, rx, ry) {
+   而这里原来的实现是径向渐变（lit→body→shade）加一层柔光顶亮 +
+   半透明接触阴影 —— **那是厚涂的语言**：用连续过渡塑造体积。
+   Q 版卡通正相反，靠**色块的硬边界**塑造体积，边界一模糊就不 Q 了。
+
+   这两件事在 37px 上差别是压倒性的：三层渐变缩到那个尺寸会糊成一片
+   脏灰（放大图里霜甲虫的壳就是这个观感），两笔硬边色块反而干净、
+   清楚、像"画上去的"。
+
+   判据很简单：**这个函数里没有一处 colorStop。**
+   以后想加强体积，加的是"多一档色块"，不是"多一个渐变停靠点"。
+
+   为什么"暗面在外圈、亮面在左上"：全局光源统一在左上（箱子、主角、
+   球都一样）。先用暗色铺满整个轮廓，再拿一块**偏移到左上**的基色椭圆
+   盖上去，右下方就自然留下一圈硬边暗面 —— 偏移量和半径差决定暗面宽度，
+   不用描边、不用渐变，边界天生是硬的。
+   ========================================================================= */
+function foeCel(g, x, y, rx, ry, skin) {
   g.save();
   g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); g.clip();
-  /* 顶光：一块偏左上、压扁的浅椭圆 */
+
+  /* ① 整块铺暗色（这一层最终只会剩下右下一圈） */
+  g.fillStyle = skin.shade;
+  g.fillRect(x - rx, y - ry, rx * 2, ry * 2);
+
+  /* ② 偏移到左上的基色椭圆 —— **偏移量就是暗面宽度，方向就是受光方向**。
+
+     两个坑：
+       · 宽窄：0.17/0.21 只留 2~3px，读起来是"平涂加一条细边"，没有体积。
+       · **方向：暗面不能只往右下压。** 尖牙兽是横长身体、头在前，
+         右下那块暗面正好被自己的头挡掉，身体又变平了。
+         真实情况里趴着的东西最暗的是**下沿**（贴地的部分接不到光），
+         所以把偏移改成"以下为主、以右为辅"（0.20 / 0.45）——
+         这一处同时照顾了圆团（moss）、拱壳（grub）和横长身体（fang）。 */
   g.beginPath();
-  g.ellipse(x - rx * 0.32, y - ry * 0.58, rx * 0.56, ry * 0.30, -0.28, 0, Math.PI * 2);
-  g.fillStyle = 'rgba(255,255,255,.20)';
-  g.fill();
-  /* 接触阴影：底沿一条，让它"压"在地上而不是浮着 */
-  g.beginPath();
-  g.ellipse(x, y + ry * 0.78, rx * 1.06, ry * 0.60, 0, 0, Math.PI * 2);
-  g.fillStyle = 'rgba(20,30,20,.22)';
-  g.fill();
+  g.ellipse(x - rx * 0.20, y - ry * 0.45, rx * 0.93, ry * 0.93, 0, 0, Math.PI * 2);
+  g.fillStyle = skin.body; g.fill();
+
+  /* ③ **没有第三步。** 只用"基色 + 一圈暗面"这两层。
+
+     中间试过加一块左上高光，两种尺寸都试了：
+       0.44×0.33 → 在 fang 背上是一枚明显的椭圆贴片（形状太规整）
+       0.24×0.17 → 变成背上长了一块斑，比贴片更像画错
+     结论是**这个尺寸上根本不该有独立高光**。Q 版卡通塑造体积靠的是
+     "暗面从哪开始"，不是"亮点在哪"—— 参考那版（浅蓝灰的霜甲虫
+     + 一圈粗描边）也是纯两层，读起来一样结实。
+     真要加强，走"多一档暗面"，不走"加一块亮面"。 */
   g.restore();
 }
 
@@ -5120,9 +5274,16 @@ function drawFoe(g, f) {
   const B = flash ? '#FFFFFF' : skin.body;
   const moving = Math.abs(f.vx) > 1;
   const ph = S.t * 11 + f.x * 0.09;
-  /* 待机的呼吸：背一起一伏。**一直匀速横移的单位读起来像巡逻机器人**，
-     停一下、身体微微起伏，才像个活物。幅度 4%，够看出来又不会抖。 */
-  const breathe = 1 + Math.sin(S.t * 4.4 + f.x * 0.07) * 0.04;
+  /* ---- 曾经的 `breathe` 就删在这里 ------------------------------------
+     原来是 `1 + sin(t*4.4) * 0.04`，挂在身体椭圆的**纵向半径**上，
+     所以每只怪都在原地一胀一缩，永远不停。
+     注释当时写的是"停一下、身体微微起伏，才像个活物" —— 但那是**人的**呼吸，
+     一条虫子没有横膈膜。放大到 37px 之后它读起来不是"活着"，是"在弹"，
+     而且玩家会本能地躲一个根本不存在的起跳。
+     用户的原话是「不希望（上下跳动）」。要走得像活物，该动的是**腿**，
+     不是胸腔。（腿的相位错开在下面 gait 分支里做。）
+     留着这个名字只为减少 diff 噪音，值恒为 1。 */
+  const breathe = 1;
 
   /* ---- 影子：画在镜像坐标系外面，它不该跟着翻转 ---- */
   g.save();
@@ -5132,7 +5293,7 @@ function drawFoe(g, f) {
 
   g.save();
   g.translate(cx, by);
-  g.scale(ART_K, ART_K);
+  g.scale(FOE_K, FOE_K);      /* 敌人的系数和玩家分开，理由见 FOE_K 的注释 */
   g.scale(f.face, 1);
 
   const leg = (lx, phase, r) => {
@@ -5171,12 +5332,12 @@ function drawFoe(g, f) {
     leg(-7.2, 0.5);
     g.beginPath();
     g.ellipse(0, -14.5, 15.4, 13.2 * breathe, 0, 0, Math.PI * 2);
-    g.fillStyle = flash ? '#FFFFFF' : foeGrad(g, 0, -14.5, 15.4, skin);
+    g.fillStyle = flash ? '#FFFFFF' : skin.body;
     g.fill();
     g.strokeStyle = skin.ink; g.lineWidth = 3; g.stroke();
     /* 受击闪白时不叠体积 —— 这一帧的全部信息就是"打中了"，
        再压一层高光会把闪白读成"变亮了"而不是"被打中了"。 */
-    if (!flash) foeVolume(g, 0, -14.5, 15.4, 13.2 * breathe);
+    if (!flash) foeCel(g, 0, -14.5, 15.4, 13.2 * breathe, skin);
 
     /* 背面的苔斑 —— 提示"这一团是有正反的" */
     g.fillStyle = skin.gill; g.globalAlpha = 0.75;
@@ -5222,36 +5383,35 @@ function drawFoe(g, f) {
     /* 身体：横向长条，低伏 */
     g.beginPath();
     g.ellipse(-2, -12.4, 16.2, 9.4 * breathe, 0, 0, Math.PI * 2);
-    g.fillStyle = flash ? '#FFFFFF' : foeGrad(g, -2, -12.4, 16.2, skin);
+    g.fillStyle = flash ? '#FFFFFF' : skin.body;
     g.fill();
     g.strokeStyle = skin.ink; g.lineWidth = 3; g.stroke();
-    if (!flash) foeVolume(g, -2, -12.4, 16.2, 9.4 * breathe);
-    /* 腹部浅色（侧视：贴地那一条） */
+    if (!flash) foeCel(g, -2, -12.4, 16.2, 9.4 * breathe, skin);
+    /* 腹部浅色（侧视：贴地那一条）。
+       **它必须比身体下沿高出至少一个暗面的宽度。** 原来是
+       `ellipse(-1, -8.4, 12.4, 4.4)`，下沿到 -4.0，而身体下沿是 -3.0 ——
+       只差 1px，等于把 cel 的整个下半圈暗面盖掉了，于是身体又变平。
+       现在压扁上移，下沿留到 -7.2，暗面才露得出来。 */
     g.fillStyle = skin.belly;
-    g.beginPath(); g.ellipse(-1, -8.4, 12.4, 4.4, 0, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.ellipse(-1, -9.8, 10.2, 2.8, 0, 0, Math.PI * 2); g.fill();
 
     /* 头：比身体高、朝前偏 */
     g.beginPath();
     g.arc(11.2, -16.6, 9.4, 0, Math.PI * 2);
-    g.fillStyle = flash ? '#FFFFFF' : foeGrad(g, 11.2, -16.6, 9.4, skin);
+    g.fillStyle = flash ? '#FFFFFF' : skin.body;
     g.fill();
     g.strokeStyle = skin.ink; g.lineWidth = 3; g.stroke();
-    if (!flash) foeVolume(g, 11.2, -16.6, 9.4, 9.4);
+    if (!flash) foeCel(g, 11.2, -16.6, 9.4, 9.4, skin);
     /* 长口鼻：往前探出 12px，这是它和"圆团"最不像的地方 */
     g.beginPath();
     g.moveTo(15, -19.6);
     g.quadraticCurveTo(25.4, -17.4, 24.6, -12.4);
     g.quadraticCurveTo(23.8, -9.4, 16.4, -10.6);
     g.closePath();
-    /* 口鼻是异形，没法用圆形 clip，改用沿探出方向的线性渐变：
-       根部暗（接在头上的地方本来就该被挡住光）、尖端亮。 */
-    if (flash) { g.fillStyle = '#FFFFFF'; } else {
-      const ngr = g.createLinearGradient(15, -19.6, 25, -11);
-      ngr.addColorStop(0, skin.shade);
-      ngr.addColorStop(0.55, skin.body);
-      ngr.addColorStop(1, skin.lit);
-      g.fillStyle = ngr;
-    }
+    /* 口鼻是异形，做不了圆形 clip。**但这么小的一块根本不需要明暗。**
+       原来用线性渐变（根部暗、尖端亮），在 37px 上是三色糊成一团，
+       而且渐变语言和 Q 版打架。给小形体留纯色，靠那条 3px 描边交代形体就够。 */
+    g.fillStyle = flash ? '#FFFFFF' : skin.body;
     g.fill();
     g.strokeStyle = skin.ink; g.lineWidth = 2.6; g.stroke();
     /* 张开的嘴 + 上排牙 */
@@ -5312,14 +5472,26 @@ function drawFoe(g, f) {
     g.moveTo(-16.4, -5.6);
     g.bezierCurveTo(-16.4, -25.6, 13.6, -25.6, 15.6, -6.4);
     g.closePath();
-    if (flash) { g.fillStyle = '#FFFFFF'; } else {
-      const sgr = g.createLinearGradient(-14, -26, 14, -6);
-      sgr.addColorStop(0, skin.lit);
-      sgr.addColorStop(0.46, skin.body);
-      sgr.addColorStop(1, skin.shade);
-      g.fillStyle = sgr;
-    }
+    if (!flash) { g.fillStyle = skin.shade; } else { g.fillStyle = '#FFFFFF'; }
     g.fill();
+    /* 壳的暗面：**同一个 path 偏移 2.4px 再填一次基色**，右下方就留下一圈硬边。
+       原来是三停靠点的线性渐变（lit→body→shade）—— 那确实是"硬壳的斜向受光"，
+       但在 37px 上三层渐变糊成一块脏灰，而且和 Q 版语言冲突。
+       用偏移 path 做暗面，边界天生是硬的，还顺手省掉一次渐变对象开销。 */
+    if (!flash) {
+      g.save();
+      g.beginPath();
+      g.moveTo(-16.4, -5.6);
+      g.bezierCurveTo(-16.4, -25.6, 13.6, -25.6, 15.6, -6.4);
+      g.closePath();
+      g.clip();
+      g.beginPath();
+      g.moveTo(-16.4 - 2.4, -5.6 - 2.8);
+      g.bezierCurveTo(-16.4 - 2.4, -25.6 - 2.8, 13.6 - 2.4, -25.6 - 2.8, 15.6 - 2.4, -6.4 - 2.8);
+      g.closePath();
+      g.fillStyle = skin.body; g.fill();
+      g.restore();
+    }
     g.strokeStyle = skin.ink; g.lineWidth = 3; g.stroke();
     /* 壳下沿的接触阴影：壳和地面之间那道暗，让它"坐"在地上 */
     if (!flash) {
@@ -5351,10 +5523,10 @@ function drawFoe(g, f) {
 
     /* 头：小、前突、两片钳 */
     g.beginPath(); g.arc(15.2, -10.6, 6.4, 0, Math.PI * 2);
-    g.fillStyle = flash ? '#FFFFFF' : foeGrad(g, 15.2, -10.6, 6.4, skin);
+    g.fillStyle = flash ? '#FFFFFF' : skin.body;
     g.fill();
     g.strokeStyle = skin.ink; g.lineWidth = 2.6; g.stroke();
-    if (!flash) foeVolume(g, 15.2, -10.6, 6.4, 6.4);
+    if (!flash) foeCel(g, 15.2, -10.6, 6.4, 6.4, skin);
     g.fillStyle = '#DCEFFF'; g.strokeStyle = skin.ink; g.lineWidth = 1.8;
     g.beginPath(); g.moveTo(19.6, -12.6); g.lineTo(24.6, -13.6); g.lineTo(20.4, -9.4); g.closePath(); g.fill(); g.stroke();
     g.beginPath(); g.moveTo(19.2, -8.2); g.lineTo(23.8, -5.6); g.lineTo(19.0, -6.4); g.closePath(); g.fill(); g.stroke();
@@ -5730,28 +5902,32 @@ function drawPlayer(g, p) {
      **整个场景共用"左上"这一个方向**（箱子顶面、球上的亮斑、敌人都是）。
      光源不统一的时候，每个物件单独看都还行，拼在一起就是拼贴画。 */
   const byy = by - 17;
-  const bgr = g.createRadialGradient(cx - 5.5 * face, byy - 6.5, 1.5, cx, byy, 16.5);
-  bgr.addColorStop(0, COL.catLight);
-  bgr.addColorStop(0.55, COL.cat);
-  bgr.addColorStop(1, COL.catDark);
+  /* **主角也走硬边色块，和敌人同一套。**
+     原来是径向渐变（catLight → cat → catDark）—— 那是厚涂；
+     敌人这一轮已经换成 Q 版的两层硬边，主角要是还留着渐变，
+     两者放在一起就是"两个画风拼在同一屏"（上一版出图里那只橙色猫
+     明显比旁边的甲虫"软"）。这里直接复用 `foeCel`：
+     它只认 { lit, body, shade } 三个颜色，跟是不是敌人无关。 */
   g.beginPath(); g.ellipse(cx, byy, 13.4, 11.8, 0, 0, Math.PI * 2);
-  g.fillStyle = bgr; g.fill();
+  g.fillStyle = COL.cat; g.fill();
+  foeCel(g, cx, byy, 13.4, 11.8, { lit: COL.catLight, body: COL.cat, shade: COL.catDark });
   g.strokeStyle = COL.ink; g.lineWidth = 2.8; g.stroke();
 
-  /* 肚皮亮面 —— "圆球"和"有体积的小动物"之间最便宜的一笔。 */
+  /* 肚皮亮面 —— "圆球"和"有体积的小动物"之间最便宜的一笔。
+     **它必须小，而且不能让开 cel 的暗面。** 原来是 7.4×5.8 的半透明浅色，
+     几乎盖满身体下半部，正好和"下方一圈暗面"叠在一起 ——
+     出图上是小腹上横着一条浅色带子，像围了条围裙。
+     缩到 5.4×3.6 之后只是胸口一点暖光，暗面照旧露在下面。 */
   g.beginPath();
-  g.ellipse(cx + face * 1.6, byy + 2.6, 7.4, 5.8, 0, 0, Math.PI * 2);
-  g.fillStyle = 'rgba(255,238,212,.40)';
+  g.ellipse(cx + face * 1.2, byy - 0.6, 5.4, 3.6, 0, 0, Math.PI * 2);
+  g.fillStyle = 'rgba(255,238,212,.34)';
   g.fill();
 
   /* ---- 头（Q 版的比例就是"头比身体大"） ---- */
   const hy = by - 33;
-  const hgr = g.createRadialGradient(cx - 6 * face, hy - 7, 2, cx, hy, 17.5);
-  hgr.addColorStop(0, COL.catLight);
-  hgr.addColorStop(0.5, COL.cat);
-  hgr.addColorStop(1, COL.catDark);
   g.beginPath(); g.arc(cx, hy, 15, 0, Math.PI * 2);
-  g.fillStyle = hgr; g.fill();
+  g.fillStyle = COL.cat; g.fill();
+  foeCel(g, cx, hy, 15, 15, { lit: COL.catLight, body: COL.cat, shade: COL.catDark });
   g.strokeStyle = COL.ink; g.lineWidth = 2.8; g.stroke();
 
   /* 头顶高光：**不描边的亮椭圆，压在描边内侧**。有它才有"球"的感觉，没有就是圆片。 */
@@ -6112,6 +6288,7 @@ const API = {
 Object.defineProperties(API, {
   /* 角色尺度走 getter：断言要能核对"形象和碰撞是同一个尺度" */
   ART_K: { get: () => ART_K },
+  FOE_K: { get: () => FOE_K },
   GEN: { get: () => GEN },
   FOE_W: { get: () => FOE_W },
   FOE_H: { get: () => FOE_H },

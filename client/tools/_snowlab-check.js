@@ -212,7 +212,7 @@ group("三、包裹发数三档（6 / 4 / 10）");
 function coatCountFor(belly) {
   L.reset(); settle(20);
   S.belly = belly;
-  const f = L.spawnFoe(400, L.GROUND_Y - 45, "crawler");
+  const f = L.spawnFoe(400, L.GROUND_Y - L.FOE_H, "crawler");
   const need = L.snowNeed();
   for (let i = 0; i < need - 1; i++) L.coatFoe(f, 1);
   const aliveBefore = !f.dead;
@@ -330,7 +330,7 @@ S.boxes.forEach(b => { b.dead = true; });
 /* **位置要挑门壳左边的空地。** 门壳在 doorX-48 ~ doorX+48，每关不同；
    球生在壳里会被顶出来，测出来就是"球没动、怪没死"。 */
 const runX = Math.max(80, Math.min(360, S.door.x - 380));
-let tf = L.spawnFoe(runX + 90, L.GROUND_Y - 45, "crawler");
+let tf = L.spawnFoe(runX + 90, L.GROUND_Y - L.FOE_H, "crawler");
 tf.vx = 0; tf.speed = 0;
 const killedBefore = S.killed;
 let mb = L.spawnBall(runX, L.GROUND_Y - L.ballR(1), 700, 1);
@@ -344,7 +344,7 @@ ck("击杀后球变大（吸收）", mb.absorbed >= 2, mb.absorbed);
 group("七、子弹不杀生");
 L.reset(); settle(20);
 S.boxes.forEach(b => { b.dead = true; });
-let nf = L.spawnFoe(620, L.GROUND_Y - 45, "crawler");
+let nf = L.spawnFoe(620, L.GROUND_Y - L.FOE_H, "crawler");
 S.belly = 100;
 for (let i = 0; i < 5; i++) L.coatFoe(nf, 1);
 ck("敌人吃 5 层雪仍未被杀", nf.dead === false && S.killed === 0, "dead=" + nf.dead + " killed=" + S.killed);
@@ -367,7 +367,7 @@ const blocker = S.boxes.filter(b => !b.dead && b.mat === "wood" && b.y === hallY
 ck("场上还有木箱可测", !!blocker);
 S.boxes.forEach(b => { if (b !== blocker) b.dead = true; });
 S.foes.length = 0;                       // 场上的怪会替箱子吃子弹，必须清掉
-const behind = L.spawnFoe(blocker.x + blocker.w + 6, blocker.y + blocker.h - 45, "crawler");
+const behind = L.spawnFoe(blocker.x + blocker.w + 6, blocker.y + blocker.h - L.FOE_H, "crawler");
 behind.vx = 0; behind.speed = 0;
 const hitsBefore = behind.hits;
 const hpBefore2 = blocker.hp;
@@ -1237,25 +1237,42 @@ group("二十四、敌方三种（跳跃 / 待机 / 远程 / 侧视）");
      few.length === 0, few.join(" "));
 
   /* 24.3 会跳 —— **判据是"向上弹起"（vy < -150）。**
-     不能拿"y 变小"当判据：怪从箱顶掉下来再被箱子接住也会让 y 变小。 */
-  let hopped = 0, frames = 0;
-  for (let sd = 1; sd <= 10; sd++) {
-    L.reset(sd);
-    S.invuln = 999; S.hp = 99;         // 别让撞脸把怪变成球，凭空少一只
-    const air = new Set();
-    let did = false;
-    for (let i = 0; i < 180; i++) {
-      L.step(DT);
-      for (const f of S.foes) {
-        if (f.vy < -150) { if (!air.has(f)) did = true; air.add(f); }
-        else air.delete(f);
+     不能拿"y 变小"当判据：怪从箱顶掉下来再被箱子接住也会让 y 变小。
+
+     **2026-10-28 晚改过判据。** 原来是"10 个种子里 ≥7 个看得到敌人起跳"，
+     但那一版三只怪共用一套"遇坎就跳"，所以多足甲虫也在箱堆上蹦。
+     现在按体态分（见 NUM.breed 的注释）：只有四足兽会跳，多足甲虫和无腿
+     苔藓团蹲着爬。**再拿"全体都在跳"当判据就变成了鼓励错误设计** ——
+     甲虫跳得越欢，断言越绿。
+
+     所以拆成三条，分别守住"该跳的会跳"和"不该跳的绝不跳"：
+       ① 静态：gait 和 jump 必须自洽（这是设计意图本身）
+       ② 动态：四足兽真的起跳
+       ③ 动态：多足 / 无腿的**一次都不能离地**  */
+  const CFG = L.NUM.breed;
+  ck("四足兽 gait=run 且 jump>0（" + CFG.fang.gait + " / " + CFG.fang.jump + "）",
+     CFG.fang.gait === 'run' && CFG.fang.jump > 0, JSON.stringify(CFG.fang));
+  ck("多足甲虫 gait=crawl 且 jump=0（" + CFG.grub.gait + " / " + CFG.grub.jump + "）",
+     CFG.grub.gait === 'crawl' && CFG.grub.jump === 0, JSON.stringify(CFG.grub));
+  ck("无腿苔藓团 gait=slide 且 jump=0（" + CFG.moss.gait + " / " + CFG.moss.jump + "）",
+     CFG.moss.gait === 'slide' && CFG.moss.jump === 0, JSON.stringify(CFG.moss));
+
+  {
+    let jumped = { moss: 0, fang: 0, grub: 0 }, frames = 0;
+    for (let sd = 1; sd <= 14; sd++) {
+      L.reset(sd);
+      S.invuln = 999; S.hp = 99;       // 别让撞脸把怪变成球，凭空少一只
+      for (let i = 0; i < 240; i++) {
+        L.step(DT);
+        for (const f of S.foes) if (f.vy < -150) jumped[f.breed] = (jumped[f.breed] || 0) + 1;
+        frames++;
       }
-      frames++;
     }
-    if (did) hopped++;
+    ck("四足兽在 14 个种子 × 240 帧里真的起跳过（" + jumped.fang + " 帧，共 " + frames + " 帧）",
+       jumped.fang > 0, jumped.fang);
+    ck("多足甲虫从头到尾没离过地（" + jumped.grub + " 帧）", jumped.grub === 0, jumped.grub);
+    ck("无腿苔藓团从头到尾没离过地（" + jumped.moss + " 帧）", jumped.moss === 0, jumped.moss);
   }
-  ck("10 个种子里至少 7 个看得到敌人起跳（" + hopped + "/10，" + frames + " 帧）",
-     hopped >= 7, hopped + "/10");
 
   /* 24.4 会待机 —— 站住的时候 vx 必须是 0（否则"待机"只是画面上不动） */
   {
@@ -1264,7 +1281,7 @@ group("二十四、敌方三种（跳跃 / 待机 / 远程 / 侧视）");
     const seg = S.plats.filter(p => p.kind !== 'ramp' && p.w >= 300).pop();
     L.placePlayer(seg.x + 20, seg.y - S.p.h);
     settle(4);
-    const f = L.spawnFoe(seg.x + 140, seg.y - 45, 'crawler', 'moss');
+    const f = L.spawnFoe(seg.x + 140, seg.y - L.FOE_H, 'crawler', 'moss');
     f.vx = 0; f.speed = 80;
     let idled = 0;
     for (let i = 0; i < 240; i++) {
@@ -1621,8 +1638,31 @@ group("三十、形象与碰撞同尺度");
      `drawFoe` 的横向跨度都是按这两个数铺的），改绘制的基准才动这里。 */
   ck("玩家：形象宽 30 × ART_K = 碰撞宽 " + S.p.w,
      Math.abs(30 * L.ART_K - S.p.w) < 0.51, (30 * L.ART_K).toFixed(1) + " vs " + S.p.w);
-  ck("敌人：形象宽 34 × ART_K = 碰撞宽 " + L.FOE_W,
-     Math.abs(34 * L.ART_K - L.FOE_W) < 0.51, (34 * L.ART_K).toFixed(1) + " vs " + L.FOE_W);
+  ck("敌人：形象宽 34 × FOE_K = 碰撞宽 " + L.FOE_W,
+     Math.abs(34 * L.FOE_K - L.FOE_W) < 0.51, (34 * L.FOE_K).toFixed(1) + " vs " + L.FOE_W);
+
+  /* ---- 尺寸层次：**敌人不许越级到箱子那一档** ----------------------------
+     2026-10-28 晚：第一版让敌人跟玩家共用 ART_K，34×30 变成 51×45，
+     出图上霜甲虫和木箱（48）几乎等宽、尖牙兽比两个箱子还长 ——
+     读起来不是"小兵"而是"和箱子同级的障碍物"。用户的原话：
+     「敌方体态都超过了箱子 是不是不太好」。
+
+     判据用 0.85 而不是 1.0：**"小于"不够，要"明显小于"。**
+     0.95 那种擦边的尺寸在屏幕上根本读不出差别，得留一格的余量，
+     眼睛才认得出"这个能踩""那个是墙"。 */
+  const BOX = 48;
+  ck("敌人明显小于箱子（" + L.FOE_W + " / " + BOX + " = " +
+     (L.FOE_W / BOX).toFixed(2) + "，要 ≤ 0.85）", L.FOE_W / BOX <= 0.85, L.FOE_W / BOX);
+  ck("敌人高度也小于箱子（" + L.FOE_H + " / " + BOX + " = " +
+     (L.FOE_H / BOX).toFixed(2) + "）", L.FOE_H / BOX <= 0.85, L.FOE_H / BOX);
+  /* 玩家比箱子**窄**、比箱子**高** —— 才读得出"人站在箱子里"，而不是
+     "另一个方块"。宽度这一条尤其关键：玩家一旦宽过箱子，站在箱堆上就分不清
+     哪一格是他、哪一格是箱子。 */
+  ck("玩家比箱子窄（" + S.p.w + " / " + BOX + " = " + (S.p.w / BOX).toFixed(2) + "）",
+     S.p.w / BOX < 1, S.p.w / BOX);
+  ck("玩家比箱子高（" + S.p.h + " / " + BOX + " = " + (S.p.h / BOX).toFixed(2) + "）",
+     S.p.h / BOX > 1.15, S.p.h / BOX);
+
   ck("玩家高度足够立绘承载细节（≥ 56px）", S.p.h >= 56, S.p.h);
   ck("角色占屏高 10%~16%（现在 " + (S.p.h / 600 * 100).toFixed(1) + "%）",
      S.p.h / 600 >= 0.10 && S.p.h / 600 <= 0.16, (S.p.h / 600).toFixed(3));

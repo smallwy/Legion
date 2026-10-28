@@ -3085,9 +3085,18 @@ const COL = {
 
   /* ---- 主角的四个色阶 ----
      **一个色相要铺成四档才叫"体积"，两档只能叫"明暗"。**
-     原来只有 cat / catDark 两档，画出来永远是"亮块 + 暗边"，
-     放大之后就是一张贴纸。catLight 走高光，catShade 走远侧/底面。 */
-  cat: '#FFA85C', catDark: '#E07A32', catLight: '#FFCE9C', catShade: '#C4641F',
+     catLight 走高光，catShade 走远侧/底面。
+
+     **色号是照立绘抄的，不是自己调的**（`art/03-candidate/01-pets/sugar-stand@v1.png`）。
+     2026-10-28 之前这里是 '#FFA85C' 深橙 —— 那是另画的一只橙猫，
+     和主界面里正在用的「砂糖」不是同一只：立绘是**奶油米黄**的短毛猫，
+     战斗里换成深橙之后，同一只宠物在家和在路上是两个颜色。
+     立绘在 `assets/ui/home/pets/` 里一直是用着的，断掉的只有战斗这一个环节。 */
+  cat: '#F7D7A4', catDark: '#D9A868', catLight: '#FFF2DE', catShade: '#B98A55',
+  /* 立绘身上那三样"一眼认出是谁"的东西，单独给色：
+     绿松领巾、粉色内耳、奶白脚掌。少了它们，奶油色的猫和奶油色的雪会糊在一起。 */
+  scarf: '#7FB896', scarfDark: '#5C9673', earIn: '#E8A08A',
+  paw: '#FFF4E4', pawDark: '#F0DFC4',
 
   wood: '#E0A96D', woodDark: '#B77F44', woodTop: '#F8DFB6', woodInk: '#7A5127',
   stone: '#B9A992', stoneDark: '#94856F', stoneInk: '#6E655C',
@@ -5861,22 +5870,40 @@ function drawPlayer(g, p) {
   g.lineCap = 'round';
 
   /* ---- 尾巴 ----
-     **三层叠出体积：外描边 / 主色 / 内侧亮边。**
-     只描边不上亮边时，尾巴是"一根香肠"；那一条 2px 的亮线一加，
-     它立刻变成有体积的圆柱 —— 成本只有一条二次曲线。 */
+     **原来是「10px 黑描边 + 6.6px 橙描边」的叠加笔法 —— 那是给线条用的，
+     不是给有面积的形状用的。** 每边只剩 1.7px 彩边，中段又被身体和头盖住，
+     露出来的上下两截就成了一根纯黑的弯棍，从左边绕到头顶 ——
+     904px 的出图上，它比眼睛还显眼，像给猫扣了个铁丝头罩。用户说的
+     "头部描边放大后显杂"有一半是它。
+
+     形状类的东西统一走**闭合路径 fill + stroke**：内填充是面不是线，
+     描边宽度只负责轮廓，再细也不会让整块变黑。 */
   const wag = Math.sin(S.t * 7 + p.runD * 0.4) * 0.55;
-  const ty0 = by - 17 - bob;
-  const ty1 = by - 26 + wag * 9 - bob;
-  const ty2 = by - 41 + wag * 7 - bob;
   g.beginPath();
-  g.moveTo(cx - face * 9, ty0);
-  g.quadraticCurveTo(cx - face * 27, ty1, cx - face * 22, ty2);
-  g.strokeStyle = COL.ink;     g.lineWidth = 10;  g.stroke();
-  g.strokeStyle = COL.catDark; g.lineWidth = 6.6; g.stroke();
+  g.moveTo(cx - face * 9.0, by - 7 - bob);
+  g.quadraticCurveTo(cx - face * 25, by - 10 + wag * 2 - bob,
+                     cx - face * 28, by - 22 + wag * 3 - bob);        // 上缘：外拱
+  g.quadraticCurveTo(cx - face * 29.5, by - 31 + wag * 4 - bob,
+                     cx - face * 22, by - 30 + wag * 3 - bob);        // 圆头（不是尖）
+  g.quadraticCurveTo(cx - face * 18, by - 20 + wag * 2 - bob,
+                     cx - face * 9.0, by - 3 - bob);                  // 下缘收进臀部
+  g.closePath();
+  g.fillStyle = COL.cat; g.fill();
+  g.strokeStyle = COL.ink; g.lineWidth = 2.8; g.stroke();
+  /* 尾背一条亮线：尾巴是圆的，没有它就是一弯月牙贴片。 */
   g.beginPath();
-  g.moveTo(cx - face * 9.6, ty0 - 2.0);
-  g.quadraticCurveTo(cx - face * 26, ty1 - 2.2, cx - face * 21.4, ty2 - 1.4);
-  g.strokeStyle = 'rgba(255,222,180,.50)'; g.lineWidth = 2.0; g.stroke();
+  g.moveTo(cx - face * 11.0, by - 9 - bob);
+  g.quadraticCurveTo(cx - face * 23, by - 14 + wag * 2 - bob,
+                     cx - face * 26.4, by - 24 + wag * 3 - bob);
+  g.strokeStyle = 'rgba(255,246,228,.55)'; g.lineWidth = 2.2; g.stroke();
+  /* 尾根一片暗：**尾巴和身体同色时必须靠这一笔分开**，
+     否则从剪影上读，尾巴是身体侧面长出来的一只手。 */
+  g.beginPath();
+  g.moveTo(cx - face * 9.0, by - 7 - bob);
+  g.quadraticCurveTo(cx - face * 16, by - 12 + wag * 2 - bob,
+                     cx - face * 9.0, by - 3 - bob);
+  g.closePath();
+  g.fillStyle = 'rgba(120,80,40,.22)'; g.fill();
 
   /* ---- 腿：**原来根本没有腿** ----
      42px 的时候藏得住（身体椭圆正好贴地），放大到 63 之后，
@@ -5890,7 +5917,10 @@ function drawPlayer(g, p) {
                    { dx: 6,  up: Math.max(0, -step) * 2.6, dark: false }]) {
     g.beginPath();
     g.ellipse(cx + L.dx * face, by - 5.4 - L.up, 4.6, 5.4, 0, 0, Math.PI * 2);
-    g.fillStyle = L.dark ? COL.catShade : COL.cat;
+    /* **脚掌是白的**（立绘四只爪都是白手套）。原来跟身体同色，
+       整只猫从胸到脚是一个橙色团子 —— 立绘里"白袜子"正是把腿
+       从身体里分出来的那条线，成本只有一次改色。 */
+    g.fillStyle = L.dark ? COL.pawDark : COL.paw;
     g.fill();
     g.strokeStyle = COL.ink; g.lineWidth = 2.6; g.stroke();
   }
@@ -5911,9 +5941,18 @@ function drawPlayer(g, p) {
   g.beginPath(); g.ellipse(cx, byy, 13.4, 11.8, 0, 0, Math.PI * 2);
   g.fillStyle = COL.cat; g.fill();
   foeCel(g, cx, byy, 13.4, 11.8, { lit: COL.catLight, body: COL.cat, shade: COL.catDark });
+  /* **描边前必须重建路径。** `foeCel` 内部有两次 `beginPath()`，
+     退出时留在上下文里的是它最后画的**那个偏移椭圆**
+     `(x - rx*0.20, y - ry*0.45, rx*0.93, ry*0.93)` —— 偏移到左上、还小一圈。
+     直接 `stroke()` 描的是它，不是身体轮廓。
+     头和身体各描一次这种偏移椭圆，两条错位的粗弧落在角色身上，
+     从左边绕到头顶 —— 904px 出图上像给猫扣了个铁丝头罩。
+     上一轮把"头部描边显杂"误判成描边太粗，就是这个原因：
+     粗只是让它更容易看见，错才是它难看的原因。 */
+  g.beginPath(); g.ellipse(cx, byy, 13.4, 11.8, 0, 0, Math.PI * 2);
   g.strokeStyle = COL.ink; g.lineWidth = 2.8; g.stroke();
 
-  /* 肚皮亮面 —— "圆球"和"有体积的小动物"之间最便宜的一笔。
+  /* ---- 肚皮亮面 —— "圆球"和"有体积的小动物"之间最便宜的一笔。
      **它必须小，而且不能让开 cel 的暗面。** 原来是 7.4×5.8 的半透明浅色，
      几乎盖满身体下半部，正好和"下方一圈暗面"叠在一起 ——
      出图上是小腹上横着一条浅色带子，像围了条围裙。
@@ -5928,7 +5967,34 @@ function drawPlayer(g, p) {
   g.beginPath(); g.arc(cx, hy, 15, 0, Math.PI * 2);
   g.fillStyle = COL.cat; g.fill();
   foeCel(g, cx, hy, 15, 15, { lit: COL.catLight, body: COL.cat, shade: COL.catDark });
+  g.beginPath(); g.arc(cx, hy, 15, 0, Math.PI * 2);   // 同上：描边前重建路径
   g.strokeStyle = COL.ink; g.lineWidth = 2.8; g.stroke();
+
+  /* ---- 绿松领巾：**立绘上最强的识别物，之前完全没有** ----
+     六只里只有砂糖戴绿松色三角巾（`sugar-stand@v1.png`）。它比配色更能认人：
+     玩家在主界面看了一百次的东西，进战斗要能一眼对上。
+
+     **必须画在头之后。** 第一版按"身体之后、头之前"的顺序画 ——
+     那是真实遮挡关系，可 Q 版没有脖子：领巾整块落在头的圆里，
+     被头吃得一点不剩，出图上一格绿都没有。
+     所以顺序上让它压住头的下沿：上沿 ±13.2 正好等于头在 `by-21`
+     处的半宽 13.5，弧线就贴着下巴走，读作"系着"而不是"贴在脸上"。 */
+  const sy = by - 21.0;
+  g.beginPath();
+  g.moveTo(cx - 13.2, sy);
+  g.quadraticCurveTo(cx, sy + 3.4, cx + 13.2, sy);
+  g.quadraticCurveTo(cx + face * 6.6, sy + 9.0, cx + face * 1.6, sy + 12.2);
+  g.quadraticCurveTo(cx - face * 3.6, sy + 8.6, cx - 13.2, sy);
+  g.closePath();
+  g.fillStyle = COL.scarf; g.fill();
+  g.strokeStyle = COL.ink; g.lineWidth = 2.4; g.stroke();
+  /* 下尖压一档暗 —— 领巾本身也要有正反两面，否则是一块平绿。 */
+  g.beginPath();
+  g.moveTo(cx + face * 1.6, sy + 12.2);
+  g.quadraticCurveTo(cx + face * 6.6, sy + 9.0, cx + 9.0, sy + 3.0);
+  g.quadraticCurveTo(cx + face * 4.0, sy + 7.6, cx + face * 1.6, sy + 12.2);
+  g.closePath();
+  g.fillStyle = COL.scarfDark; g.fill();
 
   /* 头顶高光：**不描边的亮椭圆，压在描边内侧**。有它才有"球"的感觉，没有就是圆片。 */
   g.beginPath();
@@ -5936,25 +6002,27 @@ function drawPlayer(g, p) {
   g.fillStyle = 'rgba(255,250,238,.42)';
   g.fill();
 
-  /* ---- 耳朵（左耳亮、右耳暗 —— 跟着左上光） ---- */
+  /* ---- 耳朵（左耳亮、右耳暗 —— 跟着左上光） ----
+     **这里原来还留着一条线性渐变**（catLight → catShade）。整只主角改成
+     硬边 cel 之后，只剩耳朵还是厚涂 —— 出图上两片耳朵比脸"软"。
+     Q 版判据是边界：同一只角色身上不该同时存在渐变和硬边。
+     改成两档纯色，光向照样是左上。 */
   for (const s of [-1, 1]) {
     g.beginPath();
     g.moveTo(cx + s * 12.4, hy - 6.4);
     g.lineTo(cx + s * 8.6, hy - 21.4);
     g.lineTo(cx + s * 1.2, hy - 12.2);
     g.closePath();
-    const egr = g.createLinearGradient(cx + s * 8.6, hy - 21.4, cx + s * 4.6, hy - 8);
-    egr.addColorStop(0, s < 0 ? COL.catLight : COL.cat);
-    egr.addColorStop(1, s < 0 ? COL.cat : COL.catShade);
-    g.fillStyle = egr; g.fill();
+    g.fillStyle = s < 0 ? COL.catLight : COL.catShade;
+    g.fill();
     g.strokeStyle = COL.ink; g.lineWidth = 2.6; g.stroke();
-    // 耳窝
+    // 耳窝：立绘是橘粉色，不是暗橙 —— 这一笔决定"耳朵是活的还是塑料的"
     g.beginPath();
     g.moveTo(cx + s * 9.6, hy - 8.6);
     g.lineTo(cx + s * 8.2, hy - 17.2);
     g.lineTo(cx + s * 4.6, hy - 11.4);
     g.closePath();
-    g.fillStyle = 'rgba(212,108,52,.62)'; g.fill();
+    g.fillStyle = COL.earIn; g.fill();
   }
 
   /* ---- 呆毛 + 脸侧毛毛 ----
@@ -5974,25 +6042,31 @@ function drawPlayer(g, p) {
      **眼心必须在头心之下 2px** —— 放头心（hy）时脑门只剩十几像素，
      缩略图下两只眼白会连成一整块白饼，读不出是眼睛。眼睛之间留 4.4px
      鼻梁，瞳孔偏移也从 1.3 收到 0.9：偏太多两只瞳都朝同侧，
-     高光叠上去像两个「C」。 */
+     高光叠上去像两个「C」。
+
+     **立绘的瞳仁几乎填满眼白，只留一圈极窄的白边。** 原来虹膜只有 3.0、
+     眼白 4.6×5.4 —— 白多黑少，读起来是"瞪着的眼"，不是"水汪汪的眼"。
+     六只立绘没有一只长那样。现在白 4.9×5.7、瞳 3.8，白边收到 1.1px。 */
   const ex = face * 3;
   const ey = hy + 2;
   for (const s of [-1, 1]) {
     const ox = cx + ex + s * 6.6;
     g.fillStyle = '#FFFCF6';
-    g.beginPath(); g.ellipse(ox, ey, 4.6, 5.4, 0, 0, Math.PI * 2); g.fill();
-    g.strokeStyle = COL.ink; g.lineWidth = 1.6; g.stroke();
+    g.beginPath(); g.ellipse(ox, ey, 4.9, 5.7, 0, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = COL.ink; g.lineWidth = 1.5; g.stroke();
     /* 虹膜：**不做纯黑瞳。** 纯黑放大之后是个洞；深棕渐变才有"玻璃珠"的厚度。 */
-    const igr = g.createRadialGradient(ox + face * 0.2, ey - 1.0, 0.5,
-                                       ox + face * 0.9, ey + 0.4, 3.4);
-    igr.addColorStop(0, '#7A5236');
-    igr.addColorStop(1, '#2A1C12');
-    g.beginPath(); g.arc(ox + face * 0.9, ey + 0.4, 3.0, 0, Math.PI * 2);
+    const igr = g.createRadialGradient(ox + face * 0.2, ey - 1.2, 0.5,
+                                       ox + face * 1.0, ey + 0.5, 4.2);
+    igr.addColorStop(0, '#6B4528');
+    igr.addColorStop(1, '#1C120A');
+    g.beginPath(); g.arc(ox + face * 0.8, ey + 0.4, 3.8, 0, Math.PI * 2);
     g.fillStyle = igr; g.fill();
+    /* 双高光：大的在左上、小的在右下。**两个都不能省** ——
+       只有大高光时眼球是"玻璃球"，加一颗小的才有"湿"的感觉。 */
     g.fillStyle = '#FFFFFF';
-    g.beginPath(); g.arc(ox + face * 0.9 - 1.05, ey - 1.55, 1.15, 0, Math.PI * 2); g.fill();
-    g.fillStyle = 'rgba(255,255,255,.55)';
-    g.beginPath(); g.arc(ox + face * 0.9 + 1.25, ey + 1.6, 0.62, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(ox + face * 0.8 - 1.3, ey - 1.7, 1.5, 0, Math.PI * 2); g.fill();
+    g.fillStyle = 'rgba(255,255,255,.62)';
+    g.beginPath(); g.arc(ox + face * 0.8 + 1.5, ey + 1.9, 0.78, 0, Math.PI * 2); g.fill();
   }
   /* 腮红（眼睛下移到 ey 了，腮红跟着让位，否则糊在眼白上）。
      **必须 clip 在头部轮廓里。** 腮红中心在 ±(10.5+ex)=13.5、半径 3.4，

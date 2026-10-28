@@ -83,7 +83,11 @@ const ok = (name, good, extra) => {
       for (const k in keys) delete keys[k];
       for (let i = 0; i < 10; i++) L.step(DT);
       const b = L.spawnBall(x, 200, 0, 2);
+      /* **落球会砸碎箱子（2026-10-28 第四轮）** —— 那之后球是"接着往下掉"，
+         不是"抖"。这一颗如果砸碎过箱子，就不是静止样本，跳过。 */
+      const deadBefore = L.S.boxes.filter(bx => bx.dead).length;
       for (let i = 0; i < 60; i++) L.step(DT);
+      if (L.S.boxes.filter(bx => bx.dead).length !== deadBefore) continue;
       if (Math.abs(b.vx) > 1) continue;             // 在滚，跳过
       const ys = [];
       let moved = false;

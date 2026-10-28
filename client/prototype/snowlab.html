@@ -130,7 +130,17 @@ const NUM = {
              absorbFoe = 2.0 而不是 1.0：门厅只有 3 只怪，档位阈值是
              2 / 4 / 6，裹一只是"中"、两只才"大"。1.0 的时候门厅攒不出
              能破冰墙的球 —— 这是数值上过不去，不是玩家操作问题。 */
-          absorbFoe: 2.0, absorbBox: 0 },
+          absorbFoe: 2.0, absorbBox: 0,
+
+          /* **落砸的起判速度（2026-10-28 第四轮）。**
+             用户：「球掉下去 是可以杂碎箱子」。
+             球停在地上时 vy 是 0（落地那一帧就被清零），所以"落到箱顶上
+             砸不砸"完全可以由 vy 判：320 对应一次 24px 以上的真实下落，
+             "从箱子边缘滚下去"（48px 落差、落地 vy 449）稳稳过线，
+             而"在箱顶滚"（vy 恒 0）永远不过线 —— 不需要额外的状态位。
+             落 240px（一层）的 vy 是 1004：木箱必碎、石箱（560）必碎、
+             铁箱（1150）不会碎，正好把"什么材质的箱顶能落球"读出来。 */
+          crushVy: 320 },
 
   /* 推球力度。沿用 grove 的 620 → 1209（助跑满格约 380px）。 */
   push: { base: 620, runGain: 0.95, runFull: 380 },
@@ -138,8 +148,15 @@ const NUM = {
   /* 玩家跳跃。**`airJump` = 空中还能再跳几次**（2026-10-28 第二轮）。
      重力 2100、jump 720 → 单跳高 123。
      为什么是"二段跳"而不是"加高单跳"：单跳一旦到 144，所有 3 格箱山
-     都能直上，"箱子是路"那套攀爬就整个失效了。见 stepPlayer 里的算术。 */
-  hero: { jump: 720, airJump: 1 },
+     都能直上，"箱子是路"那套攀爬就整个失效了。见 stepPlayer 里的算术。
+
+     **`airJumpV` 比首跳高（2026-10-28 第四轮）：790。**
+     楼板改成半透层之后（能跳上去、也能按下从上面下来），"上到上一层"
+     需要脚从本层地板抬到 240 —— 而 720 的二段跳只有 246，
+     顶点余量 6px：必须"在第一跳的最高点按第二跳"才成立，那不是轻松，
+     是帧数考试。790 的二段跳给 123 + 149 = 272，余量 32px。
+     首跳不动（123），所以层内的"3 格箱山要绕"这条没被破坏。 */
+  hero: { jump: 720, airJump: 1, airJumpV: 790 },
 
   /* 箱子。**这里是整套材质系统的核心表**：
      hp        = 子弹要几发才碎（Infinity = 子弹完全无效）
@@ -456,12 +473,15 @@ function genLevel(seed) {
      被洞切开。段宽决定了这一层能不能放平台/怪。 */
   function segsOf(floorY, holes) {
     const out = [];
+    /* **`floor: true` 是"半透楼板"的标记**（2026-10-28 第四轮）。
+       楼板对玩家是"只挡落下、不挡上跳"的一层 —— 见 stepBody 里那条 skip。
+       平台/斜坡没有这个标记，所以它们照旧是实心的。 */
     let cx = 0;
     for (const h of holes) {
-      if (h.x > cx) out.push({ x: cx, y: floorY, w: h.x - cx, h: GEN.thick });
+      if (h.x > cx) out.push({ x: cx, y: floorY, w: h.x - cx, h: GEN.thick, floor: true });
       cx = h.x + h.w;
     }
-    if (cx < 960) out.push({ x: cx, y: floorY, w: 960 - cx, h: GEN.thick });
+    if (cx < 960) out.push({ x: cx, y: floorY, w: 960 - cx, h: GEN.thick, floor: true });
     return out;
   }
   layers.forEach(l => { l.segs = segsOf(l.floorY, l.holes); });
@@ -1636,6 +1656,9 @@ function reset(seed) {
     w: PLAYER_W, h: PLAYER_H, onGround: true, face: 1,
     runD: 0, lockT: 0, shotCd: 0, anim: 0, shotAnim: 0,
     jumps: NUM.hero.airJump, jumpHeld: false, onBall: null,
+    /* 从楼板上下跳的窗口（见 stepPlayer 里的"下跳"）。
+       0 = 没在下跳；> 0 时 stepBody 会跳过楼板的碰撞。 */
+    dropT: 0, downHeld: false,
   };
 }
 
@@ -1709,6 +1732,8 @@ const BALL_TIER_CN = ['小', '中', '大', '特大'];
 function ballR(n) { return Math.min(NUM.ball.maxR, NUM.ball.baseR + NUM.ball.perAbsorb * Math.min(n, NUM.ball.maxAbsorb)); }
 /** 动量。**破冰墙的判据必须是球径 × 速度，不是单看体积** ——
     否则玩家把怪清光就永远攒不出特大球，而冰墙后面是门，直接死局。 */
+/** 球的横向动量（速度 × 体径比）。**只用于"横向撞箱"**；
+    落砸看的是 vy，见 `ballHitBox` 的第四个参数 —— 别拿这个函数去量落球。 */
 function ballPow(b) { return Math.abs(b.vx) * (b.r / NUM.ball.baseR); }
 
 /* ---------------------------------------------------------------- 飘字 */
@@ -1804,6 +1829,24 @@ function stepBody(o, dt) {
   o.y += o.vy * dt;
   o.onGround = false;
   for (const s of solids()) {
+    /* ================= 楼板是"半透层"（只对玩家，2026-10-28 第四轮）=================
+       用户原话：「这个横梁我方是可以跳上去的　也可以下来　只要没箱子
+       　不需要在空档里才能跳」。
+
+       也就是：楼板**只挡落下、不挡上跳**。判据放在这里而不是给楼板换一种
+       实体类型，是因为所有碰撞、地面查询、镜头吸附都在认 `solids()`，
+       换类型要改十几处；这里加一条 skip，其余系统一行都不用动。
+
+       三条限定，缺一条就出事：
+         ① **只给玩家**（`o === S.p`）。怪一旦也能穿过楼板，它们会跳进上一层，
+            而它们的巡逻走廊是按本层量出来的，上去就再也回不来 —— 满屏怪
+            挤在上一层，玩家那一层一只都没有。
+         ② **只在上升（vy < 0）或主动下跳（dropT）时 skip。** 下落时照旧接住，
+            否则人站在楼板上每一帧都在"穿过再被接住"之间闪。
+         ③ 箱子的碰撞一行没改 —— 楼板上摞着箱子的那一格，人跳上去会**撞到
+            箱底**（箱底正好在楼板顶面），于是"有箱子的地方上不去"这条
+            不需要单独写判据：它就是箱子本身。 */
+    if (s.floor && o === S.p && (o.vy < 0 || o.dropT > 0)) continue;
     if (s.kind === 'ramp') {
       /* 斜坡：**只认顶面，不参与侧面阻挡。**
          横向不挡是故意的 —— 玩家走过来时脚底被下方地板托着，每一帧的
@@ -1864,6 +1907,12 @@ function stepBody(o, dt) {
   o.x += o.vx * dt;
   for (const s of solids()) {
     if (s.kind === 'ramp') continue;      // 斜坡不挡横移，见上
+    /* **楼板对玩家不参与水平阻挡。** 穿过楼板的那些帧，身体和楼板在 y 上
+       是重叠的 —— 如果这里照旧按撞墙处理，人会被横向"推"到最近的一段楼板
+       边缘上（多半就是那个洞口），表现为"跳起来人被甩到一边"。
+       站在楼板顶上时本来就会被下面那条 `脚底 ≤ 顶面 + 2` 跳过，所以
+       这条 skip 对"在楼上走路"没有任何影响。 */
+    if (s.floor && o === S.p) continue;
     if (!aabb(o, s)) continue;
     // 站在这块上面（脚底贴着顶面）就不算撞墙
     if (o.y + o.h <= s.y + 2) continue;
@@ -2078,8 +2127,27 @@ function pushBalls(dt) {
        `aabb` 偶尔会重叠 0.1px —— 那一帧就会把球推出去，人立刻掉下来。
        用户反馈的"站不住"里，除了"球不在碰撞世界"这一条，还有这个。 */
     if (p.onBall === b) continue;
-    const bx = { x: b.x - b.r, y: b.y - b.r, w: b.r * 2, h: b.r * 2 };
-    if (!aabb(p, bx)) continue;
+    /* ================= 推球判"够不够近"，不判"包围盒相不相交" =================
+       （2026-10-28 第四轮）用户：「这种1级平面 球很难撞击到　最好想想机制上
+       去规避」。
+
+       用包围盒判有两个死角，恰好都是"1 级平面"上最常见的两种站位：
+         ① **人站在一格矮箱顶上、球在脚下的地面上。** 玩家脚底（-48）比球顶
+            （-44）还高 4px，包围盒**不相交** —— 明明挨着，推不动。
+            一层全是矮箱的平地，人几乎一直在箱顶上走，于是"球推不动"。
+         ② **球卡在一格宽的缝里。** 人 45 宽、球 44 宽，缝只有 48 ——
+            人根本挤不进去，也就永远挨不到球。
+       改成"圆心到圆心"的判定，两个方向各留 12px 余量就够了：
+         · 垂直：站一格箱顶差 57.5，阈值 31.5+22+12 = 65.5 ✓
+           站两格箱顶差 105.5 —— 依旧推不动（往上不该顺手推球）
+         · 水平：贴着缝边就差不到 12px ✓
+
+       **方向判据没变**：必须朝球的方向跑（`sign(p.vx) === dir`），
+       所以站着不动、从球旁边走过都不会误推。 */
+    const REACH = 12;
+    const dx0 = b.x - (p.x + p.w / 2), dy0 = b.y - (p.y + p.h / 2);
+    if (Math.abs(dx0) > p.w / 2 + b.r + REACH) continue;
+    if (Math.abs(dy0) > p.h / 2 + b.r + REACH) continue;
     // 只在玩家朝球方向推时才给速度，站着碰不推
     const dir = b.x > p.x + p.w / 2 ? 1 : -1;
     if (Math.abs(p.vx) < 10) continue;
@@ -2125,13 +2193,37 @@ function stepBalls(dt) {
       const overlapY = b.y + b.r > box.y && b.y - b.r < box.y + box.h;
       if (!overlapX || !overlapY) continue;
 
-      // 从上方落下 / 在箱顶滚：当作地板，不破坏
+      // 从上方落下 / 在箱顶滚：当作地板 —— **但"落下"和"滚"不是一回事**
       if (prevBottom <= box.y + 10) {
+        /* **落下来的球会砸碎脚下的箱子（2026-10-28 第四轮）。**
+           用户：「球掉下去 是可以杂碎箱子」。
+
+           以前这一分支一律"接住"，于是球从洞口掉进箱堆只是安静地停在最上面，
+           "把球推下洞"完全没有收益 —— 而它本该是这颗游戏里最爽的一下。
+
+           判据是**落地那一帧的 vy**（见 NUM.ball.crushVy）：滚上来的球 vy=0，
+           一次真下落 vy ≥ 320。砸碎之后 vy 只乘 `keepSpeed`（木箱 0.82），
+           所以一颗球能从三格箱堆里一路犁到底 —— 这就是"落球"的回报，
+           砸一颗就停的球没有意义。 */
+        if (b.vy >= NUM.ball.crushVy) {
+          ballHitBox(b, box, 0, b.vy);
+          if (b.dead) break;
+          if (box.dead) continue;       // 碎了就继续往下掉，不要贴到箱顶
+        }
         b.y = box.y - b.r; b.vy = 0; b.onGround = true;
         continue;
       }
       // 侧面撞击
-      if (Math.abs(b.vx) < 40) continue;
+      /* **慢速贴住：不碎箱，但绝不许留在箱体里。**
+         旧版这一行是 `continue`，于是被轻轻碰一下的球会钻进箱子里停住 ——
+         画面上就是"球明明撞到箱子了，什么都没发生"，而且球从此卡在箱体
+         内部，看起来像穿模。用户说的「球很难撞击到」有一半是它。
+         慢球只做位置解算：推到箱面上停住，读起来是"球抵着箱子"。 */
+      if (Math.abs(b.vx) < 40) {
+        b.x = (b.x < box.x + box.w / 2) ? box.x - b.r : box.x + box.w + b.r;
+        b.vx = 0;
+        continue;
+      }
       const dir = sign(b.vx);
       ballHitBox(b, box, dir);
       if (b.dead) break;
@@ -2192,14 +2284,21 @@ function stepBalls(dt) {
   S.balls = S.balls.filter(b => !b.dead);
 }
 
-function ballHitBox(b, box, dir) {
+/* **撞击动量只有一个数（`pow`），横向和垂直各取各的。**
+   横向撞看 vx、落下砸看 vy —— 箱子表里的 `minPow` 因此只需要一列，
+   不用维护"横撞阈值 / 垂直阈值"两套（两套表的第一个后果就是有人只改一套）。
+   量纲是一致的：`速度 × 体径比`，所以"多大球 + 多快"这层关系没变。
+   `vDown` 非空即"这是落砸"，返回时的处理不同：横向要穿透继续滚，
+   垂直要保留一部分下落速度继续往下掉。 */
+function ballHitBox(b, box, dir, vDown) {
   const def = NUM.box[box.mat];
-  const pow = ballPow(b);
+  const pow = Math.max(Math.abs(b.vx), vDown || 0) * (b.r / NUM.ball.baseR);
   const tier = ballTier(b.absorbed);
 
   if (pow >= def.minPow && tier >= def.minTier) {
     breakBox(box, 'ball', pow);
-    b.vx *= def.keepSpeed;          // 穿透：撞碎之后继续滚，这是爽感的来源
+    if (vDown) b.vy = vDown * def.keepSpeed;   // 落砸：继续往下犁
+    else b.vx *= def.keepSpeed;                // 穿透：撞碎之后继续滚，这是爽感的来源
     b.chain++;
 
     /* **撞碎箱子不给体积。**
@@ -2212,8 +2311,12 @@ function ballHitBox(b, box, dir) {
     hitStop(0.045);
   } else {
     // 砸不动：反弹 + 冒火花。**「太硬」这件事必须让玩家在物理上感到**
-    b.x = dir > 0 ? box.x - b.r : box.x + box.w + b.r;
-    b.vx = -dir * Math.max(140, Math.abs(b.vx) * 0.4);
+    if (vDown) {
+      b.y = box.y - b.r; b.vy = 0; b.onGround = true;   // 落在箱顶，不动
+    } else {
+      b.x = dir > 0 ? box.x - b.r : box.x + box.w + b.r;
+      b.vx = -dir * Math.max(140, Math.abs(b.vx) * 0.4);
+    }
     addFrag(b.x, b.y, 8, '#FFE0A0', 220);
     S.shake = Math.max(S.shake, 5);
     if (box.mat === 'ice' && tier < def.minTier) {
@@ -3056,8 +3159,10 @@ function stepPlayer(dt) {
       }
     } else if (p.jumps > 0) {
       /* 二段跳。**不改变水平速度** —— 空中变向会让"跳上井口边缘"
-         变成一件靠微操的事，而这一步本来就该轻松。 */
-      p.vy = -NUM.hero.jump;
+         变成一件靠微操的事，而这一步本来就该轻松。
+         速度用 `airJumpV`（790 > 720），理由见 NUM.hero 的注释：
+         楼板能跳上去之后，两跳的合计高度必须明显超过层高 240。 */
+      p.vy = -NUM.hero.airJumpV;
       p.jumps -= 1;
     } else {
       /* 两次跳都用完还在空中，再按 W 才允许 `wellClimb` 接一把。
@@ -3069,6 +3174,34 @@ function stepPlayer(dt) {
         once('well_climb', p.x + p.w / 2, p.y - 12, '爬上来了', '#CFEFFF');
       }
     }
+  }
+
+  /* ---- 从楼板上下跳（2026-10-28 第四轮）----
+     用户：「这个横梁我方是可以跳上去的　也可以下来」。
+     上去是二段跳（楼板半透，见 stepBody），下来就是这里：
+     **站在楼板上按 S / ↓ 就从板里穿下去。**
+
+     为什么需要这个键 —— 楼板半透之后，人跳上去就再也下不来了：
+     唯一的缺口是那个洞，而洞在几百像素之外。上去一次就下不来，
+     玩家只会觉得"这游戏把人关在上面了"，比不能上更糟。
+
+     判据里 `Math.abs(pl.y - feet) < 2` 是"脚下就是楼板顶面"；
+     30 帧的窗口（0.20s）比"穿过 26px 厚楼板"需要的 0.16s 略长一点，
+     短了会在板里被重新接住（表现为"按 S 只沉了半格"）。
+     箱子顶不参与 —— 箱子是实心的，从箱子顶上下跳等于钻进箱子里。 */
+  p.dropT = Math.max(0, p.dropT - dt);
+  {
+    const down = !!(K['s'] || K['S'] || K['ArrowDown']);
+    if (down && !p.downHeld && p.onGround && p.dropT <= 0) {
+      const feet = p.y + p.h;
+      if (S.plats.some(pl => pl.floor && Math.abs(pl.y - feet) < 2 &&
+          p.x + p.w > pl.x + 2 && p.x < pl.x + pl.w - 2)) {
+        p.dropT = 0.20;
+        p.onGround = false;
+        p.vy = 60;                 // 给一点初速，第一帧就开始往下走
+      }
+    }
+    p.downHeld = down;
   }
 
   const prevFeet = p.y + p.h;

@@ -172,28 +172,88 @@ shot("petfight", () => {
   const px = picked.seg.x + picked.seg.w - 46;
   L.placePlayer(px, gy - 42);
   for (let i = 0; i < 4; i++) L.step(DT);
-  /* 从右往左：狗（最近）、兔子、刺猬。子弹插在它们和玩家之间的空档里。 */
-  [['hoggy', 100], ['bunny', 200], ['doggy', 300]].forEach(([pet, dx]) => {
-    const f = L.spawnFoe(px - dx, gy - 30, 'crawler', pet);
+  /* 从右往左：尖牙兽（最近）、苔泥团、霜甲虫。投掷物插在它们和玩家之间的空档里。
+     **全都朝右（face = 1）= 全都朝着玩家** —— 这张图要同时证明"侧视"：
+     看见侧脸、单眼、前突的嘴，才说明朝向是画进剪影里的，不是靠两只眼对称糊出来的。 */
+  [['grub', 100], ['moss', 200], ['fang', 300]].forEach(([br, dx]) => {
+    const f = L.spawnFoe(px - dx, gy - 30, 'crawler', br);
     f.face = 1; f.fireCd = 99; f.aim = 0.22;    // 蓄力到一半：嘴前有那团光
     f.speed = 0; f.vx = 0;
     f.roamL = f.x; f.roamR = f.x;
   });
   /* **这一张是摆拍，说清楚：三发投掷物是直接放上去的，不是真打出来的。**
-     原因很实在：三只宠物的射界是 270~350，屏幕只有 960 宽 ——
+     原因很实在：三只的射界是 270~350，屏幕只有 960 宽 ——
      想让三只同时朝同一个人开火，它们必须站得比这更近，
-     一张图里就会挤成一团。**数值和形状都是真的**（和 firePetBullet
+     一张图里就会挤成一团。**数值和形状都是真的**（和 fireFoeBullet
      出来的完全一样，连 vy/自旋都在），只是位置是摆的。
      真弹道由第二十四节的断言来守。 */
   /* **每一发都紧跟在自己的宠物右边**，这样"谁扔的"一眼可读；
      排成"三发挤一团"的话，看图的人得靠猜。 */
   [
-    ['bone',   px - 245, gy - 46, 420, 0.55],   // 狗（px−300）扔的
-    ['carrot', px - 145, gy - 54, 360, 0.30],   // 兔子（px−200）扔的
-    ['spike',  px - 50,  gy - 38, 330, 0.20],   // 刺猬（px−100）扔的
+    ['tooth', px - 245, gy - 46, 420, 0.55],   // 尖牙兽（px−300）甩的
+    ['mud',   px - 145, gy - 54, 330, 0.30],   // 苔泥团（px−200）抛的
+    ['shard', px - 50,  gy - 38, 380, 0.20],   // 霜甲虫（px−100）弹的
   ].forEach(([kind, x, y, vx, spin]) => {
     S.ebullets.push({ kind, x, y, vx, vy: 40, t: 0.4, r: 9, face: 1, spin, dead: false });
   });
+});
+
+/* 3.45) impact：球撞碎箱子**那一帧**。
+   用户第 2 条里"打箱子破碎感、球的击碎感、有物理打击的感觉"全在这张图上：
+   木箱碎成板条（会转、有暗边）、两层冲击环、球已经穿过去、周围的箱子被震得发亮。
+   **这一张不是摆拍** —— 箱子、球、碎片都是真跑出来的，
+   只是把时间停在了"刚碎完第 2 帧"。 */
+shot("impact", () => {
+  /* **和 petfight 一样要单独挑种子。** 主种子的地表被两个下行口切成小段，
+     撞箱那一下会正好落在洞口边上；更糟的是兜底用 `.pop()` 会拿到最底层，
+     人放上去就掉下去 —— 第一次出图整张是空的门厅。 */
+  let seg = null, gy = 0;
+  for (let sd = 1; sd <= 60 && !seg; sd++) {
+    L.reset(sd);
+    const s2 = S.plats.filter(p => p.kind !== 'ramp' && Math.abs(p.y - L.FLOORS[0]) < 1)
+      .sort((a, b) => b.w - a.w)[0];
+    if (s2 && s2.w >= 480) { seg = s2; gy = L.FLOORS[0]; }
+  }
+  if (!seg) return;
+  S.boxes.forEach(b => b.dead = true);
+  S.foes.length = 0; S.ebullets.length = 0;
+  S.hp = 99; S.invuln = 999;
+  L.placePlayer(seg.x + 80, gy - S.p.h);
+  for (let i = 0; i < 3; i++) L.step(DT);
+
+  const mk = (x, y, mat) => S.boxes.push({
+    x, y, w: 48, h: 48, mat, hp: 1, dead: false, hitT: 0, taught: false,
+    fell: 0, frost: false, loot: false, barrel: false,
+  });
+  const bx = seg.x + 330;
+  mk(bx, gy - 48, 'wood');
+  mk(bx + 48, gy - 48, 'wood');
+  mk(bx, gy - 96, 'wood');
+  mk(bx + 96, gy - 48, 'stone');
+  mk(bx + 96, gy - 96, 'wood');
+
+  /* 一颗特大球从左边滚过去。**球必须够大够快** —— 小球撞木箱只会被弹回来，
+     画面上就是"球停在箱子前面"，读不出"击碎"。 */
+  /* **球贴着箱子放，让它第一帧就撞上。** 从远处滚过来的话，球会先被
+     地形的水平碰撞判成"撞墙"（`b.x = prevX; vx *= -0.35`），
+     一帧之内就停在原地 —— 第一次出图就是这样：球停在玩家脸前，箱子完好。
+     贴着放反而更像"刚砸进去的那一刻"，也更可控。 */
+  const rr0 = L.ballR(9);
+  /* **y 必须是"贴地"（球底正好压在地板面上）。** 随手写 `gy − 26` 会让
+     球一出生的下半截就埋在地板里，于是第一帧被地板判成"水平撞墙"，
+     vx 直接乘 −0.35 反弹 —— 图上是"球停在箱子前面，箱子完好"。 */
+  const ball = L.spawnBall(bx - rr0 * 0.55, gy - rr0, 900, 9);
+  ball.vy = 0;
+  /* **要等一下顿帧走完再截。** 破箱那一帧 21 片碎片全在箱子中心同一个点上，
+     而 hitStop 会冻结整个 step —— 直接截就是"一个黄点 + 一只球"，
+     看不出碎片，也看不出环（第一次出图就是这样）。
+     顿帧约 0.11s（7 帧），之后碎片才真正散开，所以这里数到第 20 帧。 */
+  let hit = 0;
+  for (let i = 0; i < 60; i++) {
+    L.step(DT);
+    if (S.rings.length > 0) hit++;
+    if (hit >= 20) break;
+  }
 });
 
 /* 3.5) 黑洞：吐怪的巢。**要能读出"这是个会冒东西的洞"，不是一块黑斑。** */

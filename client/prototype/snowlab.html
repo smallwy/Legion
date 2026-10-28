@@ -174,42 +174,49 @@ const NUM = {
      零弹时的唯一出路，代价是血 —— 保底是**机制**，不是系统施舍。 */
   bodyCoat: 2,
 
-  /* ---------------- 宠物（场上的小怪） ----------------
+  /* ---------------- 敌方品种 ----------------
      用户 2026-10-28：「宠物可以简单跳跃 一个箱子的高度走动待机」「宠物太少了
      没有发射子弹攻击的地方」「单位的子弹要符合宠物特点 小兔子丢萝卜
      狗狗是骨头 射程需要远点 还有一个子弹平行丢出去 需要有下落感」。
 
+     **同一天下午改口**：「敌方为什么用我方的宠物呢」。这句话订正了上一版的
+     方向：兔 / 狗 / 刺猬是**我方**的宠物形象，不该出现在敌方阵列里。
+     所以这一层叫 `breed`（品种）不叫 `pet`，三只都是**敌人**：
+
+       · `moss` 苔泥团 —— 矮胖、一撮苔草、慢；扔泥球
+       · `fang` 尖牙兽 —— 低伏四足、前突长口鼻、跑得快；甩牙
+       · `grub` 霜甲虫 —— 分节硬壳、六条小腿、背上一排冰棱；弹冰锥
+
+     上一版靠"耳朵竖 / 垂 / 一圈刺"区分，那是**萌宠**的做法。
+     敌人要靠**轮廓的体块关系**区分：圆团 / 横向拉长 / 拱起的硬壳 ——
+     缩到 34px 时，这三者的外轮廓没有一处是重合的。
+
      **三个字段管三件事，各管各的：**
        · `jump`  起跳初速。重力 2100 → 520 跳 64px，刚好一个箱子（48）富余
        · `cdA/B` 两次射击的间隔区间（秒）。只用来**拉开节奏**，不用来控难度
-       · `range` 水平射界。精灵子弹会掉，太远根本打不到，所以它要跟
-                 `ebullet` 的射程一起看，不能单独调
-
-     **为什么要三种而不是两种。** 用户说"宠物太少了"。数量可以靠生成器加，
-     但同一种怪放十只还是"一种怪"。三种的差别必须一眼可见：
-     兔子耳朵竖着、狗耳朵垂着、刺猬背上一圈刺 —— 剪影先分开，
-     子弹（胡萝卜 / 骨头 / 刺球）再补第二层区分。 */
-  pet: {
-    bunny: { speed: 84,  jump: 520, cdA: 1.9, cdB: 2.9, range: 300, bullet: 'carrot' },
-    doggy: { speed: 148, jump: 545, cdA: 1.5, cdB: 2.3, range: 350, bullet: 'bone'   },
-    hoggy: { speed: 100, jump: 470, cdA: 2.3, cdB: 3.3, range: 270, bullet: 'spike'  },
+       · `range` 水平射界。投掷物会掉，太远根本打不到，所以它要跟
+                 `ebullet` 的射程一起看，不能单独调 */
+  breed: {
+    moss: { speed: 84,  jump: 520, cdA: 1.9, cdB: 2.9, range: 300, bullet: 'mud'   },
+    fang: { speed: 148, jump: 545, cdA: 1.5, cdB: 2.3, range: 350, bullet: 'tooth' },
+    grub: { speed: 100, jump: 470, cdA: 2.3, cdB: 3.3, range: 270, bullet: 'shard' },
   },
 
-  /* 宠物子弹。**"平行丢出去 + 有下落感"是靠这三条实现的：**
+  /* 敌方投掷物。**"平行丢出去 + 有下落感"是靠这三条实现的：**
        ① 水平初速恒定（不瞄准玩家 —— 会瞄准就没有"侧身躲开"这个动作了）
-       ② `vy0 = -70` 轻轻上扬，让弹道先平后坠，读起来像"被扔出去"
-       ③ `g = 330` 只有角色的 1/6
+       ② `vy0 = -60` 轻轻上扬，让弹道先平后坠，读起来像"被扔出去"
+       ③ `g = 210` 只有角色的 1/10
 
-     **数值是解方程解出来的，不是拍的。** 约束是"从离地 35px 的高度扔出去，
-     落地时水平走了 230~280px，途中明显下垂"。g 用 2100（玩家重力）的话，
+     **数值是解方程解出来的，不是拍的。** 约束是"从离地 24px 的高度扔出去，
+     落地时水平走了 300px 上下，途中明显下垂"。g 用 2100（玩家重力）的话，
      0.4 秒就砸在脚边，所谓"射程"根本不存在；g 太小又读不出弧线。
-     330 刚好：顶点在上扬 7px 处，落地时下垂 35px，弧线斜率约 8°，
-     肉眼能看出"它在往下掉"，又不至于掉到打不到人。
+     210 的时候：先平着出去，顶点只比出手点高 9px（60²/(2·210)），
+     之后一路加速下坠 —— 这正是"平行丢出去、但有下落感"该有的样子。
 
-     `spd` 三档：胡萝卜慢（弧线最重）、骨头快（狗扔得直）、刺球居中偏慢。
-     用户要求"子弹要符合宠物特点"—— 弹速和形状一起变，才叫特点。 */
+     `spd` 三档：泥球慢（苔泥团抛得重）、牙最快（尖牙兽甩头甩出去）、
+     冰锥居中。弹速和形状一起变，才叫"这东西是它扔的"。 */
   ebullet: {
-    spd: { carrot: 360, bone: 420, spike: 330 },
+    spd: { mud: 330, tooth: 420, shard: 380 },
     vy: -60, g: 210, life: 2.4, r: 9, windup: 0.42, maxAlive: 7,
   },
 };
@@ -1130,21 +1137,77 @@ function genLevel(seed) {
       const segs = l.segs.filter(s => s.w >= 144);
       if (!segs.length) continue;
       const seg = segs[Math.floor(R() * segs.length)];
+      /* **黑洞必须坐在地板上，不能跟着箱山顶走。**
+         2026-10-28 之前取的是 `colTop[col]` —— 那一列堆了两格箱子时，黑洞就
+         悬在箱堆顶上，读起来是"墙上贴了一个紫色椭圆"（用户指着截图说
+         "太突兀了""可以地下做个玄关"）。它本来就是"地面塌出来的一个口"。
+
+         **做法是换一列，不是把箱子删掉。** 删箱子看着更直接，但那是拿掉一摞
+         可能被井梯当踏脚的地形 —— 实测 26 次"跳回上一层"里有 4 次因此上不去。
+         挑一列本来就空着的地面，零副作用。 */
       const cols = Math.max(1, Math.floor((seg.w - 48) / 48));
-      const col = Math.floor(seg.x / 48) + Math.floor(R() * cols);
+      const col0 = Math.floor(seg.x / 48);
+      let col = -1;
+      for (let cc = 0; cc < 6 && col < 0; cc++) {
+        const c = col0 + Math.floor(R() * cols);
+        const top0 = (l.colTop && l.colTop[c] != null) ? l.colTop[c] : l.floorY;
+        if (top0 === l.floorY) col = c;
+      }
+      if (col < 0) continue;
       const x = clamp(col * 48 + 24, seg.x + 24, seg.x + seg.w - 24);
       /* 洞口正上方不放：那是唯一的上下通道，堵在那里等于封路。 */
       if (l.holes.some(h => x + 30 > h.x - 8 && x - 30 < h.x + h.w + 8)) continue;
       if (used.some(u => Math.abs(u - x) < 240)) continue;
       used.push(x);
-      const gy = (l.colTop && l.colTop[col] != null) ? l.colTop[col] : l.floorY;
       nests.push({
-        x, y: gy, layer: k,
+        x, y: l.floorY, layer: k,
         left: 3 + Math.floor(R() * 3),       // 3~5 只配额
         cd: 1.4 + R() * 1.2,                 // 开局先缓一下
         dir: R() < 0.5 ? -1 : 1,
         seed: Math.floor(R() * 1000),
       });
+    }
+  }
+
+  /* ================= ⑥.6 实体小道具（陶罐 / 小箱）=================
+     **用户 2026-10-28：「又不形成阻挡啥的 就是个图贴上去」。**
+
+     上一版罐子和木箱是 deco —— 画在场景里但没有碰撞，人从中间穿过去。
+     一个"看起来能装东西"的容器穿得过去，这片场景就没有可信度了。
+
+     所以把"落地容器"整类搬进 `boxes`：同一套碰撞、同一套被打碎、同一套掉弹。
+     规则变得只有一条 —— **看着能撞的，就真能撞。**
+     （木桶早就这样；货架太大，会堵路，直接不做这个种类。） */
+  {
+    const PROPS = [
+      { kind: 'jar', w: 22, h: 30, mat: 'stone' },
+      { kind: 'crate', w: 30, h: 30, mat: 'wood' },
+    ];
+    for (let k = 0; k < nF; k++) {
+      const l = layers[k];
+      const n = 1 + (chance(0.55) ? 1 : 0);
+      for (let i = 0; i < n; i++) {
+        const p = PROPS[Math.floor(R() * PROPS.length)];
+        let px = null, py = 0;
+        for (let t = 0; t < 20 && px == null; t++) {
+          const c = Math.floor(R() * COLS);
+          const cxp = c * 48 + 24;
+          /* 不压本层洞口（那是唯一的上下通道）、不压出生点、不压门厅 */
+          if (l.holes.some(h => cxp + 30 > h.x - 16 && cxp - 30 < h.x + h.w + 16)) continue;
+          if (k === 0 && Math.abs(cxp - startX) < 96) continue;
+          if (door && cxp + 30 > door.x - 20 && cxp - 30 < door.x + door.w + 20) continue;
+          const top = (l.colTop && l.colTop[c] != null) ? l.colTop[c] : l.floorY;
+          px = cxp; py = top;
+        }
+        if (px == null) continue;
+        boxes.push({
+          x: px - p.w / 2, y: py - p.h, w: p.w, h: p.h, mat: p.mat,
+          hp: 1, dead: false, hitT: 0, taught: false, fell: 0,
+          frost: false, loot: false, barrel: false,
+          jar: p.kind === 'jar',
+          prop: true,
+        });
+      }
     }
   }
 
@@ -1160,7 +1223,9 @@ function genLevel(seed) {
      */
   const deco = [];
   const CEIL_KINDS = ['lamp', 'chandelier', 'lantern', 'beam', 'rope', 'vine', 'web', 'flag'];
-  const FLOOR_KINDS = ['barrel', 'jar', 'sign', 'mush', 'shelf', 'crate', 'ladder'];
+  /* **落地容器不在这里了**（barrel / jar / crate 都搬去 ⑥.6 当实体）。
+     这一池只剩"不装东西、撞不撞无所谓"的小物件：路牌、蘑菇、断梯。 */
+  const FLOOR_KINDS = ['sign', 'mush', 'stones', 'stump', 'ladder'];
 
   for (let k = 0; k < nF; k++) {
     /* **`usedX` 必须每层重置。** 放在层循环外面的话它会跨层累积，
@@ -1221,13 +1286,16 @@ function genLevel(seed) {
       if (kind === 'ladder') n = 1;
       for (let i = 0; i < n; i++) {
         let x = null;
-        for (let t = 0; t < 24; t++) {
+        for (let t = 0; t < 30; t++) {
           const cxx = 44 + Math.round(R() * 852);
           if (hitsRange(cxx, 34, isCeil ? avoidUp : avoidDown)) continue;
           /* 地表别摆在出生点旁边。**路牌是左右各伸出 26px 的，贴着人放
              就读成"角色举着一块牌子"** —— 缩略图上一眼就看见。 */
           if (k === 0 && Math.abs(cxx - startX) < 70) continue;
-          if (usedX.some(u => Math.abs(u - cxx) < 62)) continue;
+          /* **后 10 次把间距放宽到 44。** 地表层被两个洞口切成三小段，
+             62px 的间距在碎成三段的地面上采不满 —— 40 个种子里会有 1 层
+             只剩 2 件装饰，整层看着就是"没做完"。挤一点比秃着强。 */
+          if (usedX.some(u => Math.abs(u - cxx) < (t < 20 ? 62 : 44))) continue;
           /* **梯子必须站在真地板上。** 它是 100px 高的立式道具，站在箱山顶上
              就读作"一架够不到任何地方的梯子"；木桶和蘑菇站在箱上是"堆场"，
              梯子站在箱上是"bug"。所以这一类要额外卡一条：本列没有箱子。 */
@@ -1429,6 +1497,10 @@ const S = {
   clearT: 0,
   p: null,
   foes: [], shots: [], balls: [], frags: [], texts: [], shards: [],
+  /* **冲击环。** 球砸碎箱子那一下要有"力从这里发出去"的形状 ——
+     只靠碎片和震屏，读起来是"东西碎了"，不是"被撞碎了"。
+     一圈迅速扩散、迅速消失的白环，是最便宜也最准的表达。 */
+  rings: [],
   /* 宠物扔出来的东西（胡萝卜 / 骨头 / 刺球）。**和玩家的 `shots` 完全分开** ——
      两者速度、重力、命中对象都不一样，混在一个数组里每个系统都要写两遍判据。 */
   ebullets: [],
@@ -1482,7 +1554,7 @@ function reset(seed) {
   S.door = { ...L.door };
   S.foes = L.spawns.map(sp => makeFoe(sp.x, sp.y, sp.kind));
   S.nests = (L.nests || []).map(n => ({ ...n, born: 0, t: 0 }));
-  S.shots = []; S.balls = []; S.frags = []; S.texts = []; S.shards = [];
+  S.shots = []; S.balls = []; S.frags = []; S.texts = []; S.shards = []; S.rings = [];
   S.ebullets = [];
   S.ammo = NUM.ammoStart;
   S.belly = NUM.bellyStart;
@@ -1512,26 +1584,29 @@ function reset(seed) {
 }
 
 /* ---------------------------------------------------------------- 敌人 */
-/* **pet 由 kind 决定，不是随机的。**
-   kind 是行为（crawler 巡逻 / runner 追人），pet 是外观和子弹。
+/* **breed 由 kind 决定，不是随机的。**
+   kind 是行为（crawler 巡逻 / runner 追人），breed 是外观和投掷物。
    两者分开是为了让断言能继续用 `spawnFoe(x, y, 'crawler')` 指"一只会巡逻的怪"，
    不用关心它长什么样；同时场上又能有三种不同的剪影。
-   追人的那个是狗 —— 跑得快、扔骨头，行为和外形的说法是一致的。 */
-function petOf(kind) {
-  if (kind === 'runner') return 'doggy';
+   追人的那个是尖牙兽 —— 跑得快、甩牙甩得直，行为和外形的说法是一致的。
+
+   **别再用 bunny/doggy/hoggy。** 那是"我方宠物"的形象，2026-10-28 用户
+   明确问过「敌方为什么用我方的宠物」—— 敌人得有敌人的样子。 */
+function breedOf(kind) {
+  if (kind === 'runner') return 'fang';
   const r = FR();
-  return r < 0.52 ? 'bunny' : 'hoggy';
+  return r < 0.52 ? 'moss' : 'grub';
 }
 
-function makeFoe(x, y, kind) {
-  const pet = petOf(kind);
-  const cfg = NUM.pet[pet] || NUM.pet.bunny;
+function makeFoe(x, y, kind, breed) {
+  const br = breed || breedOf(kind);
+  const cfg = NUM.breed[br] || NUM.breed.moss;
   const speed = cfg.speed;
   /* **vx 和 face 必须一开始就一致。** 原来 face 写死 1、vx 随机左右，
      第一帧就成了"面朝右往左走"，再被换向锁一锁，怪就永远倒着走。 */
   const dir = FR() < 0.5 ? -1 : 1;
   return {
-    x, y, kind, pet,
+    x, y, kind, breed: br,
     w: 34, h: 30,
     vx: dir * speed,
     turnLock: 0,             // 刚折返时的锁，见 stepFoes
@@ -1546,9 +1621,9 @@ function makeFoe(x, y, kind) {
     homeY: y,
     patrolT: 0,
     speed,
-    /* ---- 宠物行为状态 ----
+    /* ---- 行为状态 ----
        idleT > 0 就是"站着待机"。**待机不是省事，是让它看起来活着** ——
-       一直匀速横移的单位读起来像巡逻机器人，停一下、抖抖耳朵，才像宠物。 */
+       一直匀速横移的单位读起来像巡逻机器人，停一下、耸一下背，才像个活物。 */
     idleT: 0,
     walkT: 0.8 + FR() * 1.6,
     aim: 0,                  // 蓄力进度，到 windup 就发射
@@ -1584,10 +1659,25 @@ function ballPow(b) { return Math.abs(b.vx) * (b.r / NUM.ball.baseR); }
 function addText(x, y, s, color, size, lifeT) {
   S.texts.push({ x, y, s, color: color || '#fff', size: size || 16, t: 0, life: lifeT || 0.9 });
 }
-function addFrag(x, y, n, color, spd) {
+/** 碎片。`shape` 决定"碎成了什么样" —— 这是打击感的一半：
+    木箱碎成**板条**（长条、会转），石箱碎成**棱角块**，雪/血碎成点。
+    **全一样的方点会让所有材质碎得一样**，玩家就读不出"这是什么做的"。 */
+function addFrag(x, y, n, color, spd, shape, bias) {
+  const bx = (bias && bias.x) || 0, by = (bias && bias.y) || 0;
   for (let i = 0; i < n; i++) {
     const a = rnd(0, Math.PI * 2), v = rnd(60, spd || 260);
-    S.frags.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 80, t: 0, life: rnd(0.35, 0.8), color, r: rnd(2, 4.5) });
+    const f = {
+      x, y,
+      vx: Math.cos(a) * v + bx, vy: Math.sin(a) * v - 80 + by,
+      t: 0, life: rnd(0.35, 0.8), color,
+      r: rnd(2, 4.5), rot: rnd(0, Math.PI * 2), vr: rnd(-11, 11),
+      w: 0, h: 0,
+    };
+    if (shape === 'plank') { f.w = rnd(7, 15); f.h = rnd(2.4, 4.2); }
+    else if (shape === 'chunk') { f.w = rnd(3.4, 7.5); f.h = f.w * rnd(0.55, 1.15); }
+    else { f.w = f.r; f.h = f.r; f.vr = 0; }
+    if (f.w) f.r = Math.max(f.w, f.h);
+    S.frags.push(f);
   }
 }
 function hitStop(t) { S.hitStop = Math.max(S.hitStop, t); }
@@ -2024,7 +2114,7 @@ function ballHitBox(b, box, dir) {
   const tier = ballTier(b.absorbed);
 
   if (pow >= def.minPow && tier >= def.minTier) {
-    breakBox(box, 'ball');
+    breakBox(box, 'ball', pow);
     b.vx *= def.keepSpeed;          // 穿透：撞碎之后继续滚，这是爽感的来源
     b.chain++;
 
@@ -2056,12 +2146,47 @@ function burstBall(b) {
   addText(b.x, b.y - b.r - 6, '散了', '#9FB4C4', 14, 0.7);
 }
 
-function breakBox(box, how) {
+/* **打击感的三件套，缺一件就"软"：**
+     ① 碎片要有材质形状（木 = 板条、石 = 棱角块）—— 碎成一样的方点，
+        所有东西就都一样了；
+     ② 球砸要有**顿帧 + 冲击环**。顿帧让"力"有时间落地，环给出方向；
+     ③ 震屏按"撞的动量"分级，不是一律 10 —— 小球轻轻蹭一下和特大球
+        正面撞，手感该是不一样的。 */
+function breakBox(box, how, pow) {
   box.dead = true;
   const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
-  addFrag(cx, cy, how === 'ball' ? 16 : 9, box.mat === 'wood' ? '#C9A273' : '#9AA6B0', how === 'ball' ? 340 : 200);
-  S.shake = Math.max(S.shake, how === 'ball' ? 10 : 3);
-  if (how === 'ball') hitStop(0.05);
+  const byBall = how === 'ball';
+  const wood = box.mat === 'wood';
+  const hard = byBall ? 360 : 210;
+
+  if (wood) {
+    /* 木：一堆**板条** + 几块小碎块。板条会转，转起来才像"被撞散的"。 */
+    addFrag(cx, cy, byBall ? 10 : 6, '#C9A273', hard, 'plank');
+    addFrag(cx, cy, byBall ? 7 : 4, '#E8C79A', hard * 0.8, 'chunk');
+    addFrag(cx, cy, byBall ? 4 : 2, '#8A6236', hard * 0.6, 'chunk');
+  } else {
+    /* 石 / 铁：没有板条，全是**棱角块**，飞得近、落得快。 */
+    addFrag(cx, cy, byBall ? 13 : 7, '#9AA6B0', hard * 0.9, 'chunk');
+    addFrag(cx, cy, byBall ? 6 : 3, '#6E7A86', hard * 0.65, 'chunk');
+    addFrag(cx, cy, byBall ? 4 : 2, '#CFD8E0', hard * 1.1, 'chunk');
+  }
+
+  if (byBall) {
+    /* 球有动量，顿帧和震动跟着动量走。`pow` 是 ballPow（速度 × 体径比）。 */
+    const k = clamp((pow || 1) / 2.6, 0.55, 1.5);
+    hitStop(0.05 + 0.04 * k);
+    /* **震屏上限压到 14。** 再大整个画面就在"跳"，玩家会晕。 */
+    S.shake = Math.max(S.shake, Math.min(14, 8 + 5 * k));
+    /* **同时最多 4 个环。** 特大球会连着碾碎 4~5 个箱子，每个箱子两圈 ——
+       十来个环叠在一起就是一团结，什么也读不出来（放大图里像一堆泡泡）。
+       旧环直接丢掉：它们本来就快消失了，留着只添乱。 */
+    if (S.rings.length > 3) S.rings.splice(0, S.rings.length - 3);
+    S.rings.push({ x: cx, y: cy, r: 6, r0: 6, r1: 54 + 26 * k, t: 0, life: 0.26, color: '#FFF6E0' });
+    /* 第二圈慢半拍、暗一档：两圈才有"冲击波"的层次，一圈只是一个圆 */
+    S.rings.push({ x: cx, y: cy, r: 4, r0: 4, r1: 82 + 34 * k, t: -0.05, life: 0.36, color: 'rgba(255,226,170,.85)' });
+  } else {
+    S.shake = Math.max(S.shake, 3);
+  }
 
   if (how === 'ball') S.stat.boxByBall++; else S.stat.boxByShot++;
 
@@ -2095,6 +2220,10 @@ function killFoe(f, byBall) {
   S.stat.kills++;
   if (byBall) S.stat.killByBall++;
   addFrag(f.x + f.w / 2, f.y + f.h / 2, 12, '#FFC8B0', 260);
+  /* 打中敌人也要有"打中"的感觉：一小圈白环 + 短顿帧。
+     **不加的话，怪就是"凭空变成一堆碎片"** —— 玩家感受不到自己打中了。 */
+  S.rings.push({ x: f.x + f.w / 2, y: f.y + f.h / 2, r: 5, r0: 5, r1: 30, t: 0, life: 0.2, color: '#FFE8D8' });
+  if (byBall) hitStop(0.055);
   S.shake = Math.max(S.shake, 7);
   if (byBall) {
     byBall.absorbed = Math.min(NUM.ball.maxAbsorb, byBall.absorbed + NUM.ball.absorbFoe);
@@ -2205,16 +2334,16 @@ function stepNests(dt) {
        也是画面上唯一能读出"要来了"的信号。
      · **全场同时最多 7 发。** 怪一多就会打成弹幕，那不是这个游戏的难度曲线。
 */
-function firePetBullet(f) {
+function fireFoeBullet(f) {
   if (S.ebullets.length >= NUM.ebullet.maxAlive) return;
-  const cfg = NUM.pet[f.pet] || NUM.pet.bunny;
+  const cfg = NUM.breed[f.breed] || NUM.breed.moss;
   const E = NUM.ebullet;
   const spd = (E.spd && E.spd[cfg.bullet]) || 320;
   S.ebullets.push({
     kind: cfg.bullet,
     x: f.x + f.w / 2 + f.face * 17,
     /* **出手位置在头顶下方 6px（离地约 24px）。**
-       再高一点（f.y−2）会贴着这一层箱子的顶跑 —— 宠物站在箱堆边上时，
+       再高一点（f.y−2）会贴着这一层箱子的顶跑 —— 敌人站在箱堆边上时，
        子弹一出生就撞进旁边的箱体里，飞出 5 帧就没了，"射程"变成了一句空话。
        离地 24px 是"够高、能拉开弧线，又不至于一出膛就撞头"的分界。 */
     y: f.y + 2,
@@ -2222,7 +2351,7 @@ function firePetBullet(f) {
     vy: E.vy,
     t: 0, r: E.r, face: f.face, spin: 0, dead: false,
   });
-  addFrag(f.x + f.w / 2 + f.face * 17, f.y, 3, '#FFE6C0', 110);
+  addFrag(f.x + f.w / 2 + f.face * 17, f.y, 3, '#E8E2D2', 110);
 }
 
 function stepEBullets(dt) {
@@ -2293,18 +2422,18 @@ function stepFoes(dt) {
        每 0.2 秒来回一次（抽搐），不如让它守在那里。 */
     const canWalk = f.roamR - f.roamL >= 46;
 
-    /* ================= 宠物行为 ==================
+    /* ================= 敌方行为 ==================
        用户的四条要求都落在这里：会跳、会待机、会远程打人、弹道有下落。
        **优先级：瞄准 > 待机 > 走路。** 顺序反过来的话，宠物会在"该开枪了"
        的时候还在东张西望，玩家永远等不到那一发。 */
-    const pcfg = NUM.pet[f.pet] || NUM.pet.bunny;
+    const pcfg = NUM.breed[f.breed] || NUM.breed.moss;
     f.fireCd = Math.max(0, (f.fireCd || 0) - dt);
     f.jumpCd = Math.max(0, (f.jumpCd || 0) - dt);
 
     const dxp = (p.x + p.w / 2) - (f.x + f.w / 2);
     const dyp = (p.y + p.h / 2) - (f.y + f.h / 2);
     /* 射界：水平在射程内、垂直差 < 78（小半层），而且自己站得住。
-       **垂直判据不能省。** 少了它，宠物会隔着两层楼朝天花板扔骨头。 */
+       **垂直判据不能省。** 少了它，它会隔着两层楼朝天花板扔东西。 */
     const inSight = S.phase === 'play' && f.onGround && solidFoot &&
                     Math.abs(dxp) < pcfg.range && Math.abs(dyp) < 78;
     const aiming = inSight && f.fireCd <= 0;
@@ -2316,13 +2445,13 @@ function stepFoes(dt) {
       if (Math.abs(dxp) > 6) f.face = dxp > 0 ? 1 : -1;
       f.vx = 0;
       if (f.aim >= NUM.ebullet.windup) {
-        firePetBullet(f);
+        fireFoeBullet(f);
         f.aim = 0;
         f.fireCd = pcfg.cdA + FR() * (pcfg.cdB - pcfg.cdA);
       }
     } else {
       f.aim = Math.max(0, f.aim - dt * 4);
-      /* ---- 待机 ---- 走一阵停一阵。停的时候它会抖耳朵（画在 drawFoe），
+      /* ---- 待机 ---- 走一阵停一阵。停的时候它会耸背（画在 drawFoe），
          所以"不动"不等于"卡住了"。 */
       if (f.idleT > 0) {
         f.idleT -= dt;
@@ -2776,8 +2905,19 @@ function step(dt) {
   if (S.phase === 'clear') S.clearT += dt;
 
   // 粒子与飘字
-  for (const f of S.frags) { f.t += dt; f.x += f.vx * dt; f.y += f.vy * dt; f.vy += 900 * dt; }
+  for (const f of S.frags) {
+    f.t += dt; f.x += f.vx * dt; f.y += f.vy * dt; f.vy += 900 * dt;
+    f.rot += f.vr * dt;
+  }
   S.frags = S.frags.filter(f => f.t < f.life).slice(-400);
+  for (const r of S.rings) {
+    r.t += dt;
+    /* **t 可以是负数 = 延迟出生。** 第二圈故意晚 50ms 出现，
+       两圈错开才有"冲击波"的层次；但进度必须夹住，
+       负数传进去会把半径算成负的，canvas 直接抛 IndexSizeError。 */
+    r.r = r.r0 + (r.r1 - r.r0) * clamp(r.t / r.life, 0, 1);
+  }
+  S.rings = S.rings.filter(r => r.t < r.life);
   for (const t of S.texts) { t.t += dt; t.y -= 26 * dt; }
   S.texts = S.texts.filter(t => t.t < t.life);
 }
@@ -3291,7 +3431,32 @@ function draw() {
   for (const f of S.frags) {
     g.globalAlpha = Math.max(0, 1 - f.t / f.life);
     g.fillStyle = f.color;
-    g.fillRect(f.x - f.r / 2, f.y - f.r / 2, f.r, f.r);
+    if (f.vr) {
+      g.save();
+      g.translate(f.x, f.y); g.rotate(f.rot);
+      g.fillRect(-f.w / 2, -f.h / 2, f.w, f.h);
+      /* 板条的一侧压一道暗边：没有这道，旋转起来读作"一根黄条" */
+      g.fillStyle = 'rgba(60,42,26,.35)';
+      g.fillRect(-f.w / 2, f.h / 2 - 1, f.w, 1);
+      g.restore();
+    } else {
+      g.fillRect(f.x - f.r / 2, f.y - f.r / 2, f.r, f.r);
+    }
+  }
+  g.globalAlpha = 1;
+  /* 冲击环：画在碎片之上，一眼就看见"力是从哪发出来的" */
+  for (const r of S.rings) {
+    if (r.t < 0) continue;
+    const k2 = 1 - r.t / r.life;
+    /* **环要"双色"。** 单画一圈浅黄，在雪地/木箱这种浅底色上等于隐形 ——
+       第一次出图就是这样：碎片看得见，环完全找不到。
+       先用一圈深棕打底（保证任何底色上都读得出来），再用浅色压上去。 */
+    g.globalAlpha = k2 * 0.55;
+    g.strokeStyle = 'rgba(96,54,24,1)'; g.lineWidth = 1.6 + 3.0 * k2;
+    g.beginPath(); g.arc(r.x, r.y, r.r, 0, Math.PI * 2); g.stroke();
+    g.globalAlpha = k2 * 0.9;
+    g.strokeStyle = r.color; g.lineWidth = 1 + 2.6 * k2;
+    g.beginPath(); g.arc(r.x, r.y, r.r - 1.2, 0, Math.PI * 2); g.stroke();
   }
   g.globalAlpha = 1;
 
@@ -3825,96 +3990,242 @@ function drawPlat(g, pl) {
     }
   }
 }
-
-/* 黑洞（吐怪巢）。**贴在地面上的一张口**，不是飘着的传送门 ——
+/* 黑洞（吐怪巢）。**地面上塌出来的一个口**，不是飘着的传送门 ——
    飘着的传送门在横向平台里读作"出口"，玩家会去撞它；
-   贴地的黑口读作"危险"，绕开是本能反应。 */
+   贴地的破口读作"危险"，绕开是本能反应。
+
+   **2026-10-28 重画。** 用户指着截图说「黑洞是怎么回事 太突兀了点
+   你可以地下做个玄关地方出来」。上一版确实像贴纸，三个原因都得改：
+
+   ① **它悬在箱子顶上。** 生成侧用 `colTop` 取高度，那一列堆了两格箱子
+      它就浮在半空 —— 先在地形这一层修掉（见 genLevel ⑥.5），这里只管画；
+   ② **它是一块规整的椭圆。** 规整 = 贴图。所以底面先画一块**塌陷区**
+      （不规则的破口 + 地板断面），洞是从这块断面里往下陷的，不是压在上面的；
+   ③ **顶部那道高光弧把它画成了"眼睛"。** 那道弧是为了表现"口沿有厚度"，
+      结果紫光 + 椭圆 + 亮上沿 = 一只竖着的眼睛。现在厚度改用**内壁**表达：
+      口沿往下收两圈、越深越暗，光从**洞里往外透**，不从头顶照。
+
+   埋进去的那点"玄关"：口的内侧有两级塌下去的石阶。它们不承担玩法，
+   只是让这个口读起来"通向某个地方"，而不是"地上破了个洞"。 */
 function drawNest(g, n) {
   const alive = n.left > 0;
-  const cx = n.x, cy = n.y - 12;
+  const cx = n.x;
+  const cy = n.y;                     // 地板面。破口就开在这条线上
   const t = n.t || 0;
   const pulse = 0.5 + 0.5 * Math.sin(t * 2.2 + (n.seed || 0));
-  const w = 31, h = 15;
+  const w = 32, h = 12;
+  /* 楼板厚度。**破口必须挖穿它**，否则只是"地板上一个凹坑" —— 那是贴花，
+     不是入口。26 是这个原型里楼板的固定厚度（GEN.thick）。 */
+  const SLAB = 27;
 
   g.save();
-  /* 地面上的紫色辉光。**这一笔是它唯一的"功能性"提示** ——
-     没有光，一颗黑椭圆在深色房间里根本看不见。
 
-     **光不能只用一个紫。** 房间底色本身就是紫灰（黄昏调），
-     同色相的光打上去等于没打（第一版出图就是这样：看得见黑口，
-     看不出"在发光"）。所以是两层：外圈偏品红的紫 + 内圈近白的紫，
-     再加顶部一道亮口沿 —— 靠**明度**和**冷白**把"发光"读出来。 */
+  /* ---- ① 塌陷区：先把地板"啃掉"一块 ----
+     上沿不规整（口沿），往下**收成漏斗**一直到楼板底 —— 收口才叫"塌"，
+     直上直下叫"挖了个方坑"。边界抖动用固定伪随机（由 seed 决定），
+     不能用 Math.random：那会每帧变一次，坑会像在呼吸一样抖。 */
+  const jag = (i, base, amp) => {
+    const s = Math.sin((n.seed || 0) * 12.9 + i * 7.13) * 0.5 + 0.5;
+    return base + (s - 0.5) * amp;
+  };
+  const rimL = cx - (w + 9), rimR = cx + (w + 9);
+  const rimPtsO = [];
+  for (let i = 0; i <= 10; i++) {
+    const a = Math.PI + (i / 10) * Math.PI;      // 上半圈：口沿
+    const rx = w + 9 + jag(i, 0, 7);
+    const ry = h + 6 + jag(i + 3, 0, 4);
+    rimPtsO.push([cx + Math.cos(a) * rx, cy + Math.sin(a) * ry + 3]);
+  }
+  g.beginPath();
+  rimPtsO.forEach((pt, i) => { if (i === 0) g.moveTo(pt[0], pt[1]); else g.lineTo(pt[0], pt[1]); });
+  /* 漏斗：从口沿外缘收到楼板底，左右各收 12px。**底边要越过楼板底**
+     （+5）—— 停在楼板底的话，下面会出现一条干净的直边，读作"洞下面贴了块补丁"，
+     而不是"这一块楼板没了"。 */
+  g.lineTo(rimR - 14, cy + SLAB + 5);
+  g.lineTo(rimL + 14, cy + SLAB + 5);
+  g.closePath();
+  const funnel = g.createLinearGradient(0, cy - 12, 0, cy + SLAB);
+  funnel.addColorStop(0, '#5A412A');    // 上沿：受光的地板断面
+  funnel.addColorStop(0.55, '#4A3526');
+  funnel.addColorStop(1, '#1B120C');    // 底：楼板下面，黑的
+  g.fillStyle = funnel;
+  g.fill();
+  /* **只描口沿，不描下沿。** 整条闭合描边会让这块断面变成一个"贴在楼板上的
+     单独图形"；只描上沿，它就是"楼板缺了一块"。 */
+  g.beginPath();
+  rimPtsO.forEach((pt, i) => { if (i === 0) g.moveTo(pt[0], pt[1]); else g.lineTo(pt[0], pt[1]); });
+  g.strokeStyle = COL.ink; g.lineWidth = 2.4; g.stroke();
+
+  /* ---- ② 光先打在地面和断面上，③ 洞壁再压上去 ----
+     **顺序反过来会把洞壁照成一块紫色的垫子。** 光是从洞里往外跑的，
+     它照亮的是口沿四周的地板，不是洞的内壁。
+     —— 用户原话「太突兀」，一半是这个：紫光把整个洞口连同内壁糊成一团。 */
+  /* ---- ③ 光：从**洞里**往外透，不是从头顶照下来 ----
+     用加色混合，紫光才会真的把木地板推亮（亮色墙上 source-over 只涨 3%）。 */
   if (alive) {
-    const gl = g.createRadialGradient(cx, cy, 4, cx, cy, 66);
-    gl.addColorStop(0, 'rgba(214,120,255,' + (0.30 + 0.16 * pulse).toFixed(3) + ')');
-    gl.addColorStop(0.45, 'rgba(152,84,236,' + (0.16 + 0.10 * pulse).toFixed(3) + ')');
-    gl.addColorStop(1, 'rgba(120,80,220,0)');
+    g.globalCompositeOperation = 'lighter';
+    const gl = g.createRadialGradient(cx, cy + 2, 3, cx, cy + 2, 74);
+    gl.addColorStop(0, 'rgba(196,110,255,' + (0.26 + 0.14 * pulse).toFixed(3) + ')');
+    gl.addColorStop(0.5, 'rgba(140,80,224,' + (0.12 + 0.08 * pulse).toFixed(3) + ')');
+    gl.addColorStop(1, 'rgba(110,70,200,0)');
     g.fillStyle = gl;
-    g.beginPath(); g.ellipse(cx, cy, 66, 40, 0, 0, Math.PI * 2); g.fill();
-
-    const core = g.createRadialGradient(cx, cy, 2, cx, cy, 34);
-    core.addColorStop(0, 'rgba(238,214,255,' + (0.30 + 0.14 * pulse).toFixed(3) + ')');
-    core.addColorStop(1, 'rgba(200,150,255,0)');
-    g.fillStyle = core;
-    g.beginPath(); g.ellipse(cx, cy - 2, 34, 20, 0, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.ellipse(cx, cy + 2, 74, 34, 0, 0, Math.PI * 2); g.fill();
+    g.globalCompositeOperation = 'source-over';
   }
 
-  /* 翻起来的边 */
-  g.fillStyle = alive ? '#5B3E8C' : '#66606E';
-  g.beginPath(); g.ellipse(cx, cy, w + 5, h + 5, 0, 0, Math.PI * 2); g.fill();
-  g.strokeStyle = COL.ink; g.lineWidth = 3; g.stroke();
+  /* ---- ③ 内壁：往下一圈比一圈暗，深度是靠"层的颜色"读出来的 ----
+     三圈，最后一圈贴到楼板底 —— 有这三圈，口才不是"地上印了个黑椭圆"。 */
+  const rings = [
+    { dx: 13, dy: 5, col: '#57402C' },
+    { dx: 8,  dy: 3, col: '#33251A' },
+    { dx: 3,  dy: 1, col: '#17100A' },
+  ];
+  for (const r of rings) {
+    g.beginPath();
+    g.ellipse(cx, cy + r.dy, w + r.dx, h + r.dy * 0.6, 0, Math.PI, Math.PI * 2);
+    g.lineTo(cx + w + r.dx, cy + SLAB - 2);
+    g.lineTo(cx - w - r.dx, cy + SLAB - 2);
+    g.closePath();
+    g.fillStyle = r.col; g.fill();
+  }
 
-  /* 口内：中心纯黑，边缘带一点紫 —— 纯黑一块读不出深度 */
-  const hole = g.createRadialGradient(cx, cy - 3, 2, cx, cy, w);
+  /* ---- ④ 洞口本身 ----
+     中心纯黑、边缘带紫。**纯黑一块读不出深度**，得靠边缘那一圈紫说明
+     "光在往外跑"。 */
+  /* **口沿要"破"，不能是椭圆。** 一个规整的椭圆 + 一圈均匀描边，
+     在放大图里就是"一个紫色铁盆"（第一版出图就是这样）。改成 14 个点的
+     不规则闭合路径，半径按 seed 抖动 ±5px —— 它得看起来像"被顶开的"。 */
+  const rimPts = [];
+  for (let i = 0; i < 14; i++) {
+    const a = (i / 14) * Math.PI * 2;
+    const rj = 1 + jag(i + 9, 0, 0.16);
+    rimPts.push([cx + Math.cos(a) * w * rj, cy + Math.sin(a) * h * rj * 1.02]);
+  }
+  /* **紫只留在最外一圈（12%）。** 上一版从 55% 就开始转紫，整个口读成
+     "一块发光的紫色圆饼"——洞应该是黑的，紫是"光从里面跑出来"的那点边缘。 */
+  const hole = g.createRadialGradient(cx, cy + 2, 2, cx, cy, w);
   hole.addColorStop(0, '#000000');
-  hole.addColorStop(0.6, alive ? '#170A2C' : '#26262C');
-  hole.addColorStop(1, alive ? '#43246E' : '#37373F');
+  hole.addColorStop(0.62, alive ? '#040209' : '#1C1C22');
+  hole.addColorStop(0.88, alive ? '#150A26' : '#24242C');
+  hole.addColorStop(1, alive ? '#2E1750' : '#2C2C34');
   g.fillStyle = hole;
-  g.beginPath(); g.ellipse(cx, cy, w, h, 0, 0, Math.PI * 2); g.fill();
+  g.beginPath();
+  rimPts.forEach((pt, i) => { if (i === 0) g.moveTo(pt[0], pt[1]); else g.lineTo(pt[0], pt[1]); });
+  g.closePath(); g.fill();
+  g.strokeStyle = COL.ink; g.lineWidth = 2.6; g.stroke();
 
-  /* 口沿上缘的高光弧。**给它一条"厚度"**：没有这条，口只是一块黑饼，
-     有了它，读作"地面被撑开了一道边" —— 这是"洞"和"黑斑"的区别。 */
+  /* 口沿上缘的**细亮线**。只留 1.4px，跟着口沿走半圈 ——
+     上一版是 2.4px 的整条亮弧，加上紫光就成了"眼白"。 */
   if (alive) {
-    g.strokeStyle = 'rgba(226,200,255,' + (0.42 + 0.30 * pulse).toFixed(3) + ')';
-    g.lineWidth = 2.4; g.lineCap = 'round';
-    g.beginPath(); g.ellipse(cx, cy, w - 1.5, h - 1.5, 0, Math.PI * 1.06, Math.PI * 1.94); g.stroke();
+    g.strokeStyle = 'rgba(212,182,255,' + (0.26 + 0.20 * pulse).toFixed(3) + ')';
+    g.lineWidth = 1.4; g.lineCap = 'round';
+    g.beginPath();
+    for (let i = 0; i < 7; i++) {
+      const pt = rimPts[i];
+      if (i === 0) g.moveTo(pt[0], pt[1]); else g.lineTo(pt[0], pt[1]);
+    }
+    g.stroke();
     g.lineCap = 'butt';
   }
 
-  /* 绕口沿转的光点（活着的巢才有） */
+  /* ---- ⑤ 内侧三级石阶：这一点"玄关感"是用户直接点名的 ----
+     一阶比一阶低、一阶比一阶窄，往洞底消失。
+     它们不可交互，也不该被当成路 —— 所以只用弱光画台阶面、不描边，
+     而且越往下越被洞口的黑吃掉。 */
+  if (alive) {
+    for (let i = 0; i < 3; i++) {
+      const sy = cy + 5 + i * 5.6;
+      const half = w * (0.78 - i * 0.19);
+      /* **石阶是"石头"色，不是紫的。** 紫色台阶会把整个口读成"发光的碗"；
+         石头只是被洞里的紫光照到，所以是"暖灰 + 一点点紫"，越往下越暗。 */
+      g.fillStyle = 'rgba(122,108,96,' + (0.55 - i * 0.13).toFixed(3) + ')';
+      g.beginPath();
+      g.moveTo(cx - half, sy); g.lineTo(cx + half, sy);
+      g.lineTo(cx + half * 0.9, sy + 3.4); g.lineTo(cx - half * 0.9, sy + 3.4);
+      g.closePath(); g.fill();
+      /* 台阶前沿的亮线：有它才读得出"这一级是往下踩的" */
+      g.fillStyle = 'rgba(196,184,176,' + (0.34 - i * 0.09).toFixed(3) + ')';
+      g.fillRect(cx - half, sy, half * 2, 1.1);
+    }
+  }
+
+  /* ---- ⑥ 掀起的板边：**这是"从下面顶开"的关键一笔** ----
+     左右各一块，朝外上方翘。没有它，口就只是"地上印了个黑椭圆"；
+     有了它，地板是"被弄破"的，破坏留下了痕迹。 */
+  const plank = (dir) => {
+    g.save();
+    /* **一头埋进地板、一头翘起来。** 上一版是整块浮在口沿上，读出两只"把手"；
+       现在平移点压在口沿外侧、旋转幅度更大（0.62），埋进去的那一端被地板盖住，
+       只留翘起的那半截 —— 这才是"被顶开"的板。 */
+    g.translate(cx + dir * (w + 8), cy + 6);
+    g.rotate(dir * -0.62);
+    g.fillStyle = '#A87C4E';
+    g.strokeStyle = COL.ink; g.lineWidth = 2.4;
+    rr(g, -20, -3.2, 24, 6.4, 2);
+    g.fill(); g.stroke();
+    /* 断面（浅一档的木茬），让"厚度"读得出来 */
+    g.fillStyle = '#D8B486';
+    g.beginPath();
+    g.moveTo(3, -3.2); g.lineTo(3, 3.2); g.lineTo(-2, 3.2); g.lineTo(-2, -3.2);
+    g.closePath(); g.fill();
+    /* 板头的一根木刺：断口不是平的 */
+    g.fillStyle = '#A87C4E';
+    g.beginPath(); g.moveTo(3.6, -2.6); g.lineTo(7.4, 0.4); g.lineTo(3.6, 1.4); g.closePath(); g.fill(); g.stroke();
+    g.restore();
+  };
+  plank(-1); plank(1);
+
+  /* ---- ⑦ 口沿的碎石与木屑：静态的（不用 sin 动），证明"这里碎过" ---- */
+  for (let i = 0; i < 8; i++) {
+    const a = Math.PI * (1.04 + (i / 7) * 0.92);
+    const rx = w + 11 + jag(i + 5, 0, 5);
+    const px = cx + Math.cos(a) * rx;
+    const py = cy + Math.sin(a) * (h + 7) + 4;
+    const sz = 1.6 + ((i * 37) % 5) * 0.42;
+    g.fillStyle = i % 3 === 0 ? '#6B5236' : '#8A6C46';
+    g.strokeStyle = 'rgba(40,28,18,.65)'; g.lineWidth = 1.1;
+    g.beginPath();
+    g.moveTo(px, py - sz);
+    g.lineTo(px + sz, py);
+    g.lineTo(px + sz * 0.4, py + sz * 0.8);
+    g.lineTo(px - sz, py + sz * 0.3);
+    g.closePath(); g.fill(); g.stroke();
+  }
+
+  /* ---- ⑧ 绕口沿转的光点（活着的巢才有）---- */
   if (alive) {
     for (let i = 0; i < 5; i++) {
       const a = t * 1.4 + i * (Math.PI * 2 / 5) + (n.seed || 0);
       const px = cx + Math.cos(a) * (w - 1);
       const py = cy + Math.sin(a) * (h - 1);
-      const s = 1.5 + 1.3 * (0.5 + 0.5 * Math.sin(a * 2 + t * 3));
+      const s = 1.4 + 1.2 * (0.5 + 0.5 * Math.sin(a * 2 + t * 3));
       g.fillStyle = 'rgba(204,176,255,' + (0.42 + 0.38 * Math.sin(a + t * 2)).toFixed(3) + ')';
       g.beginPath(); g.arc(px, py, Math.max(0.8, s), 0, Math.PI * 2); g.fill();
     }
   }
 
-  /* 往上升的紫烟。**这一笔才让人读出"它在往外冒东西"。**
-     三个烟团各自错开相位往上飘，用 sin 做左右摆 —— 它证明口是活的，
-     不是画在地上的一块贴图。烟不到 20px 高：太高就会糊住上一层的箱子。 */
+  /* ---- ⑨ 往上升的紫烟。**这一笔才让人读出"它在往外冒东西"** ----
+     烟不到 20px 高：太高就会糊住上一层的箱子。 */
   if (alive) {
     for (let i = 0; i < 3; i++) {
       const ph = (t * 0.55 + i / 3 + (n.seed || 0) * 0.01) % 1;
       const wx = cx + Math.sin(ph * 6.4 + i * 2.1) * 9;
-      const wy = cy - 3 - ph * 22;
-      g.fillStyle = 'rgba(196,150,255,' + ((1 - ph) * 0.34).toFixed(3) + ')';
-      g.beginPath(); g.arc(wx, wy, 3.4 + ph * 3.6, 0, Math.PI * 2); g.fill();
+      const wy = cy - 4 - ph * 22;
+      g.fillStyle = 'rgba(196,150,255,' + ((1 - ph) * 0.32).toFixed(3) + ')';
+      g.beginPath(); g.arc(wx, wy, 3.2 + ph * 3.4, 0, Math.PI * 2); g.fill();
     }
   }
 
   /* 刚吐完那一瞬口沿发亮 */
   if (n.born > 0) {
-    g.globalAlpha = n.born / 0.8 * 0.6;
-    g.strokeStyle = '#D8C4FF'; g.lineWidth = 3;
+    g.globalAlpha = n.born / 0.8 * 0.55;
+    g.strokeStyle = '#D8C4FF'; g.lineWidth = 2.6;
     g.beginPath(); g.ellipse(cx, cy, w + 3, h + 3, 0, 0, Math.PI * 2); g.stroke();
     g.globalAlpha = 1;
   }
   g.restore();
 }
+
 
 function drawBox(g, b) {
   const def = NUM.box[b.mat];
@@ -3957,6 +4268,39 @@ function drawBox(g, b) {
     }
     g.fillStyle = 'rgba(255,244,224,.42)';
     g.beginPath(); g.ellipse(bx + bw * 0.26, mid, 3.4, (bot - top) * 0.30, 0, 0, Math.PI * 2); g.fill();
+    return;
+  }
+
+  /* ---- 陶罐 ----
+     **它以前是装饰（能穿过去），现在是实体（能撞碎）。** 用户 2026-10-28
+     的原话是「又不形成阻挡啥的 就是个图贴上去」—— 一个"看着能装东西"的罐子
+     如果人能从它身上走过去，那这个场景就没有可信度。
+     现在凡是落地的东西都走这套碰撞：撞得动、打得碎、碎了掉雪弹。 */
+  if (b.jar) {
+    const jx = b.x + b.w / 2;
+    const jw = b.w * 0.36;
+    const jTop = b.y + 5, jBot = b.y + b.h;
+    g.fillStyle = hit ? '#FFF2DC' : '#D3BE9C';
+    g.beginPath();
+    g.moveTo(jx - jw * 0.62, jTop + 3);
+    g.quadraticCurveTo(jx - jw * 1.25, jTop + (jBot - jTop) * 0.55, jx - jw * 0.7, jBot - 3);
+    g.lineTo(jx + jw * 0.7, jBot - 3);
+    g.quadraticCurveTo(jx + jw * 1.25, jTop + (jBot - jTop) * 0.55, jx + jw * 0.62, jTop + 3);
+    g.closePath(); g.fill();
+    g.strokeStyle = COL.ink; g.lineWidth = 2.8; g.lineJoin = 'round'; g.stroke();
+    /* 罐口：一小段椭圆 + 里面一点暗，证明"口是开着"的 */
+    g.fillStyle = hit ? '#FFF6E6' : '#BFA985';
+    g.beginPath(); g.ellipse(jx, jTop + 3, jw * 0.66, 3.4, 0, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = COL.ink; g.lineWidth = 2.2; g.stroke();
+    /* 腰上两道釉纹：有它们才像个陶器而不是一颗蛋 */
+    g.strokeStyle = 'rgba(112,88,58,.42)'; g.lineWidth = 1.8;
+    for (const yy of [jTop + (jBot - jTop) * 0.36, jTop + (jBot - jTop) * 0.60]) {
+      g.beginPath();
+      g.moveTo(jx - jw * 1.02, yy); g.lineTo(jx + jw * 1.02, yy);
+      g.stroke();
+    }
+    g.fillStyle = 'rgba(255,250,238,.5)';
+    g.beginPath(); g.ellipse(jx - jw * 0.42, jTop + (jBot - jTop) * 0.46, 2.2, (jBot - jTop) * 0.24, 0, 0, Math.PI * 2); g.fill();
     return;
   }
 
@@ -4339,6 +4683,36 @@ function drawDeco(g, d) {
     g.strokeStyle = 'rgba(74,58,44,.6)'; g.lineWidth = 2;
     g.beginPath(); g.moveTo(-16, -9); g.lineTo(16, -9); g.stroke();
     g.restore();
+  } else if (k === 'stones') {
+    /* 一小堆碎石。**这类东西撞不撞无所谓** —— 它是地面本身的质感，
+       玩家从上面走过去不会觉得被骗。所以它留在装饰层，不进碰撞。 */
+    for (let i = 0; i < 5; i++) {
+      const sx = x + (i - 2) * 5.4 + ((s >> i) % 5) - 2;
+      const sz = 2.6 + (i % 3) * 1.4;
+      g.fillStyle = i % 2 ? '#9A948C' : '#BBB3A6';
+      g.strokeStyle = COL.ink; g.lineWidth = 1.6;
+      g.beginPath();
+      g.ellipse(sx, y - sz * 0.72, sz, sz * 0.78, (i - 2) * 0.22, 0, Math.PI * 2);
+      g.fill(); g.stroke();
+    }
+  } else if (k === 'stump') {
+    /* 树桩：地表层专属的"这里以前是林子"。
+       和山石、雪堆一起把地面从"一条直线"打碎。 */
+    const hh = 15 + (s % 7);
+    g.fillStyle = '#8A6A46';
+    g.beginPath();
+    g.moveTo(x - 9, y); g.lineTo(x - 7, y - hh); g.lineTo(x + 7, y - hh); g.lineTo(x + 9, y);
+    g.closePath(); g.fill();
+    g.strokeStyle = COL.ink; g.lineWidth = 2.4; g.stroke();
+    /* 顶面的年轮：这一笔是"它是被锯断的树"而不是"一根木桩" */
+    g.fillStyle = '#C9A472';
+    g.beginPath(); g.ellipse(x, y - hh, 7.4, 2.9, 0, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = COL.ink; g.lineWidth = 2; g.stroke();
+    g.strokeStyle = 'rgba(92,66,42,.55)'; g.lineWidth = 1.2;
+    g.beginPath(); g.ellipse(x, y - hh, 4.2, 1.6, 0, 0, Math.PI * 2); g.stroke();
+    /* 侧面一小片苔 */
+    g.fillStyle = '#7FA05E';
+    g.beginPath(); g.ellipse(x - 6, y - hh * 0.42, 3.2, 5.2, 0.2, 0, Math.PI * 2); g.fill();
   } else if (k === 'ladder') {
     /* 靠墙的旧木梯，**顶上是断的**。
        这是全场唯一一件"叙事道具"：它说明有人从这里上下过、后来塌了。
@@ -4426,189 +4800,286 @@ function drawDoor(g, d) {
     g.fillRect(d.x + d.w / 2 - 2, d.y + d.h * 0.55, 4, 8);
   }
 }
+/* 三种**敌人**的配色。**剪影决定"这是谁"，颜色只是加分项** ——
+   在 34×30 的尺寸上，外轮廓的体块关系比色相可读得多：
+   苔泥团是"一团"、尖牙兽是"横着拉长 + 前突的嘴"、霜甲虫是"拱起的硬壳"。
 
-/* 三种宠物的配色。**剪影决定"这是谁"，颜色只是加分项** ——
-   在 34×30 的尺寸上，耳朵的形状比色相可读得多，所以每只的轮廓都不一样：
-   兔子是"两根竖条"、狗是"两侧下垂"、刺猬是"一圈锯齿"。 */
+   **配色偏冷偏暗。** 上一版是宠物的奶油白 / 蜂蜜黄 / 雾蓝，那是"我方"的读法；
+   敌人要在浅色的木屋墙、雪地面上都能一眼拎出来，所以三只都压到中低明度，
+   和场景的暖米底色形成冷暖对比 —— 玩家扫一眼就知道"那不是我的人"。 */
 const FOE_SKIN = {
-  bunny: { body: '#FBF6EE', ink: '#8B7566', belly: '#FFFFFF', ear: '#F6D7DC', inner: '#F2A9B6' },
-  doggy: { body: '#F2C47E', ink: '#8B5A2C', belly: '#FFEBCB', ear: '#CE9149', inner: '#E4A96A' },
-  hoggy: { body: '#AEBDD2', ink: '#4C5A73', belly: '#DEE7F2', ear: '#8E9EB8', inner: '#C8B6A6' },
+  moss: { body: '#6F8F6A', ink: '#2F4230', belly: '#A8C39B', gill: '#C9DD9E' },
+  fang: { body: '#A85C4A', ink: '#43190F', belly: '#D08E70', gill: '#F0C79E' },
+  grub: { body: '#7C90AE', ink: '#28344A', belly: '#AFC3DC', gill: '#E4F1FF' },
 };
 
+/* **侧视，不是正面。**（2026-10-28 用户：「敌方和我方宠物不应该是朝向玩家
+   应该是个侧视的」）
+
+   正面画法（两只对称的眼睛 + 一个正面肚皮）在横版里有一个硬伤：它只说明
+   "这是谁"，不说明"它在往哪走"。而在这款里朝向是**唯一要紧的信息** ——
+   雪弹打哪边、它往哪边跑、这一发躲不躲得开。侧视把"朝向"直接写进剪影。
+
+   实现上整块绘制都翻到"永远朝右"的坐标系里（`g.scale(face, 1)`）：
+   朝左只是镜像，不用写两套坐标。局部原点放在**脚底中点**，
+   于是 y 向上为负、x 向前为正，画腿、画嘴都是直觉坐标。 */
 function drawFoe(g, f) {
   const cx = f.x + f.w / 2;
   const by = f.y + f.h;
-  /* **Q 版的做法：头占一半以上、眼睛占头的一半。**
-     写实比例的小眼睛在 34px 的角色上根本读不出"它朝哪边"，
-     而朝向是这一个游戏里最要紧的信息（雪弹打哪边、往哪边跑）。 */
-  const skin = FOE_SKIN[f.pet] || FOE_SKIN.bunny;
-  const face = f.face;
+  const skin = FOE_SKIN[f.breed] || FOE_SKIN.moss;
   const flash = f.hitT > 0;
+  const B = flash ? '#FFFFFF' : skin.body;
+  const moving = Math.abs(f.vx) > 1;
+  const ph = S.t * 11 + f.x * 0.09;
+  /* 待机的呼吸：背一起一伏。**一直匀速横移的单位读起来像巡逻机器人**，
+     停一下、身体微微起伏，才像个活物。幅度 4%，够看出来又不会抖。 */
+  const breathe = 1 + Math.sin(S.t * 4.4 + f.x * 0.07) * 0.04;
+
+  /* ---- 影子：画在镜像坐标系外面，它不该跟着翻转 ---- */
+  g.save();
+  g.globalAlpha = 0.18; g.fillStyle = '#33281F';
+  g.beginPath(); g.ellipse(cx, by - 1, 17, 4.2, 0, 0, Math.PI * 2); g.fill();
+  g.restore();
 
   g.save();
-  g.globalAlpha = 0.16; g.fillStyle = '#4A3A2C';
-  g.beginPath(); g.ellipse(cx, by - 1, 16, 4, 0, 0, Math.PI * 2); g.fill();
-  g.globalAlpha = 1;
+  g.translate(cx, by);
+  g.scale(f.face, 1);
 
-  // 呼吸一样的挤压 —— 静止的怪会让整层看起来是静止的
-  const squash = 1 + Math.sin(S.t * 5 + f.x * 0.05) * 0.05;
-  const rw = 17, rh = 15 * squash;
-  const hr = 15;
-  const hy = by - rh - hr + 5;          // 头心（头压在身体上沿三分之一处）
-
-  /* ---- 品种特征：画在身体和头**后面**，先出头后面的那部分 ---- */
-  if (f.pet === 'bunny') {
-    /* 长耳朵。**必须比头高出一截**，不然 34px 的兔子读起来是仓鼠。 */
-    for (const s of [-1, 1]) {
-      g.save();
-      g.translate(cx + s * 6.5, hy - hr + 5);
-      g.rotate(s * 0.17);
-      g.fillStyle = flash ? '#FFFFFF' : skin.body;
-      g.beginPath(); g.ellipse(0, -11, 5.2, 14, 0, 0, Math.PI * 2); g.fill();
-      g.strokeStyle = skin.ink; g.lineWidth = 2.6; g.stroke();
-      g.fillStyle = skin.inner;
-      g.beginPath(); g.ellipse(0, -11, 2.3, 9.5, 0, 0, Math.PI * 2); g.fill();
-      g.restore();
-    }
-  } else if (f.pet === 'hoggy') {
-    /* 背上一圈刺。**先画刺再画头**，尖只露出外面那半圈，读起来才像"扎在后背"，
-       画在头前面就成了一顶太阳帽。 */
-    g.fillStyle = flash ? '#FFFFFF' : skin.body;
-    g.strokeStyle = skin.ink; g.lineWidth = 2.4;
-    for (let i = 0; i < 8; i++) {
-      const a = -Math.PI * 0.96 + (i / 7) * Math.PI * 0.92;
-      const bx = cx + Math.cos(a) * (hr - 2);
-      const byy = hy + Math.sin(a) * (hr - 2);
-      const tx = cx + Math.cos(a) * (hr + 8.5);
-      const ty = hy + Math.sin(a) * (hr + 8.5);
-      g.beginPath();
-      g.moveTo(bx - Math.sin(a) * 3.3, byy + Math.cos(a) * 3.3);
-      g.lineTo(tx, ty);
-      g.lineTo(bx + Math.sin(a) * 3.3, byy - Math.cos(a) * 3.3);
-      g.closePath(); g.fill(); g.stroke();
-    }
-  } else if (f.pet === 'doggy') {
-    /* 垂耳：从头的两侧往下挂，**比头长** —— 狗和兔子最大的区别就在这里，
-       一个是竖的、一个是垂的，剪影上永远不会混。 */
-    for (const s of [-1, 1]) {
-      g.fillStyle = flash ? '#FFFFFF' : skin.ear;
-      g.beginPath(); g.ellipse(cx + s * 12.5, hy + 2, 6.4, 11.5, s * 0.24, 0, Math.PI * 2); g.fill();
-      g.strokeStyle = skin.ink; g.lineWidth = 2.6; g.stroke();
-    }
-  }
-
-  /* ---- 身体 ---- */
-  g.beginPath();
-  g.ellipse(cx, by - rh - 1, rw, rh, 0, 0, Math.PI * 2);
-  g.fillStyle = flash ? '#FFFFFF' : skin.body;
-  g.fill();
-  g.strokeStyle = skin.ink;
-  g.lineWidth = 3;
-  g.stroke();
-  // 肚皮（浅一档）：让圆球身体有个"正面"，不然是一颗色团
-  g.fillStyle = skin.belly;
-  g.beginPath(); g.ellipse(cx + face * 2, by - 6, rw * 0.52, rh * 0.48, 0, 0, Math.PI * 2); g.fill();
-
-  /* ---- 脚：走路时交错抬起 ----
-     **"站着待机"和"在走"必须一眼分开**，靠眼睛看不出动没动，
-     靠这两只小脚就够了。 */
-  if (f.onGround) {
-    const moving = Math.abs(f.vx) > 1;
-    const ph = S.t * 11 + f.x * 0.09;
-    for (const s of [-1, 1]) {
-      const lift = moving ? Math.max(0, Math.sin(ph + (s > 0 ? 0 : Math.PI))) * 3.4 : 0;
-      g.fillStyle = skin.ear;
-      g.beginPath(); g.ellipse(cx + s * 8, by - 2.6 - lift, 5.4, 3.2, 0, 0, Math.PI * 2); g.fill();
-      g.strokeStyle = skin.ink; g.lineWidth = 2; g.stroke();
-    }
-  }
-
-  /* ---- 头 ---- */
-  g.beginPath(); g.arc(cx, hy, hr, 0, Math.PI * 2);
-  g.fillStyle = flash ? '#FFFFFF' : skin.body;
-  g.fill();
-  g.strokeStyle = skin.ink;
-  g.lineWidth = 3;
-  g.stroke();
-
-  /* ---- 口鼻（三种各不相同，是第二层区分）---- */
-  if (f.pet === 'doggy') {
-    g.fillStyle = skin.belly;
-    g.beginPath(); g.ellipse(cx + face * 5.5, hy + 6.5, 7.6, 5.4, 0, 0, Math.PI * 2); g.fill();
-    g.strokeStyle = skin.ink; g.lineWidth = 2; g.stroke();
-    g.fillStyle = '#4A3226';
-    g.beginPath(); g.ellipse(cx + face * 10.5, hy + 4.8, 3.1, 2.6, 0, 0, Math.PI * 2); g.fill();
-  } else if (f.pet === 'hoggy') {
-    /* 尖鼻：往前探出去一小截，刺猬的脸就是"一个锥" */
-    g.fillStyle = skin.inner;
-    g.beginPath(); g.ellipse(cx + face * 11.5, hy + 3.5, 5.2, 3.8, 0, 0, Math.PI * 2); g.fill();
-    g.strokeStyle = skin.ink; g.lineWidth = 2; g.stroke();
-    g.fillStyle = '#3A3242';
-    g.beginPath(); g.arc(cx + face * 15.5, hy + 2.6, 2.2, 0, Math.PI * 2); g.fill();
-  } else {
-    g.fillStyle = skin.inner;
-    g.beginPath(); g.ellipse(cx + face * 4.6, hy + 7, 3.4, 2.6, 0, 0, Math.PI * 2); g.fill();
-    g.strokeStyle = skin.ink; g.lineWidth = 1.6; g.stroke();
-  }
-
-  /* 眼睛（白眼球 + 瞳 + 高光） */
-  const ex = face * 2.6;
-  const ey = hy + (f.pet === 'doggy' ? 0.5 : 2);
-  for (const s of [-1, 1]) {
+  const leg = (lx, phase, r) => {
+    const lift = moving ? Math.max(0, Math.sin(ph + phase * Math.PI)) * 3.2 : 0;
+    g.fillStyle = skin.ink;
+    g.beginPath(); g.ellipse(lx, -2.2 - lift, r || 4.8, 3.0, 0, 0, Math.PI * 2); g.fill();
+  };
+  /* 侧视只画**一只**眼。两只眼在 34px 上会挤成两个点，反而读不出它在盯谁；
+     一只眼 + 瞳孔朝前，就是"它在看这边"。 */
+  const eye = (ex, ey, rx, ry) => {
     g.fillStyle = '#FFFFFF';
-    g.beginPath(); g.ellipse(cx + ex + s * 5.8, ey, 4.2, 5, 0, 0, Math.PI * 2); g.fill();
-    g.strokeStyle = skin.ink; g.lineWidth = 1.7; g.stroke();
-    g.fillStyle = '#2A2018';
-    g.beginPath(); g.arc(cx + ex + s * 5.8 + face * 1.0, ey + 0.4, 2.4, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.ellipse(ex, ey, rx, ry, 0, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = skin.ink; g.lineWidth = 1.8; g.stroke();
+    g.fillStyle = '#20180F';
+    g.beginPath(); g.ellipse(ex + rx * 0.34, ey + 0.5, rx * 0.5, ry * 0.62, 0, 0, Math.PI * 2); g.fill();
     g.fillStyle = '#FFFFFF';
-    g.beginPath(); g.arc(cx + ex + s * 5.8 + face * 1.0 + 0.8, ey - 1.2, 0.95, 0, Math.PI * 2); g.fill();
-  }
-  /* 狗的小皱眉：**跑得快的那个要有跑得快的脸**，光靠颜色区分两种怪太弱。 */
-  if (f.kind === 'runner') {
-    g.strokeStyle = skin.ink; g.lineWidth = 2.2;
-    for (const s of [-1, 1]) {
+    g.beginPath(); g.arc(ex + rx * 0.5, ey - ry * 0.34, 0.95, 0, Math.PI * 2); g.fill();
+  };
+
+  /* ================================================================ 苔泥团
+     一团矮胖的苔，慢、皮厚。**外形是一整块，没有脖子** —— "圆团"这个体块
+     和另外两只（横长 / 拱壳）在任何缩放下都不会混。 */
+  if (f.breed === 'moss') {
+    /* 背上的苔草：先画，根埋在身体里，尖朝后上方探出来 */
+    g.strokeStyle = skin.ink; g.lineWidth = 2.4; g.lineCap = 'round';
+    for (let i = 0; i < 4; i++) {
+      const bx = -9.5 + i * 3.4, sway = Math.sin(S.t * 3 + i * 1.7 + f.x * 0.05) * 1.6;
+      const len = 8 + (i % 2) * 3.4;
       g.beginPath();
-      g.moveTo(cx + ex + s * 9.2, ey - 8.4);
-      g.lineTo(cx + ex + s * 3.2, ey - 5.8);
+      g.moveTo(bx, -24);
+      g.quadraticCurveTo(bx - 2.6 + sway, -24 - len * 0.6, bx - 1.4 + sway, -24 - len);
       g.stroke();
     }
+    g.lineCap = 'butt';
+
+    leg(-7.2, 0.5);
+    g.beginPath();
+    g.ellipse(0, -14.5, 15.4, 13.2 * breathe, 0, 0, Math.PI * 2);
+    g.fillStyle = B; g.fill();
+    g.strokeStyle = skin.ink; g.lineWidth = 3; g.stroke();
+
+    /* 背面的苔斑 —— 提示"这一团是有正反的" */
+    g.fillStyle = skin.gill; g.globalAlpha = 0.75;
+    g.beginPath(); g.ellipse(-7, -17, 6.4, 5.2, -0.3, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.ellipse(-3.5, -9.5, 4.2, 3.4, 0.2, 0, Math.PI * 2); g.fill();
+    g.globalAlpha = 1;
+
+    /* 脸盘：前侧一块浅色，替代"正面肚皮" */
+    g.fillStyle = skin.belly;
+    g.beginPath(); g.ellipse(7.6, -14.5, 7.4, 8.6, 0, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = skin.ink; g.lineWidth = 1.6; g.stroke();
+
+    leg(7.6, 0);
+    eye(10.4, -17.4, 4.2, 5.0);
+    /* 嘴：一条小弧 + 一颗露出来的牙 */
+    g.strokeStyle = skin.ink; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(7.4, -8.6); g.quadraticCurveTo(10.2, -7.2, 12.6, -9.2); g.stroke();
+    g.fillStyle = '#FFFDF2';
+    g.beginPath(); g.moveTo(9.4, -9.4); g.lineTo(11.2, -9.4); g.lineTo(10.3, -6.6); g.closePath(); g.fill();
+    g.strokeStyle = skin.ink; g.lineWidth = 1.3; g.stroke();
+
+    /* ============================================================ 尖牙兽
+       横着拉长 + 前突的长口鼻 + 一排牙。跑得最快，所以"低伏"是它的姿态语言。 */
+  } else if (f.breed === 'fang') {
+    /* 背刺：朝后上方，先画 */
+    g.fillStyle = B; g.strokeStyle = skin.ink; g.lineWidth = 2.2;
+    for (let i = 0; i < 3; i++) {
+      const bx = -13 + i * 6.4;
+      g.beginPath();
+      g.moveTo(bx - 3, -18);
+      g.lineTo(bx - 5.4, -26 - (i === 1 ? 2 : 0));
+      g.lineTo(bx + 2.6, -18);
+      g.closePath(); g.fill(); g.stroke();
+    }
+    /* 尾巴 */
+    g.strokeStyle = skin.ink; g.lineWidth = 4.4; g.lineCap = 'round';
+    g.beginPath();
+    g.moveTo(-15, -14);
+    g.quadraticCurveTo(-24, -18, -22.5, -26 + Math.sin(S.t * 6 + f.x) * 1.6);
+    g.stroke(); g.lineCap = 'butt';
+
+    leg(-9, 0.5, 4.4);
+    /* 身体：横向长条，低伏 */
+    g.beginPath();
+    g.ellipse(-2, -12.4, 16.2, 9.4 * breathe, 0, 0, Math.PI * 2);
+    g.fillStyle = B; g.fill();
+    g.strokeStyle = skin.ink; g.lineWidth = 3; g.stroke();
+    /* 腹部浅色（侧视：贴地那一条） */
+    g.fillStyle = skin.belly;
+    g.beginPath(); g.ellipse(-1, -8.4, 12.4, 4.4, 0, 0, Math.PI * 2); g.fill();
+
+    /* 头：比身体高、朝前偏 */
+    g.beginPath();
+    g.arc(11.2, -16.6, 9.4, 0, Math.PI * 2);
+    g.fillStyle = B; g.fill();
+    g.strokeStyle = skin.ink; g.lineWidth = 3; g.stroke();
+    /* 长口鼻：往前探出 12px，这是它和"圆团"最不像的地方 */
+    g.beginPath();
+    g.moveTo(15, -19.6);
+    g.quadraticCurveTo(25.4, -17.4, 24.6, -12.4);
+    g.quadraticCurveTo(23.8, -9.4, 16.4, -10.6);
+    g.closePath();
+    g.fillStyle = B; g.fill();
+    g.strokeStyle = skin.ink; g.lineWidth = 2.6; g.stroke();
+    /* 张开的嘴 + 上排牙 */
+    g.fillStyle = '#3A1410';
+    g.beginPath();
+    g.moveTo(15.6, -12.2);
+    g.lineTo(24.4, -12.0);
+    g.lineTo(23.4, -9.2);
+    g.lineTo(16.2, -9.6);
+    g.closePath(); g.fill();
+    g.fillStyle = '#FFFDF2'; g.strokeStyle = skin.ink; g.lineWidth = 1.2;
+    for (let i = 0; i < 4; i++) {
+      const tx = 17 + i * 2.1;
+      g.beginPath();
+      g.moveTo(tx, -12.1); g.lineTo(tx + 1.5, -12.1); g.lineTo(tx + 0.75, -10.2);
+      g.closePath(); g.fill(); g.stroke();
+    }
+    /* 一只尖耳 */
+    g.fillStyle = B; g.strokeStyle = skin.ink; g.lineWidth = 2.4;
+    g.beginPath();
+    g.moveTo(8.2, -24.6); g.lineTo(10.4, -31); g.lineTo(14.6, -24.2);
+    g.closePath(); g.fill(); g.stroke();
+    eye(13.6, -19.6, 4.0, 4.8);
+    leg(11.4, 0, 4.4);
+    /* 眉骨：跑得快的那个要有跑得快的脸 */
+    g.strokeStyle = skin.ink; g.lineWidth = 2.4; g.lineCap = 'round';
+    g.beginPath(); g.moveTo(9.4, -24.4); g.lineTo(16.6, -22.2); g.stroke();
+    g.lineCap = 'butt';
+
+    /* ============================================================ 霜甲虫
+       拱起的硬壳 + 分节 + 背上一排冰棱 + 六条小腿。**"拱"是它的体块语言**：
+       另外两只是"团"和"条"，它是一道弧，缩到指甲盖大也分得开。 */
+  } else {
+    /* 冰棱：沿壳的拱形排，先画 */
+    g.fillStyle = '#DCEFFF'; g.strokeStyle = skin.ink; g.lineWidth = 2;
+    for (let i = 0; i < 4; i++) {
+      const a = Math.PI * (1.06 + i * 0.17);
+      const bx = Math.cos(a) * 15.4, byy = -10 + Math.sin(a) * 15.4 * 0.9;
+      const tx = Math.cos(a) * (15.4 + 7.5), ty = -10 + Math.sin(a) * (15.4 + 7.5) * 0.9;
+      g.beginPath();
+      g.moveTo(bx - 2.6, byy + 1.4);
+      g.lineTo(tx, ty);
+      g.lineTo(bx + 2.6, byy + 1.4);
+      g.closePath(); g.fill(); g.stroke();
+    }
+    /* 三条后腿（侧视里被壳挡住一半，所以画得比前腿短） */
+    for (let i = 0; i < 3; i++) {
+      const lx = -11 + i * 7.4;
+      const lift = moving ? Math.max(0, Math.sin(ph + i * 2.1)) * 2.6 : 0;
+      g.strokeStyle = skin.ink; g.lineWidth = 2.6; g.lineCap = 'round';
+      g.beginPath(); g.moveTo(lx, -8.4); g.lineTo(lx - 1.4, -1.4 - lift); g.stroke();
+      g.lineCap = 'butt';
+    }
+    /* 壳：半圆拱 */
+    g.beginPath();
+    g.moveTo(-16.4, -5.6);
+    g.bezierCurveTo(-16.4, -25.6, 13.6, -25.6, 15.6, -6.4);
+    g.closePath();
+    g.fillStyle = B; g.fill();
+    g.strokeStyle = skin.ink; g.lineWidth = 3; g.stroke();
+    /* 分节：三道竖弧，读作"硬壳拼片" */
+    g.strokeStyle = skin.ink; g.lineWidth = 2; g.globalAlpha = 0.6;
+    for (let i = 0; i < 3; i++) {
+      const sx = -8 + i * 6.6;
+      g.beginPath();
+      g.moveTo(sx, -5.8);
+      g.quadraticCurveTo(sx + 1.4, -16, sx + 0.6, -22.4 + i * 0.8);
+      g.stroke();
+    }
+    g.globalAlpha = 1;
+    /* 壳顶的高光条 */
+    g.strokeStyle = skin.gill; g.lineWidth = 2.6; g.lineCap = 'round'; g.globalAlpha = 0.7;
+    g.beginPath(); g.moveTo(-9.6, -18.6); g.quadraticCurveTo(-2, -23.6, 6.4, -20.4); g.stroke();
+    g.globalAlpha = 1; g.lineCap = 'butt';
+
+    /* 头：小、前突、两片钳 */
+    g.beginPath(); g.arc(15.2, -10.6, 6.4, 0, Math.PI * 2);
+    g.fillStyle = B; g.fill();
+    g.strokeStyle = skin.ink; g.lineWidth = 2.6; g.stroke();
+    g.fillStyle = '#DCEFFF'; g.strokeStyle = skin.ink; g.lineWidth = 1.8;
+    g.beginPath(); g.moveTo(19.6, -12.6); g.lineTo(24.6, -13.6); g.lineTo(20.4, -9.4); g.closePath(); g.fill(); g.stroke();
+    g.beginPath(); g.moveTo(19.2, -8.2); g.lineTo(23.8, -5.6); g.lineTo(19.0, -6.4); g.closePath(); g.fill(); g.stroke();
+    eye(16.2, -12.6, 3.4, 4.2);
+    /* 前腿：撑在最前，走路时和三条后腿错开 */
+    const lift0 = moving ? Math.max(0, Math.sin(ph + Math.PI)) * 2.6 : 0;
+    g.strokeStyle = skin.ink; g.lineWidth = 2.8; g.lineCap = 'round';
+    g.beginPath(); g.moveTo(10.4, -8.4); g.lineTo(12.4, -1.4 - lift0); g.stroke();
+    g.lineCap = 'butt';
   }
 
-  /* ---- 蓄力：嘴前那一小团 ---- 
+  /* ---- 蓄力：嘴前那一团 ----
      **这是"它要扔东西了"的唯一提示。** 0.42 秒的前摇如果画面上什么都没有，
-     玩家只会觉得"莫名其妙掉血"。 */
+     玩家只会觉得"莫名其妙掉血"。形状跟着投掷物走：泥球是圆的、牙是尖的、
+     冰锥是竖的一条。 */
   if (f.aim > 0) {
     const k2 = clamp(f.aim / NUM.ebullet.windup, 0, 1);
-    const bcol = f.pet === 'doggy' ? '#F4EAD8' : (f.pet === 'hoggy' ? '#C6A8FF' : '#FF9E4A');
-    g.globalAlpha = 0.35 + 0.6 * k2;
-    g.fillStyle = bcol;
-    g.beginPath(); g.arc(cx + face * 17, by - rh - 6, 2.6 + 4.6 * k2, 0, Math.PI * 2); g.fill();
+    const mx = f.breed === 'fang' ? 25 : (f.breed === 'grub' ? 21 : 14);
+    const my = f.breed === 'fang' ? -13 : (f.breed === 'grub' ? -10 : -12);
+    const rr2 = 2.4 + 4.4 * k2;
+    g.globalAlpha = 0.4 + 0.6 * k2;
+    if (f.breed === 'fang') {
+      g.fillStyle = '#FFF0D8';
+      g.beginPath();
+      g.moveTo(mx - rr2 * 0.5, my - rr2); g.lineTo(mx + rr2 * 0.3, my); g.lineTo(mx - rr2 * 0.5, my + rr2);
+      g.closePath(); g.fill();
+      g.strokeStyle = skin.ink; g.lineWidth = 1.6; g.stroke();
+    } else {
+      g.fillStyle = f.breed === 'grub' ? '#BFE8FF' : '#8A9E5E';
+      g.beginPath(); g.arc(mx, my, rr2, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = skin.ink; g.lineWidth = 1.8; g.stroke();
+    }
     g.globalAlpha = 1;
-    g.strokeStyle = skin.ink; g.lineWidth = 1.8;
-    g.beginPath(); g.arc(cx + face * 17, by - rh - 6, 2.6 + 4.6 * k2, 0, Math.PI * 2); g.stroke();
   }
 
-  /* 雪覆盖：按 hits/need 上白，**这是玩家读"还差几发"的唯一线索** */
+  /* ---- 雪覆盖：按 hits/need 上白，这是玩家读"还差几发"的唯一线索 ---- */
   const need = f.needAt || snowNeed();
   const k = clamp(f.hits / need, 0, 1);
   if (k > 0) {
     g.globalAlpha = 0.42 + k * 0.55;
     g.fillStyle = '#FFFFFF';
     g.beginPath();
-    g.ellipse(cx, by - 1, rw * (0.55 + k * 0.45), rh * (0.3 + k * 0.7), 0, 0, Math.PI * 2);
+    g.ellipse(-1, -12, 15 * (0.55 + k * 0.45), 11 * (0.3 + k * 0.7), 0, 0, Math.PI * 2);
     g.fill();
     g.globalAlpha = 1;
-    // 结的霜边
     g.strokeStyle = 'rgba(150,215,240,' + (0.3 + k * 0.5).toFixed(2) + ')';
     g.lineWidth = 2;
     g.beginPath();
-    g.ellipse(cx, by - 1, rw * (0.6 + k * 0.4), rh * (0.35 + k * 0.65), 0, 0, Math.PI * 2);
+    g.ellipse(-1, -12, 15 * (0.6 + k * 0.4), 11 * (0.35 + k * 0.65), 0, 0, Math.PI * 2);
     g.stroke();
   }
-  /* 进度条（细，不抢眼，但读得清）。
-     **位置从 f.y−9 抬到 f.y−26** —— 头比碰撞盒高出 9px、兔子耳朵再高 14px，
-     留在原处这条永远压在脸和耳朵上，等于没有。 */
+  g.restore();
+
+  /* 进度条画在镜像坐标系外面 —— 否则朝左时会倒着长。
+     **位置在 f.y−26**：头比碰撞盒高出 9px、背刺再高 5px，
+     留在原处这条永远压在脸上，等于没有。 */
   if (f.hits > 0) {
     const bw = f.w + 4;
     const barY = f.y - 26;
@@ -4617,71 +5088,77 @@ function drawFoe(g, f) {
     g.fillStyle = '#9BE86E';
     g.fillRect(f.x - 2, barY, bw * k, 4);
   }
-  g.restore();
 }
 
-/* 宠物扔出来的东西。**二十来像素里要认得出是什么** ——
+/* 敌人扔出来的东西。**二十来像素里要认得出是什么** ——
    它的唯一职责是告诉玩家"这一发躲不开会掉血"，认不出就只是个彩色圆点。
-   所以每样都带自己品种的形状：萝卜是锥、骨头是哑铃、刺球是齿轮。 */
+   所以每样都带自己品种的形状语言：牙是尖的、冰锥是细长的、泥球是圆的。
+
+   **这三样都不能用白色。** 地表是浅色雪地、墙面是暖米色，白东西在上面
+   直接消失（上一版骨头就吃过这个亏：三发出图只看得见两发）。
+   一律给它们"比背景更深一档的底色 + 更深的描边"。 */
 function drawEBullet(g, b) {
   g.save();
   g.translate(b.x, b.y);
-  if (b.kind === 'bone') {
-    g.rotate(b.spin);
-    /* **骨头不能用"雪白"。** 地表是浅色雪地，白骨头在上面等于隐形 ——
-       第一次出图时三发只看得见两发，缺的那个就是它。
-       改成米黄 + 更深的描边，并且在雪地上靠"影子般的深边"立住。 */
-    g.fillStyle = '#F4E3BC';
-    g.strokeStyle = '#6B4A2E'; g.lineWidth = 2.8;
-    rr(g, -6, -2.6, 12, 5.2, 2.6); g.fill(); g.stroke();
-    for (const s of [-1, 1]) {
-      for (const yy of [-3.1, 3.1]) {
-        g.beginPath(); g.arc(s * 6.6, yy, 3.1, 0, Math.PI * 2);
-        g.fillStyle = '#F4E3BC'; g.fill(); g.stroke();
-      }
-    }
-  } else if (b.kind === 'spike') {
-    g.rotate(b.spin * 1.7);
-    g.fillStyle = '#8E68D8';
-    g.strokeStyle = '#452B78'; g.lineWidth = 2;
-    for (let i = 0; i < 8; i++) {
-      const a = i / 8 * Math.PI * 2;
-      g.beginPath();
-      g.moveTo(Math.cos(a - 0.22) * 4.4, Math.sin(a - 0.22) * 4.4);
-      g.lineTo(Math.cos(a) * 10.6, Math.sin(a) * 10.6);
-      g.lineTo(Math.cos(a + 0.22) * 4.4, Math.sin(a + 0.22) * 4.4);
-      g.closePath(); g.fill(); g.stroke();
-    }
-    g.beginPath(); g.arc(0, 0, 5.2, 0, Math.PI * 2);
-    g.fillStyle = '#B79BF0'; g.fill(); g.stroke();
-  } else {
-    /* 胡萝卜：朝飞行方向躺着，尾巴上两片叶。 */
-    g.scale(b.face, 1);
-    g.rotate(-0.10 + Math.sin(b.t * 14) * 0.07);
-    g.fillStyle = '#FF8B3D';
-    g.strokeStyle = '#A44E1B'; g.lineWidth = 2.4;
+  if (b.kind === 'tooth') {
+    /* 尖牙兽甩出来的牙：一个弯锥。**弯**很关键 ——
+       直的三角读作"箭头"，弯的才读作"从嘴里甩出来的牙"。 */
+    g.rotate(b.spin * 0.8);
+    g.fillStyle = '#FFF6E2';
+    g.strokeStyle = '#4A2C1A'; g.lineWidth = 2.6;
     g.beginPath();
-    g.moveTo(11, 0);
-    g.quadraticCurveTo(1, -5.6, -8.5, -3.4);
-    g.quadraticCurveTo(-11, 0, -8.5, 3.4);
-    g.quadraticCurveTo(1, 5.6, 11, 0);
+    g.moveTo(9.6, 0);
+    g.quadraticCurveTo(2, -5.4, -5.6, -3.2);
+    g.quadraticCurveTo(-8.4, -1.2, -5.4, 2.4);
+    g.quadraticCurveTo(2, 4.2, 9.6, 0);
     g.closePath(); g.fill(); g.stroke();
-    g.strokeStyle = 'rgba(168,80,28,.55)'; g.lineWidth = 1.6;
-    for (const dx of [-3, 2]) {
-      g.beginPath(); g.moveTo(dx, -2.6); g.lineTo(dx + 1.6, 2.6); g.stroke();
-    }
-    g.fillStyle = '#6FBF5A';
-    g.strokeStyle = '#2F6B2A'; g.lineWidth = 1.8;
-    for (const s of [-1, 1]) {
-      g.beginPath();
-      g.moveTo(-8, 0);
-      g.quadraticCurveTo(-14, s * 3.4, -15.5, s * 7.2);
-      g.quadraticCurveTo(-9.6, s * 3.6, -8, 0);
-      g.fill(); g.stroke();
-    }
+    /* 牙根那一圈暗色，让它不像一片叶子 */
+    g.fillStyle = 'rgba(94,54,30,.5)';
+    g.beginPath(); g.ellipse(-5.2, 0, 2.6, 3.0, 0, 0, Math.PI * 2); g.fill();
+  } else if (b.kind === 'shard') {
+    /* 冰锥：细长的六面体，**朝飞行方向躺着**，带一条高光棱。
+       和"牙"的区别在长宽比：牙接近 2:1，冰锥 3:1 且是冷色。 */
+    g.scale(b.face, 1);
+    g.rotate(Math.sin(b.t * 10) * 0.08);
+    g.fillStyle = '#CFEAFA';
+    g.strokeStyle = '#2C4A62'; g.lineWidth = 2.4;
+    g.beginPath();
+    g.moveTo(13, 0);
+    g.lineTo(2.4, -5.2);
+    g.lineTo(-7.6, -3.4);
+    g.lineTo(-9.4, 0);
+    g.lineTo(-7.6, 3.4);
+    g.lineTo(2.4, 5.2);
+    g.closePath(); g.fill(); g.stroke();
+    /* 高光棱：只有冰才有的那道亮线 */
+    g.strokeStyle = 'rgba(255,255,255,.85)'; g.lineWidth = 1.6; g.lineCap = 'round';
+    g.beginPath(); g.moveTo(1.4, -2.6); g.lineTo(11, -0.6); g.stroke();
+    g.lineCap = 'butt';
+    /* 尾部的霜点 */
+    g.fillStyle = 'rgba(210,238,252,.9)';
+    g.beginPath(); g.arc(-10.4, 0, 1.6, 0, Math.PI * 2); g.fill();
+  } else {
+    /* 泥球：苔泥团抛出来的一坨，边缘不圆、带三颗凸起。 */
+    g.rotate(b.spin * 1.4);
+    g.fillStyle = '#6E7A45';
+    g.strokeStyle = '#2C3418'; g.lineWidth = 2.4;
+    g.beginPath();
+    g.moveTo(8.6, -1.4);
+    g.quadraticCurveTo(7.2, -6.4, 1.6, -6.6);
+    g.quadraticCurveTo(-4.6, -6.8, -7.8, -1.8);
+    g.quadraticCurveTo(-9.2, 2.6, -3.4, 5.8);
+    g.quadraticCurveTo(3.4, 7.4, 7.6, 3.2);
+    g.quadraticCurveTo(9.4, 1.2, 8.6, -1.4);
+    g.closePath(); g.fill(); g.stroke();
+    /* 三颗凸起：让它在旋转时能看出"在滚" */
+    g.fillStyle = '#8C9A5A';
+    g.beginPath(); g.arc(-2.4, -3.2, 2.2, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(3.4, 1.6, 1.7, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(-4.2, 2.6, 1.4, 0, Math.PI * 2); g.fill();
   }
   g.restore();
 }
+
 
 /* 四档球的配色。**档位必须一眼能读出来** ——
    冰墙只认特大球，玩家得能判断"我还差几只"，光靠半径差 1.5 倍不够。 */
@@ -5156,10 +5633,9 @@ const API = {
   coatFoe, makeBallFrom, ballHitBox, shotBox, breakBox, hurtPlayer,
   checkDoor, doorBlocked, groundAt, stepDoor,
   /* `pet` 可选：测试要能点名"给我一只兔子 / 一只狗"。
-     不传就按 kind 自动挑（见 petOf），和生成器走同一条路。 */
-  spawnFoe: (x, y, kind, pet) => {
-    const f = makeFoe(x, y, kind);
-    if (pet) f.pet = pet;
+     不传就按 kind 自动挑（见 breedOf），和生成器走同一条路。 */
+  spawnFoe: (x, y, kind, breed) => {
+    const f = makeFoe(x, y, kind, breed);
     S.foes.push(f);
     return f;
   },

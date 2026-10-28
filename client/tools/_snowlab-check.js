@@ -1208,14 +1208,16 @@ group("二十三、手感回归（贴墙跳 / 走坡 / 球的生命）");
 }
 
 /* =========================================================================
-   二十四、宠物：三种、会跳、会待机、会打人
+   二十四、敌方三种：会跳、会待机、会打人、侧视
    ========================================================================= */
-group("二十四、宠物（三种 / 跳跃 / 待机 / 远程）");
+group("二十四、敌方三种（跳跃 / 待机 / 远程 / 侧视）");
 {
-  /* 24.1 三种剪影都出现 —— 用户说的"宠物太少了"里，一半是数量，一半是同质。 */
+  /* 24.1 三种剪影都出现 —— 用户说的"太少了"里，一半是数量，一半是同质。
+     **2026-10-28 起敌方不再是兔/狗/刺猬**：用户指出"敌方为什么用我方的宠物"，
+     所以 breed 换成了 moss/fang/grub 三只怪物。这条断言盯的就是这件事。 */
   const pets = new Set();
-  for (let sd = 1; sd <= 12; sd++) { L.reset(sd); S.foes.forEach(f => pets.add(f.pet)); }
-  ck("三种宠物都上场了（" + Array.from(pets).sort().join(" / ") + "）",
+  for (let sd = 1; sd <= 12; sd++) { L.reset(sd); S.foes.forEach(f => pets.add(f.breed)); }
+  ck("三种敌方都上场了（" + Array.from(pets).sort().join(" / ") + "）",
      pets.size >= 3, "只出现 " + pets.size + " 种");
 
   /* 24.2 数量：一关至少 10 只（6 层 × 2 + 门厅 3） */
@@ -1224,7 +1226,7 @@ group("二十四、宠物（三种 / 跳跃 / 待机 / 远程）");
     L.reset(sd);
     if (S.foes.length < 8) few.push(sd + ":" + S.foes.length);
   }
-  ck("每层至少 2 只宠物、一关至少 8 只（" + (few.length ? few.join(" ") : "12 个种子全部达标") + "）",
+  ck("每层至少 2 只、一关至少 8 只（" + (few.length ? few.join(" ") : "12 个种子全部达标") + "）",
      few.length === 0, few.join(" "));
 
   /* 24.3 会跳 —— **判据是"向上弹起"（vy < -150）。**
@@ -1245,7 +1247,7 @@ group("二十四、宠物（三种 / 跳跃 / 待机 / 远程）");
     }
     if (did) hopped++;
   }
-  ck("10 个种子里至少 7 个看得到宠物起跳（" + hopped + "/10，" + frames + " 帧）",
+  ck("10 个种子里至少 7 个看得到敌人起跳（" + hopped + "/10，" + frames + " 帧）",
      hopped >= 7, hopped + "/10");
 
   /* 24.4 会待机 —— 站住的时候 vx 必须是 0（否则"待机"只是画面上不动） */
@@ -1255,18 +1257,18 @@ group("二十四、宠物（三种 / 跳跃 / 待机 / 远程）");
     const seg = S.plats.filter(p => p.kind !== 'ramp' && p.w >= 300).pop();
     L.placePlayer(seg.x + 20, seg.y - S.p.h);
     settle(4);
-    const f = L.spawnFoe(seg.x + 140, seg.y - 30, 'crawler', 'bunny');
+    const f = L.spawnFoe(seg.x + 140, seg.y - 30, 'crawler', 'moss');
     f.vx = 0; f.speed = 80;
     let idled = 0;
     for (let i = 0; i < 240; i++) {
       L.step(DT);
       if (f.idleT > 0 && Math.abs(f.vx) < 1) idled++;
     }
-    ck("宠物会站着待机（240 帧里 " + idled + " 帧）", idled > 20, idled + " 帧");
+    ck("敌人会站着待机（240 帧里 " + idled + " 帧）", idled > 20, idled + " 帧");
   }
 
   /* 24.5 会打人 + 弹道是抛物线 */
-  const petShot = (pet) => {
+  const foeShot = (br) => {
     L.reset(4);
     S.foes.length = 0; S.ebullets.length = 0; S.hp = 99; S.invuln = 999;
     /* **箱子全清。** 这一节测弹道本身；半路上随机有一摞箱子会把子弹打掉，
@@ -1276,7 +1278,7 @@ group("二十四、宠物（三种 / 跳跃 / 待机 / 远程）");
              || S.plats.filter(p => p.kind !== 'ramp' && p.w >= 420)[0];
     L.placePlayer(seg.x + 30, seg.y - S.p.h);
     settle(6);
-    const f = L.spawnFoe(S.p.x + 220, seg.y - 30, 'crawler', pet);
+    const f = L.spawnFoe(S.p.x + 220, seg.y - 30, 'crawler', br);
     f.face = -1; f.vx = 0; f.speed = 0; f.fireCd = 0;
     f.roamL = f.x; f.roamR = f.x;
     /* **必须咬住"第一颗"的引用。** 早先每帧都取 S.ebullets[0] —— 第一颗消失
@@ -1291,8 +1293,8 @@ group("二十四、宠物（三种 / 跳跃 / 待机 / 远程）");
     return { f, first, minY, maxY, y0: first ? undefined : 0, x0, x1 };
   };
   {
-    const r = petShot('bunny');
-    ck("兔子会朝玩家丢东西（fireCd 归零后 200 帧内命中射界就开火）", !!r.first,
+    const r = foeShot('moss');
+    ck("苔泥团会朝玩家丢东西（fireCd 归零后 200 帧内命中射界就开火）", !!r.first,
        "aim=" + (r.f.aim || 0).toFixed(2));
     if (r.first) {
       /* 抛物线两条：初始上扬（vy < 0），飞行中下垂 ≥ 25px；水平行程 ≥ 150px */
@@ -1305,11 +1307,11 @@ group("二十四、宠物（三种 / 跳跃 / 待机 / 远程）");
       ck("投掷物是抛物线不是直线", false, "根本没打出来");
     }
   }
-  /* 三种宠物的投掷物互不相同（用户要求"子弹要符合宠物特点"）。
+  /* 三种敌人的投掷物互不相同（用户要求"子弹要符合特点"）。
      **直接查配置，不查运行时的 S.ebullets** —— 那个数组在结束时已经被清空了。 */
   {
-    const set = new Set(['bunny', 'doggy', 'hoggy'].map(p => L.NUM.pet[p].bullet));
-    ck("三种宠物各有自己的投掷物（" + Array.from(set).join(" / ") + "）", set.size === 3,
+    const set = new Set(['moss', 'fang', 'grub'].map(p => L.NUM.breed[p].bullet));
+    ck("三种敌人各有自己的投掷物（" + Array.from(set).join(" / ") + "）", set.size === 3,
        Array.from(set).join(","));
   }
 
@@ -1323,12 +1325,12 @@ group("二十四、宠物（三种 / 跳跃 / 待机 / 远程）");
              || S.plats.filter(p => p.kind !== 'ramp' && p.w >= 420)[0];
     L.placePlayer(seg.x + 30, seg.y - S.p.h);
     settle(4);
-    const f = L.spawnFoe(S.p.x + 200, seg.y - 30, 'crawler', 'doggy');
+    const f = L.spawnFoe(S.p.x + 200, seg.y - 30, 'crawler', 'fang');
     f.face = -1; f.vx = 0; f.speed = 0; f.fireCd = 0;
     f.roamL = f.x; f.roamR = f.x;
     const hp0 = S.hp;
     for (let i = 0; i < 240; i++) { S.keys = {}; L.step(DT); if (S.hp < hp0) break; }
-    ck("宠物的投掷物能打到玩家（" + hp0 + " → " + S.hp + "）", S.hp < hp0, "一发都没中");
+    ck("敌人的投掷物能打到玩家（" + hp0 + " → " + S.hp + "）", S.hp < hp0, "一发都没中");
   }
 }
 
@@ -1460,6 +1462,84 @@ group("二十七、场景装饰（三件新的 + 不压洞口 / 不浮空）");
   ck("天花板件不会掉到地表层（地表上面是天空）", ceilOnSurface === 0, ceilOnSurface + " 件");
   ck("没有装饰压住上下通道", onHole === 0, onHole + " 件压洞口");
   ck("地面件都踩在落脚面上，没有浮空", floatY === 0, floatY + " 件浮空");
+}
+
+/* =========================================================================
+   二十八、打击感 + 落地容器是实体
+   ========================================================================= */
+group("二十八、打击感（碎片形状 / 冲停 / 冲击环）+ 容器是实体");
+{
+  /* 28.1 球砸木箱：碎片够多、有板条、有环、有顿帧 */
+  {
+    L.reset(3);
+    S.balls.length = 0; S.frags.length = 0; S.rings.length = 0; S.hitStop = 0; S.shake = 0;
+    const box = S.boxes.filter(b => !b.dead && b.mat === 'wood')[0];
+    if (!box) { ck("球砸木箱有碎片与冲击环", false, "这一关没有木箱"); }
+    else {
+      const ball = L.spawnBall(box.x - 30, box.y + box.h / 2, 700, 3);
+      ball.r = L.NUM.ball.maxR;
+      for (let i = 0; i < 30 && !box.dead; i++) L.step(DT);
+      const planks = S.frags.filter(f => f.w > f.h * 1.6).length;
+      ck("球砸木箱：碎成板条（" + S.frags.length + " 片，其中长条 " + planks + "）",
+         S.frags.length >= 15 && planks >= 5, S.frags.length + " 片 / " + planks + " 长条");
+      ck("球砸木箱有两层冲击环", S.rings.length >= 2, S.rings.length + " 个环");
+      /* 顿帧：球破箱的 hitStop 必须比雪弹大 —— 那是"重"和"轻"的区别 */
+      ck("球砸有顿帧（" + (S.hitStop || 0).toFixed(3) + "s）", (S.hitStop || 0) > 0.05,
+         String(S.hitStop));
+      ck("球砸有震屏（" + Math.round(S.shake) + "px）", S.shake >= 8, String(S.shake));
+    }
+  }
+
+  /* 28.2 石箱不产板条 —— 材质不同，碎法不同 */
+  {
+    L.reset(3);
+    S.balls.length = 0; S.frags.length = 0;
+    const box = S.boxes.filter(b => !b.dead && b.mat !== 'wood')[0];
+    if (!box) { ck("石箱碎成棱角块而不是板条", false, "这一关没有石箱"); }
+    else {
+      const ball = L.spawnBall(box.x - 30, box.y + box.h / 2, 700, 3);
+      ball.r = L.NUM.ball.maxR;
+      for (let i = 0; i < 30 && !box.dead; i++) L.step(DT);
+      const planks = S.frags.filter(f => f.w > f.h * 1.6).length;
+      ck("石箱碎成棱角块而不是板条（" + S.frags.length + " 片，长条 " + planks + "）",
+         S.frags.length >= 10 && planks === 0, planks + " 长条");
+    }
+  }
+
+  /* 28.3 落地的容器必须是实体（用户：「又不形成阻挡啥的 就是个图贴上去」） */
+  {
+    let props = 0, levels = 0, lidx = 0;
+    for (let sd = 1; sd <= 20; sd++) {
+      L.reset(sd); levels++;
+      const n = S.boxes.filter(b => b.prop && !b.dead).length;
+      props += n;
+      if (n > 0) lidx++;
+    }
+    ck("每关都有罐子/小箱这类实体小道具（" + (props / levels).toFixed(1) + " 个/关）",
+       props / levels >= 2, props + " 个 / " + levels + " 关");
+    ck("道具真的进了碰撞（solids 里能查到）", (() => {
+      L.reset(1);
+      const p = S.boxes.filter(b => b.prop && !b.dead)[0];
+      if (!p) return false;
+      return L.groundAt(p.x + p.w / 2, p.y + p.h / 2) === p.y + p.h ||
+             L.groundAt(p.x + p.w / 2, p.y - 4) === p.y;
+    })(), "solids 里找不到");
+    ck("道具一发就碎（hp = 1）", (() => {
+      L.reset(1);
+      return S.boxes.filter(b => b.prop).every(b => b.hp === 1);
+    })(), "有道具 hp > 1");
+  }
+
+  /* 28.4 敌人不再是"我方宠物"的外观，也不再是正面双眼 */
+  {
+    L.reset(2);
+    const bad = S.foes.filter(f => ['bunny', 'doggy', 'hoggy'].indexOf(f.breed) >= 0);
+    ck("敌人不再用兔/狗/刺猬的形象", bad.length === 0, bad.length + " 只");
+    const cfg = L.NUM.breed;
+    ck("三种敌人的投掷物都在 ebullet.spd 里有速度",
+       ['moss', 'fang', 'grub'].every(b => cfg[b] && L.NUM.ebullet.spd[cfg[b].bullet] > 0),
+       JSON.stringify(Object.keys(cfg || {})));
+  }
 }
 
 /* =========================================================================

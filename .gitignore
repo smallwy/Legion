@@ -37,7 +37,15 @@ client/prototype/*.bak-*.html
 *.user
 
 # ---- 本地工具状态（WorkBuddy 工作区记忆/总览）----
-.workbuddy/
+# **用 `.workbuddy/*` 而不是 `.workbuddy/`。** git 不允许"父目录被排除之后
+# 再放行里面的某个文件"，所以写成排除目录就再也没有例外了 —— 前两轮出现过
+# "日志写完了、git status 干干净净、以为提交了"的事故。
+# 只排除直接子项，就能单独放行 memory/ 和 overview.md：工作日志和项目总览
+# 要进版本库（踩过的坑比代码注释更常被翻，换机器也不能丢），
+# tmp/ 和会话缓存照旧不进。
+.workbuddy/*
+!.workbuddy/memory/
+!.workbuddy/overview.md
 
 # ---- 验证轮次产物（随时可重跑生成）----
 .playwright-mcp/

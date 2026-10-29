@@ -396,11 +396,16 @@ ck("铁箱：助跑推（pow 1209）能碎", ir2.dead === true);
     prevX = b.x;
   }
   S.keys = {};
-  /* **真正要守的是这一条。** 旧版的表现不是"抖"，是"球被顶飞出去"：
-     球贴着墙 → 玩家推 → vx 顶到 1209 → 走 20px 撞墙 → 弹回 -542 →
-     球比玩家（300）跑得快，甩开玩家自己滚 415px 才停。玩家看到的
-     就是"球在墙边乱蹦、然后跑掉"。新版应该原地抵住，位置不动。 */
-  ck("贴着墙推球不会被顶飞（位移 < 12px）", Math.abs(b.x - x0) < 12, Math.round(Math.abs(b.x - x0)));
+  /* **2026-10-29 改判据：从"原地冻住"改成"挤回场内"。**
+     用户：「现在球在最左右 没办法推动」。
+     原地冻住看着很安全，实际是死局 —— 球贴墙时玩家永远站不到它另一侧
+     （人 45 宽，墙和球之间 0 身位），这颗球从此废掉，只能等它自己化。
+     所以现在的行为是"顶住墙就往外挤"（见 pushBalls 里 blk === 'wall' 那一支）。
+     要守两条：
+       · 球真的离开了墙角（往场内走 ≥120px）—— 否则还是死球；
+       · **不抖**：x 的方向反转 ≤2 次。这条是老断言留下的，它守的是
+         "推 → 撞 → 弹回 → 再推" 的 8Hz 死循环，那个问题不能回来。 */
+  ck("贴着墙推球会被挤回场内（往场内 ≥110px）", b.x < x0 - 110, Math.round(x0 - b.x));
   ck("球贴着墙被推时不会反复冲撞（x 反转 ≤2 次）", flips <= 2, flips);
 }
 
@@ -1676,15 +1681,19 @@ group("二十六、左右走不晃（镜头不跟横移 / 平地不掉）");
 group("二十七、场景装饰（三件新的 + 不压洞口 / 不浮空）");
 {
   const CEIL = ['lamp', 'chandelier', 'lantern', 'beam', 'rope', 'vine', 'web', 'flag'];
-  const lvWith = { chandelier: 0, lantern: 0, ladder: 0 };
+  const lvWith = { chandelier: 0, lantern: 0 };
+  /* 断梯是 2026-10-29 按用户反馈删掉的（「梯子没啥用吧 很突兀」）：
+     它画得跟真梯子一样、却爬不上去。这里反过来守"它不许回来"。 */
+  let ladderLeft = 0;
   let total = 0, layers = 0, emptyLayer = 0;
   let ceilOnSurface = 0, onHole = 0, floatY = 0;
   for (let sd = 1; sd <= 24; sd++) {
     const g = L.genLevel(sd);
-    const has = { chandelier: false, lantern: false, ladder: false };
+    const has = { chandelier: false, lantern: false };
     for (const d of g.deco) {
       total++;
       if (has[d.kind] != null) has[d.kind] = true;
+      if (d.kind === 'ladder') ladderLeft++;
       const isCeil = CEIL.indexOf(d.kind) >= 0;
       /* 地表层的顶是天空。**挂件掉到地表就是"半空飘着一盏灯"** ——
          曾经出图时右上角确实飘过一面旗，被当成 UI 残留。 */
@@ -1711,14 +1720,13 @@ group("二十七、场景装饰（三件新的 + 不压洞口 / 不浮空）");
     }
     for (const kk in has) if (has[kk]) lvWith[kk]++;
   }
-  ck("三种新装饰都上场了（枝形吊灯 / 挂灯笼 / 断梯）",
-     lvWith.chandelier > 0 && lvWith.lantern > 0 && lvWith.ladder > 0, JSON.stringify(lvWith));
+  ck("两种新装饰都上场了（枝形吊灯 / 挂灯笼）",
+     lvWith.chandelier > 0 && lvWith.lantern > 0, JSON.stringify(lvWith));
   ck("枝形吊灯覆盖过半的关（" + lvWith.chandelier + "/24）", lvWith.chandelier >= 12,
      lvWith.chandelier + "/24");
   ck("挂灯笼覆盖过半的关（" + lvWith.lantern + "/24）", lvWith.lantern >= 12,
      lvWith.lantern + "/24");
-  ck("断梯覆盖过半的关（" + lvWith.ladder + "/24）", lvWith.ladder >= 12,
-     lvWith.ladder + "/24");
+  ck("装饰里没有断梯（画得能爬、其实爬不上去）", ladderLeft === 0, ladderLeft + " 件");
   ck("每一层至少 3 件装饰（" + (layers - emptyLayer) + "/" + layers + " 层达标，" +
      total + " 件）", emptyLayer === 0, emptyLayer + " 层太秃");
   ck("天花板件不会掉到地表层（地表上面是天空）", ceilOnSurface === 0, ceilOnSurface + " 件");
@@ -1729,12 +1737,15 @@ group("二十七、场景装饰（三件新的 + 不压洞口 / 不浮空）");
 /* =========================================================================
    二十八、打击感 + 落地容器是实体
    ========================================================================= */
-group("二十八、打击感（碎片形状 / 冲停 / 冲击环）+ 容器是实体");
+group("二十八、打击感（碎片形状 / 冲停）+ 容器是实体");
 {
   /* 28.1 球砸木箱：碎片够多、有板条、有环、有顿帧 */
   {
     L.reset(3);
     S.balls.length = 0; S.frags.length = 0; S.rings.length = 0; S.hitStop = 0; S.shake = 0;
+    /* **怪要清掉。** 球滚过去碾死一只，`killFoe` 也会放一个环（打中反馈，
+       和碎箱无关）；不清的话"碎箱不放环"那条会被它误判。 */
+    S.foes.length = 0;
     const box = S.boxes.filter(b => !b.dead && b.mat === 'wood')[0];
     if (!box) { ck("球砸木箱有碎片与冲击环", false, "这一关没有木箱"); }
     else {
@@ -1753,7 +1764,10 @@ group("二十八、打击感（碎片形状 / 冲停 / 冲击环）+ 容器是�
       const planks = S.frags.filter(f => f.shape === 'plank').length;
       ck("球砸木箱：碎成板条（" + S.frags.length + " 片，其中长条 " + planks + "）",
          S.frags.length >= 15 && planks >= 5, S.frags.length + " 片 / " + planks + " 长条");
-      ck("球砸木箱有两层冲击环", S.rings.length >= 2, S.rings.length + " 个环");
+      /* **冲击环是 2026-10-29 删掉的**（用户：「球滚动的圆圈就不要啦」）。
+         环从**箱子中心**放出去，而球正贴着箱子滚，环心几乎就是球心 ——
+         读起来是"球外面套了一圈波纹"。这条反过来守"它不许回来"。 */
+      ck("球砸木箱不再放冲击环（用户要求去掉）", S.rings.length === 0, S.rings.length + " 个环");
       /* 顿帧：球破箱的 hitStop 必须比雪弹大 —— 那是"重"和"轻"的区别 */
       ck("球砸有顿帧（" + (S.hitStop || 0).toFixed(3) + "s）", (S.hitStop || 0) > 0.05,
          String(S.hitStop));

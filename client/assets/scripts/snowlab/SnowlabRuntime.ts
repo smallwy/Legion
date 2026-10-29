@@ -1887,8 +1887,13 @@ function genLevel(seed) {
   const deco = [];
   const CEIL_KINDS = ['lamp', 'chandelier', 'lantern', 'beam', 'rope', 'vine', 'web', 'flag'];
   /* **落地容器不在这里了**（barrel / jar / crate 都搬去 ⑥.6 当实体）。
-     这一池只剩"不装东西、撞不撞无所谓"的小物件：路牌、蘑菇、断梯。 */
-  const FLOOR_KINDS = ['sign', 'mush', 'stones', 'stump', 'ladder'];
+     这一池只剩"不装东西、撞不撞无所谓"的小物件：路牌、蘑菇、树桩。
+
+     **断梯子已经删掉了（2026-10-29）。** 用户的原话是「梯子没啥用吧 很突兀」——
+     它是一根 100px 高、缺一根横档的梯子，画得跟真梯子一样，却爬不上去；
+     而场地里本来就有**真能爬的井梯**（那摞 3 格箱子）。两件事长得一样、
+     一个能用一个不能用，等于在教玩家"别信画面"。删掉比"画得更像断的"便宜。 */
+  const FLOOR_KINDS = ['sign', 'mush', 'stones', 'stump'];
 
   for (let k = 0; k < nF; k++) {
     /* **`usedX` 必须每层重置。** 放在层循环外面的话它会跨层累积，
@@ -1931,10 +1936,6 @@ function genLevel(seed) {
        单靠随机大概只有一半的关能抽到枝形吊灯 —— 那就等于没有规律。 */
     if (k > 0 && chosen.indexOf('chandelier') < 0) chosen.push('chandelier');
     for (const kind of chosen) {
-      /* 地表不放梯子。**地表上面是天空，梯子没地方靠** ——
-         一根 100px 高的直梯竖在雪地中间，读起来就是"能爬"，而它其实不能。
-         地下才有"靠墙"这个语境，也才有"这里塌过"的叙事。 */
-      if (kind === 'ladder' && k === 0) continue;
       const isCeil = CEIL_KINDS.indexOf(kind) >= 0;
       let n = ri(1, (kind === 'mush' || kind === 'jar' || kind === 'vine') ? 3 : 2);
       /* 吊灯每层至少一盏：**它是地下唯一的光源**，没有它整层是平光。
@@ -1945,8 +1946,6 @@ function genLevel(seed) {
       }
       /* 主灯一盏。它是画面上最亮的东西，两盏就开始抢主角。 */
       if (kind === 'chandelier') n = 1;
-      /* 断梯子是"痕迹"，不是货架 —— 一层一件，多了像工地。 */
-      if (kind === 'ladder') n = 1;
       for (let i = 0; i < n; i++) {
         let x = null;
         for (let t = 0; t < 30; t++) {
@@ -1959,14 +1958,6 @@ function genLevel(seed) {
              62px 的间距在碎成三段的地面上采不满 —— 40 个种子里会有 1 层
              只剩 2 件装饰，整层看着就是"没做完"。挤一点比秃着强。 */
           if (usedX.some(u => Math.abs(u - cxx) < (t < 20 ? 62 : 44))) continue;
-          /* **梯子必须站在真地板上。** 它是 100px 高的立式道具，站在箱山顶上
-             就读作"一架够不到任何地方的梯子"；木桶和蘑菇站在箱上是"堆场"，
-             梯子站在箱上是"bug"。所以这一类要额外卡一条：本列没有箱子。 */
-          if (kind === 'ladder') {
-            const gi0 = clamp(Math.floor(cxx / 48), 0, COLS - 1);
-            const top0 = (l.colTop && l.colTop[gi0] != null) ? l.colTop[gi0] : fY;
-            if (top0 !== fY) continue;
-          }
           x = cxx;
           break;
         }
@@ -2982,11 +2973,15 @@ function makeBallFrom(f) {
    画面上球在原地剧烈抖动，玩家完全推不动它。
 
    判据分三类，只有**真的推不动**才算挡：
-     · 墙 —— 一律挡；
+     · 墙 —— 挡（但**不是"什么都不做"**，见 pushBalls 里的"挤出来"）；
      · 木箱 / 陶罐 —— 放行（会被撞碎，碎完继续滚）；
      · 砸不动的箱子 —— 球底比箱顶高 ≤56（能翻上去）放行，否则挡。
        这一条和 `ballHitBox` 里"翻一格台阶"用的是同一把尺子，
-       两处必须一致，否则球要么在硬边前自己弹、要么翻不上去。 */
+       两处必须一致，否则球要么在硬边前自己弹、要么翻不上去。
+
+   **返回值带上"被谁挡的"（2026-10-29）。** 墙和箱子要区别对待：
+   箱子挡是"这条路真的堵死了"，墙挡是"这个方向推不过去、但球可以从
+   墙角挤出来"。只返回 true 的话，两种情况都只能原地不动。 */
 function pushBlocked(b, dir, pow) {
   /* **探测距离要按"推起来之后一帧走多远"算，不是固定的 5px。**
      助跑推是 1209 px/s，一帧 20px。只探测 5px 的话，球在离墙 44px 处
@@ -2994,7 +2989,7 @@ function pushBlocked(b, dir, pow) {
      7 帧一个来回（8Hz）。看起来就是球在墙边反复冲撞。 */
   const reach = Math.max(b.r + 5, b.r + (pow || 0) / 60 + 3);
   const nx = b.x + dir * reach;
-  if (nx - b.r < WALL_L + 1 || nx + b.r > WALL_R - 1) return true;
+  if (nx - b.r < WALL_L + 1 || nx + b.r > WALL_R - 1) return 'wall';
   for (const bx of S.boxes) {
     if (bx.dead) continue;
     if (nx + b.r <= bx.x || nx - b.r >= bx.x + bx.w) continue;
@@ -3002,9 +2997,9 @@ function pushBlocked(b, dir, pow) {
     const def = NUM.box[bx.mat];
     if (!def || def.hp !== Infinity) continue;     // 木箱：撞得碎
     if ((b.y + b.r) - bx.y <= 56) continue;        // 一格硬边：翻得上去
-    return true;
+    return 'box';
   }
-  return false;
+  return '';
 }
 
 function pushBalls(dt) {
@@ -3044,7 +3039,32 @@ function pushBalls(dt) {
     if (Math.abs(p.vx) < 10) continue;
     if (sign(p.vx) !== dir) continue;
     if (Math.abs(b.vx) >= pow) continue;
-    if (pushBlocked(b, dir, pow)) continue;
+    const blk = pushBlocked(b, dir, pow);
+    /* ================= 顶在墙角 → 挤出来 =================
+       用户 2026-10-29：「现在球在最左右 没办法推动」。
+
+       原来这里是 `if (pushBlocked(...)) continue`：墙挡和箱挡一个待遇，
+       都是"什么都不做"。箱子挡没问题 —— 路真的堵死了；**墙挡有问题**：
+       球贴着墙时，玩家永远站不到它的另一侧（墙和球之间只有 0 身位，
+       人 45 宽），于是这颗球在这个位置**永久废掉**，只能等 16 秒自己化掉。
+       而球滚到墙角是极常见的结局（墙会把它弹回来再停住）。
+
+       雪球是软的：顶不住就往外挤。给一个反向速度（0.62 倍力度）加一点上抛，
+       球从墙角弹回场内，玩家接着就能正常推 —— 不需要新机制、不需要新 UI，
+       只是把"推不动"改成"推得动，但方向由墙决定"。 */
+    if (blk === 'wall') {
+      /* **力度要收着给。** 直接 `-dir * pow`（助跑时 1209）会把这颗球
+         一发打到对面的墙上 —— 实测从右墙弹出去 800px、穿了大半个场地，
+         读起来是"球被抽走了"，不是"挤出来"。0.45 倍、上限 460，
+         滚出去约 300px 停住，正好是"退回场内、还够得着"。 */
+      b.vx = -dir * Math.min(460, pow * 0.45);
+      b.vy = Math.min(b.vy, -150);
+      b.pushT = 0.16;
+      b.life = NUM.ball.life;
+      kickShake(1.8, 'push');
+      continue;
+    }
+    if (blk) continue;               // 箱子挡：真的堵死了
     b.vx = dir * pow;
     /* **留一个"正在被推"的印记给撞墙用。**
        被玩家压着撞墙不该回弹 45% —— 那是"撞上去"的力度。被压住的时候
@@ -3397,13 +3417,18 @@ function breakBox(box, how, pow, dirX, dirY) {
     /* 方向跟着冲击走：横向撞是球的速度方向，落砸是"从上往下"。 */
     S.shakeDX = dirX || 0;
     S.shakeDY = dirY || 0;
-    /* **同时最多 4 个环。** 特大球会连着碾碎 4~5 个箱子，每个箱子两圈 ——
-       十来个环叠在一起就是一团结，什么也读不出来（放大图里像一堆泡泡）。
-       旧环直接丢掉：它们本来就快消失了，留着只添乱。 */
-    if (S.rings.length > 3) S.rings.splice(0, S.rings.length - 3);
-    S.rings.push({ x: cx, y: cy, r: 6, r0: 6, r1: 54 + 26 * k, t: 0, life: 0.26, color: '#FFF6E0' });
-    /* 第二圈慢半拍、暗一档：两圈才有"冲击波"的层次，一圈只是一个圆 */
-    S.rings.push({ x: cx, y: cy, r: 4, r0: 4, r1: 82 + 34 * k, t: -0.05, life: 0.36, color: 'rgba(255,226,170,.85)' });
+    /* ================= 冲击环删了（2026-10-29）=================
+       用户：「球滚动的圆圈就不要啦」，截图上那颗球外面套着两个同心大圆。
+
+       那两个圆是这一支画的：球碾碎箱子时，从**箱子中心**放一圈 54~130px
+       的环出去。设计意图是"力从这里发出去"，但实际读出来完全不是 ——
+       球正贴着箱子往前滚，环的中心几乎就是球心，于是它读成
+       "球外面有一圈波纹/雷达"（`drawBall` 的注释里早写过同一个教训：
+       球身上不能出现同心圆）。而且球连着碾 3~4 口箱就叠 6~8 个环，
+       一屏全是圆圈。
+
+       **碎箱的力已经有三处在讲了**：板条碎片（带旋转）、震屏（带方向）、
+       顿帧。环是第四份重复信息，去掉它画面反而干净。 */
   } else {
     /* 子弹碎箱。**弹是一点一点啃的**，不该有整屏反馈 ——
        1.6px 只在连续射击时"有一点毛刺感"，单独打一口几乎看不见。 */
@@ -5656,17 +5681,53 @@ function drawRamp(g, pl) {
   const botAt = px => base + 2 + Math.sin(px * 0.058 + s) * 2.0 + Math.sin(px * 0.021 + s * 0.6) * 1.6;
   const surfAt = px => topL + (topR - topL) * ((px - x0) / pl.w);
 
-  /* 土体轮廓。上沿逐点走过去、**一点抖动都不加**（它就是碰撞面），
-     自然感交给下面那条瘤状的底边。 */
+  /* ================= 画出来的坡面不是一条尺子画的直线 =================
+     用户 2026-10-29：「这个斜坡是不是太笔直了点」。
+     整条坡的轮廓是一条 3px 的墨线、从坡脚笔直拉到坡顶，中间一个弯都没有 ——
+     那不是"土坡"，那是"用尺子量出来的三角楔子"。可**碰撞面必须还是直线**：
+     `surfY()` 是线性的，"能不能走上去 / 球会不会顺着滚"整套物理都建在它上面。
+
+     所以作弊只作在画上，三条约束：
+       · 起伏 ≤2.6px，而且**只往高的一侧偏**（画得比碰撞面高一点）。
+         脚陷进去 2px 没人看得出来，浮空 2px 一眼就是"没站住" ——
+         这个容差是不对称的，偏的方向就不能自由。
+       · 两端收成 0：坡脚要和地面平接、坡顶要和上面的台子接住，
+         中间鼓一点没人管，两头裂一 2px 的缝立刻被看见。
+       · 三个**不通约**的频率叠加。单频沿全长起伏读作"波浪"，
+         三个通约不了的正弦叠起来才是"土被踩实、被水冲过"的沉降。 */
+  const bumpAt = t => 0.85 + (0.5 + 0.5 * Math.sin(t * 6.1 + s * 0.5)) * 1.25
+                          + (0.5 + 0.5 * Math.sin(t * 13.7 + s * 1.3)) * 0.5;
+  const edgeAt = px => {
+    const t = clamp((px - x0) / pl.w, 0, 1);
+    return surfAt(px) - Math.sin(t * Math.PI) * bumpAt(t);
+  };
+  /* ================= 两端的断面：往里塌，不是一刀切 =================
+     "土坡"最可疑的地方其实不是坡面，是**两端那面 90° 的直墙** ——
+     土挖开之后下面是塌的，谁也没法把它切得那么直。
+     所以断面按"侵蚀剖面"走：顶上收进去一点，中段最深（12px），
+     坡脚反而往外鼓一点（土摊到地上）。
+     **物理上零影响**：斜坡只认顶面、横向不挡（见 stepBody 的注释），
+     这面墙本来就是纯画的。 */
+  const cutPts = (xf, yTop, yBot, inward) => {
+    const Hh = yBot - yTop;
+    const prof = [[0, 0], [0.18, 0.55], [0.42, 1.0], [0.66, 0.9], [0.86, 0.4], [1, -0.2]];
+    return prof.map(([f, k]) => [
+      xf + inward * (k * 12 + Math.sin(f * 9 + s * 0.7) * 1.2),
+      yTop + Hh * f,
+    ]);
+  };
+
+  /* 土体轮廓。**从右下角起笔**：底边往左 → 左断面往上 → 坡面往右 → 右断面往下。
+     两个断面都是从顶往底走，剖面点直接复用（左边那串反过来用）。 */
   const bodyPath = () => {
     g.beginPath();
-    g.moveTo(x0, topL);
-    const step = Math.max(8, pl.w / 24);
-    for (let px = x0 + step; px < x1; px += step) g.lineTo(px, surfAt(px));
-    g.lineTo(x1, topR);
-    g.lineTo(x1, base + 3);
+    g.moveTo(x1, base + 3);
     for (let px = x1; px > x0; px -= 13) g.lineTo(px, botAt(px));
-    g.lineTo(x0, base + 3);
+    for (const [px, py] of cutPts(x0, edgeAt(x0), base + 3, 1).reverse()) g.lineTo(px, py);
+    const step = Math.max(6, pl.w / 26);
+    for (let px = x0 + step; px < x1; px += step) g.lineTo(px, edgeAt(px));
+    g.lineTo(x1, edgeAt(x1));
+    for (const [px, py] of cutPts(x1, edgeAt(x1), base + 3, -1)) g.lineTo(px, py);
     g.closePath();
   };
 
@@ -5686,7 +5747,7 @@ function drawRamp(g, pl) {
     g.fillStyle = 'rgba(150,188,214,.28)';
     g.beginPath();
     g.moveTo(x0, base + 3);
-    for (let px = x0; px <= x1; px += 12) g.lineTo(px, surfAt(px) + 16 + Math.sin(px * 0.05) * 5);
+    for (let px = x0; px <= x1; px += 12) g.lineTo(px, edgeAt(px) + 16 + Math.sin(px * 0.05) * 5);
     g.lineTo(x1, base + 3);
     g.closePath(); g.fill();
   } else {
@@ -5703,21 +5764,33 @@ function drawRamp(g, pl) {
   const variant = (!steep || snowy) ? 2 : (Math.abs(Math.round(pl.x * 3.1 + pl.base * 0.7)) % 2);
   if (variant !== 2) {
     const N = Math.max(5, Math.round(pl.w / 26));
+    /* **等分的那道缝是"机械感"的一半。**
+       六块板一样宽、缝一样间隔，读出来是"百叶窗"；真实铺装是东一块西一块。
+       做法是给每块板一个 0.5~1.5 的权重再归一化 —— **不能直接给边界加抖动**：
+       两次独立的抖动撞在一起会剩下一块 2px 的板条，在图上读作"划痕"
+       （第一版就是这样，坡顶冒出一排细线）。按权重分配就永远不会出窄条。 */
+    const wts = [];
+    for (let i = 0; i < N; i++) wts.push(1 + 0.5 * Math.sin(i * 4.3 + s * 1.7));
+    const wsum = wts.reduce((a, b) => a + b, 0);
+    const cuts = [0];
+    for (let i = 0; i < N; i++) cuts.push(cuts[i] + wts[i] / wsum);
+    /* 铺装厚度：**一段坡只用一个数**。每块板各抖一次厚度，带子就断了。 */
+    const dw = 12 + (s % 3);
     for (let i = 0; i < N; i++) {
-      const t0 = i / N, t1 = (i + 1) / N;
-      const ax = x0 + pl.w * t0, ay = surfAt(ax);
-      const bx = x0 + pl.w * t1, by = surfAt(bx);
+      const t0 = cuts[i], t1 = cuts[i + 1];
+      const ax = x0 + pl.w * t0, ay = edgeAt(ax);
+      const bx = x0 + pl.w * t1, by = edgeAt(bx);
       if (variant === 0) {
-        /* 木阶：**每一级要留缝、下垂高度要抖开**。
-           全宽等高的排板读出来是"百叶窗"，抖开之后才像一块块钉歪的板。 */
-        const drop = 13 + ((i * 7) % 6);
+        /* 木阶：**一整条连续的板面带**，缝另画（见循环之后）。
+           原来是每块板单独画一个梯形、下垂高度各抖 13~18px ——
+           板缝里露出整块土，放大看是坡面上一排"悬空的横条"。
+           现在只差 1px（`i % 2`），带子始终连着，厚度统一由 `dw` 给。 */
         g.beginPath();
-        g.moveTo(ax + 2, ay + 1.5); g.lineTo(bx - 2, by + 1.5);
-        g.lineTo(bx - 2, by + drop); g.lineTo(ax + 2, ay + drop + 1);
+        g.moveTo(ax, ay + 1.2); g.lineTo(bx, by + 1.2);
+        g.lineTo(bx, by + dw + (i % 2)); g.lineTo(ax, ay + dw + (i % 2));
         g.closePath();
-        g.fillStyle = i % 2 ? '#E0A96C' : '#C98C51';
+        g.fillStyle = i % 2 ? '#E0A96C' : '#CC9054';
         g.fill();
-        g.strokeStyle = 'rgba(74,58,44,.5)'; g.lineWidth = 1.8; g.stroke();
       } else {
         /* 乱石：一块一块圆头的石头，中间露土 */
         const drop = 15 + ((i * 5) % 9);
@@ -5735,13 +5808,42 @@ function drawRamp(g, pl) {
         g.beginPath(); g.ellipse(cx, cy + 5, Math.max(3, (bx - ax) * 0.3), 2.2, 0, 0, Math.PI * 2); g.fill();
       }
     }
+    if (variant === 0) {
+      /* 缝与下沿都在**所有板填完之后**画 —— 边填边描的话，下一块板的填充
+         会把上一条缝盖掉一半（和"先描边再上色会把描边盖住"是同一件事）。 */
+      g.strokeStyle = 'rgba(74,58,44,.42)'; g.lineWidth = 1.7;
+      for (let i = 1; i < N; i++) {
+        const px = x0 + pl.w * cuts[i], py = edgeAt(px);
+        g.beginPath(); g.moveTo(px, py + 3.2); g.lineTo(px, py + dw + 1.4); g.stroke();
+      }
+      /* 下沿那条墨线 = 铺装的厚度。没有它，板带会糊进土里读成一块脏色。 */
+      g.strokeStyle = 'rgba(74,58,44,.5)'; g.lineWidth = 1.8;
+      g.beginPath();
+      for (let px = x0 + 2; px <= x1 - 2; px += 8) g.lineTo(px, edgeAt(px) + dw + 1.6);
+      g.stroke();
+    }
   }
   /* 半埋的石头 + 被踩秃的顶边。
      **一块 240×114 的纯土色三角，无论纹理怎么调都是一块"纸板"。**
      能救它的只有两样：往下压几块石头（有体积感）、顶边磨出一道浅色
-     （人和球天天从这儿过）。石头一律**画在坡面以下**，不许露头 ——
-     露头就是玩家脚下多出来的 6px 空气。 */
+     （人和球天天从这儿过）。石头**本体**一律画在坡面以下，露头的只有
+     坡沿上那三块小石子（见下，最多 5px）。 */
   if (!snowy) {
+    /* **坡沿上压三块"半露"的石头。**
+       这条线和上面"石头不许露头"那条不冲突 —— 那条说的是"石头比坡面高
+       就是玩家脚下多出来的空气"。这里露出来的只有 3~5px，而且**角色和球
+       都画在坡之后**，走过去是"从石头前面过"，不是"浮在石头上"。
+       它换来的东西很值：一条 144px 长的直线上有三个凸起，
+       眼睛就不再把它读成一条尺子画的边。 */
+    for (let i = 0; i < 3; i++) {
+      const t = 0.19 + i * 0.29 + ((s + i * 17) % 5) / 90;
+      const px = x0 + pl.w * t;
+      const py = edgeAt(px) + 1.5;
+      const r = 3.6 + ((i * 5 + s) % 3) * 0.9;
+      g.fillStyle = i % 2 ? '#CFC5B4' : '#B6AA98';
+      g.beginPath(); g.ellipse(px, py, r * 1.25, r * 0.95, (i - 1) * 0.3, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = 'rgba(74,58,44,.45)'; g.lineWidth = 1.5; g.stroke();
+    }
     for (let i = 0; i < 4; i++) {
       const t = 0.13 + i * 0.23 + ((s + i * 31) % 7) / 100;
       const px = x0 + pl.w * t;
@@ -5756,7 +5858,7 @@ function drawRamp(g, pl) {
     g.strokeStyle = 'rgba(255,248,228,.45)';
     g.lineWidth = 3.2;
     g.beginPath();
-    for (let px = x0 + 6; px <= x1 - 6; px += 12) g.lineTo(px, surfAt(px) + 2.4);
+    for (let px = x0 + 6; px <= x1 - 6; px += 12) g.lineTo(px, edgeAt(px) + 2.4);
     g.stroke();
   }
   if (variant === 2 && !snowy) {
@@ -5766,7 +5868,7 @@ function drawRamp(g, pl) {
     for (let i = 0; i < 10; i++) {
       const t = ((i * 137 + s) % 1000) / 1000;
       const px = x0 + pl.w * t;
-      const py = surfAt(px) + 5 + ((i * 53) % 18);
+      const py = edgeAt(px) + 5 + ((i * 53) % 18);
       g.fillStyle = i % 3 === 0 ? 'rgba(255,244,222,.42)' : 'rgba(96,66,40,.32)';
       g.beginPath(); g.ellipse(px, py, 2.6 + (i % 3), 1.7 + (i % 2), 0.3, 0, Math.PI * 2); g.fill();
     }
@@ -5781,21 +5883,51 @@ function drawRamp(g, pl) {
      那条竖边交给对面去画，这里留空。 */
   g.beginPath();
   g.moveTo(x0, topL);
-  for (let px = x0; px <= x1; px += 8) g.lineTo(px, surfAt(px));
+  for (let px = x0; px <= x1; px += 6) g.lineTo(px, edgeAt(px));
   g.strokeStyle = COL.ink;
   g.lineWidth = 3;
   g.lineCap = 'round';
   g.lineJoin = 'round';
   g.stroke();
 
+  /* ---- 坡沿上"卡"着两块石头，**画在墨线之后** ----
+     起伏 2px 只让线变软，线还是连着的；真正把"一条笔直的边"打断的，
+     是压在线上、露出 5~7px 的东西 —— 那一段边**直接消失**，
+     眼睛接不上这条直线，也就读不出"三角楔子"了。
+     这样做是安全的：角色和球都画在坡之后，走过去是"从石头前面过"。 */
+  for (let i = 0; i < 2; i++) {
+    const t = 0.34 + i * 0.38 + ((s + i * 23) % 7) / 70;
+    const px = x0 + pl.w * t;
+    const py = edgeAt(px);
+    const r = 5.4 + ((s + i * 11) % 3) * 1.1;
+    g.fillStyle = snowy ? '#F4FBFF' : (i % 2 ? '#C6BCAA' : '#B0A492');
+    g.beginPath();
+    g.moveTo(px - r * 1.5, py + r * 1.0);
+    g.quadraticCurveTo(px - r * 1.45, py - r * 0.95, px - r * 0.2, py - r * 0.9);
+    g.quadraticCurveTo(px + r * 1.15, py - r * 0.85, px + r * 1.45, py + r * 0.5);
+    g.quadraticCurveTo(px + r * 0.7, py + r * 1.2, px - r * 1.5, py + r * 1.0);
+    g.closePath(); g.fill();
+    g.strokeStyle = COL.ink; g.lineWidth = 2.4; g.lineJoin = 'round'; g.stroke();
+    g.fillStyle = snowy ? 'rgba(160,198,222,.30)' : 'rgba(255,252,244,.34)';
+    g.beginPath(); g.ellipse(px - r * 0.3, py - r * 0.4, r * 0.6, r * 0.28, 0, 0, Math.PI * 2); g.fill();
+  }
+
   /* 坡脚的碎石堆。`rise > 0` 是"右端更高"，所以低端在左（x0）。
-     这条写反过一次：两段坡的土全堆到顶点，山坡正中间一道弧，像张嘴。 */
+     这条写反过一次：两段坡的土全堆到顶点，山坡正中间一道弧，像张嘴。
+
+     **坡脚要"摊开"，不能是半圆盖在地上。** 一块半圆扣在地板上，
+     仍然读作"一个楔子摆在这儿"；土坡被踩塌之后是往外摊的，
+     所以这里是三层套着的小土丘（宽 52 / 34 / 20），一层比一层矮。
+     摊出去那 26px 只有 5~7px 高，人从上面走过去不会有"浮空"的感觉。 */
   const lowX = pl.rise > 0 ? x0 : x1;
   const dir = pl.rise > 0 ? 1 : -1;
   g.fillStyle = snowy ? '#E4F2FA' : '#B78F64';
-  g.beginPath(); g.ellipse(lowX, base - 1, 26, 7, 0, Math.PI, 0); g.fill();
+  for (let i = 0; i < 3; i++) {
+    const rw = 26 - i * 7, rh = 7 - i * 1.6;
+    g.beginPath(); g.ellipse(lowX + dir * (i * 9 - 3), base - 1, rw, rh, 0, Math.PI, 0); g.fill();
+  }
   g.strokeStyle = 'rgba(74,58,44,.55)'; g.lineWidth = 2.2;
-  g.beginPath(); g.ellipse(lowX, base - 1, 26, 7, 0, Math.PI, 0); g.stroke();
+  g.beginPath(); g.ellipse(lowX - dir * 3, base - 1, 26, 7, 0, Math.PI, 0); g.stroke();
   for (let i = 0; i < 3; i++) {
     const px = lowX + dir * (10 + i * 14) + (i % 2 ? 3 : -2);
     const r = 3.6 + (i % 2) * 1.4;
@@ -7057,50 +7189,6 @@ function drawDecoBody(g, d) {
     /* 侧面一小片苔 */
     g.fillStyle = '#7FA05E';
     g.beginPath(); g.ellipse(x - 6, y - hh * 0.42, 3.2, 5.2, 0.2, 0, Math.PI * 2); g.fill();
-  } else if (k === 'ladder') {
-    /* 靠墙的旧木梯，**顶上是断的**。
-       这是全场唯一一件"叙事道具"：它说明有人从这里上下过、后来塌了。
-       **断必须画清楚**（左轨比右轨矮一截 + 中间缺一根横档 + 断口有毛刺）——
-       不断的话玩家会去踢它、以为这条路能走，那就是骗人。
-       它只有 100px 高、够不到上层，所以读作"痕迹"而不是"通道"。 */
-    const H = 100;
-    /* 10° 的倾斜是"靠墙"和"立着"的分界线 —— 只在 3px 上做文章（1.7°）读不出来，
-       直上直下的梯子看起来就是一条能走的路。 */
-    const tilt = 16;
-    const lx = x - 14, rx = x + 12;
-    const lt = y - H + 20;     // 左轨断得低一截
-    const rt = y - H;          // 右轨多出 20px，断口错开才像"折了"
-    /* 先粗深色打底、再细木色压上去 = 统一描边的廉价做法。 */
-    g.lineCap = 'round';
-    g.strokeStyle = COL.ink;
-    g.lineWidth = 9;
-    g.beginPath(); g.moveTo(lx, y); g.lineTo(lx + tilt, lt); g.stroke();
-    g.beginPath(); g.moveTo(rx, y); g.lineTo(rx + tilt, rt); g.stroke();
-    g.strokeStyle = '#C99358'; g.lineWidth = 5.5;
-    g.beginPath(); g.moveTo(lx, y); g.lineTo(lx + tilt, lt); g.stroke();
-    g.beginPath(); g.moveTo(rx, y); g.lineTo(rx + tilt, rt); g.stroke();
-    /* 横档：第 3 根缺失，只留一截断头 */
-    g.lineCap = 'butt';
-    for (let i = 0; i < 4; i++) {
-      const yy = y - 18 - i * 22;
-      const f = (y - yy) / H;                            // 横档在梯身上的实际比例
-      const ax = lx + tilt * f, bx2 = rx + tilt * f;
-      if (i === 2) {
-        g.strokeStyle = COL.ink; g.lineWidth = 6;
-        g.beginPath(); g.moveTo(ax, yy); g.lineTo(ax + 8, yy); g.stroke();
-        g.strokeStyle = '#C99358'; g.lineWidth = 3.5;
-        g.beginPath(); g.moveTo(ax, yy); g.lineTo(ax + 7, yy); g.stroke();
-        continue;
-      }
-      g.strokeStyle = COL.ink; g.lineWidth = 6;
-      g.beginPath(); g.moveTo(ax, yy); g.lineTo(bx2, yy); g.stroke();
-      g.strokeStyle = '#C99358'; g.lineWidth = 3.5;
-      g.beginPath(); g.moveTo(ax, yy); g.lineTo(bx2, yy); g.stroke();
-    }
-    /* 断口的木刺：两根短斜刺，靠它把"折了"和"画歪了"区分开。 */
-    g.strokeStyle = '#A9713F'; g.lineWidth = 2;
-    g.beginPath(); g.moveTo(lx + tilt, lt); g.lineTo(lx + tilt - 5, lt - 6); g.stroke();
-    g.beginPath(); g.moveTo(rx + tilt, rt); g.lineTo(rx + tilt + 5, rt - 6); g.stroke();
   }
   g.restore();
 }

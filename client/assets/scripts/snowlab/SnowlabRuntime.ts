@@ -4817,18 +4817,193 @@ const FOE_W = 37, FOE_H = 33;
 /* 每层的"房间主题"。**换主题不只是换颜色 —— 形状语言也换**：
    木板是竖条、砖是错缝、石头是圆块、地窖是拱形壁龛。
    顺序是"越来越往里"：天空 → 木屋 → 砖房 → 石洞 → 地窖。
-   这比单纯把颜色调暗更能传达"我又下了一层"。 */
+
+   ============ 2026-10-29（第七轮）「层与层之间没有差异化」 ============
+   上一版四个主题**全压在同一支米黄色调上**：
+   F9E0B8 / F7D2C8 / E4DACC / DED2E8 —— 明度差不到 8%、色相差不到 20°。
+   出图缩到一半，四层就是同一张壁纸换了个色温，读者要靠标题才知道这是第几层。
+   真正读得出"我又下了一层"的，是**三件事同时变**：
+
+     ① **明度阶梯**：一层比一层暗。1.00 → 0.93 → 0.82 → 0.70。
+        只变颜色不变明度，四层永远是"同一间屋子挂着四块不同颜色的布"。
+     ② **色相跳变**：黄 → 红 → **冷青** → 紫。第三层跳冷色是最关键的一步：
+        前两层再怎么调都在暖色里打转，一跳冷，前两层的暖才被读成"两层"。
+     ③ **楼板材质**：楼板是屏幕里**面积最大的横向色带**（每层地板 + 下一层的
+        天花板都是它），四层共用一块土黄等于每层都盖着同一条地板 ——
+        这一条比墙色更显眼，见 slabFill / slabSeams。
+
+   字段：
+     bg1/bg2/line  墙面三段
+     slab[3]       楼板（也是下一层的天花板）三段色
+     seam          楼板缝/砖缝/铆钉缝的颜色
+     det           材质细节（层理、碎石）的颜色 "r,g,b"
+     glow          这层的光色 [r,g,b] —— 冷色房间配暖光，是"深度"最便宜的信号
+     dark/lite     墙面上下的压暗与反光。**冷色房间不能用暖棕压**，
+                   暖棕压在青灰上会发脏绿，一脏整层就"没画完"。 */
 const ROOM = [
   null,
-  { key: 'wood',  bg1: '#F9E0B8', bg2: '#E8C79A', line: '#C99B66' },
-  { key: 'brick', bg1: '#F7D2C8', bg2: '#E3B0A4', line: '#C18D7F' },
-  { key: 'rock',  bg1: '#E4DACC', bg2: '#CCBEAD', line: '#A6947F' },
-  { key: 'vault', bg1: '#DED2E8', bg2: '#C4B4D6', line: '#9E8CB2' },
+  { key: 'wood',
+    bg1: '#FAE2B8', bg2: '#E7C392', line: '#C79A63',
+    slab: ['#CB9A5E', '#AC7C46', '#8B6236'], seam: 'rgba(66,42,20,.30)',
+    cap: ['#F1D3A4', '#E0B87F', '#C7975E'],
+    det: '70,46,26', lines: 3,
+    glow: [255, 232, 170], dark: '70,46,26', lite: '255,250,238' },
+  { key: 'brick',
+    bg1: '#EFBB9A', bg2: '#D4947A', line: '#B06F57',
+    slab: ['#C4885F', '#A26A49', '#7B4E36'], seam: 'rgba(240,216,192,.40)',
+    cap: ['#D9B49A', '#BD8C6F', '#9E6E57'],
+    det: '96,52,32', lines: 0,
+    glow: [255, 204, 138], dark: '74,36,20', lite: '255,244,226' },
+  { key: 'rock',
+    bg1: '#CDD6DB', bg2: '#A7B5BD', line: '#84939C',
+    slab: ['#B9C1C7', '#97A1A9', '#6F7A83'], seam: 'rgba(46,58,66,.26)',
+    cap: ['#CFD5DA', '#B0B9C0', '#8D979F'],
+    det: '46,58,66', lines: 3,
+    glow: [176, 214, 255], dark: '30,42,50', lite: '234,246,255' },
+  { key: 'vault',
+    bg1: '#B4A9CC', bg2: '#8B7FAA', line: '#695D8A',
+    slab: ['#867E93', '#655E74', '#474254'], seam: 'rgba(20,16,30,.34)',
+    cap: ['#A79FB8', '#8B8398', '#6E6679'],
+    det: '24,18,36', lines: 0,
+    glow: [206, 178, 255], dark: '24,18,38', lite: '236,228,255' },
 ];
 const roomOf = k => ROOM[clamp(k, 1, ROOM.length - 1)];
+/* 楼板/台子属于哪一层房间：y 落在 (FLOORS[k-1], FLOORS[k]] 里就是第 k 层。
+   **不能用"最近的楼层"** —— 悬空台子的 y 在两层之间，取最近会在 50% 的情况下
+   掉到上一层，于是同一层的楼板和台子画成两种材质，比不分材质更乱。 */
+function roomAtY(y) {
+  const F = FLOORS;
+  for (let k = 1; k < F.length; k++) if (y <= F[k] + 1) return k;
+  return Math.max(1, F.length - 1);
+}
 
 /* 一面墙。**纹理必须每帧一模一样** —— 用坐标当种子、不开 Math.random，
    否则砖缝和木纹会在屏幕上抖（和岩体那次的教训同一条）。 */
+/* 天花板剪影：**每层一套，一眼认得出这是第几层。**
+   为什么选天花板：楼板底面横贯整幅、而且玩家脚下的东西全被箱子和敌人挡着，
+   唯独头顶那条边永远是空的 —— 剪影挂在这里，信息量最便宜也最不会被挡住。
+
+   四套的形状语言刻意不共用：斜撑（木）/ 直管（砖）/ 尖锥（石）/ 圆弧（铁）。
+   "直、斜、尖、圆"四种轮廓在缩略图上都能分辨，而四块不同色温的矩形不能。
+   全部只用两笔：一道墨线 + 一道亮边，和箱子的画法保持一致。 */
+function drawRoomSig(g, k, r, cY, fY) {
+  g.save();
+  g.lineJoin = 'round';
+  g.strokeStyle = COL.ink;
+  const ink = COL.ink;
+
+  if (r.key === 'wood') {
+    /* 屋架：两根斜撑 + 一根短柱。**斜撑必须落回墙里**，
+       否则读成"挂在天花板上的两根木头"。 */
+    /* **必须是一套"桁架"，不是两根斜线。**
+       第一版只画了两根从天花板斜向中线的墨线，出图上读作"墙上有两道划痕"——
+       因为木墙上本来就有木纹和藤蔓，一条 4px 的深色斜线混在里面认不出来。
+       真桁架的识别特征是**闭合的梯形**：一根横梁 + 两根斜撑 + 一根中柱。
+       四笔围出一个形状，形状才读得出来。横梁用木头色 + 墨线，和箱子的画法同一套。 */
+    const mid = W / 2 + ((k * 173) % 120) - 60;
+    const by = cY + 30;
+    g.fillStyle = '#B08350';
+    g.fillRect(mid - 128, by, 256, 12);
+    g.strokeStyle = ink; g.lineWidth = 2.8;
+    g.strokeRect(mid - 128, by, 256, 12);
+    g.fillStyle = 'rgba(' + r.lite + ',.34)';
+    g.fillRect(mid - 126, by + 2, 252, 3);
+    g.lineWidth = 3.6; g.lineCap = 'round';
+    g.strokeStyle = ink;
+    for (const dir of [-1, 1]) {
+      g.beginPath();
+      g.moveTo(mid + dir * 128, by + 6);
+      g.lineTo(mid + dir * 34, cY + 4);
+      g.stroke();
+    }
+    g.beginPath(); g.moveTo(mid, cY + 2); g.lineTo(mid, by + 12); g.stroke();
+  } else if (r.key === 'brick') {
+    /* 管道：一根横贯整幅的直管 + 两道法兰。**必须横贯** ——
+       断在半路的管子读作"一根木棍"，接上两边的侧墙才读作"穿过这间屋子的管路"。 */
+    const py = cY + 26;
+    g.fillStyle = '#9C6B58';
+    g.fillRect(0, py - 6, W, 12);
+    g.strokeStyle = ink; g.lineWidth = 3;
+    g.strokeRect(0, py - 6, W, 12);
+    g.fillStyle = 'rgba(' + r.lite + ',.22)';
+    g.fillRect(0, py - 5, W, 3);
+    for (let i = 0; i < 4; i++) {
+      const px = 110 + i * 246 + ((k * 37) % 60);
+      g.fillStyle = '#B5846B';
+      g.fillRect(px - 8, py - 10, 16, 20);
+      g.strokeStyle = ink; g.lineWidth = 2.6;
+      g.strokeRect(px - 8, py - 10, 16, 20);
+    }
+  } else if (r.key === 'rock') {
+    /* 钟乳石：**从天花板往下尖**，长短必须悬殊。
+       等长的钟乳石读作"一排牙"，长短差 3 倍才读作"石头长下来的"。 */
+    /* **第一版画成了一排等距的倒三角**，出图上读作"挂了一排小旗子"——
+       三个原因：等距（牙）、太宽（锥子）、太亮（塑料）。
+       真的钟乳石是**水滴垂下来的形状**：根部只比尖端宽一点、整体细长、
+       长短悬殊到三倍、而且绝不会等距。所以这里：
+         · 位置按一层不重复的伪随机抖开（间距 90~170 不等）；
+         · 长 20~72、根宽 4~8 —— 宽长比控制在 1:8 左右才像滴出来的；
+         · 填充用比墙更暗的岩色，只留一笔左侧高光。 */
+    const n = 6;
+    let seedX = (k * 137) % 60;
+    for (let i = 0; i < n; i++) {
+      seedX = (seedX * 61 + 29) % 173;
+      const px = 60 + i * ((W - 120) / n) + (seedX % 74) - 37;
+      const len = 20 + (seedX % 53);
+      /* **宽度必须盖过墨线。** 第一版根宽 4~8，2.2px 的墨线左右各吃 1.1px，
+         中间只剩 2~6px 的填充 —— 出图上一根根读作"挂下来的钉子"。
+         根宽 8~14、墨线降到 2，中间才有颜色，才读作石头。 */
+      const wd = 8 + (seedX % 7);
+      const tipX = px + ((seedX % 9) - 4);
+      g.beginPath();
+      g.moveTo(px - wd, cY - 2);
+      g.quadraticCurveTo(px - wd * 0.7, cY + len * 0.55, tipX, cY + len);
+      g.quadraticCurveTo(px + wd * 0.7, cY + len * 0.55, px + wd, cY - 2);
+      g.closePath();
+      g.fillStyle = r.slab[2]; g.fill();
+      g.strokeStyle = ink; g.lineWidth = 2; g.stroke();
+      g.strokeStyle = 'rgba(' + r.lite + ',.34)'; g.lineWidth = 1.4;
+      g.beginPath();
+      g.moveTo(px - wd * 0.55, cY + 2);
+      g.quadraticCurveTo(px - wd * 0.5, cY + len * 0.5, tipX - 0.5, cY + len * 0.86);
+      g.stroke();
+    }
+  } else {
+    /* 拱肋：两道从侧墙起跳的短拱 + 中间垂下的吊链。
+       地窖的墙上有壁龛拱了，天花板再来拱肋，"上下都是拱"才成了这层的语法。 */
+    /* **肋要有厚度。** 细弧线在紫墙上读作"两根电线"，改成一条下弓的带状肋
+       （外弧深、内弧浅 → 中间那条缝就是肋的厚度），三道并排才成为"拱顶"。 */
+    for (let i = 0; i < 3; i++) {
+      const cx = 150 + i * 330 + ((k * 97) % 60);
+      const half = 104, dep = 52;
+      /* **拱是往上顶的，不是往下垂的。** 第一版把两端画在天花板上、中间往下弓，
+         出图上是一道下垂的弧 —— 那读作"一根挂着的电缆"，不是拱肋。
+         拱的识别特征是"**两端落在墙上、拱心顶到天花板**"，所以这里反过来：
+         起拱点在 cY+dep，弧心在 cY 附近。 */
+      g.beginPath();
+      g.moveTo(cx - half, cY + dep);
+      g.quadraticCurveTo(cx, cY - dep * 0.92, cx + half, cY + dep);
+      g.lineTo(cx + half, cY + dep);
+      g.quadraticCurveTo(cx, cY - dep * 0.30, cx - half, cY + dep);
+      g.closePath();
+      g.fillStyle = r.slab[1]; g.fill();
+      g.strokeStyle = ink; g.lineWidth = 2.6; g.stroke();
+      g.strokeStyle = 'rgba(' + r.lite + ',.26)'; g.lineWidth = 1.5;
+      g.beginPath();
+      g.moveTo(cx - half + 12, cY + dep - 4);
+      g.quadraticCurveTo(cx, cY - dep * 0.44, cx + half - 12, cY + dep - 4);
+      g.stroke();
+    }
+    const cx = W / 2 + ((k * 71) % 160) - 80;
+    g.lineWidth = 2.4;
+    g.beginPath(); g.moveTo(cx, cY); g.lineTo(cx, cY + 34); g.stroke();
+    g.beginPath(); g.arc(cx, cY + 42, 8, 0, Math.PI * 2); g.stroke();
+    g.strokeStyle = 'rgba(' + r.lite + ',.32)'; g.lineWidth = 1.5;
+    g.beginPath(); g.arc(cx, cY + 42, 8, Math.PI * 1.1, Math.PI * 1.9); g.stroke();
+  }
+  g.restore();
+}
+
 function drawRoomWall(g, k, cY, fY) {
   const r = roomOf(k);
   const h = fY - cY;
@@ -4915,9 +5090,9 @@ function drawRoomWall(g, k, cY, fY) {
     /* AO：两面墙的夹角本来就照不到光。靠屏幕边缘那头也压暗一档 ——
        侧墙是"斜着被看到"的，落到它上面的光本来就比后墙少。 */
     const ao = g.createLinearGradient(xe, 0, xc, 0);
-    ao.addColorStop(0, 'rgba(44,29,17,.34)');
-    ao.addColorStop(0.55, 'rgba(44,29,17,.17)');
-    ao.addColorStop(1, 'rgba(34,22,12,.62)');
+    ao.addColorStop(0, 'rgba(' + r.dark + ',.34)');
+    ao.addColorStop(0.55, 'rgba(' + r.dark + ',.17)');
+    ao.addColorStop(1, 'rgba(' + r.dark + ',.62)');
     g.fillStyle = ao;
     g.fillRect(x0, cY, span, h);
     g.restore();
@@ -4969,7 +5144,10 @@ function drawRoomWall(g, k, cY, fY) {
       const by = cY + ((i * 211 + k * 53) % Math.max(30, h));
       const bw = 44 + ((i * 61) % 76);
       const bh = 28 + ((i * 43) % 46);
-      g.fillStyle = i % 3 === 0 ? 'rgba(255,255,255,.20)' : 'rgba(120,102,84,.10)';
+      /* **对比度必须比暖色房间高。** 青灰底上压 10% 的暖灰几乎看不见 ——
+         出图上整间房是一块发雾的蓝灰，圆石全糊成噪点。冷色房间的明暗差
+         在同样的 alpha 下本来就更难读，所以这里给到 2.4 倍。 */
+      g.fillStyle = i % 3 === 0 ? 'rgba(240,250,255,.30)' : 'rgba(38,52,62,.26)';
       g.beginPath();
       for (let v = 0; v < 8; v++) {
         const a = v / 8 * Math.PI * 2;
@@ -5002,18 +5180,20 @@ function drawRoomWall(g, k, cY, fY) {
      原来的暗压根本压不住，挂灯的光晕等于打在一块白纸上 —— 看不出"亮"。
      压暗之后同一盏灯的亮度差才成立，房间的"上暗下亮"也才读得出来。 */
   const shade = g.createLinearGradient(0, BCY, 0, fY);
-  shade.addColorStop(0, 'rgba(70,46,26,.34)');
-  shade.addColorStop(0.14, 'rgba(70,46,26,.18)');
-  shade.addColorStop(0.30, 'rgba(70,46,26,.02)');
-  shade.addColorStop(0.84, 'rgba(255,250,238,.12)');
-  shade.addColorStop(1, 'rgba(255,250,238,.24)');
+  shade.addColorStop(0, 'rgba(' + r.dark + ',.34)');
+  shade.addColorStop(0.14, 'rgba(' + r.dark + ',.18)');
+  shade.addColorStop(0.30, 'rgba(' + r.dark + ',.02)');
+  shade.addColorStop(0.84, 'rgba(' + r.lite + ',.12)');
+  shade.addColorStop(1, 'rgba(' + r.lite + ',.24)');
   g.fillStyle = shade;
   g.fillRect(BX0, BCY, BX1 - BX0, fY - BCY);
 
   /* ---- ⑤ 空气透视 ----
      **往后退的东西不能和前景一个对比度。** 箱子和玩家的颜色原封不动，
      后墙只降一档，前后就分开了 —— 这比"糊一层黑"干净，也不会把木色压脏。 */
-  g.fillStyle = 'rgba(230,219,199,.10)';
+  /* 空气透视的颜色跟着主题走：暖房间用暖灰，冷房间用冷灰。
+     统一用暖灰落在青灰上会把整面墙推向脏绿 —— 那是"没画完"的颜色。 */
+  g.fillStyle = 'rgba(' + r.lite + ',.10)';
   g.fillRect(BX0, BCY, BX1 - BX0, fY - BCY);
   g.restore();
 
@@ -5023,9 +5203,9 @@ function drawRoomWall(g, k, cY, fY) {
      所以必须在 restore 之后画。 */
   for (const bx of [BX0, BX1]) {
     const cg = g.createLinearGradient(0, BCY, 0, fY);
-    cg.addColorStop(0, 'rgba(255,246,226,.07)');
-    cg.addColorStop(0.50, 'rgba(255,246,226,.20)');
-    cg.addColorStop(1, 'rgba(255,250,236,.42)');
+    cg.addColorStop(0, 'rgba(' + r.lite + ',.07)');
+    cg.addColorStop(0.50, 'rgba(' + r.lite + ',.20)');
+    cg.addColorStop(1, 'rgba(' + r.lite + ',.42)');
     g.fillStyle = cg;
     g.fillRect(bx - 1.6, BCY, 3.2, fY - BCY);
   }
@@ -5034,9 +5214,9 @@ function drawRoomWall(g, k, cY, fY) {
      一条横向的渐变压暗，**横跨整幅** —— 只压后墙的话，两块侧墙的顶上是亮的，
      天花板就"飞"起来了。用渐变而不是硬边的一条黑带：硬边读成"又一根横梁"。 */
   const cap = g.createLinearGradient(0, cY, 0, cY + 16);
-  cap.addColorStop(0, 'rgba(52,35,21,.46)');
-  cap.addColorStop(0.60, 'rgba(52,35,21,.18)');
-  cap.addColorStop(1, 'rgba(52,35,21,0)');
+  cap.addColorStop(0, 'rgba(' + r.dark + ',.46)');
+  cap.addColorStop(0.60, 'rgba(' + r.dark + ',.18)');
+  cap.addColorStop(1, 'rgba(' + r.dark + ',0)');
   g.fillStyle = cap;
   g.fillRect(0, cY, W, 16);
 
@@ -5045,11 +5225,19 @@ function drawRoomWall(g, k, cY, fY) {
   for (const x0 of [0, BX1]) {
     const w0 = x0 === 0 ? BX0 : W - BX1;
     const bot = g.createLinearGradient(0, fY - 30, 0, fY);
-    bot.addColorStop(0, 'rgba(255,250,238,0)');
-    bot.addColorStop(1, 'rgba(255,250,238,.16)');
+    bot.addColorStop(0, 'rgba(' + r.lite + ',0)');
+    bot.addColorStop(1, 'rgba(' + r.lite + ',.16)');
     g.fillStyle = bot;
     g.fillRect(x0, fY - 30, w0, 30);
   }
+
+  /* ---- ⑧ 天花板剪影 ----
+     **一条空的天花板边等于"这层没做"。** 楼板底面在每一层的最上面横贯整幅，
+     而玩家的视线落脚点永远在脚下，天花板是画面里**唯一一块没人挡的横幅**。
+     四层共用一条平边，再换多少墙色都像同一间屋子 —— 所以每层在天花板下沿
+     挂一套自己的剪影（木屋桁架 / 砖房管道 / 石洞钟乳石 / 地窖拱肋）。
+     全部压在 `cap` 之后画，才不会被天花板背光糊掉。 */
+  drawRoomSig(g, k, r, BCY, fY);
 }
 
 /* ---- 背景立绘 ----
@@ -5685,14 +5873,72 @@ function draw() {
 /* ---------------------------------------------------------------- 岩体
    **纹理必须每帧一模一样。** 用坐标当种子（不开 Math.random），
    否则石头会在屏幕上"沸腾"。 */
-function rockFill(g, x, y, w, h, seed) {
-  /* **暖土色，不是冷灰岩。** 整个场景已经换成暖色调（木箱 / 木墙），
-     灰蓝的岩体是上一版写实路子的残留，会在画面里显脏。
-     纹理仍然用坐标当种子 —— 开 Math.random 土纹会"沸腾"。 */
+/* 楼板 / 坡体的底色。**材质跟着层走**（2026-10-29 第七轮）。
+   上一版这里写死三段暖土色 —— 于是四层的地板、天花板、坡体全是同一块土黄，
+   而楼板是画面里面积最大的横向色带，这一处不换，墙换得再狠也还是"同一间屋子"。
+   纹理仍然用坐标当种子 —— 开 Math.random 土纹会"沸腾"。 */
+/* 楼板的材质细节。**底色由 rockFill 给，这里只负责"这是什么东西铺的"** ——
+   一条纯色带 + 一条墨线，在 240px 高的房间里读作"一块板"；加上缝、砖、铆钉，
+   才读作"木梁地面 / 砖砌地面 / 岩层 / 铁板"。四层用四种，比换墙色有效得多，
+   因为楼板横贯整幅、而且每层出现两次（自己的地板 + 下一层看到的天花板）。
+
+   isGround=false 的时候是悬空台子：**只给最省的两三笔**。台子窄（48~200px），
+   铺满砖块会变成"一块砖头飘在空中"，反而更假。 */
+function slabSeams(g, mat, x0, x1, yT, hh, seed, isGround) {
+  const r = ROOM[clamp(mat, 1, ROOM.length - 1)];
+  if (mat === 2) {
+    /* ---- 砖砌：错缝小砖 ----
+       **缝必须错开**（对齐的砖格读作方格纸）；砖高 13、宽 34，
+       是 26px 厚的楼板里唯一能塞下两排还不糊的尺寸。 */
+    const BH = 13, BW = 34;
+    g.strokeStyle = r.seam; g.lineWidth = 1.4;
+    for (let row = 0, yy = yT + 3; yy < yT + hh; row++, yy += BH) {
+      g.beginPath(); g.moveTo(x0, yy); g.lineTo(x1, yy); g.stroke();
+      const off = (row % 2) * (BW / 2);
+      for (let bx = x0 - BW + ((seed * 7) % BW) + off; bx < x1; bx += BW) {
+        g.beginPath(); g.moveTo(bx, yy); g.lineTo(bx, yy + BH); g.stroke();
+      }
+    }
+  } else if (mat === 3) {
+    /* ---- 岩层：不规则的断层线 + 碎石 ----
+       **岩层不能等距。** 等距线是砖缝，岩层是"一层压一层、每层长短不一"。 */
+    g.strokeStyle = 'rgba(' + r.det + ',.22)'; g.lineWidth = 1.6;
+    for (let i = 0; i < 2; i++) {
+      const yy = yT + hh * (0.4 + i * 0.34) + ((seed >> i) % 4);
+      g.beginPath(); g.moveTo(x0 - 2, yy + 1.5);
+      for (let px = x0; px < x1 + 8; px += 22) g.lineTo(px, yy + Math.sin(px * 0.11 + i * 2.3 + seed) * 1.8);
+      g.stroke();
+    }
+    for (let i = 0; i < Math.max(2, Math.round((x1 - x0) / 60)); i++) {
+      const px = x0 + ((seed * 13 + i * 71) % Math.max(12, x1 - x0));
+      g.fillStyle = i % 2 ? 'rgba(' + r.lite + ',.22)' : 'rgba(' + r.det + ',.18)';
+      g.beginPath(); g.arc(px, yT + hh * 0.55, 2 + (i % 3), 0, Math.PI * 2); g.fill();
+    }
+  } else if (mat === 4) {
+    /* ---- 铁板：两排铆钉 + 一条横接缝 ----
+       地窖是唯一"人造"的一层，铁板是最省力的说法：直线 + 等距圆点。
+       **故意等距** —— 铁板是压出来的，规矩正是它的语言。 */
+    const my = yT + hh * 0.62;
+    g.strokeStyle = r.seam; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(x0, my); g.lineTo(x1, my); g.stroke();
+    const step = 26;
+    for (const ry of [yT + 7, yT + hh - 5]) {
+      for (let px = x0 + ((seed * 9) % step) + step / 2; px < x1 - 4; px += step) {
+        g.fillStyle = 'rgba(' + r.lite + ',.55)';
+        g.beginPath(); g.arc(px, ry, 1.7, 0, Math.PI * 2); g.fill();
+        g.fillStyle = 'rgba(' + r.det + ',.45)';
+        g.beginPath(); g.arc(px + 0.6, ry + 0.8, 1.1, 0, Math.PI * 2); g.fill();
+      }
+    }
+  }
+}
+
+function rockFill(g, x, y, w, h, seed, mat) {
+  const r = ROOM[clamp(mat || 1, 1, ROOM.length - 1)];
   const grd = g.createLinearGradient(0, y, 0, y + h);
-  grd.addColorStop(0, '#CFAB80');
-  grd.addColorStop(0.42, '#B78F64');
-  grd.addColorStop(1, '#8F6C48');
+  grd.addColorStop(0, r.slab[0]);
+  grd.addColorStop(0.42, r.slab[1]);
+  grd.addColorStop(1, r.slab[2]);
   g.fillStyle = grd;
   g.fillRect(x, y, w, h);
 
@@ -5702,10 +5948,10 @@ function rockFill(g, x, y, w, h, seed) {
      一块 200×140 的坡体看起来就是一块均匀的土色三角，读不出厚度。
      三条微弯的水平暗线一加，立刻有"这是挖开的土"的体积感。
      **薄板（h<40）不加** —— 20px 高的楼板里塞三条线，反而像划痕。 */
-  if (h > 40) {
-    g.strokeStyle = 'rgba(96,66,40,.14)';
+  if (h > 40 && r.lines > 0) {
+    g.strokeStyle = 'rgba(' + r.det + ',.14)';
     g.lineWidth = 1.6;
-    for (let i = 1; i <= 3; i++) {
+    for (let i = 1; i <= r.lines; i++) {
       const ly = y + h * (i / 4) + Math.sin(seed * 0.7 + i) * 3;
       g.beginPath();
       g.moveTo(x - 4, ly);
@@ -5721,7 +5967,7 @@ function rockFill(g, x, y, w, h, seed) {
     const px = x + ((seed * 37 + i * 131) % Math.max(1, Math.floor(w)));
     const py = y + 4 + ((seed * 53 + i * 79) % Math.max(1, Math.floor(h - 6)));
     const r = 1.6 + ((i * 7) % 3.4);
-    g.fillStyle = i % 3 === 0 ? 'rgba(255,240,215,.30)' : 'rgba(96,66,40,.20)';
+    g.fillStyle = i % 3 === 0 ? 'rgba(' + r.lite + ',.30)' : 'rgba(' + r.det + ',.20)';
     g.beginPath(); g.arc(px, py, r, 0, Math.PI * 2); g.fill();
   }
   g.restore();
@@ -5729,7 +5975,14 @@ function rockFill(g, x, y, w, h, seed) {
 
 /* 雪盖（现在是"草皮 / 木顶"）。顶面在碰撞面上 —— **不许高出去，高出去人就悬空**，
    所以"自然"只能靠左右圆角 + 起伏的边缘 + 底部的一条暗边。 */
-function snowCap(g, x, y, w, thick, seed, grass, stone) {
+/* 平台顶面。
+   **这一块比楼板本身更显眼。** 玩家站在它上面、箱子坐在它上面，
+   26px 厚的楼板里顶面占 9px，而且它是全屏最连续的一条横带 ——
+   2026-10-29 第七轮之前这里写死三段暖木色，于是四层的顶面全是同一块奶油黄，
+   底下 slab 换得再狠也看不出来（出图才确认：紫色地窖的地板还是黄的）。
+   现在顶面也按层取色，`cap` 三段跟 `slab` 一起定义在 ROOM 里。 */
+function snowCap(g, x, y, w, thick, seed, grass, stone, mat) {
+  const rm = ROOM[clamp(mat || 1, 1, ROOM.length - 1)];
   const wob = px => Math.sin(px * 0.083 + seed) * 0.8 + Math.sin(px * 0.031) * 0.5;
   g.beginPath();
   g.moveTo(x - 2, y + thick);
@@ -5744,17 +5997,12 @@ function snowCap(g, x, y, w, thick, seed, grass, stone) {
     sg.addColorStop(0, '#F6FCFF');
     sg.addColorStop(0.55, '#E2F2FB');
     sg.addColorStop(1, '#C3DDEC');
-  } else if (stone) {
-    /* 悬空台子的顶面是**石头**，不是木地板。
-       原来所有顶面都走木色渐变，台子于是读成"一块钉在墙上的木板" ——
-       用户说的"横向的太规矩"，一半来自这个。 */
-    sg.addColorStop(0, '#CFC8BC');
-    sg.addColorStop(0.6, '#B4AB9D');
-    sg.addColorStop(1, '#958B7C');
   } else {
-    sg.addColorStop(0, '#F1D3A4');
-    sg.addColorStop(0.65, '#E0B87F');
-    sg.addColorStop(1, '#C7975E');
+    /* 顶面 = 这一层的材质。悬空台子也跟着层走（它和地板是同一种石头），
+       不再单独给一套"灰顶面" —— 同一间屋里地板是砖、台子是灰石，反而更乱。 */
+    sg.addColorStop(0, rm.cap[0]);
+    sg.addColorStop(0.65, rm.cap[1]);
+    sg.addColorStop(1, rm.cap[2]);
   }
   g.fillStyle = sg;
   g.fill();
@@ -5789,6 +6037,7 @@ function drawRamp(g, pl) {
   const base = pl.base;
   const s = Math.round(x0 * 1.7 + base * 0.3);
   const snowy = base === GEN.topY;            // 地表那层的坡是"雪坡"，不是"木坡"
+  const mat = roomAtY(base);                  // 坡体的材质跟着所在的层走
   const botAt = px => base + 2 + Math.sin(px * 0.058 + s) * 2.0 + Math.sin(px * 0.021 + s * 0.6) * 1.6;
   const surfAt = px => topL + (topR - topL) * ((px - x0) / pl.w);
 
@@ -5862,7 +6111,7 @@ function drawRamp(g, pl) {
     g.lineTo(x1, base + 3);
     g.closePath(); g.fill();
   } else {
-    rockFill(g, Math.min(x0, x1), Math.min(topL, topR), pl.w, base - Math.min(topL, topR) + 4, s);
+    rockFill(g, Math.min(x0, x1), Math.min(topL, topR), pl.w, base - Math.min(topL, topR) + 4, s, mat);
   }
 
   /* ---- 坡面铺装 ----
@@ -6171,6 +6420,8 @@ function drawPlat(g, pl) {
   const seed = Math.round(pl.x) + Math.round(pl.y);
   const snowy = pl.y === GEN.topY;
   const isGround = (S.level ? S.level.floors : []).some(f => Math.abs(f - pl.y) < 1);
+  /* 这块楼板/台子属于哪一层 → 决定它的材质（木梁 / 砖砌 / 岩层 / 铁板）。 */
+  const mat = roomAtY(pl.y);
   const x0 = pl.x, x1 = pl.x + pl.w, yT = pl.y, hh = pl.h;
   /* 底面的瘤状起伏。**只在悬空台子上用** —— 地板的下沿就是下一层的天花板，
      把它画成波浪等于把下一层的净空挖掉一块。 */
@@ -6222,10 +6473,13 @@ function drawPlat(g, pl) {
 
   g.save();
   bodyPath(); g.clip();
-  rockFill(g, x0 - 1, yT + 2, pl.w + 2, hh + 2, seed);
+  rockFill(g, x0 - 1, yT + 2, pl.w + 2, hh + 2, seed, mat);
   /* 地板的**板缝**。一整条 960 宽的色带上什么都没有，看不出这是"铺出来的
      地面"；每 64px 一道缝，才有工坊/砖房的地板感。悬空台子不画（太窄）。 */
-  if (isGround && !snowy) {
+  if (!snowy && mat !== 1) slabSeams(g, mat, x0, x1, yT, hh, seed, isGround);
+  /* 木梁地面的板缝仍然由下面这段老代码画（颜色本来就对），
+     其余三种材质交给 slabSeams —— 免得把这段调过好几轮的缝重写一遍。 */
+  if (isGround && !snowy && mat === 1) {
     /* **板缝不能等距。** 每 64px 一道的等距缝，一整条屏看过去就是"栅栏"，
        而且四条缝一模一样长 —— 这是"太规矩"里最容易被一眼看穿的一种。
        间距抖到 46~82，偶尔一块板换个深浅、再点一个节疤。 */
@@ -6293,15 +6547,20 @@ function drawPlat(g, pl) {
   g.lineJoin = 'round';
   g.stroke();
 
-  snowCap(g, pl.x, pl.y, pl.w, isGround ? 9 : 13, seed * 0.7, snowy, !isGround);
+  snowCap(g, pl.x, pl.y, pl.w, isGround ? 9 : 13, seed * 0.7, snowy, !isGround, mat);
 
   /* 顶面上的小东西：**两三颗石子 + 一撮苔**。
      它们只有 4~6px 高，压在碰撞线上也看不出来（人的鞋本来就在这条线里），
      但没它们，台面就是一条剃刀一样平的直边。 */
+  /* **苔和石子也要跟层走。** 石子原来是写死的暖棕（#C6A585 / #A8815C），
+     在青灰的石洞和紫色的地窖上，整条地板就只有这些暖点是暖的 ——
+     远看像撒了一层沙。苔更明显：铁板上长草是穿帮，只在木屋和石洞留。 */
+  const rTop = ROOM[clamp(mat, 1, ROOM.length - 1)];
+  const hasMoss = (mat === 1 || mat === 3);
   const nTop = Math.round(pl.w / 46);
   for (let i = 0; i < nTop; i++) {
     const px = x0 + 12 + ((i * 97 + seed * 13) % Math.max(16, pl.w - 24));
-    if (i % 3 === 2) {
+    if (i % 3 === 2 && hasMoss) {
       g.fillStyle = 'rgba(126,158,104,.9)';
       for (let k = 0; k < 3; k++) {
         g.beginPath();
@@ -6311,9 +6570,9 @@ function drawPlat(g, pl) {
         g.closePath(); g.fill();
       }
     } else {
-      g.fillStyle = i % 2 ? '#C6A585' : '#A8815C';
+      g.fillStyle = i % 2 ? rTop.cap[0] : rTop.cap[2];
       g.beginPath(); g.ellipse(px, yT + 3, 3.4 + (i % 2), 2.4, 0.2, 0, Math.PI * 2); g.fill();
-      g.strokeStyle = 'rgba(74,58,44,.42)'; g.lineWidth = 1.2; g.stroke();
+      g.strokeStyle = 'rgba(' + rTop.det + ',.42)'; g.lineWidth = 1.2; g.stroke();
     }
   }
 
@@ -7028,6 +7287,11 @@ function drawDecoBody(g, d) {
   const k = d.kind;
   const s = d.seed || 0;
   const x = d.x, y = d.y;
+  /* 光色跟着房间走。**冷色房间里点一盏暖黄灯**，那点暖才读得出是"唯一的火源"，
+     也顺便把这一层和上一层分开 —— 四层全是同一盏暖黄的灯，
+     光照就等于没有参与差异化。 */
+  const rr = ROOM[clamp(d.layer, 1, ROOM.length - 1)];
+  const G0 = 'rgba(' + rr.glow[0] + ',' + rr.glow[1] + ',' + rr.glow[2];
   g.save();
   g.lineJoin = 'round';
 
@@ -7038,9 +7302,9 @@ function drawDecoBody(g, d) {
     /* 暖光。**这是地下唯一的光源叙事** —— 没有它，木墙是一块均匀的米色；
        有了它，画面上就有"亮处"和"暗处"，房间才有体积。 */
     const rg = g.createRadialGradient(x + sway, y + 44, 3, x + sway, y + 44, 84);
-    rg.addColorStop(0, 'rgba(255,238,186,.46)');
-    rg.addColorStop(.5, 'rgba(255,214,130,.16)');
-    rg.addColorStop(1, 'rgba(255,222,140,0)');
+    rg.addColorStop(0, G0 + ',.46)');
+    rg.addColorStop(.5, G0 + ',.16)');
+    rg.addColorStop(1, G0 + ',0)');
     /* **加色混合（lighter）。** 木屋/砖房的墙本身是亮米色，
        用 source-over 叠一层暖黄，亮度只涨 3%~5% —— 出图上等于没打光。
        lighter 是逐通道相加，同样的颜色能把墙面从 (232,211,174) 推到 (250,242,205)，
@@ -7066,9 +7330,9 @@ function drawDecoBody(g, d) {
     const sw = Math.sin(S.t * 0.8 + s) * 1.6;
     /* 先铺光晕再画灯体。**顺序反了烛火会被暖光糊掉**，只剩一团黄。 */
     const rg = g.createRadialGradient(x + sw, y + 36, 5, x + sw, y + 36, 104);
-    rg.addColorStop(0, 'rgba(255,242,200,.52)');
-    rg.addColorStop(.42, 'rgba(255,214,130,.20)');
-    rg.addColorStop(1, 'rgba(255,206,110,0)');
+    rg.addColorStop(0, G0 + ',.52)');
+    rg.addColorStop(.42, G0 + ',.20)');
+    rg.addColorStop(1, G0 + ',0)');
     g.globalCompositeOperation = 'lighter';
     g.fillStyle = rg;
     g.beginPath(); g.arc(x + sw, y + 36, 104, 0, Math.PI * 2); g.fill();
@@ -7111,9 +7375,9 @@ function drawDecoBody(g, d) {
     const sw = Math.sin(S.t * 1.4 + s) * 2.4;
     const bx = x + sw, by = y + 18;
     const rg = g.createRadialGradient(bx, by + 15, 3, bx, by + 15, 70);
-    rg.addColorStop(0, 'rgba(255,222,164,.42)');
-    rg.addColorStop(.5, 'rgba(255,204,140,.14)');
-    rg.addColorStop(1, 'rgba(255,200,120,0)');
+    rg.addColorStop(0, G0 + ',.42)');
+    rg.addColorStop(.5, G0 + ',.14)');
+    rg.addColorStop(1, G0 + ',0)');
     g.globalCompositeOperation = 'lighter';
     g.fillStyle = rg;
     g.beginPath(); g.arc(bx, by + 15, 74, 0, Math.PI * 2); g.fill();

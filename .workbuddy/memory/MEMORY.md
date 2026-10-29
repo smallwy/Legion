@@ -19,16 +19,16 @@
 
 ## 两条铁律（都踩过多次）
 - **原型是唯一真源**：改 `prototype/*.html` → 跑 `extract_*_runtime.py` 重抽运行时。直接改 `.ts` 会被覆盖，且**生成物过期不报错**（snowlab 曾在 `cce5c23` 停四轮，用户玩到旧版本）。
-- **仓库源码是 LF**。脚本改写后看 `git diff --stat`，数字暴涨就是行尾被转成 CRLF（`io.open(...,newline='')`）。
+- **仓库里存的是 LF，工作区是 CRLF**（`core.autocrlf=true`）。用脚本改文件时替换串要按**工作区实际行尾**写，否则 `assert count==1` 就炸；改完看 `git diff --stat`，数字暴涨就是行尾被动过。
 
 ## 验收工具
 | 目标 | 命令 |
 |---|---|
-| snowlab 结构+玩法 | `tools/_snowlab-check.js`（240 项） |
+| snowlab 结构+玩法 | `tools/_snowlab-check.js`（244 项） |
 | snowlab 运行时 | `client/tools/snowlab-runtime-check.js`（14 项 / 900 帧 0 偏差） |
 | grove 玩法 | `tools/grove-smoke.js`、`grove-runtime-check.js` |
 | 编译期致命码 | `tools/runtime-sanity.js`（阈值 0） |
-| 出图 | `_snowlab-shot.js`（种子 7）、`_well-shot.js`、`_cmp-shot.js`、`_perfhud-shot.js`、`_crop.js` |
+| 出图 | `_snowlab-shot.js`（种子 7）、`_well-shot.js`、`_cmp-shot.js`、`_perfhud-shot.js`、`_crop.js`、`_ramp-shot.js`（斜坡局部）、`_fixshot.js`（改前改后对照，`MODE=ladder/wall`） |
 | 行为 | `_foe-bounce.js`（数跳/蹭坎）、`_jitter-probe.js`（**量 y 方向反转**）、`_spawn-probe.js`（量两只怪的中心距+中间有无阻挡）、`_ball-chaos.js`（**玩家 AI 自动推球 40 秒再扫反转**，定向构造不出来时用它）、`_foe-seq-shot.js` |
 | 性能 | `_ab-perf.js`（**同进程交替 A/B，只看比值**，绝对毫秒不可信）、`_perf-probe.js`、`_stop-probe.js` |
 

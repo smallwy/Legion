@@ -1402,6 +1402,47 @@ group("二十四、敌方三种（跳跃 / 待机 / 远程 / 侧视）");
     ck("无腿苔藓团从头到尾没离过地（" + jumped.moss + " 帧）", jumped.moss === 0, jumped.moss);
   }
 
+  /* 24.3b **不许在路障前面原地弹。**
+     用户 2026-10-29 截图反馈：「到这里会一直弹弹弹 好像遇到路障就有些问题
+     要不一直跳跳跳」。两个成因各自都有坑：
+
+       ① 跳跃上限写死 104，可 fang 的顶点只有 545²/(2·2100) = 70.7px ——
+          71~104 的坎它物理上跳不过去却在跳，每 0.75 秒一次；
+       ② 理论上跳得上去、实际被挡住（箱缝、落点只剩半格），
+          光调几何治不了，得看结果。
+
+     判据直接取用户能看见的那个量：**同一只怪 20 秒里尝试了几次**。
+     修之前一只 fang 原地连跳 26 次、一只 grub 贴边抬 50 次；修之后最多 3 次。
+     阈值 6 留了一倍余量 —— 正常跳上一格箱子是"一次成功"，不该反复来。 */
+  {
+    let worst = 0, worstWho = "";
+    for (let sd = 1; sd <= 8; sd++) {
+      L.reset(sd);
+      S.invuln = 999; S.hp = 99;
+      const tries = new Map();
+      let prevY = new Map(), prevG = new Map();
+      for (const f of S.foes) { tries.set(f, 0); prevY.set(f, f.y); prevG.set(f, f.onGround); }
+      for (let i = 0; i < 1200; i++) {
+        L.step(DT);
+        for (const f of S.foes) {
+          if (!tries.has(f)) { tries.set(f, 0); prevY.set(f, f.y); prevG.set(f, f.onGround); continue; }
+          const y0 = prevY.get(f), g0 = prevG.get(f);
+          /* 跳：从地上变成空中；蹭坎：站在地上 y 却变小了（重力只会让它变大） */
+          const jumped = g0 && !f.onGround && f.vy < 0;
+          const lifted = g0 && f.onGround && f.y < y0 - 4;
+          if (jumped || lifted) {
+            tries.set(f, tries.get(f) + 1);
+            const n = tries.get(f);
+            if (n > worst) { worst = n; worstWho = f.breed + " @(" + Math.round(f.x) + "," + Math.round(f.y) + ")"; }
+          }
+          prevY.set(f, f.y); prevG.set(f, f.onGround);
+        }
+      }
+    }
+    ck("没有怪在路障前面反复弹（最多 " + worst + " 次 / 只 / 20 秒" +
+       (worstWho ? "，" + worstWho : "") + "）", worst <= 6, worst);
+  }
+
   /* 24.4 会待机 —— 站住的时候 vx 必须是 0（否则"待机"只是画面上不动） */
   {
     L.reset(4);

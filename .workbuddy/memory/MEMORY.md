@@ -24,11 +24,12 @@
 ## 验收工具
 | 目标 | 命令 |
 |---|---|
-| snowlab 结构+玩法 | `tools/_snowlab-check.js`（239 项） |
+| snowlab 结构+玩法 | `tools/_snowlab-check.js`（240 项） |
 | snowlab 运行时 | `client/tools/snowlab-runtime-check.js`（14 项 / 900 帧 0 偏差） |
 | grove 玩法 | `tools/grove-smoke.js`、`grove-runtime-check.js` |
 | 编译期致命码 | `tools/runtime-sanity.js`（阈值 0） |
 | 出图 | `_snowlab-shot.js`（种子 7）、`_well-shot.js`、`_cmp-shot.js`、`_perfhud-shot.js`、`_crop.js` |
+| 行为 | `_foe-bounce.js`（数次数）、`_foe-seq-shot.js`（4 时刻并排序列图） |
 | 性能 | `_ab-perf.js`（**同进程交替 A/B，只看比值**，绝对毫秒不可信）、`_perf-probe.js`、`_stop-probe.js` |
 
 **性能尖峰先做最小复现**：把游戏代码整个剥掉、只留几百次画布操作再跑一遍。

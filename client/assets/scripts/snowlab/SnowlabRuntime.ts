@@ -2337,6 +2337,17 @@ function makeFoe(x, y, kind, breed) {
     fireCd: 0.8 + FR() * 1.4,
     jumpCd: 0,
     hopT: 0,                 // 纯表演性的小跳（原地），不影响碰撞
+    /* ---- 卡住检测 ----
+       `jumpCd` 只能挡住 0.75 秒，挡不住"这个坎根本过不去"。
+       字段配合见 stepFoes 里的"撞不过去就掉头"：
+         tryN        —— 自上次结算以来尝试过几次跳 / 蹭坎；
+         stuckT      —— 结算窗口计时；
+         stuckXMin/Max —— 窗口内横向走过的最左 / 最右（判据只看横向，
+                          见那段注释：纵向会被自己的跳跃污染）。 */
+    tryN: 0,
+    stuckT: 0, stuckXMin: x, stuckXMax: x,
+    jumpBan: 0,              // 判定"跳不过去"之后的禁跳时间
+    banX: -9999,             // 禁跳的**地点**：得走开 24px 才允许再试
   };
 }
 
@@ -3416,6 +3427,7 @@ function stepFoes(dt) {
     const pcfg = NUM.breed[f.breed] || NUM.breed.moss;
     f.fireCd = Math.max(0, (f.fireCd || 0) - dt);
     f.jumpCd = Math.max(0, (f.jumpCd || 0) - dt);
+    f.jumpBan = Math.max(0, (f.jumpBan || 0) - dt);
 
     const dxp = (p.x + p.w / 2) - (f.x + f.w / 2);
     const dyp = (p.y + p.h / 2) - (f.y + f.h / 2);
@@ -3455,9 +3467,23 @@ function stepFoes(dt) {
         }
       }
       /* ---- 跳 ---- **一个箱子高的台阶要能上去。**
-         探前方 8px、往上 112px 找最近的可站面：落差 18~104 就起跳。
-         上限 104 是"两格 96 也跳"，下限 18 是别为了 10px 的坎一直弹。 */
-      if (f.onGround && f.jumpCd <= 0) {
+         探前方 8px、往上 112px 找最近的可站面：落差 18~`maxRise` 就起跳。
+         下限 18 是别为了 10px 的坎一直弹。
+
+         **上限必须由跳跃力推出来，不能拍。** 原来写死 104，理由是"两格 96 也跳"，
+         可是 fang 的初速 545 撞上 2100 的重力，顶点只有 545²/(2·2100) = **70.7px**
+         —— 96 那个坎物理上就上不去。于是它每 0.75 秒跳一次、撞在箱壁上掉回来、
+         再跳、再掉。探针（`tools/_foe-bounce.js`）量到同一只 fang 在 20 秒里
+         **原地连跳 26 次**，用户原话「到这里会一直弹弹弹」。
+         乘 0.8 是留头顶余量：正好等于顶点时箱顶和脚底重合，落不上去。 */
+      const apex = pcfg.jump * pcfg.jump / (2 * 2100);
+      const maxRise = apex * 0.8;
+      /* **禁跳是按位置的，不是只按时间。** 只给计时的话，时间一到它还在原地，
+         于是又跳一次、又被挡住 —— 20 秒里还是能看到七八次弹脚。
+         加上"走开 24px 才允许再试"，同一个障碍前就彻底不会再弹。 */
+      const canTry = f.onGround && f.jumpCd <= 0 && f.jumpBan <= 0 &&
+                     Math.abs(f.x - f.banX) > 24;
+      if (canTry) {
         const ahead = f.face > 0 ? f.x + f.w + 8 : f.x - 8;
         const rise = (f.y + f.h) - groundAt(ahead, f.y + f.h - 112);
         /* **会不会跳，由体态决定，不由关卡决定。**
@@ -3465,15 +3491,20 @@ function stepFoes(dt) {
            以前它被塞进和四足兽同一套跳跃里，一遇到箱堆就原地连蹦 ——
            十几条腿的东西弹起来，比什么动画都出戏。 */
         if (pcfg.jump > 0) {
-          if (rise > 18 && rise < 104) {
+          if (rise > 18 && rise < maxRise) {
             f.vy = -pcfg.jump;
             f.onGround = false;
             f.jumpCd = 0.75;
+            f.tryN++;
           }
-        } else if (rise > 2 && rise <= NUM.crawlStep) {
+        } else if (rise >= 4 && rise <= NUM.crawlStep) {
           /* 蹭坎：**位移不是跳，是贴着地往上抬**。一点点把脚落上去，
-             不做抛物线、不改 vy，读起来就是"爬过去了"。 */
+             不做抛物线、不改 vy，读起来就是"爬过去了"。
+             **门槛从 2 抬到 4。** 2~3px 的落差是浮点和对齐的毛刺（箱子边缘、
+             斜坡接缝），抬上去只是让它每帧抖 1px —— 探针量到一只 grub
+             连续 50 帧"抬幅 1px"。真坎至少 4px 起。 */
           f.y -= Math.min(rise, NUM.crawlStep);
+          f.tryN++;
         }
       }
     }
@@ -3560,6 +3591,40 @@ function stepFoes(dt) {
        **这里不能再补位移或重力** —— 叠上去会让速度翻倍、一帧穿过地面
        （第一版就是这么写的：crawler 直接掉出画面）。 */
     stepBody(f, dt);
+
+    /* ---- 撞不过去就掉头 ----
+       用户反馈「到这里会一直弹弹弹 好像遇到路障就有些问题 要不一直跳跳跳」。
+       把跳跃上限按跳跃力算对，只解决了"物理上跳不过却还在跳"那一类；
+       还有一类是**理论跳得上去、实际被挡住**（头顶压着箱子、落点只剩半格、
+       台阶比身宽还窄）。那类没法靠读几何解决，只能看结果：
+
+         0.6 秒的窗口里尝试过跳 / 蹭坎（`tryN > 0`），
+         可 x 和 y 都没挪过 8px —— 就是在原地做无用功。
+
+       处理跟"甲虫遇到高坎掉头"同一条道理：转身走开，停一下再走。
+       那 0.3 秒的 `idleT` 是让"转身"读起来像个决定，而不是抽搐一下。
+
+       **判据是"有没有效果"，不是"试了几次"。** 数次数会随走速变：换个速度
+       就得重新调阈值，而"原地没动"这个判据跟速度无关。
+
+       **只看横向走了多远，而且不管它在不在空中。** 前两版都错在这里：
+       第一版每帧拿当前位置比，跳跃中间那半秒 y 差 70px，永远判成"动了"；
+       第二版改成只在落地时结算，可最严重的那只 fang 被卡在箱缝里
+       **几乎从不落地**（探针里它 168 帧只有一帧算站稳），于是窗口根本走不到。
+       横向位移就没这两个毛病：跳上台阶必然横着过去，原地弹则一格不动。 */
+    if (f.x < f.stuckXMin) f.stuckXMin = f.x;
+    if (f.x > f.stuckXMax) f.stuckXMax = f.x;
+    f.stuckT = (f.stuckT || 0) + dt;
+    if (f.stuckT >= 0.6) {
+      if (f.tryN > 0 && f.stuckXMax - f.stuckXMin < 10) {
+        f.face = -f.face;
+        f.turnLock = 0.45;
+        f.idleT = 0.3;
+        f.jumpBan = 1.6 + FR() * 1.4;
+        f.banX = f.x;
+      }
+      f.stuckT = 0; f.stuckXMin = f.x; f.stuckXMax = f.x; f.tryN = 0;
+    }
 
     /* 掉出世界就送回**自己原来那一层**，不是送回洞窟底。
        三层之后 H 已经不是世界高度了，用 H 会把 L2 掉下去的怪

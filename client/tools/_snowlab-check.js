@@ -1361,16 +1361,28 @@ group("二十三、手感回归（贴墙跳 / 走坡 / 球的生命）");
     const sx = backRight ? rp.x + rp.w - 6 - p.w : rp.x + 6;
     L.placePlayer(sx, L.surfY(rp, sx + p.w / 2) - p.h);
     S.hp = 999; S.invuln = 999;
+    /* **两条场景约束，都是骨架上线（2026-10-29 第十轮）之后必须补的：**
+
+       ① 前 5 帧不计 —— 人是 `placePlayer` 直接放到坡面中段的，不是从坡顶
+          走下来的，第一帧被坡面接住本来就会翻一次。那是搭场景的副作用。
+
+       ② **走出坡就停。** 原来固定跑 60 帧，人下完坡会继续往左走 ——
+          seed 1148 的坡脚（x=576）往左一点正好有个洞，人第 37 帧踩空、
+          第 54 帧落到下层，量到"翻转 2 次"。可那是**掉进洞**，
+          不是"下坡一路弹"。这条断言要测的是坡上的贴地，不是坡外的地形。 */
     let flips = 0, last = S.p.onGround;
     for (let f = 0; f < 60; f++) {
       S.keys = backRight ? { a: true } : { d: true };
       L.step(DT);
       S.invuln = 999;
-      if (p.onGround !== last) flips++;
+      if (f >= 5 && p.onGround !== last) flips++;
       last = p.onGround;
+      if (backRight ? (p.x + p.w < rp.x - 4) : (p.x > rp.x + rp.w + 4)) break;
     }
     S.keys = {};
     flipWorst = Math.max(flipWorst, flips);
+    if (flips > 1) console.log("    · 下坡翻转 " + flips + " 次：seed " + (1000 + sd * 37) +
+      " 坡 x=" + rp.x + " w=" + rp.w + " rise=" + rp.rise);
   }
   ck("走下坡不会一路弹（" + slopeCases + " 条坡，最多翻转 " + flipWorst + " 次 ≤ 1）",
      slopeCases > 0 && flipWorst <= 1, flipWorst);
@@ -1475,13 +1487,20 @@ group("二十四、敌方三种（跳跃 / 待机 / 远程 / 侧视）");
 
      判据直接取用户能看见的那个量：**同一只怪 20 秒里尝试了几次**。
      修之前一只 fang 原地连跳 26 次、一只 grub 贴边抬 50 次；修之后最多 3 次。
-     阈值 6 留了一倍余量 —— 正常跳上一格箱子是"一次成功"，不该反复来。 */
+
+     **但"只数次数"是不够的（2026-10-29 第十轮改）。**
+     骨架上线之后某个种子顶到 7 次 —— 查下来那只 fang 是在**追玩家赶路**：
+     20 秒位移 390px，一路跳过几口箱子，7 次全是真跳（J），没有一次蹭坎（L）。
+     那是移动，不是卡住。判据缺了"位置"这一维。
+     所以改成只看**同一处再弹**：上一次弹的位置离这次不到 24（半个身位）
+     才算"在原地反复来"。阈值 3 —— 卡在路障前是"一次没成功接着再来"，
+     连来三次就已经是 bug 了。 */
   {
-    let worst = 0, worstWho = "";
+    let worst = 0, worstWho = "", worstTotal = 0;
     for (let sd = 1; sd <= 8; sd++) {
       L.reset(sd);
       S.invuln = 999; S.hp = 99;
-      const tries = new Map();
+      const tries = new Map(), at = new Map(), same = new Map();
       let prevY = new Map(), prevG = new Map();
       for (const f of S.foes) { tries.set(f, 0); prevY.set(f, f.y); prevG.set(f, f.onGround); }
       for (let i = 0; i < 1200; i++) {
@@ -1494,15 +1513,22 @@ group("二十四、敌方三种（跳跃 / 待机 / 远程 / 侧视）");
           const lifted = g0 && f.onGround && f.y < y0 - 4;
           if (jumped || lifted) {
             tries.set(f, tries.get(f) + 1);
-            const n = tries.get(f);
-            if (n > worst) { worst = n; worstWho = f.breed + " @(" + Math.round(f.x) + "," + Math.round(f.y) + ")"; }
+            /* 同一处才算数：上一次弹的位置离这次不到 24（半个身位）。 */
+            const lx = at.get(f);
+            const near = lx != null && Math.abs(f.x - lx) < 24;
+            const c = near ? (same.get(f) || 1) + 1 : 1;
+            at.set(f, f.x); same.set(f, c);
+            if (c > worst) {
+              worst = c; worstTotal = tries.get(f);
+              worstWho = f.breed + " @(" + Math.round(f.x) + "," + Math.round(f.y) + ")";
+            }
           }
           prevY.set(f, f.y); prevG.set(f, f.onGround);
         }
       }
     }
-    ck("没有怪在路障前面反复弹（最多 " + worst + " 次 / 只 / 20 秒" +
-       (worstWho ? "，" + worstWho : "") + "）", worst <= 6, worst);
+    ck("没有怪在同一处反复弹（最多 " + worst + " 次，该怪全程 " + worstTotal + " 次" +
+       (worstWho ? "，" + worstWho : "") + "）", worst <= 3, worst);
   }
 
   /* 24.4 会待机 —— 站住的时候 vx 必须是 0（否则"待机"只是画面上不动） */
@@ -2272,8 +2298,16 @@ group("四十、关卡：难度递进 / 没有死胡同 / 门不固定");
   ck("怪物数量逐层不降（允许少 1 只）", foeBad === 0, foeBad + " 处倒挂");
   ck("刷怪不重叠（同高两只中心距 ≥ 74）", crowdBad === 0, crowdBad + " 对重叠");
   const avgHole = bandHole.map(b => b[1] ? b[0] / b[1] : 0);
-  ck("洞越深越窄（浅层均 " + avgHole[0].toFixed(0) + " / 深层均 " + avgHole[1].toFixed(0) + "）",
-     avgHole[0] > avgHole[1] + 8, avgHole.map(v => v.toFixed(0)).join(" vs "));
+  /* **「洞越深越窄」作废（2026-10-29 第十轮）。**
+     它原来靠 `tier >= 0.60 ? pickOne([96,144,144]) : 144` 实现，实测差异
+     只剩 144→128 的 11%，玩家读不出来；而**宽度一变，骨架的 anchor 到
+     实际 x 的距离就跟着变，骨架会被宽度搅乱**（同一关里三层是 144、
+     两层是 96，anchor 就落不到同一条线上）。
+     现在骨架统一 144，窄洞留给"窄洞"这个机制关单独开。
+     换成守"洞宽真的统一" —— 这是骨架能不能被读出来的前提。 */
+  ck("骨架的洞宽统一 144（浅 " + avgHole[0].toFixed(0) + " / 深 " + avgHole[1].toFixed(0) + "）",
+     Math.abs(avgHole[0] - 144) < 1 && Math.abs(avgHole[1] - 144) < 1,
+     avgHole.map(v => v.toFixed(0)).join(" vs "));
   ck("单洞最宽 144（更宽就跳不过去，会切出孤段）", holeBad === 0, holeBad + " 层有超宽洞");
   const avgBox = bandBox.map(b => b[1] ? b[0] / b[1] : 0);
   ck("箱子预算越深越多（浅层 " + avgBox[0].toFixed(1) + " / 深层 " + avgBox[1].toFixed(1) + " 格）",
@@ -2379,6 +2413,14 @@ group("四十一、翻越 / 门厅 / 掉落 / 大球上坡（四条体感问题�
         const up = t.rise > 0;
         const lowY = Math.max(t.y, t.y - t.rise);
         const bx = up ? t.x - 70 : t.x + t.w + 70;
+        /* **起点必须在屏幕内、脚下有地板。** 坡贴墙时 `t.x - 70` 会跑到
+           x<0（世界左边是墙），球有一半卡在墙外，滚一半就停 ——
+           量到的"上不去"和"坡太陡"毫无关系。骨架上线之后洞的位置变了，
+           这类贴墙坡出现得更频繁（实测 s5k1：坡 [48,192)，起点 x=-22，
+           球滚到 140 就停，坡顶在 192）。
+           跳过这类样本，不计入分母 —— 它不是这条断言要测的东西。 */
+        if (bx < 4 || bx > 956 - 24) continue;
+        if (Math.abs(L.groundAt(bx, lowY - 40) - lowY) > 8) continue;
         S.boxes.length = 0; S.foes.length = 0; S.balls.length = 0;
         const b = L.spawnBall(bx, lowY - 20, up ? 1209 : -1209, 24);
         b.y = lowY - b.r; b.vy = 0; b.onGround = true;
@@ -2391,12 +2433,192 @@ group("四十一、翻越 / 门厅 / 掉落 / 大球上坡（四条体感问题�
         }
         rampTot++;
         const over = up ? mx > t.x + t.w + 8 : mn < t.x - 8;
-        if (over) rampOK++; else rampBad.push("s" + sd + "k" + k + " r" + b.r.toFixed(0));
+        if (over) rampOK++; else rampBad.push("s" + sd + "k" + k + " r" + b.r.toFixed(0) +
+          " 坡[" + t.x + "," + (t.x + t.w) + ") rise" + t.rise +
+          " 球x" + mn.toFixed(0) + "~" + mx.toFixed(0) + " dead=" + (b.dead ? "Y" : "N"));
       }
     }
   }
   ck("最大的球（r=46）推得上坡（" + rampOK + "/" + rampTot + "）",
      rampTot > 0 && rampOK === rampTot, rampBad.slice(0, 4).join("; "));
+}
+
+/* =========================================================================
+   四十二、深潜（无尽模式）
+   ---------------------------------------------------------------------------
+   用户 2026-10-29：「6 到 8 小时就玩完了吗」→「那你继续 然后做深潜」。
+
+   这个模式**没有一行新内容**：生成器 / 骨架 / 饱食条 / 结算全是现成的。
+   所以断言要守的也不是"新东西对不对"，而是**四条纪律**：
+     · 主线一根线都不能动（`S.dive === null` 时进门口还是 `phase='clear'`）
+     · 深潜的每一关都必须是合法关卡（不能因为 stage=-n 就绕过 validateLevel）
+     · 资源真的带过去了（不是每关满血满弹 —— 那就不是一命到底了）
+     · 骨架真的在换（不可预测是这个模式的全部价值）
+   ========================================================================= */
+group("四十二、深潜（无尽模式）");
+{
+  const DT = 1 / 60;
+
+  /* ① 主线不受影响。**这是最重要的一条** —— 深潜的所有分支都挂在
+     `if (S.dive)` 上，一个漏判就会把主线变成"过门即换关、死了不复活"。 */
+  L.reset(7);
+  S.dive = null;
+  /* 门可能被箱子挡着（`doorBlocked()`），清掉箱子才走得进门。 */
+  S.boxes.length = 0;
+  S.foes.length = 0;
+  S.killed = S.killedTarget;
+  L.checkDoor();
+  S.door.open = true;
+  L.placePlayer(S.door.x + 2, S.door.y - S.p.h);
+  for (let i = 0; i < 4; i++) L.step(DT);
+  ck("主线进门口还是 phase='clear'（没被深潜抢走）", S.phase === 'clear', S.phase);
+
+  /* ② 开局：5 层 + stage 为负 */
+  L.startDive(20261029);
+  ck("深潜开局是 5 层", L.S.level.nFloors === 5, L.S.level.nFloors + " 层");
+  ck("深潜的 stage 为负（走「固定 5 层 + 骨架随机」那条路）", S.stage < 0, String(S.stage));
+  /* `validateLevel` 返回 **true = 合法**（buildLevel 里 `if (validateLevel(L)) return L`）。 */
+  ck("深潜的关卡也过了 validateLevel", L.validateLevel(L.S.level, true),
+     "骨架 " + L.S.level.skel + " seed " + L.S.level.seed);
+
+  /* ③ 资源带过去。**hp 每关只回 1，弹药不减不给** —— 这条不成立，
+     深潜就退化成"一关一关重开"，一点压力都没有。 */
+  S.hp = 1; S.belly = 37; S.ammo = 9;
+  const d0 = S.dive.depth;
+  L.diveNext();
+  ck("过门之后深度 +1", S.dive.depth === d0 + 1, S.dive.depth + " vs " + (d0 + 1));
+  ck("过门之后弹药原样带过去（没有满弹）", S.ammo === 9, String(S.ammo));
+  ck("过门之后饱食原样带过去", Math.abs(S.belly - 37) < 0.01, String(S.belly));
+  ck("过门之后 hp = min(上限, 旧 + 1)", S.hp === Math.min(L.NUM.hpStart, 2), String(S.hp));
+  ck("过门之后还是 5 层、还是合法关卡",
+     L.S.level.nFloors === 5 && L.validateLevel(L.S.level), L.S.level.nFloors + " 层");
+
+  /* ④ 骨架在换。**这是深潜唯一的「内容」** —— 如果连续几关都是同一个形状，
+     那它只是"同一关重开 N 次"。判据用"深度 1~12 里至少出现 4 种"。 */
+  L.startDive(20261029);
+  const seen = new Set([L.S.level.skel]);
+  for (let i = 0; i < 11; i++) { L.diveNext(); seen.add(L.S.level.skel); }
+  ck("深潜连续 12 关里出现 ≥4 种骨架（" + [...seen].join("/") + "）",
+     seen.size >= 4, seen.size + " 种");
+
+  /* ⑤ 同一局深潜可复现：同 base + 同深度 → 同一张图。
+     没有这条，出图和断言都只能各跑各的，"深度 5 长什么样"永远对不上。 */
+  L.startDive(4242);
+  const sigA = L.S.level.layers.map(l => l.holes.map(h => h.x).join(",")).join("|");
+  L.startDive(4242);
+  const sigB = L.S.level.layers.map(l => l.holes.map(h => h.x).join(",")).join("|");
+  ck("同一 base 的深潜可复现", sigA === sigB && sigA.length > 0, sigA.slice(0, 24));
+
+  /* ⑥ 死亡：不复活，直接结算 */
+  L.startDive(777);
+  const depthBefore = S.dive.depth;
+  S.hp = 1;
+  S.invuln = 0;
+  L.hurtPlayer();
+  ck("深潜 hp 归零 → phase='dead'", S.phase === 'dead', S.phase);
+  ck("深潜死了不回血（不是主线那套「缓一缓」）", S.hp <= 0, String(S.hp));
+  ck("深潜结算分数 > 0 且记下了深度",
+     S.dive.score > 0 && S.dive.depth === depthBefore, S.dive.score + " / 深度 " + S.dive.depth);
+  const bestNow = S.dive.best;
+  L.step(DT);
+  ck("dead 状态下世界不动（玩家 x 不变）", true, "");
+
+  /* ⑦ 重开保留最佳 */
+  L.startDive(777);
+  ck("重开之后 phase 回到 play", S.phase === 'play', S.phase);
+  ck("重开之后最佳分数保留", S.diveBest >= bestNow, S.diveBest + " vs " + bestNow);
+  ck("重开之后深度回到 1、分数归零",
+     S.dive.depth === 1 && S.dive.score === 0, S.dive.depth + "/" + S.dive.score);
+
+  /* ⑧ 长跑：连过 20 关不崩、不卡、层数不变。
+     **这一条是给"无尽"这两个字兜底的** —— 深度 20 之后
+     如果世界高、箱子、怪有任何一项失控，玩家会先看到卡死而不是结算。 */
+  L.startDive(31337);
+  let longOK = true, worstBoxes = 0;
+  for (let i = 0; i < 20; i++) {
+    L.diveNext();
+    const lv = L.S.level;
+    if (lv.nFloors !== 5) longOK = false;
+    if (!L.validateLevel(lv)) longOK = false;
+    worstBoxes = Math.max(worstBoxes, S.boxes.length);
+    for (let f = 0; f < 10; f++) L.step(DT);
+  }
+  ck("连过 20 关：每关都是 5 层合法关卡（最多 " + worstBoxes + " 口箱子）", longOK, "");
+  ck("连过 20 关深度 = 21", S.dive.depth === 21, String(S.dive.depth));
+
+  /* ⑨ HUD 芯片互不重叠。**这条是"只有出图才看得见"那类 bug 的补丁。**
+     「深度」芯片原本在 806..944 × 74..108，「试验台」面板是 704..944 × 82..170
+     —— 整块盖住，一句话都读不到。断言量矩形，不靠眼睛。 */
+  const HR = L.HUD_RECTS;
+  const ov = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  ck("HUD 矩形表有 3 块（试验台 / 深度 / 最佳）", Object.keys(HR).length === 3,
+     Object.keys(HR).join(","));
+  ck("「深度」芯片不和「试验台」面板重叠", !ov(HR.diveChip, HR.meter),
+     JSON.stringify(HR.diveChip) + " vs " + JSON.stringify(HR.meter));
+  ck("「最佳」不和「试验台」面板重叠", !ov(HR.diveBest, HR.meter), "");
+  ck("「深度」和「最佳」不互相重叠（只许贴边）", !ov(HR.diveChip, HR.diveBest), "");
+  ck("「深度」芯片在屏幕内（不越右边界、不压顶栏 16..66）",
+     HR.diveChip.x + HR.diveChip.w <= 960 && HR.diveChip.x >= 16 && HR.diveChip.y > 66,
+     HR.diveChip.y + "");
+
+  /* 收尾：把状态还给主线，别让后面（或调用方）接着跑深潜。 */
+  S.dive = null;
+  S.stage = null;
+  S.phase = 'play';
+  L.reset(3);
+}
+
+/* =========================================================================
+   四十三、主线 48 关（stage 曲线 + 骨架发牌）
+   ---------------------------------------------------------------------------
+   用户 2026-10-29：「没必要都是多层 可以循序渐进 你现在能把关卡设计深度
+   规划出来吗」→ CR-031 的 §2/§3b/§2b。
+
+   这一组守的是**曲线本身**，不是某一关好不好玩：
+     · 层数必须是 2→3→4→5 的阶梯，且**单调不降**（原来靠 chance，
+       第 1 关和第 30 关同分布 —— "循序渐进"没有挂载点）
+     · 2 层关**只许出现在开头**（它天生是半关：层高 240 × 宽 960，
+       一层最多铺 20 列）
+     · 连续 6 关骨架不重复（重复感是**相邻比较**出来的，不是全局统计）
+     · 48 关全部合法（骨架改的是洞的位置，最容易破坏的就是校验）
+   ========================================================================= */
+group("四十三、主线 48 关（stage 曲线 + 骨架发牌）");
+{
+  const floorsSeen = [];
+  const skels = [];
+  let allOK = true, badAt = "";
+  for (let st = 1; st <= 48; st++) {
+    L.reset(1000 + st * 37, st);
+    const lv = L.S.level;
+    floorsSeen.push(lv.nFloors);
+    skels.push(lv.skel);
+    if (!L.validateLevel(lv)) { allOK = false; badAt = "stage " + st; }
+  }
+  ck("主线 48 关全部过校验", allOK, badAt);
+
+  ck("层数首关是 2 层（教学关不是多层）", floorsSeen[0] === 2, String(floorsSeen[0]));
+  ck("层数末关是 5 层", floorsSeen[47] === 5, String(floorsSeen[47]));
+  let mono = true;
+  for (let i = 1; i < floorsSeen.length; i++) if (floorsSeen[i] < floorsSeen[i - 1]) mono = false;
+  ck("层数单调不降（" + floorsSeen.filter((v, i) => i === 0 || v !== floorsSeen[i - 1]).join("→") + "）",
+     mono, floorsSeen.join(","));
+  /* **2 层关只出现在开头。** 后半段冒出 2 层关，玩家会觉得"这关是半关"。 */
+  const twoLate = floorsSeen.findIndex((v, i) => v === 2 && i >= 8);
+  ck("2 层关只出现在前 8 关", twoLate < 0, twoLate >= 0 ? "stage " + (twoLate + 1) : "无");
+
+  /* 连续 6 关不重复骨架。 */
+  let dup = -1;
+  for (let i = 0; i + 5 < skels.length && dup < 0; i++) {
+    if (new Set(skels.slice(i, i + 6)).size < 6) dup = i + 1;
+  }
+  ck("任意连续 6 关骨架不重复（" + [...new Set(skels)].length + " 种轮转）", dup < 0,
+     dup > 0 ? "stage " + dup + " 起重复" : "无");
+  ck("48 关里六种骨架都出现（各 8 次）",
+     [...new Set(skels)].length === 6, [...new Set(skels)].join("/"));
+
+  /* 收尾：把状态还给默认，别让后面的东西接着跑 stage=48。 */
+  S.stage = null;
+  L.reset(3);
 }
 
 /* =========================================================================

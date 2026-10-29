@@ -24,7 +24,8 @@
 ## 验收工具
 | 目标 | 命令 |
 |---|---|
-| snowlab 结构+玩法 | `tools/_snowlab-check.js`（244 项） |
+| snowlab 结构+玩法 | `tools/_snowlab-check.js`（249 项） |
+| 难度离散度 | `client/tools/_diff-audit.js [N]`（200 种子摊开层数/箱子/怪/铁箱/冰墙 + CSV） |
 | snowlab 运行时 | `client/tools/snowlab-runtime-check.js`（14 项 / 900 帧 0 偏差） |
 | grove 玩法 | `tools/grove-smoke.js`、`grove-runtime-check.js` |
 | 编译期致命码 | `tools/runtime-sanity.js`（阈值 0） |
@@ -69,3 +70,12 @@
 是唯一没人遮的横幅）。**板体 `rockFill` 和顶面 `snowCap` 是两个函数，
 只改一处看不出效果**；冷色房间的压暗色不能用暖棕（发脏绿）。
 验收：`_floors-shot.js`（逐房间锁镜头，`BEFORE=` 对照）+ `_slab-probe.js`（采样像素）。
+
+## 关卡曲线（2026-10-29，CR-031）
+**先有"第几关"才有曲线**：`reset()` 种子是 Math.random、层数靠 chance，
+所以第 1 关和第 30 关难度同分布（审计 3.7 倍离散）。要加 `stage` 参数进 `genLevel`。
+- 30 关 = 层数 2→3→4→5 四段；**15 个机制全是现有零件，只排序**。
+- **2 层关天生是半关**（层高 240 × 宽 960 一层最多铺 20 列），只该在开头出现。
+- 陷阱一：`tierOf(k)=k/(nF-1)` 是层内比例 → 短关更早撞铁箱（3 层关 1/3 处、
+  5 层关 2/5 处）。要改绝对深度。
+- 陷阱二：`szK=sqrt(4/(nF-1))` 在 2 层关 ×2 会把教学关铺满，应删。

@@ -2297,6 +2297,109 @@ group("四十、关卡：难度递进 / 没有死胡同 / 门不固定");
 }
 
 /* =========================================================================
+   四十一、2026-10-29 第五轮的四条：翻越 / 门厅 / 掉落 / 大球上坡
+   ---------------------------------------------------------------------------
+   四条都是"看着不合理"的体感问题，四条都能量成一个数。这一节守的就是
+   那四个数 —— 光改代码不加断言，下一轮重构会原样退回去。
+   ========================================================================= */
+group("四十一、翻越 / 门厅 / 掉落 / 大球上坡（四条体感问题的数值）");
+{
+  /* ① **洞口翻越不许一帧到位。**
+     用户原话：「这个位置往上 会自动向左移动」。
+     原因是那一行 `p.x = nx; p.y = gh - p.h` —— 一帧横移 48~112px。
+     现在是 0.10~0.26 秒的 smoothstep 跨步，单帧峰值 12~16px。 */
+  let flipWorst = 0, flipSpot = "", flipOK = 0, flipTot = 0;
+  for (let sd = 1; sd <= 8; sd++) {
+    L.reset(sd);
+    const F = L.FLOORS, LY = L.LAYERS;
+    for (let k = 1; k < F.length; k++) {
+      const h = (LY[k - 1].holes || [])[0];
+      if (!h) continue;
+      for (const rel of [h.w * 0.30, h.w * 0.62]) {
+        L.reset(sd);
+        const upper = F[k - 1];
+        /* 站在 2 格箱顶（跳得起来的那个高度），清掉箱子免得落点被判挡 */
+        S.boxes.length = 0; S.foes.length = 0; S.balls.length = 0;
+        L.placePlayer(h.x + rel, upper + 96 - S.p.h);
+        S.p.vy = 0; S.p.onGround = true;
+        flipTot++;
+        S.keys = { w: true };
+        let px = S.p.x, py = S.p.y, mx = 0;
+        for (let i = 0; i < 60; i++) {
+          L.step(DT);
+          if (i === 0) S.keys = {};
+          const dd = Math.hypot(S.p.x - px, S.p.y - py);
+          if (dd > mx) mx = dd;
+          px = S.p.x; py = S.p.y;
+        }
+        if (mx > flipWorst) { flipWorst = mx; flipSpot = "s" + sd + "k" + k; }
+        if (S.p.onGround && S.p.y + S.p.h <= upper + 2) flipOK++;
+      }
+    }
+  }
+  ck("翻越没有单帧瞬移（最差 " + flipWorst.toFixed(1) + "px/帧" +
+     (flipSpot ? "，" + flipSpot : "") + "）", flipWorst > 0 && flipWorst < 22,
+     flipWorst.toFixed(1));
+  ck("翻越之后真的站在上层地板上（" + flipOK + "/" + flipTot + "）",
+     flipTot > 0 && flipOK === flipTot, flipOK + "/" + flipTot);
+
+  /* ② **门厅（最底层）地板不是半透楼板。**
+     带 `floor` 标记就能按 ↓ 穿下去，而门厅下面什么都没有 ——
+     穿出去之后被掉落兜底接走。用户原话：「最下层往下 既然去了第一层」。 */
+  L.reset(3);
+  const lastK = L.FLOORS.length - 1;
+  const lastFloorSegs = L.LAYERS[lastK].segs;
+  ck("门厅地板不是半透楼板（按 ↓ 穿不下去）",
+     lastFloorSegs.length > 0 && lastFloorSegs.every(s => !s.floor),
+     lastFloorSegs.filter(s => s.floor).length + " 段还带 floor");
+
+  /* ③ **掉出世界送回最下面那一层，不是最上面。**
+     `groundAt(x, 0)` 是从 y=0 往下扫的第一个面 = 地表 —— 一个笔误就让
+     "掉到最底"变成"传送到第一层"。 */
+  L.reset(3);
+  const bottom = L.FLOORS[L.FLOORS.length - 1];
+  const topFloor = L.FLOORS[0];
+  L.placePlayer(240, L.WORLD_H + 120);
+  for (let i = 0; i < 3; i++) L.step(DT);
+  const landedFeet = S.p.y + S.p.h;
+  ck("掉出世界落在最底层（不是被传送到第一层）",
+     Math.abs(landedFeet - bottom) < 4, Math.round(landedFeet) + " / 最底 " + bottom + " / 地表 " + topFloor);
+
+  /* ④ **最大的球（r=46）也推得上坡。**
+     用户原话：「这个坡始终推不上去」。
+     球贴面用球心的高度，滚到坡顶时球底比台面低 `半径 × 坡度`；
+     助步门槛写死 24 的话，r=46 在 38° 的坡上差 36px —— 永远卡住。
+     现在门槛 = 24 + 半径 × 斜率。 */
+  let rampOK = 0, rampTot = 0, rampBad = [];
+  for (let sd = 1; sd <= 16 && rampTot < 8; sd++) {
+    L.reset(sd);
+    for (let k = 0; k < L.LAYERS.length && rampTot < 8; k++) {
+      for (const t of L.LAYERS[k].terrain) {
+        if (t.kind !== 'ramp' || Math.abs(t.rise) < 90) continue;
+        const up = t.rise > 0;
+        const lowY = Math.max(t.y, t.y - t.rise);
+        const bx = up ? t.x - 70 : t.x + t.w + 70;
+        S.boxes.length = 0; S.foes.length = 0; S.balls.length = 0;
+        const b = L.spawnBall(bx, lowY - 20, up ? 1209 : -1209, 24);
+        b.y = lowY - b.r; b.vy = 0; b.onGround = true;
+        let mx = b.x, mn = b.x;
+        for (let i = 0; i < 120; i++) {
+          L.step(DT);
+          if (b.dead) break;
+          if (b.x > mx) mx = b.x;
+          if (b.x < mn) mn = b.x;
+        }
+        rampTot++;
+        const over = up ? mx > t.x + t.w + 8 : mn < t.x - 8;
+        if (over) rampOK++; else rampBad.push("s" + sd + "k" + k + " r" + b.r.toFixed(0));
+      }
+    }
+  }
+  ck("最大的球（r=46）推得上坡（" + rampOK + "/" + rampTot + "）",
+     rampTot > 0 && rampOK === rampTot, rampBad.slice(0, 4).join("; "));
+}
+
+/* =========================================================================
    汇总
    ========================================================================= */
 console.log("\n" + "=".repeat(56));

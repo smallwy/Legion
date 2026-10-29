@@ -572,20 +572,25 @@ function genLevel(seed) {
 
   /* ================= ② 地板段 =================
      被洞切开。段宽决定了这一层能不能放平台/怪。 */
-  function segsOf(floorY, holes) {
+  function segsOf(floorY, holes, walkThrough) {
     const out = [];
     /* **`floor: true` 是"半透楼板"的标记**（2026-10-28 第四轮）。
        楼板对玩家是"只挡落下、不挡上跳"的一层 —— 见 stepBody 里那条 skip。
        平台/斜坡没有这个标记，所以它们照旧是实心的。 */
     let cx = 0;
     for (const h of holes) {
-      if (h.x > cx) out.push({ x: cx, y: floorY, w: h.x - cx, h: GEN.thick, floor: true });
+      /* **最底层（门厅）的地板不是"半透楼板"。**（2026-10-29 用户第 2 条）
+         半透楼板的意义是"下面还有一层，可以按 ↓ 穿下去"。门厅下面
+         什么都没有 —— 带上这个标记，玩家在门厅按一下 ↓ 就穿出世界，
+         然后被掉落兜底一口气传送到地表（用户原话：
+         「最下层往下 既然去了第一层」）。 */
+      if (h.x > cx) out.push({ x: cx, y: floorY, w: h.x - cx, h: GEN.thick, floor: !!walkThrough });
       cx = h.x + h.w;
     }
-    if (cx < 960) out.push({ x: cx, y: floorY, w: 960 - cx, h: GEN.thick, floor: true });
+    if (cx < 960) out.push({ x: cx, y: floorY, w: 960 - cx, h: GEN.thick, floor: !!walkThrough });
     return out;
   }
-  layers.forEach(l => { l.segs = segsOf(l.floorY, l.holes); });
+  layers.forEach((l, k) => { l.segs = segsOf(l.floorY, l.holes, k < layers.length - 1); });
 
   /* **出生点 x 在这里就得定下来。**
      原来是最后一步才算的，于是 ⑥ 放怪时根本不知道出生点在哪 ——
@@ -2321,6 +2326,9 @@ const S = {
   /* 量具面板开关。跑原型时开着（要看数值），出图 / 给人看设计时关掉 ——
      这块面板压在右上角，正好盖住第 1~2 层右侧那段浮台上的箱子。 */
   showMeter: true,
+  /* 出图工具用：整个顶栏一次性关掉（`showMeter` 只管饱食条）。
+     评审图上有半透明顶栏压着标题，图就没法用了。 */
+  showHud: true,
   // 量具：这个面板是给"跑原型"看的，不是给玩家看的
   stat: {
     shots: 0, hitFoe: 0, hitBox: 0,
@@ -2833,7 +2841,23 @@ function stepBody(o, dt) {
   /* 兜底：真的掉出世界了才拉回来。**不能写 GROUND_Y** ——
      GROUND_Y 现在是世界最底（1500），写它等于把中层掉下去的东西
      全部瞬移到洞窟底，玩家会看到怪物凭空出现在脚边。 */
-  if (o.y + o.h > WORLD_H + 80) { o.y = groundAt(o.x + o.w / 2, 0) - o.h; o.vy = 0; o.onGround = true; }
+  /* **掉出世界要送回最下面那一层，不是最上面。**（2026-10-29 用户第 2 条）
+     `groundAt(x, 0)` 的语义是"从 y=0 往下扫，第一个能站的面" —— 也就是
+     **最上层**。于是任何掉出世界的东西都会被一发传送到地表：
+     门厅按 ↓ 穿下去的人如此（现在门厅地板不带 `floor` 标记了，穿不下去，
+     这里是第二道防线），被挤出楼层底边的怪、球也一样。
+     找"该 x 处最低的那块可站面"，才是"掉到底了"的正确落点。 */
+  if (o.y + o.h > WORLD_H + 80) {
+    const cx = o.x + o.w / 2;
+    let low = -Infinity;
+    for (const s of solids()) {
+      if (cx < s.x || cx > s.x + s.w) continue;
+      const top = surfY(s, cx);
+      if (top > low) low = top;
+    }
+    o.y = (isFinite(low) ? low : WORLD_H) - o.h;
+    o.vy = 0; o.onGround = true;
+  }
 }
 
 /* ---------------------------------------------------------------- 吐雪 */
@@ -3154,6 +3178,21 @@ function stepBalls(dt) {
     if (b.dead) continue;
 
     // --- 撞平台（左右墙 + 落地）
+    /* **球贴坡时，坡顶那一步的助步量要按坡度算。**（2026-10-29 用户第 3 条）
+       球的贴面用**球心**那一列的高度，所以滚到坡顶时球底比台面低
+       `半径 × 坡度`：r=25 时是 17px，r=46 时是 **36px**。
+       而助步门槛写死 24 —— 于是同一个坡，小球上得去、大球永远卡在坡顶。
+       用户说的「这个坡始终推不上去」就是这个：他的球吸过大，半径 30+。
+
+       先量一下"球现在压在哪条坡上"，门槛 = 24 + 半径 × 斜率。
+       球不在坡附近时斜率是 0，门槛还是 24，不会把球抬上别的台子
+       （平台离地 96/114，平地上的球离台面差 96 以上，够不着）。 */
+    let rampSlope = 0;
+    for (const pl of S.plats) {
+      if (pl.kind !== 'ramp') continue;
+      if (b.x + b.r <= pl.x || b.x - b.r >= pl.x + pl.w) continue;
+      rampSlope = Math.max(rampSlope, Math.abs(pl.rise) / pl.w);
+    }
     for (const pl of S.plats) {
       if (pl.kind === 'ramp') {
         /* 球走坡：贴顶面，并**顺着坡自己往下滚**。
@@ -3194,7 +3233,7 @@ function stepBalls(dt) {
       if (!overlapX || !overlapY) continue;
       if (b.vy > 0 && prevBottom <= pl.y + 12) {
         b.y = pl.y - b.r; b.vy = 0; b.onGround = true;
-      } else if ((b.y + b.r) - pl.y <= 24) {
+      } else if ((b.y + b.r) - pl.y <= 24 + b.r * rampSlope) {
         /* **台阶助步：坡顶与台面之间有 ≈18px 的缝。**
            球的贴面用圆心高度（和玩家同一套理由：斜坡要这样才不抖），
            滚到坡顶时球底比台面低 `半径 × 坡度` ≈ 17px，于是侧面把它
@@ -4183,17 +4222,50 @@ function onKey(e, down) {
 function startClimb(p, cw) {
   const dy = p.y - cw.y;                 // 向上为正
   const dx = cw.x - p.x;
+  /* **一条总时长，不再"先竖直 0.33 秒、再水平 0.4 秒"。**
+     两段式的读法很具体：人先直着升到楼板面高度，然后**悬在那儿**横着滑
+     97px 落到旁边 —— 用户 2026-10-29 第 1 条「这个位置往上 会自动
+     向左移动」说的就是这个。真实的攀爬是"贴着井壁往上蹭，顺带往边靠"，
+     横移和上升是同时发生的，而且**到楼板面之前就该靠完**（否则读成
+     "在地面上方滑行"）。见下面 climb 分支里的曲线。 */
   p.climb = {
+    mode: 'well',
     x0: p.x, y0: p.y, x1: cw.x, y1: cw.y,
     t: 0,
-    tv: Math.max(0.10, Math.abs(dy) / 430),
-    th: Math.abs(dx) < 1.5 ? 0 : Math.max(0.06, Math.abs(dx) / 240),
+    T: Math.max(0.20, Math.abs(dy) / 430, Math.abs(dx) / 300),
   };
   p.vx = 0; p.vy = 0;
   p.onGround = true;
   /* 爬的这段时间不打不挨打：人贴在洞口里，如果这时被雪弹打中，
      位置会被击退逻辑改写，表现是"爬到一半掉回去"。 */
-  S.invuln = Math.max(S.invuln, p.climb.tv + p.climb.th + 0.2);
+  S.invuln = Math.max(S.invuln, p.climb.T + 0.2);
+}
+
+/* ---------------------------------------------------------------- 跨步翻越
+   **"往上会自动向左移动"就是这里。**（2026-10-29 用户第 1 条）
+
+   翻越本身必须留：洞口是镂空的，二段跳把脚送过楼板面之后人还在洞的正上方，
+   不横移就站不住（`wellClimb` 的注释里已经为同一件事写过一遍）。
+   但原来那一行是 `p.x = nx; p.y = gh - p.h` —— **一帧之内**人平移
+   48~112px，读起来就是"我按 W 往上，人却往左跑了"。
+
+   所以只改过程、不改判据：
+     · 0.10~0.26 秒的 smoothstep 跨步（距离越远越久，但不是按比例
+       线性给 —— 112px 用 0.26 秒是 430px/s，和爬井的竖直速度一档）；
+     · 弧顶抬高 6px。人和球不一样，**"跨"这个动作本来就是先离地再落地**；
+       贴着楼板面平移过去，看起来像被谁推着滑。
+   翻越期间走 `p.climb` 状态机（和爬井共用），物理整段让位，
+   不会有"插值刚写进去、同一帧重力又把 y 拉回来"的一帧抖。 */
+function startMantle(p, nx, ny) {
+  const dx = nx - p.x;
+  p.climb = {
+    mode: 'mantle',
+    x0: p.x, y0: p.y, x1: nx, y1: ny, t: 0,
+    tv: 0.10,
+    th: Math.min(0.16, Math.abs(dx) / 900),
+  };
+  p.vx = 0; p.vy = 0; p.onGround = true;
+  S.invuln = Math.max(S.invuln, p.climb.tv + p.climb.th + 0.1);
 }
 
 function wellClimb(p) {
@@ -4276,14 +4348,33 @@ function stepPlayer(dt) {
     const c = p.climb;
     c.t += dt;
     const sm = v => v * v * (3 - 2 * v);      // smoothstep：首尾减速
-    if (c.t < c.tv) {
-      /* ① 竖直段：x 锁死，人顺着井往上 */
-      p.x = c.x0;
-      p.y = c.y0 + (c.y1 - c.y0) * sm(c.t / c.tv);
-    } else if (c.t < c.tv + c.th) {
-      /* ② 水平段：y 锁死在落点高度，人从洞口跨出来 */
-      p.y = c.y1;
-      p.x = c.x0 + (c.x1 - c.x0) * sm((c.t - c.tv) / c.th);
+    if (c.mode === 'mantle') {
+      /* 跨步翻越（见 startMantle）。一条 smoothstep 曲线走完 x 和 y，
+         中途再叠一个 6px 的弧顶 —— 有弧顶才读得出"跨"，没有就是"滑"。 */
+      const T = c.tv + c.th;
+      const u = Math.min(1, c.t / T);
+      const e = sm(u);
+      p.x = c.x0 + (c.x1 - c.x0) * e;
+      p.y = c.y0 + (c.y1 - c.y0) * e - Math.sin(u * Math.PI) * 6;
+      if (u >= 1) {
+        p.x = c.x1; p.y = c.y1;
+        p.climb = null;
+        p.jumps = NUM.hero.airJump;
+      }
+      p.vx = 0; p.vy = 0; p.onGround = true; p.anim += dt;
+      return;
+    }
+    if (c.t < c.T) {
+      /* **沿井壁往上蹭。**（2026-10-29 第 1 条）
+         竖直全程 smoothstep；水平只在 **32%~92%** 这段走 ——
+         前 32% 纯竖直（人先离开梯顶），最后 8% 也是纯竖直
+         （脚越过楼板面那一下横移已经靠完，读作"直着爬出洞口"）。
+         两段式改成一条曲线之后，"升到顶再横着滑"就没了；
+         横移时人还在楼板**底下**，所以不会出现"在地面上方平移"。 */
+      const tv = c.t / c.T;
+      p.y = c.y0 + (c.y1 - c.y0) * sm(Math.min(1, tv));
+      const hx = Math.min(1, Math.max(0, (tv - 0.32) / 0.60));
+      p.x = c.x0 + (c.x1 - c.x0) * sm(hx);
     } else {
       p.x = c.x1; p.y = c.y1;
       p.climb = null;
@@ -4439,8 +4530,14 @@ function stepPlayer(dt) {
       if (feet > f + 6 || feet < f - 40) continue;
       /* ② 洞口。`LAYERS[k].holes` 就是 f 这层楼板上的洞。 */
       const holes = (LAYERS[k] && LAYERS[k].holes) || [];
-      if (!holes.some(h => p.x + p.w > h.x - 6 && p.x < h.x + h.w + 6)) continue;
-      const dirs = (left || right) ? [left ? -1 : 1] : [-1, 1];
+      const hole = holes.find(h => p.x + p.w > h.x - 6 && p.x < h.x + h.w + 6);
+      if (!hole) continue;
+      /* **没按方向键时，按"人在洞口的哪半边"决定往哪边翻。**
+         原来写死 `[-1, 1]`：站在洞右半边也先去试左边，横移距离直接翻倍
+         —— 用户 2026-10-29 第 1 条「这个位置往上 会自动向左移动」，
+         一半是它，另一半是下面那条"一帧到位"。 */
+      const prefer = (p.x + p.w / 2) < (hole.x + hole.w / 2) ? -1 : 1;
+      const dirs = (left || right) ? [left ? -1 : 1] : [prefer, -prefer];
       for (const dir of dirs) {
         for (const step of [20, 34, 48, 62, 78, 96, 112]) {
           const nx = p.x + dir * step;
@@ -4452,8 +4549,9 @@ function stepPlayer(dt) {
           const gh = groundAt(nx + p.w / 2, f - 1);
           if (gh < f - 96 || gh > f + 2) continue;
           if (gh >= prevFeet - 4) continue;      // ③ 翻过去得更低，不是原地
-          p.x = nx; p.y = gh - p.h; p.vx = 0; p.vy = 0; p.onGround = true;
-          p.jumps = NUM.hero.airJump;
+          /* **不再一帧到位。** 见 startMantle 的注释：横向 48~112px
+             一帧完成，读起来就是"按 W 往上、人却往左跑了"。 */
+          startMantle(p, nx, gh - p.h);
           break;
         }
         if (p.onGround) break;
@@ -4549,7 +4647,20 @@ function updateCamera(dt) {
   const k = camGoalFloor();
   if (k >= 0) S.cam.k = k;
   const target = clamp(FLOORS[Math.min(S.cam.k, FLOORS.length - 1)] - camViewOffset(), 0, WORLD_H - H);
-  S.cam.y += (target - S.cam.y) * Math.min(1, 7 * dt);
+  /* **跨多层要"快摇"，不能"慢慢扫过去"。**（2026-10-29 用户第 2 条）
+     「现在跳层的摄像头是不是有问题 一闪一下」。
+
+     固定 7/s 是给"挪一层"配的（240px，0.4 秒到位，读作"跟下去"）。
+     一旦一次跨两层以上（掉出世界被接走、一口气穿过两个洞），
+     同样 7/s 就是**镜头在整关里从上滑到下** —— 那 0.8 秒里画面
+     一直在动，什么也看不清，这就是"闪"。
+
+     改成分档：差 1.5 层以内还是 7/s（正常跟拍），超过就 16/s。
+     16/s 在指数逼近里意味着"0.25 秒走完大半"，读起来是快速下摇，
+     到位之后再自动落回 7/s 收尾 —— 起步快、停得稳，这是镜头的基本做法。 */
+  const gapLayers = Math.abs(target - S.cam.y) / GEN.floorH;
+  const rate = gapLayers > 1.5 ? 16 : 7;
+  S.cam.y += (target - S.cam.y) * Math.min(1, rate * dt);
   if (Math.abs(target - S.cam.y) < 0.5) S.cam.y = target;
 }
 
@@ -8613,6 +8724,7 @@ function drawPlayer(g, p) {
 }
 
 function drawHud(g) {
+  if (S.showHud === false) return;
   g.save();
   const inClear = S.phase === 'clear';
 

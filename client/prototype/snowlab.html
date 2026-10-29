@@ -2529,7 +2529,16 @@ function stepBody(o, dt) {
       }
       continue;
     }
-    if (!aabb(o, s)) continue;
+    /* **垂直方向允许 0.5px 的"相切"。**
+       `aabb` 用的是严格 `>`，而"站在某块上"在数值上恰恰是
+       `o.y + o.h === s.y` —— 正好相切，判成不相交。平时无所谓（落地时总是
+       先穿过去一点），但 `step-up` 和斜坡贴地是把 y **精确设成** `s.y - o.h`：
+       于是下一帧判定不落地 → 被重力拉下去 → 水平段又被 step-up 抬回来。
+       自反馈循环，3px 的上下抖，`_jitter-probe.js` 量到一只 moss
+       以 40 次/秒、2px 幅抖了整整 19 秒。
+       放开的量取 0.5px（一帧重力的十分之一），不会把"悬空站着"吸下来。 */
+    if (!(o.x < s.x + s.w && o.x + o.w > s.x &&
+          o.y < s.y + s.h && o.y + o.h >= s.y - 0.5)) continue;
     // 只认"从上方落下来"和"从下方顶上去"，侧面的事交给下一轮
     if (o.vy >= 0 && prevBottom <= s.y + 8) {
       o.y = s.y - o.h; o.vy = 0; o.onGround = true;
@@ -2593,7 +2602,27 @@ function stepBody(o, dt) {
        所以这条只对"坡与台面的缝"生效，不会变成"人能直接上箱子"。 */
     if (o.onGround) {
       const stepUp = (o.y + o.h) - s.y;
-      if (stepUp > 0.5 && stepUp <= 20) { o.y = s.y - o.h; o.vy = 0; o.onGround = true; continue; }
+      /* **抬上去必须踩得实，踩空就不收。**
+         台阶助步本来只服务"坡顶 → 台面"那 18px 的缝。但它只按包围盒判：
+         只要身体边框蹭到某块高台的侧面，就把人抬到那块顶上 ——
+         哪怕重心还留在原来那一块上。抬起来站不住，同一帧的重力又把人
+         送回去，下一帧再抬：**10Hz、18px 的上下抖**，读起来就是"一直弹弹弹"。
+
+         （2026-10-29 用户两次反馈「一直弹弹弹」，第一次我把它全算成"跳不上去
+         还在跳"，修的是跳跃上限 —— 那只是三种成因里的一种。这个才是画面里
+         真正看到的那个抖动：`_jitter-probe.js` 量到 x 一动不动、y 在
+         931↔949 之间以 10Hz 往返，`tryN` 全程为 0，一秒都没起跳过。）
+
+         判据用重心那一列的地面：抬到 `s.y` 之后，重心处必须真的托在 `s.y`。
+         坡顶那一次重心本来就在台面上，所以原用途一点不受影响。 */
+      /* 门槛从 0.5 提到 2.2：0.5~2px 的"落差"是浮点和箱子对齐的毛刺，
+         抬上去只是每帧上下抖 1px。真台阶（坡顶接台面）是 18px 那个量级，
+         门槛抬到 2.2 一点不影响它。`_jitter-probe.js` 量到一只 moss
+         因此以 40 次/秒、2px 幅抖了整整 19 秒。 */
+      if (stepUp > 2.2 && stepUp <= 20 &&
+          Math.abs(groundAt(o.x + o.w / 2, s.y) - s.y) < 6) {
+        o.y = s.y - o.h; o.vy = 0; o.onGround = true; continue;
+      }
     }
     if (o.vx > 0) { o.x = s.x - o.w; }
     else if (o.vx < 0) { o.x = s.x + s.w; }
@@ -2604,9 +2633,26 @@ function stepBody(o, dt) {
       const outTop = Math.abs(o.y + o.h - s.y);
       const outL = Math.abs(s.x + s.w - o.x);
       const outR = Math.abs(o.x + o.w - s.x);
-      if (outTop < Math.min(outL, outR)) { o.y = s.y - o.h; o.vy = 0; o.onGround = true; }
-      else if (outL < outR) o.x = s.x + s.w;
-      else o.x = s.x - o.w;
+      /* **顶到上面也要看能不能站住。** 重心悬在块外时（贴着箱沿站、重心整个
+         在箱子外面），顶上去下一帧就掉、掉了再被顶回来 —— 跟 step-up 那条
+         是同一个循环，只是入口不同。
+
+         两个出口都要判"这一下有没有真的改变位置"：
+           · 重心在块上 → 从顶上顶出去；
+           · 重心在块外、横向还推得动 → 从侧面推出去；
+           · **重心在块外、横推也动不了**（它正好贴着那条边，推出去等于原地）
+             → 什么都不做，**放它掉下去**。这里"掉下去"本来就是对的：
+             踩着 0px 的边缘站住才是假的。
+         `_jitter-probe.js` 量到种子 18 的一只 moss 在 x=576（箱子右边界）
+         以 40 次/秒、2px 幅抖了整整 19 秒，走的就是第三条。 */
+      const topOk = outTop < Math.min(outL, outR) &&
+                    Math.abs(groundAt(o.x + o.w / 2, s.y) - s.y) < 6;
+      if (topOk) { o.y = s.y - o.h; o.vy = 0; o.onGround = true; }
+      else if (outL < outR) {
+        if (Math.abs((s.x + s.w) - o.x) > 0.5) o.x = s.x + s.w;
+      } else {
+        if (Math.abs((s.x - o.w) - o.x) > 0.5) o.x = s.x - o.w;
+      }
     }
     o.vx = 0;
   }

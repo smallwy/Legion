@@ -29,7 +29,7 @@
 | grove 玩法 | `tools/grove-smoke.js`、`grove-runtime-check.js` |
 | 编译期致命码 | `tools/runtime-sanity.js`（阈值 0） |
 | 出图 | `_snowlab-shot.js`（种子 7）、`_well-shot.js`、`_cmp-shot.js`、`_perfhud-shot.js`、`_crop.js` |
-| 行为 | `_foe-bounce.js`（数次数）、`_foe-seq-shot.js`（4 时刻并排序列图） |
+| 行为 | `_foe-bounce.js`（数跳/蹭坎次数）、`_jitter-probe.js`（**量 y 方向反转，抓"碰撞推挤"这一类，前一个抓不到**）、`_foe-seq-shot.js`（4 时刻并排序列图） |
 | 性能 | `_ab-perf.js`（**同进程交替 A/B，只看比值**，绝对毫秒不可信）、`_perf-probe.js`、`_stop-probe.js` |
 
 **性能尖峰先做最小复现**：把游戏代码整个剥掉、只留几百次画布操作再跑一遍。
@@ -48,3 +48,10 @@
 - 角色尺度：箱子 48 永不动 / 玩家 45×63 / 敌人 ≤0.85 箱宽；形象与碰撞框同比例（`ART_K` 与 `PLAYER_W/H` 一起改）。
 - 美术：Q 版 = 硬边色块（`foeCel`），**角色身上不要渐变**；统一光源左上。
 - **已知未解决**：每层塞满装饰导致画面噪声、主角出生点有时在人缝里。
+
+## 敌人「弹」有三种成因（2026-10-29 两轮才分清，别再只查一种）
+
+真跳（上限要从 `apex = jump²/(2·2100)` 反推，不许手写）→ 蹭坎（门槛 ≥4px）→
+**碰撞推挤**：`step-up`/挤出把 y 设成 `s.y - o.h`（正好相切），而 `aabb` 用严格 `>`，
+下帧判不相交 → 不落地 → 掉 → 又被抬，10Hz 无限循环。
+第三种 `_foe-bounce` 抓不到，只有 `_jitter-probe`（量 y 方向反转次数）能抓。

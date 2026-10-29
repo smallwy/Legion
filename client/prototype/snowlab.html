@@ -99,12 +99,38 @@ const NUM = {
   bellyPerBall: 14,       // 造一颗球掉多少
   bellyPerShard: 20,      // 吃一片雪之碎片回多少
 
-  /* 吐雪。**「喷的代价」在这里**，两条都用：
-     ① 射程短 —— life 0.24s × 620 = 149px，必须靠近
-     ② 喷时锁移动 —— 0.14s，比射速 0.16s 短一点，所以连喷 = 站桩
-     没有这两条，100 发会让玩家站在角落喷满全场再统一推球，
-     「喷」和「推」就变成两个不相干的阶段了。 */
-  shot: { speed: 620, life: 0.24, cd: 0.16, lock: 0.14, r: 7 },
+  /* 吐雪投掷物。**2026-10-29 用户第 3 条：「我方单位的子弹 射程需要远点
+     并且要有特色 符合宠物的特征 丢出去是下落的 类似横向丢出去的石头」**
+
+     上一版是 speed 620 × life 0.24 = **149px 的一根直线**，短、平、六只共用一套。
+     而主线 `grove.html` 的 `HEROES` 里六只**各有各的武器**（溜溜球 / 音波 /
+     坚果 / 萝卜 / 飞刀 / 影子）—— 那是 10-20 就做好了的，我在 snowlab 里
+     重写时丢了。用户问「为啥代码要单独写 不能兼并能融合吗」，指的就是这个。
+
+     **为什么没有把 grove 那六把武器原样搬过来**：grove 的武器是"直接伤害"，
+     而 snowlab 的子弹只干一件事 —— 给敌人加雪点，满 6 发裹成球。
+     搬伤害会绕开裹球，整条玩法断掉。所以只搬两样：
+     ① 抛物线的飞行方式；② "每只长得不一样"的识别度。
+
+     弹道：横向初速 + 轻微上扬 + 重力下坠。
+     `vy0 = -80 / g = 520` 是从"同高度还能打中多远"倒推的 ——
+     子弹掉到敌人胸口（≈30px）时 x 已经走了 327px，是原来的 2.2 倍。
+     再远就砸地：射程有上限，但不再需要贴脸。 */
+  shot: {
+    cd: 0.16,
+    lock: 0.14,        // 出手时锁移动：这是「喷的代价」，连喷 = 站桩
+    /* 每只一套。**靠飞行方式区分，不靠配色区分** ——
+       缩到 8px 的子弹上涂什么颜色都一样，但"走直线"和"甩弧线"一眼分得开。
+       参数从 grove 的六把武器继承手感（刀最快最直、萝卜最远、坚果最重）。 */
+    pets: {
+      cat: { speed: 620, life: 0.62, vy0: -80, grav: 520, r: 8,  kind: 'yoyo'   },
+      dog: { speed: 700, life: 0.55, vy0: -60, grav: 400, r: 9,  kind: 'bone'   },
+      ham: { speed: 520, life: 0.90, vy0: -40, grav: 620, r: 10, kind: 'nut'    },
+      rab: { speed: 760, life: 0.75, vy0: -50, grav: 380, r: 8,  kind: 'carrot' },
+      ox:  { speed: 820, life: 0.50, vy0: -30, grav: 300, r: 9,  kind: 'knife'  },
+      fox: { speed: 680, life: 0.45, vy0: -30, grav: 360, r: 7,  kind: 'shadow' },
+    },
+  },
 
   /* 球。半径沿用 grove 的 22 + 2.8/点，上限提到 +24。
      两点 = 一只怪的量；**砸碎一口箱子算 2.0 点，也就是大半只怪** ——
@@ -1585,6 +1611,10 @@ const S = {
   ammo: 0, belly: 0, hp: 0, invuln: 0,
   killed: 0, killedTarget: 0,
   shake: 0, flash: 0, hitStop: 0,
+  /* 最近一次冲击的**方向**（单位向量）。震屏只给幅度的话，
+     画面是"在抖"；给了方向，才是"被从右边撞了一下"。
+     不设的时候是 (0,0) —— 纯震颤，适合没有明确来向的坠落/爆裂。 */
+  shakeDX: 0, shakeDY: 0,
   keys: {},
   /* 量具面板开关。跑原型时开着（要看数值），出图 / 给人看设计时关掉 ——
      这块面板压在右上角，正好盖住第 1~2 层右侧那段浮台上的箱子。 */
@@ -1745,8 +1775,14 @@ function addText(x, y, s, color, size, lifeT) {
     **全一样的方点会让所有材质碎得一样**，玩家就读不出"这是什么做的"。 */
 function addFrag(x, y, n, color, spd, shape, bias) {
   const bx = (bias && bias.x) || 0, by = (bias && bias.y) || 0;
+  /* **有方向时把角度收进扇形，而不是"全向撒 + 整体漂移"。**
+     后者只改变碎片整体的重心，不改变扩散形状 —— 出图上看还是一次爆炸。
+     收进 ±66° 之后，木片才会朝球飞去的方向扑出去，读作"被撞开"。 */
+  const hasDir = bx !== 0 || by !== 0;
+  const baseA = hasDir ? Math.atan2(by, bx) : 0;
   for (let i = 0; i < n; i++) {
-    const a = rnd(0, Math.PI * 2), v = rnd(60, spd || 260);
+    const a = hasDir ? baseA + rnd(-1.15, 1.15) : rnd(0, Math.PI * 2);
+    const v = rnd(60, spd || 260);
     const f = {
       x, y,
       vx: Math.cos(a) * v + bx, vy: Math.sin(a) * v - 80 + by,
@@ -1755,6 +1791,15 @@ function addFrag(x, y, n, color, spd, shape, bias) {
       w: 0, h: 0,
     };
     if (shape === 'plank') { f.w = rnd(7, 15); f.h = rnd(2.4, 4.2); }
+    else if (shape === 'slab') {
+      /* **大块残骸。** 只有小块的时候，箱子碎完读作"箱子消失了"；
+         大块是它的"尸体"，玩家看得见它被撞到哪去了。飞得慢、活得久，
+         所以撞击后一两秒画面里还留着几块斜插的木板 —— 这才是"碎了"，
+         而不是"被删了"。 */
+      f.w = rnd(16, 26); f.h = rnd(7, 12);
+      f.life = rnd(0.85, 1.25);
+      f.vr = rnd(-6, 6);
+    }
     else if (shape === 'chunk') { f.w = rnd(3.4, 7.5); f.h = f.w * rnd(0.55, 1.15); }
     else { f.w = f.r; f.h = f.r; f.vr = 0; }
     if (f.w) f.r = Math.max(f.w, f.h);
@@ -2005,14 +2050,19 @@ function shoot() {
   }
   S.ammo--;
   S.stat.shots++;
+  const cfg = NUM.shot.pets[HERO_ID] || NUM.shot.pets.cat;
   p.shotCd = NUM.shot.cd;
   p.lockT = NUM.shot.lock;      // 喷时不能移动：这是「喷的代价」第 ②条
   p.shotAnim = 0.18;
   S.shots.push({
     x: p.x + p.w / 2 + p.face * 16,
     y: p.y + p.h * 0.42,
-    vx: p.face * NUM.shot.speed,
-    t: 0, life: NUM.shot.life, r: NUM.shot.r, dead: false,
+    vx: p.face * cfg.speed,
+    /* **横向丢出去，但要掉下来。** vy0 轻微上扬让弹道先平后坠 ——
+       没有这一下，子弹读起来是"射出去的激光"；有了它才是"扔出去的东西"。
+       重力 520 是角色重力（2100）的四分之一：子弹比人轻，但不该飘。 */
+    vy: cfg.vy0, grav: cfg.grav, kind: cfg.kind,
+    t: 0, life: cfg.life, r: cfg.r, dead: false,
   });
   for (let i = 0; i < 3; i++) addFrag(p.x + p.w / 2 + p.face * 14, p.y + p.h * 0.42, 1, '#EAF6FF', 120);
 }
@@ -2022,6 +2072,9 @@ function stepShots(dt) {
     if (s.dead) continue;
     s.t += dt;
     s.x += s.vx * dt;
+    /* 抛物线：**先加速度、再动位置**。顺序反了的话同一帧里下落晚半拍，
+       连射三发能看出来高低不一，像是三颗不同重量的子弹。 */
+    if (s.grav) { s.vy += s.grav * dt; s.y += s.vy * dt; }
     if (s.t >= s.life) { s.dead = true; continue; }
 
     /* **命中判定必须取"最近的那个"，不能分两轮先怪后箱。**
@@ -2296,7 +2349,11 @@ function ballHitBox(b, box, dir, vDown) {
   const tier = ballTier(b.absorbed);
 
   if (pow >= def.minPow && tier >= def.minTier) {
-    breakBox(box, 'ball', pow);
+    /* 冲击方向：横向撞 = 球的速度符号；落砸 = 自上而下。
+       碎片、震屏、冲击环都吃这一个向量，三者才是一件事。 */
+    const ddx = vDown ? 0 : (b.vx >= 0 ? 1 : -1);
+    const ddy = vDown ? 1 : 0;
+    breakBox(box, 'ball', pow, ddx, ddy);
     if (vDown) b.vy = vDown * def.keepSpeed;   // 落砸：继续往下犁
     else b.vx *= def.keepSpeed;                // 穿透：撞碎之后继续滚，这是爽感的来源
     b.chain++;
@@ -2338,24 +2395,38 @@ function burstBall(b) {
         所有东西就都一样了；
      ② 球砸要有**顿帧 + 冲击环**。顿帧让"力"有时间落地，环给出方向；
      ③ 震屏按"撞的动量"分级，不是一律 10 —— 小球轻轻蹭一下和特大球
-        正面撞，手感该是不一样的。 */
-function breakBox(box, how, pow) {
+        正面撞，手感该是不一样的。
+   2026-10-29 补第四条：
+     ④ **碎片和震屏都要有方向。** 全向均匀炸开读作"爆了"，
+        沿撞击方向喷出去才叫"被撞碎"。`dirX/dirY` 是冲击的单位向量。 */
+function breakBox(box, how, pow, dirX, dirY) {
   box.dead = true;
   const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
   const byBall = how === 'ball';
   const wood = box.mat === 'wood';
   const hard = byBall ? 360 : 210;
+  /* 定向喷出的偏置。**只有球撞才给方向** —— 子弹是一点一点啃的，
+     它不该把整口箱子掀飞，否则"子弹 vs 球"的力气差就没了。 */
+  const BX = byBall ? (dirX || 0) * 210 : 0;
+  const BY = byBall ? (dirY || 0) * 210 : 0;
+  const bias = { x: BX, y: BY };
 
   if (wood) {
     /* 木：一堆**板条** + 几块小碎块。板条会转，转起来才像"被撞散的"。 */
-    addFrag(cx, cy, byBall ? 10 : 6, '#C9A273', hard, 'plank');
-    addFrag(cx, cy, byBall ? 7 : 4, '#E8C79A', hard * 0.8, 'chunk');
-    addFrag(cx, cy, byBall ? 4 : 2, '#8A6236', hard * 0.6, 'chunk');
+    addFrag(cx, cy, byBall ? 4 : 2, '#B08A5E', 130, 'slab', bias);      // 大块残骸，飞得慢
+    addFrag(cx, cy, byBall ? 14 : 6, '#C9A273', hard, 'plank', bias);
+    addFrag(cx, cy, byBall ? 9 : 4, '#E8C79A', hard * 0.8, 'chunk', bias);
+    addFrag(cx, cy, byBall ? 5 : 2, '#8A6236', hard * 0.6, 'chunk', bias);
+    /* 第三层：**极小的木屑，飞得慢、活得久。** 大块负责"撞开",
+       这层负责"余韵" —— 大块 0.35~0.8 秒就落干净了，画面会突然安静；
+       屑子飘到 1.1 秒，撞击的"尾巴"才留得住。 */
+    if (byBall) addFrag(cx, cy, 10, '#F0DCC0', 130, 'chunk', bias);
   } else {
     /* 石 / 铁：没有板条，全是**棱角块**，飞得近、落得快。 */
-    addFrag(cx, cy, byBall ? 13 : 7, '#9AA6B0', hard * 0.9, 'chunk');
-    addFrag(cx, cy, byBall ? 6 : 3, '#6E7A86', hard * 0.65, 'chunk');
-    addFrag(cx, cy, byBall ? 4 : 2, '#CFD8E0', hard * 1.1, 'chunk');
+    addFrag(cx, cy, byBall ? 16 : 7, '#9AA6B0', hard * 0.9, 'chunk', bias);
+    addFrag(cx, cy, byBall ? 8 : 3, '#6E7A86', hard * 0.65, 'chunk', bias);
+    addFrag(cx, cy, byBall ? 5 : 2, '#CFD8E0', hard * 1.1, 'chunk', bias);
+    if (byBall) addFrag(cx, cy, 7, '#FFE9A8', 240, 'chunk', bias);   // 石屑里迸的火星
   }
 
   if (byBall) {
@@ -2364,6 +2435,9 @@ function breakBox(box, how, pow) {
     hitStop(0.05 + 0.04 * k);
     /* **震屏上限压到 14。** 再大整个画面就在"跳"，玩家会晕。 */
     S.shake = Math.max(S.shake, Math.min(14, 8 + 5 * k));
+    /* 方向跟着冲击走：横向撞是球的速度方向，落砸是"从上往下"。 */
+    S.shakeDX = dirX || 0;
+    S.shakeDY = dirY || 0;
     /* **同时最多 4 个环。** 特大球会连着碾碎 4~5 个箱子，每个箱子两圈 ——
        十来个环叠在一起就是一团结，什么也读不出来（放大图里像一堆泡泡）。
        旧环直接丢掉：它们本来就快消失了，留着只添乱。 */
@@ -3364,7 +3438,12 @@ function step(dt) {
   if (S.hitStop > 0) { S.hitStop = Math.max(0, S.hitStop - dt); S.t += dt * 0.25; return; }
 
   S.t += dt;
-  S.shake = Math.max(0, S.shake - 60 * dt);
+  /* **指数衰减，不是线性。** 线性的毛病在尾段：从 14 掉到 1 和从 1 掉到 0
+     用的时间一样长，最后那一下是"匀速停下"，读起来是机械。
+     指数是先猛后缓 —— 撞上去那一下最重，然后迅速收住，
+     和真实的震动一致。低于 0.4 直接归零，不拖看不见的尾巴。 */
+  S.shake = S.shake > 0.4 ? S.shake * Math.exp(-7.5 * dt) : 0;
+  if (S.shake === 0) { S.shakeDX = 0; S.shakeDY = 0; }
   S.flash = Math.max(0, S.flash - 2.4 * dt);
 
   stepPlayer(dt);
@@ -3469,6 +3548,26 @@ const COL = {
    形象比碰撞框高一点（72 vs 63），是**故意的**：头顶的呆毛、耳朵本来就该
    允许穿进天花板一点点，卡死反而显得僵。原来也是这个比例（48 vs 42）。 */
 const ART_K = 1.5;
+/* **宽 ≤ 箱宽、高 ≥ 箱高，两个都要。**（2026-10-29 用户提出第 4 条）
+   用户原话：「我方宠物大小 比箱子大 没办法独立站一个箱子的空格？」
+
+   一量就清楚了 —— 碰撞盒 45 本来是能站的（45 < 48 箱宽），但**贴图实际
+   画出来 68.7 宽**，是箱宽的 1.43 倍。所以是"看着站不进去"，
+   不是"真的站不进去"。根因是上一轮把 `PET_VIS_K` 提到 1.0 时只对齐了
+   **高度**（体高 = 碰撞高），**宽度没人管**：cat.png 宽高比 0.716，
+   体高一撑到 63，视觉宽就跟着到 68.7。
+
+   **不能靠降碰撞高来解决。** 试过 63 → 55（视觉 46.3 宽、53.1 高，
+   两条都成立，碰撞和视觉只差 2px），但一跑断言就掉三条：
+   比箱高 1.15、高度 ≥ 56 承载立绘细节、占屏 10.5% ——
+   那三条是"角色别缩回去变小"的红线，缩宽度不能拿高度去换。
+
+   所以反过来：**高度守住 63，只压视觉宽度**。要视觉 ≤ 48（= 一箱宽），
+   图高 = 48/0.716 = 67，对应 VIS = 67×0.656/63 = 0.70。
+   验证：视觉 48.1 宽 / 55.2 高（含耳），箱 48 —— 宽刚好一格，高 1.15 格。
+   代价是碰撞顶比耳朵尖高 7.8px，跳起来会"没碰到就弹下来"。
+   这 7.8px 只能认：0.716 的宽高比决定了"宽进一格"和"碰撞=视觉"不可兼得，
+   而宁可空一点碰撞，也不要角色缩成一小团。 */
 const PLAYER_W = 45, PLAYER_H = 63;
 
 /* ---- 敌人：**不跟玩家共用系数** -------------------------------------------
@@ -3973,9 +4072,24 @@ function draw() {
 
   g.save();
 
-  // 震屏
+  /* 震屏。**不能是白噪声。**
+     原来每帧独立随机 `rnd(-sh, sh)`，帧与帧之间毫无关系 ——
+     肉眼读作"画面在抖"，而不是"被什么东西撞了一下"。
+     真实的冲击是「沿一个方向被推出去，然后弹回来」。
+
+     做法：两条**非整数倍频**（1.0 / 2.31）的正弦叠加。
+     非整数比意味着它不会周期性回到同一点，看起来就不像机械摆动；
+     再叠一个方向偏置 `shakeDX/DY`，让大震有明确的来向。
+     大震才吃得进方向（乘 sh/14），小震（擦碰、落地）保持纯震颤 ——
+     否则每一颗子弹打到箱子都让画面横移，会晕。 */
   const sh = S.shake;
-  if (sh > 0) g.translate(rnd(-sh, sh), rnd(-sh, sh));
+  if (sh > 0) {
+    const tt = S.t * 42;
+    const dirK = Math.min(1, sh / 14) * 0.55;
+    const dx = (Math.sin(tt) * 0.62 + Math.sin(tt * 2.31 + 1.7) * 0.38) * sh + S.shakeDX * sh * dirK;
+    const dy = (Math.cos(tt * 1.37) * 0.55 + Math.sin(tt * 3.07) * 0.45) * sh + S.shakeDY * sh * dirK;
+    g.translate(dx, dy);
+  }
 
   // 镜头
   g.translate(0, -S.cam.y);
@@ -4096,14 +4210,7 @@ function draw() {
   for (const b of S.balls) drawBall(g, b);
 
   // 雪弹
-  for (const s of S.shots) {
-    g.fillStyle = '#FFFFFF';
-    g.globalAlpha = 0.9;
-    g.beginPath(); g.arc(s.x, s.y, s.r, 0, Math.PI * 2); g.fill();
-    g.globalAlpha = 0.35;
-    g.beginPath(); g.arc(s.x - s.vx * 0.012, s.y, s.r * 1.9, 0, Math.PI * 2); g.fill();
-    g.globalAlpha = 1;
-  }
+  for (const s of S.shots) drawShot(g, s);
 
   // 玩家
   drawPlayer(g, S.p);
@@ -6141,6 +6248,121 @@ const BALL_SKIN = [
   { a: '#EEFAFF', b: '#8FC8E8', edge: '#356F9C' },   // 特大
 ];
 
+/* ============================================================================
+   我方投掷物：六只六种样子
+   ----------------------------------------------------------------------------
+   **形状就是识别度。** 8~10px 的子弹上，配色几乎没有意义（缩到那个尺寸，
+   橙和红是同一个色块），能读出来的只有**外轮廓**和**运动方式**：
+   圆的、带两个凸头的、锥形的、细长的 —— 一屏同时出现也不会认错。
+
+   用户 2026-10-29：「要符合宠物的特征」。所以每只扔自己的东西：
+   猫的溜溜球、狗的骨头、仓鼠的坚果、兔子的萝卜、牛的飞刀、狐狸的影子。
+   这些东西在 `grove.html` 里本来就是各角色的武器（`HEROES[].tag`），
+   这里搬的是**形象**，不是伤害 —— snowlab 的子弹只管加雪点、裹球。
+
+   三样东西共用：
+   ① 拖尾 —— 一条按速度方向拖出去的淡影。**没有它，抛物线读不出来**：
+      单帧只是一颗球，玩家分不清它在往上飘还是往下掉。
+   ② 统一 `COL.ink` 描边 —— 和场景里所有实体的语言一致，不描边就是贴纸。
+   ③ 飞行中自转（`kind` 决定转速：刀和骨头转得明显，坚果几乎不转）。 */
+function drawShot(g, s) {
+  const a = clamp(s.t / (s.life || 1), 0, 1);
+
+  /* 拖尾：沿速度反方向拉长。alpha 随飞行时间衰减，
+     所以刚出手那一段最"实"，快消失时自己淡掉，不用额外的消失动画。 */
+  const sp = Math.hypot(s.vx, s.vy) || 1;
+  g.save();
+  g.globalAlpha = 0.28 * (1 - a * 0.7);
+  g.fillStyle = '#EAF6FF';
+  g.beginPath();
+  g.ellipse(s.x - s.vx / sp * 7, s.y - s.vy / sp * 7,
+            s.r * 1.5, s.r * 0.8, Math.atan2(s.vy, s.vx), 0, Math.PI * 2);
+  g.fill();
+  g.restore();
+
+  g.save();
+  g.translate(s.x, s.y);
+  g.lineWidth = 2.4;
+  g.strokeStyle = COL.ink;
+  g.lineJoin = 'round';
+
+  const R = s.r;
+  switch (s.kind) {
+    /* 溜溜球：一个厚圆盘 + 中间那条缝线。猫的武器是"甩出去再拉回来"，
+       所以它必须看起来像"能转的东西"，不是一个雪块。 */
+    case 'yoyo': {
+      g.rotate(s.t * 16 * (s.vx < 0 ? -1 : 1));
+      g.beginPath(); g.arc(0, 0, R, 0, Math.PI * 2);
+      g.fillStyle = '#FFC94E'; g.fill(); g.stroke();
+      g.beginPath(); g.moveTo(-R * 0.62, 0); g.lineTo(R * 0.62, 0);
+      g.strokeStyle = '#B4781E'; g.lineWidth = 1.6; g.stroke();
+      g.beginPath(); g.arc(-R * 0.3, -R * 0.34, R * 0.26, 0, Math.PI * 2);
+      g.fillStyle = 'rgba(255,250,230,.85)'; g.fill();
+      break;
+    }
+    /* 骨头：两头大、中间细。狗的武器。**两个凸头是它的全部识别度**，
+       画成一根直棍就变成"扔了根木头"。 */
+    case 'bone': {
+      g.rotate(s.t * 12 * (s.vx < 0 ? -1 : 1));
+      g.beginPath();
+      g.moveTo(-R * 0.55, -R * 0.30); g.lineTo(R * 0.55, -R * 0.30);
+      g.lineTo(R * 0.55, R * 0.30);  g.lineTo(-R * 0.55, R * 0.30);
+      g.closePath();
+      g.fillStyle = '#F6EFE0'; g.fill();
+      g.beginPath(); g.arc(-R * 0.68, -R * 0.30, R * 0.32, 0, Math.PI * 2); g.fill(); g.stroke();
+      g.beginPath(); g.arc(-R * 0.68, R * 0.30, R * 0.32, 0, Math.PI * 2); g.fill(); g.stroke();
+      g.beginPath(); g.arc(R * 0.68, -R * 0.30, R * 0.32, 0, Math.PI * 2); g.fill(); g.stroke();
+      g.beginPath(); g.arc(R * 0.68, R * 0.30, R * 0.32, 0, Math.PI * 2); g.fill(); g.stroke();
+      break;
+    }
+    /* 坚果：椭圆 + 一道中缝。仓鼠的武器贴地滚，所以它几乎是圆的
+       （圆的东西滚起来才成立），转速也压到最低。 */
+    case 'nut': {
+      g.beginPath(); g.ellipse(0, 0, R * 1.05, R * 0.86, s.t * 3, 0, Math.PI * 2);
+      g.fillStyle = '#B07A42'; g.fill(); g.stroke();
+      g.beginPath(); g.moveTo(-R * 0.7, -R * 0.5); g.quadraticCurveTo(R * 0.1, 0, -R * 0.7, R * 0.5);
+      g.strokeStyle = '#7A4E24'; g.lineWidth = 1.5; g.stroke();
+      break;
+    }
+    /* 萝卜：锥身 + 尾部一撮绿。兔子的武器，**全六种里最长的东西**，
+       在屏幕上一眼能认出来是"射出去的蔬菜"。 */
+    case 'carrot': {
+      g.rotate(s.vx < 0 ? Math.PI : 0);
+      g.beginPath();
+      g.moveTo(R * 1.15, 0); g.lineTo(-R * 0.55, -R * 0.72); g.lineTo(-R * 0.55, R * 0.72);
+      g.closePath();
+      g.fillStyle = '#F2903F'; g.fill(); g.stroke();
+      g.beginPath();
+      g.moveTo(-R * 0.55, 0); g.lineTo(-R * 1.15, -R * 0.5); g.lineTo(-R * 1.05, 0);
+      g.lineTo(-R * 1.15, R * 0.5);
+      g.closePath();
+      g.fillStyle = '#79B65A'; g.fill(); g.stroke();
+      break;
+    }
+    /* 飞刀：最细最长、转得最快。牛的武器，读作"穿过"而不是"砸中"。 */
+    case 'knife': {
+      g.rotate(s.t * 26);
+      g.beginPath();
+      g.moveTo(R * 1.5, 0); g.lineTo(0, -R * 0.55); g.lineTo(-R * 0.75, 0); g.lineTo(0, R * 0.55);
+      g.closePath();
+      g.fillStyle = '#DDE8F2'; g.fill(); g.stroke();
+      break;
+    }
+    /* 影子：唯一"不发光"的一种 —— 实心暗紫 + 一圈更暗的边，
+       飞的时候还留两道残影，读作"这不是实物"。 */
+    default: {
+      g.globalAlpha = 0.4;
+      g.beginPath(); g.arc(-s.vx * 0.02, -s.vy * 0.02, R * 0.9, 0, Math.PI * 2);
+      g.fillStyle = '#A98CFF'; g.fill();
+      g.globalAlpha = 1;
+      g.beginPath(); g.arc(0, 0, R, 0, Math.PI * 2);
+      g.fillStyle = '#6B54A8'; g.fill(); g.stroke();
+      break;
+    }
+  }
+  g.restore();
+}
+
 function drawBall(g, b) {
   const tier = ballTier(b.absorbed);
   const skin = BALL_SKIN[tier];
@@ -6307,18 +6529,19 @@ function drawClimbHint(g) {
    走路不用整只上下蹦（那是跳），是**同一张站立图切三块**、
    绕髋关节前后对摆，身体反方向轻前倾。 */
 const PET_BODY_K = 0.656;   // 体高 / 图高
-/* **这个系数不能照抄 grove 的 0.78。**
-   它定义的是「画出来的**体高** / 碰撞高」，不是图高 —— 图高还要再除 0.656。
-   grove 用 0.78，是让猫的体高只有碰撞盒的 78%；但 snowlab 的碰撞盒
-   PLAYER_H=63 是照**代码画的那只**量的，那只的体高就是 63。
-   直接搬 0.78 的后果：体高 49，比木箱（48）高一格都不到，
-   断言第三十节「玩家比箱子高 1.31」当场作废 —— 而且断言还是绿的，
-   因为那一条按 PLAYER_H 算、根本不看贴图。**机器绿、画面错**，
-   这类只有出图能抓到。
-   这里取 1.0：体高 = 碰撞高，和代码画的那只同尺寸。
-   代价是耳朵溢出碰撞盒顶 33px（cat.png 的耳朵占图高 34%，
-   代码那只只占 14%），耳朵大是素材本身的特征，认了。 */
-const PET_VIS_K = 1.0;
+/* **这个系数由"视觉宽 = 一箱宽"倒推，既不是 grove 的 0.78，也不是 1.0。**
+   它定义的是「画出来的**体高** / 碰撞高」。
+
+   上一轮取 1.0（体高 = 碰撞高），只对了高度、宽度没人管 ——
+   体高 63 撑起来，视觉宽就是 63/0.656×0.716 = 68.7，箱宽的 1.43 倍。
+   用户一句"比箱子大 没办法独立站一个箱子的空格"才把它问出来。
+
+   现在按宽度倒推：要视觉 ≤ 48（= 一箱宽），图高 = 48/0.716 = 67，
+   而碰撞高 63 不变，所以 63×k/0.656 = 67 → k = 0.70。
+   验证：视觉 48.1 宽、55.2 高（含耳朵），箱 48。
+   **代价**：体高 44.1 比碰撞高 63 矮 18.9px —— 但视觉总高 55.2 是靠
+   耳朵撑起来的，看起来仍比箱子高。碰撞发生在身体上，眼睛看到的是整只。 */
+const PET_VIS_K = 0.70;
 
 /* ---- 当前角色 ----
    **这是"换哪只宠物"的唯一开关。** 贴图键是 `pet-` + HERO_ID，

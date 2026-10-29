@@ -1768,6 +1768,90 @@ group("三十七、出手有反馈（后坐力）");
 }
 
 /* =========================================================================
+   三十八、投掷物：射得远、会掉、六只长得不一样
+   =========================================================================
+   §3 的验收（用户 2026-10-29）：「射程需要远点 并且要有特色 符合宠物的
+   特征 丢出去是下落的 类似横向丢出去的石头」。
+
+   三个判据缺一不可：
+     · 射程 —— 太短就退回"贴脸喷"，这条要能防住回退；
+     · 下坠 —— 只加射程不加下坠，弹道是激光不是石头；
+     · 六种不同 —— 全六只共用一个 kind 就等于没做特色。
+   **射程在无遮挡下量**：箱堆本身就是地形，场上有箱子时弹道会被挡，
+   那量出来的是"地形"不是"射程"。
+   ========================================================================= */
+group("三十八、投掷物：射程 / 下坠 / 六种不同");
+{
+  const P = L.NUM.shot.pets;
+  const ids = ["cat", "dog", "ham", "rab", "ox", "fox"];
+  ck("六只都有投掷物参数", ids.every(id => P && P[id]), Object.keys(P || {}).join(","));
+  const kinds = ids.map(id => (P && P[id] ? P[id].kind : "?"));
+  ck("六种 kind 互不相同", new Set(kinds).size === 6, kinds.join(","));
+  ck("六只都带重力（会掉下来）", ids.every(id => P && P[id] && P[id].grav > 0),
+    ids.map(id => P && P[id] ? P[id].grav : "-").join(","));
+
+  L.reset(1);
+  const S = L.S;
+  /* 清场：只量弹道本身 */
+  S.foes.forEach(f => { f.dead = true; });
+  S.boxes.forEach(b => { b.dead = true; });
+  S.plats.length = 0;
+  const seg = L.LAYERS[0].segs.filter(s => s.w >= 120).sort((a, b) => b.w - a.w)[0];
+  L.placePlayer(seg.x + 60, L.FLOORS[0] - S.p.h);
+  for (let i = 0; i < 20; i++) L.step(1 / 60);
+  S.p.face = 1; S.ammo = 99; S.shots.length = 0;
+
+  const x0 = S.p.x + S.p.w / 2 + 16, y0 = S.p.y + S.p.h * 0.42;
+  L.shoot();
+  let top = 0, last = null;
+  for (let i = 0; i < 90 && S.shots.length; i++) {
+    L.step(1 / 60);
+    const s = S.shots[0];
+    if (s) { last = { dx: s.x - x0, dy: s.y - y0 }; top = Math.min(top, s.y - y0); }
+  }
+  ck("射程 ≥ 300px（" + (last ? last.dx.toFixed(0) : "-") + "）",
+    !!last && last.dx >= 300, last ? last.dx.toFixed(1) : "-");
+  ck("落点明显低于出手点（下坠 " + (last ? last.dy.toFixed(0) : "-") + "px）",
+    !!last && last.dy > 25, last ? last.dy.toFixed(1) : "-");
+  ck("弹道先微微上扬（顶点 +" + (-top).toFixed(1) + "px）", -top > 2, (-top).toFixed(2));
+}
+
+/* =========================================================================
+   三十九、打击感：冲击有方向
+   =========================================================================
+   用户 2026-10-29：「震屏视觉效果不好 打击感 和 破碎感需要加强」。
+
+   原来震屏是每帧独立随机 —— 帧间毫无关系，读作"画面在抖"而不是"被撞了"。
+   现在三样东西共用一个冲击向量（震屏偏移 / 碎片扇形 / 冲击环）。
+   断言守的就是"这个向量真的被用上了"：光调参数看不出方向对不对。
+   ========================================================================= */
+group("三十九、打击感：冲击有方向");
+{
+  L.reset(1);
+  const S = L.S;
+  const box = S.boxes.find(b => !b.dead && b.mat === "wood");
+  ck("场上有一口木箱可以做靶", !!box, S.boxes.length + " 口");
+  if (box) {
+    S.shake = 0; S.shakeDX = 0; S.shakeDY = 0; S.frags.length = 0;
+    L.breakBox(box, "ball", 3.0, 1, 0);
+    ck("向右撞 → 震屏方向向右", S.shakeDX === 1 && S.shakeDY === 0,
+      S.shakeDX + "," + S.shakeDY);
+    ck("震屏幅度 ≥ 8（" + S.shake.toFixed(1) + "）", S.shake >= 8, S.shake.toFixed(1));
+    const right = S.frags.filter(f => f.vx > 0).length;
+    ck("碎片多数朝撞击方向飞（" + right + "/" + S.frags.length + "）",
+      S.frags.length > 10 && right >= S.frags.length * 0.7,
+      (right / Math.max(1, S.frags.length)).toFixed(2));
+
+    const s0 = S.shake;
+    for (let i = 0; i < 12; i++) L.step(1 / 60);
+    ck("0.2 秒后震屏已收掉大半（" + S.shake.toFixed(1) + " < " + (s0 * 0.5).toFixed(1) + "）",
+      S.shake > 0 && S.shake < s0 * 0.5, S.shake.toFixed(2));
+    for (let i = 0; i < 90; i++) L.step(1 / 60);
+    ck("最终归零（不拖尾巴）", S.shake === 0, S.shake);
+  }
+}
+
+/* =========================================================================
    汇总
    ========================================================================= */
 console.log("\n" + "=".repeat(56));

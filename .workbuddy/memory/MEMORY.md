@@ -9,11 +9,13 @@
 - 提交信息按「子系统的变更意图」写，不按文件类型堆。一个提交说清一件事为什么这么改，
   踩过的坑写在信息里（这些信息比代码注释更常被翻）。
 - 截图 / 评审图一律入库，不做体积优化（用户已确认接受仓库变大）。
-- **push 要显式指定代理**（2026-10-29）：`~/.gitconfig` 里
-  `http.https://github.com.proxy = http://127.0.0.1:7897` 指向早已不监听的端口，
-  直接 push 必失败；清掉 env 代理后是直连超时。可用的是沙箱代理 38190：
-  `git -c "http.https://github.com.proxy=http://127.0.0.1:38190" push origin main`。
-  单次 curl 返 000 不代表不通，用 `/info/refs` 端点复测（401 = 可达）。
+- **push 的代理端口会变，每次推送前先探一遍，别照抄旧端口**（2026-10-29 两次实测已反转）：
+  上午可用的是沙箱 38190、7897 拒绝连接；下午反过来 7897=200、38190=000。
+  探法：
+  `curl -s -o /dev/null -w "%{http_code}" --max-time 6 -x http://127.0.0.1:<port> https://github.com/smallwy/Legion.git/info/refs?service=git-upload-pack`
+  （200 = 可用；顺带试 `--noproxy '*'` 直连）。哪个通就
+  `git -c "http.https://github.com.proxy=http://127.0.0.1:<port>" push origin main`。
+  单次 curl 返 000 不代表不通，用 `/info/refs` 端点复测。
 
 ## 工程事实
 

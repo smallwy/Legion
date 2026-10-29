@@ -2201,7 +2201,13 @@ const S = {
      画面会连抖 2.2 秒（探针实测）。见 kickShake。 */
   kick: {},
   /* 帧率计。见 draw() 末尾的显示与 perfTick()。 */
-  perf: { on: false, last: 0, acc: 0, n: 0, fps: 0, ms: 0 },
+  /* `worst` = 最近一秒里**最长的那一帧**。
+     平均帧率会把"偶发长帧"抹平：60 帧里夹一帧 300ms，平均下来还是 58fps，
+     可玩家看到的就是卡了一下。两种"卡"必须分开读 ——
+       帧率低   → 每一帧都慢（多半是画得太多）；
+       峰时长高 → 平时很快、偶尔停一下（顿帧 / GC / 环境抢 CPU）。
+     判据不同，改法完全不同，所以别只看 fps。 */
+  perf: { on: false, last: 0, acc: 0, n: 0, fps: 0, ms: 0, worst: 0, wHold: 0, wSum: 0 },
   /* 最近一次冲击的**方向**（单位向量）。震屏只给幅度的话，
      画面是"在抖"；给了方向，才是"被从右边撞了一下"。
      不设的时候是 (0,0) —— 纯震颤，适合没有明确来向的坠落/爆裂。 */
@@ -4911,14 +4917,24 @@ function buildStatic() {
 }
 
 /* 帧间隔统计。**在 draw() 开头调**，量的就是"这一帧开始 - 上一帧开始"，
-   正好是玩家感知到的帧间隔（含 step + 浏览器空闲），不是 draw 本身的耗时。 */
+   正好是玩家感知到的帧间隔（含 step + 浏览器空闲），不是 draw 本身的耗时。
+
+   两个窗口，别混：
+     · 12 帧一结算 → `fps` / `ms`，十几帧就能收敛，反应快；
+     · 1 秒一结算  → `worst`，慢窗口才抓得住"一秒里偶尔停一下"的那种卡。
+   窗口按**累计帧时长**切（不是按帧数），因为出问题的时候帧本来就长。 */
 function perfTick() {
   const P = S.perf;
   const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   if (P.last > 0) {
     const dt = now - P.last;
-    /* 切标签页回来会有一次数秒的间隔，别让它污染平均 */
-    if (dt > 0 && dt < 500) { P.acc += dt; P.n++; }
+    /* 切标签页回来会有一次数秒的间隔，别让它污染平均，也别记成"峰" */
+    if (dt > 0 && dt < 500) {
+      P.acc += dt; P.n++;
+      if (dt > P.wHold) P.wHold = dt;
+      P.wSum += dt;
+      if (P.wSum >= 1000) { P.worst = P.wHold; P.wHold = 0; P.wSum = 0; }
+    }
     if (P.n >= 12) { P.ms = P.acc / P.n; P.fps = 1000 / P.ms; P.acc = 0; P.n = 0; }
   }
   P.last = now;
@@ -8324,17 +8340,29 @@ function drawHud(g) {
   }
 
   /* 帧率（F 键）。**放右下角**：左上和顶部被 HUD 占着，
-     放那儿会压住弹药/体力。 */
+     放那儿会压住弹药/体力。
+
+     显示三段：`58 fps · 17.2ms · 峰 320ms`。
+     **第三段才是"一卡一卡"的证据** —— 前两段是平均值，一帧停 300ms
+     也能被平均成 58fps。颜色按"最难受的那个"来定，不是只按 fps。 */
   if (S.perf.on && S.perf.fps > 0) {
     const P = S.perf;
-    const txt = P.fps.toFixed(0) + ' fps · ' + P.ms.toFixed(1) + 'ms';
-    g.font = '700 14px ui-monospace,Menlo,Consolas,monospace';
+    const txt = P.fps.toFixed(0) + ' fps · ' + P.ms.toFixed(1) + 'ms · 峰 ' + P.worst.toFixed(0) + 'ms';
+    /* 等宽栈必须带一个中文字族。只写 `monospace` 时，"峰" 会渲成豆腐块 ——
+       Chromium 会按字形回退，但离屏渲染（@napi-rs/canvas）不会。
+       数字仍然吃 Consolas，中文落到雅黑，混排宽度也还算齐。 */
+    g.font = '700 14px ui-monospace,Menlo,Consolas,"Microsoft YaHei",monospace';
     g.textAlign = 'left';
     const tw = g.measureText(txt).width;
     g.fillStyle = 'rgba(10,16,22,.62)';
     rr(g, W - tw - 34, H - 42, tw + 22, 28, 7); g.fill();
-    /* 绿 / 黄 / 红三档：60 上下正常，40 以下已经能看出来顿，25 以下是"在卡" */
-    g.fillStyle = P.fps >= 55 ? '#9BE86E' : (P.fps >= 40 ? '#FFE08A' : '#FF8E7A');
+    /* 绿 / 黄 / 红三档。判据取两者中更差的一档：
+         fps  ≥55 好 / ≥40 黄 / 否则红
+         峰   <45 好 / <100 黄 / 否则红（45ms ≈ 掉了 2~3 帧，已经能看出来） */
+    const fpsLv = P.fps >= 55 ? 0 : (P.fps >= 40 ? 1 : 2);
+    const pkLv  = P.worst < 45 ? 0 : (P.worst < 100 ? 1 : 2);
+    const lv = Math.max(fpsLv, pkLv);
+    g.fillStyle = lv === 0 ? '#9BE86E' : (lv === 1 ? '#FFE08A' : '#FF8E7A');
     g.fillText(txt, W - tw - 23, H - 22);
     g.textAlign = 'left';
   }

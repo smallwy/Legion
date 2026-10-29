@@ -28,8 +28,12 @@
 | snowlab 运行时 | `client/tools/snowlab-runtime-check.js`（14 项 / 900 帧 0 偏差） |
 | grove 玩法 | `tools/grove-smoke.js`、`grove-runtime-check.js` |
 | 编译期致命码 | `tools/runtime-sanity.js`（阈值 0） |
-| 出图 | `_snowlab-shot.js`（种子 7）、`_well-shot.js`、`_cmp-shot.js`、`_crop.js` |
+| 出图 | `_snowlab-shot.js`（种子 7）、`_well-shot.js`、`_cmp-shot.js`、`_perfhud-shot.js`、`_crop.js` |
 | 性能 | `_ab-perf.js`（**同进程交替 A/B，只看比值**，绝对毫秒不可信）、`_perf-probe.js`、`_stop-probe.js` |
+
+**性能尖峰先做最小复现**：把游戏代码整个剥掉、只留几百次画布操作再跑一遍。
+剥比读代码快，而且是唯一能钉死「是环境还是我们」的办法 —— 2026-10-29 那个
+每 550ms 一次的 340ms 尖峰，就是这么确认成 `@napi-rs/canvas` 自身行为的。
 
 ## 最常返工的坑
 - 震屏唯一出口 `kickShake(px, key)`，峰值硬上限 8px；散落的 `S.shake = Math.max` 会**重复点火**，让调公式完全失效。

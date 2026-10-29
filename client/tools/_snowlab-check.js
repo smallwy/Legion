@@ -80,16 +80,17 @@ for (let sd = 1; sd <= NSEED; sd++) {
     l.terrain.forEach(t => { if (t.kind === "ramp") rampTotal++; });
   });
 }
-/* **判据从"200/200 首掷全过"放宽成"首掷 ≥ 98%，重掷后 200/200 可玩"。**
-   两件事要分开看：
-     · 首掷通过率 = 生成器的"命中率"。它掉到 98% 以下说明约束开始互相打架，
-       玩家会看到大量重掷，生成变慢 —— 那是要修的信号；
-     · 能不能玩 = buildLevel 会拿 seed+7919·t 重掷最多 80 次，
-       只要有一次过，这一关就是可玩的。
-   楼板断成两三段（2026-10-28）之后，地表层能摞箱子的列从 15 掉到 13，
-   极少数种子首掷会掉在"箱子 10 口 < 门槛 12"。这不是死局 —— 重掷一次就换
-   一个布局。所以门槛这么定，而不是把箱子门槛本身降下来。 */
-ck(NSEED + " 个种子首掷通过校验（≥98%）", gOK >= NSEED * 0.98,
+/* **判据回到"200/200 首掷全过"（2026-10-29）。**
+   之前放宽到 98%，理由是"约束互相打架时重掷一次就好" —— 但那等于承认
+   生成器有 1~2% 的种子要靠碰运气，而这些种子恰恰也最容易是死局。
+   这一轮把三个根因都修在生成侧，首掷是干净的 200/200：
+     · **出生点那一列从源头就不摞箱子**（原来是生成完再删，删完只剩 7 口
+       却还在按 9 口算门槛）；
+     · **箱子门槛和"这层几何上摞得下几口"取小**（`l.colCap`：锁死的盖板列
+       只算已有箱数，再往上加就造球坑的格子也不算）；
+     · **洞口落位加了兜底**（三条间距约束合起来可能无解，那一层就没有出口）。
+   现在把它焊死在 100% —— 哪天又掉下来，说明新加的东西又在和这三条打架。 */
+ck(NSEED + " 个种子首掷通过校验（100%）", gOK === NSEED,
    gOK + "/" + NSEED + "，没过: " + gBad.slice(0, 8).join(","));
 {
   let playable = 0;
@@ -113,6 +114,36 @@ ck("三种封口方式都出现过（不是每层都同一招）",
 ck("斜坡平均每关 " + (rampTotal / NSEED).toFixed(1) + " 条（地形不止平台）",
    rampTotal / NSEED > 1.1, (rampTotal / NSEED).toFixed(2));
 ck("箱子平均每关 " + (boxTotal / NSEED).toFixed(1) + " 口", boxTotal / NSEED > 50, (boxTotal / NSEED).toFixed(1));
+
+/* **"门槛和几何取小"这条不能被用来偷懒。**
+   `validateLevel` 第 9 条现在按 `min(门槛, l.colCap)` 判 —— 上面那几个
+   "地表只剩两三列能摞"的种子就是靠它过的。可这条一旦写松，
+   生成器只要把 `colCap` 报小就能让自己永远合格。
+   所以反过来钉一条下限：**任何一层都至少要有 4 口箱子**。
+   实测最差的地表层（种子 154）正好 6 口，离下限还有余量。 */
+{
+  let minCnt = 999, minAt = "";
+  for (let sd = 1; sd <= NSEED; sd++) {
+    const g = L.genLevel(sd);
+    for (let k = 0; k < g.layers.length; k++) {
+      const F = g.floors[k];
+      const c = g.boxes.filter(b => b.y < F - 1 && b.y + b.h > F - 200).length;
+      if (c < minCnt) { minCnt = c; minAt = "seed " + sd + " 层" + k; }
+    }
+  }
+  ck("最空的一层也有 " + minCnt + " 口箱子（≥4）", minCnt >= 4, minAt);
+}
+/* 每层都必须有出口。`layers[k].holes` 为空 = 玩家掉下来就困在里面，
+   这是硬死局，不是难度。原来每个口试 26 次、撞线就放弃，实测 1/200 会空；
+   现在落位有兜底（逐条放宽间距，最后硬开在屏幕中间）。 */
+{
+  let noExit = 0;
+  for (let sd = 1; sd <= NSEED; sd++) {
+    const g = L.genLevel(sd);
+    for (let k = 0; k + 1 < g.floors.length; k++) if (!g.layers[k].holes.length) noExit++;
+  }
+  ck("200 个种子每层都有出口", noExit === 0, noExit + " 层没出口");
+}
 
 /* 上面是一条大 bool，只知道"没通过"，不知道踩了哪条。
    这里把四条硬不变量各自单列，红的时候能直接指出是哪一条。 */
@@ -287,7 +318,36 @@ let ir = soloBox("iron");
 let b3 = L.spawnBall(ir.x - 30, ir.y + 24, 620, 1);
 for (let i = 0; i < 20 && !ir.dead; i++) L.step(DT);
 ck("铁箱：站立推（pow 620 < 1150）砸不动", ir.dead === false);
-ck("铁箱：砸不动会反弹", b3.vx < 0, Math.round(b3.vx));
+/* **砸不动 ≠ 是一堵墙**（2026-10-29）。
+   用户：「球进入了死胡同 比如上坡 完全推不上去了」——
+   球没有跳跃，被推进一个四周高一格的坑里就永远出不来。
+   现在的规则是"球能翻过它砸不动的一格台阶"（见 ballHitBox 的翻越分支），
+   所以这一格铁箱的结局不是弹回来，而是"球跳上去、落在箱顶"。 */
+ck("铁箱：一格高 → 球翻上去（不再原地弹）",
+  b3.y + b3.r <= ir.y + 4 && b3.x > ir.x - 10,
+  Math.round(b3.y + b3.r) + " vs 箱顶 " + ir.y);
+/* **一次只翻一格。** 翻越分支的台阶判据是 ≤56px，所以两格高的墙不会
+   被"一发跳上去"：球最多抬 48（一格）+ 一点滞空余量。
+   这条守的是"箱山对球仍然是地形"—— 一次能翻两格的话，3 格箱山对球就等于平地，
+   箱子就彻底退化成装饰了。 */
+let ir3 = soloBox("iron");
+S.boxes.push({ x: ir3.x, y: ir3.y - 48, w: 48, h: 48, mat: "iron",
+               hp: Infinity, dead: false, hitT: 0, frost: false, fell: 0 });
+/* 按"连续上升的一段"量抬升 —— 量的是单跳，不是整条路径最后爬了多高
+   （那个必然是两格）。`b.onGround` 不能用来切段：它在一帧内就被摩擦分段
+   消费掉了，外面永远读到 false。 */
+const bots = [];
+let b5b = L.spawnBall(ir3.x - 30, L.GROUND_Y - NUM.ball.baseR, 620, 1);
+for (let i = 0; i < 60 && !ir3.dead; i++) { L.step(DT); bots.push(b5b.y + b5b.r); }
+let hopRise = 0;
+for (let i = 1; i < bots.length; i++) {
+  if (!(bots[i] < bots[i - 1] - 0.5)) continue;
+  let j = i, minB = bots[i];
+  while (j + 1 < bots.length && bots[j + 1] < bots[j] + 0.5) { j++; minB = Math.min(minB, bots[j]); }
+  hopRise = Math.max(hopRise, bots[i - 1] - minB);
+  i = j;
+}
+ck("铁箱：两格高 → 一次只翻一格（单跳抬升 ≤ 60）", bots.length > 10 && hopRise <= 60, Math.round(hopRise));
 
 let ir2 = soloBox("iron");
 let b4 = L.spawnBall(ir2.x - 30, ir2.y + 24, 1209, 1);
@@ -427,15 +487,19 @@ group("十一、门（藏箱 / 露出 / 解锁 / 过关）");
 L.reset(); settle(20);
 ck("门初始被冰墙盖着（看不见、也碰不到）", L.doorBlocked() === true);
 
-/* **门壳那一列的 x 是随机的，必须从 S.door 推。** 写死 840 的断言
-   在门开在别处时全都是假绿 —— 它数的是"840 有没有冰箱"，不是"门有没有壳"。
-   另外**必须按层筛 y**：`x` 是全球共用的，下面某一层的"冰封洞口"完全可能
-   和门开在同一列，只按 x 数会把那两格冰墙也算进门壳里（实测数到 4）。 */
+/* **"藏"的载体从冰墙换成了普通木箱**（2026-10-29 用户：「门不需要那么大啊
+   　需要隐藏到箱子里」）。门只有 32×40，整扇躲在门所在那一格的木箱后面；
+   深层（tier ≥ 0.55）还多压一层，要连拆两口。
+
+   门那一列的 x 是随机的，必须从 S.door 推 —— 写死坐标的断言在门开在别处时
+   全是假绿。**按层筛 y** 也不能省：`x` 是全关共用的，下面某一层的
+   "冰封洞口"完全可能和门开在同一列。 */
 const hallFloorY = S.door.y + S.door.h;
-const shells = S.boxes.filter(b => b.mat === "ice" && b.x === S.door.x &&
+const doorColX = Math.floor(S.door.x / 48) * 48;
+const shells = S.boxes.filter(b => !b.dead && b.x === doorColX &&
   b.y + b.h <= hallFloorY + 1 && b.y >= hallFloorY - 96 - 1);
-ck("门的外壳正好 2 口冰箱", shells.length === 2, shells.length);
-ck("外壳盖住门的包围盒", shells.every(b => b.y + b.h > S.door.y && b.y < S.door.y + S.door.h));
+ck("门那一列压着 1~2 口木箱（藏身用）", shells.length >= 1 && shells.length <= 2, shells.length);
+ck("其中一口把门整个盖住", shells.some(b => b.y <= S.door.y + 1 && b.y + b.h >= S.door.y + S.door.h - 1));
 
 shells.forEach(b => L.breakBox(b, "ball"));
 for (let i = 0; i < 8; i++) L.step(DT);          // 让 stepDoor 跑起来（砸箱会带顿帧）
@@ -456,30 +520,44 @@ for (let i = 0; i < 14 && S.phase === "play"; i++) L.step(DT);
 ck("碰门 → phase = clear", S.phase === "clear", S.phase);
 
 /* =========================================================================
-   十二、箱子：挡路 / 可站 / 塌落
+   十二、门：藏 / 挡 / 露
+   ---------------------------------------------------------------------------
+   **门现在是"藏在木箱里"的**（2026-10-29 用户：「门不需要那么大啊
+   　需要隐藏到箱子里」）。原来这一节验的是"门壳两边各垫两格冰墙当门框"，
+   门一改，那一节的四个前提全没了，所以整段换成新的五条：
+     ① 门"小"：宽高都不超过一格；
+     ② 砸开之前门是看不见的（doorBlocked 为真）；
+     ③ 往门那一列走会被箱子挡住（挡路的是箱子，不是冰）；
+     ④ 砸掉那一列之后门露出来；
+     ⑤ 露出来的门坐在地板上，不悬空。
    ========================================================================= */
-group("十二、箱子挡路 / 可站 / 塌落");
 L.reset(); settle(20);
-/* 从门左边 300px 往右走，撞在门壳左列上。**起点必须动态** ——
-   门的位置每关都变，写死 700 的话有时会站在门壳右边，一路畅通走到底。 */
-L.placePlayer(Math.max(48, S.door.x - 300), L.GROUND_Y - S.p.h);
+const dDoor = S.door;
+ck("门是一格之内的小门（w ≤ 48, h ≤ 48）", dDoor.w <= 48 && dDoor.h <= 48, dDoor.w + "×" + dDoor.h);
+ck("没砸开之前门是藏着的（doorBlocked 为真）", L.doorBlocked() === true);
+const dColX = Math.floor(dDoor.x / 48) * 48;
+const buryN = S.boxes.filter(b => !b.dead && b.x === dColX &&
+  b.y + b.h > L.GROUND_Y - 200 && b.y < L.GROUND_Y).length;
+ck("门那一列压着至少 1 口箱子（藏身用）", buryN >= 1, buryN);
+
+/* ③ 从门左边 300px 往右走：被门那一列的箱子挡住。**起点动态** ——
+   门的位置每关都变，写死坐标有时会站在门右边一路走到底。 */
+L.placePlayer(Math.max(48, dDoor.x - 300), L.GROUND_Y - S.p.h);
 S.keys = { d: true };
 for (let i = 0; i < 120; i++) L.step(DT);
 S.keys = {};
-ck("玩家被冰墙挡住（左外屏障 = 门壳左边一列）",
-   S.p.x + S.p.w <= S.door.x - 48 + 1, Math.round(S.p.x + S.p.w) + " vs " + (S.door.x - 48));
+ck("往门那一列走会被箱子挡住", S.p.x + S.p.w <= dColX + 2,
+   Math.round(S.p.x + S.p.w) + " vs " + dColX);
 
-// 塌落：门壳左边那一列砸掉底下那口，上面那口必须掉下来
-L.reset(); settle(30);
-/* **必须限定在门厅这一层。** 只按 x 筛的话，别的层"冰封洞口"正好和门同列时
-   也会被数进来，199 关里会数出 4 口（箱子铺满之后这个碰撞概率变得很高）。 */
-const colB = S.boxes.filter(b => !b.dead && b.x === S.door.x - 48 && b.mat === "ice" &&
-  b.y + b.h > L.GROUND_Y - 200).sort((a, b) => b.y - a.y);
-ck("门壳左边那列是 2 口叠着", colB.length === 2, colB.length);
-const aboveY0 = colB[1].y;
-L.breakBox(colB[0], "ball");
-for (let i = 0; i < 60; i++) L.step(DT);
-ck("砸掉底箱后上面的会下落", colB[1].y > aboveY0 + 10, aboveY0 + " → " + Math.round(colB[1].y));
+/* ④⑤ 砸掉门那一列的箱子 → 门露出来，而且**必须落在地板上**：
+   门壳没了之后如果 y 还是按旧高度算的，门就浮在半空，玩家走过去
+   `aabb` 判不到，等于门不存在。 */
+S.boxes.filter(b => !b.dead && b.x === dColX).forEach(b => L.breakBox(b, "ball"));
+for (let i = 0; i < 40; i++) L.step(DT);
+ck("砸掉之后门露出来（doorBlocked 为假）", L.doorBlocked() === false);
+ck("门底下是门厅地板（不悬空）",
+   Math.abs((S.door.y + S.door.h) - L.GROUND_Y) <= 4,
+   Math.round(S.door.y + S.door.h) + " vs " + L.GROUND_Y);
 
 /* =========================================================================
    十三、贴脸保底（零弹时的唯一出路）
@@ -869,14 +947,24 @@ for (let k = 0; k < NF - 1; k++) {
      S.p.y > next - 200 && S.p.y <= next, Math.round(S.p.y));
 }
 
-/* ⑥ 推球破冰墙。门壳右边一列是门本身，左边一列是外屏障。 */
-const doorX = S.door.x;
-const wallX = doorX - 48;
+/* ⑥ 推球破冰墙 —— **门壳没有了，这一段改成自己搭一堵。**
+   2026-10-29 之前门厅的门是"两边各垫两格冰墙"当门框，所以这里直接拿
+   门左边那一列当靶。门改成"藏进木箱"之后，门厅里已经没有固定的冰墙了
+   （冰墙只剩"封洞口"这一种用途，位置随机）。
+
+   这一条验的本来也不是"门厅长什么样"，而是**一颗球只破一格冰**
+   （keepSpeed 把速度砍到 36%，pow 从 2500 掉到 ~900）。所以靶子自己搭：
+   平地上摞两格冰，推特大球，看它只带走下半格。 */
+const wallX = 528;
 S.balls.length = 0;
-/* 先把门左侧的箱子清掉，给球留出滚动的跑道（喂球箱可能正好在那儿） */
-S.boxes.filter(b => !b.dead && b.x >= wallX - 160 && b.x < wallX && b.y >= L.GROUND_Y - 120)
-       .forEach(b => L.breakBox(b, "ball"));
-for (let i = 0; i < 20; i++) L.step(DT);
+S.boxes.filter(b => !b.dead && b.x + b.w > wallX - 200 && b.x < wallX + 96 &&
+  b.y >= L.GROUND_Y - 200 && b.y < L.GROUND_Y)
+  .forEach(b => { b.dead = true; });
+for (let j = 0; j < 2; j++) {
+  S.boxes.push({ x: wallX, y: L.GROUND_Y - 48 * (j + 1), w: 48, h: 48, mat: "ice",
+                 hp: Infinity, dead: false, hitT: 0, frost: false, fell: 0 });
+}
+for (let i = 0; i < 10; i++) L.step(DT);
 
 /* **冰墙一列两格，一颗球只能破一格。**
    撞碎第一格之后 keepSpeed 把速度砍到 36%，pow 从 2500 掉到 ~900，
@@ -885,7 +973,7 @@ for (let i = 0; i < 20; i++) L.step(DT);
    坐标变了，`b.y === 1444` 就不再指向它，断言会假红。 */
 const colF = S.boxes.filter(b => b.mat === "ice" && b.x === wallX && !b.dead &&
   b.y + b.h > L.GROUND_Y - 200).sort((a, b) => b.y - a.y);
-ck("⑥ 门厅外屏障是 2 格冰", colF.length === 2, colF.length);
+ck("⑥ 一列 2 格冰（自建靶）", colF.length === 2, colF.length);
 const lowerF = colF[0], upperF = colF[1];
 /* **球心 y 必须是"地面减去半径"，不是"地面减去固定值"。**
    特大球 r=46，写成 GROUND_Y-30 的话球底比地面还低 16px，
@@ -900,8 +988,9 @@ L.spawnBall(wallX - 100, L.GROUND_Y - L.ballR(12), 1209, 12);
 for (let i = 0; i < 40 && !upperF.dead; i++) L.step(DT);
 ck("⑥ 推第二颗球破掉冰墙上半", upperF.dead === true);
 
-// ⑦ 破门壳 → 门露出
-S.boxes.filter(b => b.mat === "ice" && b.x === doorX).forEach(b => L.breakBox(b, "ball"));
+// ⑦ 砸掉压在门上的箱子 → 门露出（门现在藏在本列的木箱里）
+S.boxes.filter(b => !b.dead && Math.floor(S.door.x / 48) * 48 === b.x)
+       .forEach(b => L.breakBox(b, "ball"));
 for (let i = 0; i < 10; i++) L.step(DT);
 ck("⑦ 门露出来", L.doorBlocked() === false);
 
@@ -1911,6 +2000,7 @@ group("四十、关卡：难度递进 / 没有死胡同 / 门不固定");
 {
   const NSEED2 = 200;
   let tierBad = 0, foeBad = 0, holeBad = 0, budgetBad = 0, missBad = 0;
+  let corrBad = 0, corrHBad = 0, corrHiBad = 0, corrCols = 0;
   const bandHole = [[0, 0], [0, 0]];      // 浅层 / 深层的洞宽 [总宽, 个数]
   const bandBox = [[0, 0], [0, 0]];       // 浅层 / 深层的箱子预算 [总预算, 层数]
   const doorBand = [0, 0, 0];             // 左(<400) / 中(400~600) / 右(>600)
@@ -1944,6 +2034,28 @@ group("四十、关卡：难度递进 / 没有死胡同 / 门不固定");
     /* 4. 每层每一列都走得到。 */
     for (let k = 0; k < N; k++) if (L.unreachableCols(g, k).length) missBad++;
 
+    /* 5. **主通道的结构**（它同时是画面上"路标"的落点）。
+       三条，一条都不能少：
+         · 每层至少有一条走廊 —— 少于一条，那一层就是"整层箱山"，没有回主路的路；
+         · 走廊列**基本恒 0 格**。唯一允许的例外是 1 格：
+           `fillPits` 的最后一步会往走廊里垫一格，用来救"2-0-2 且两边都是
+           洞口盖板"那种填不掉的球坑（见那里的注释）—— 一口能砸的木箱，
+           比"球滚进去出不来"划算；
+         · 走廊相邻列 ≤2 格 —— 高差 3 = 144 > 跳高 123，走廊自己会变成沟底。
+       `l.corridor` 是生成侧导出的，画 `drawTrail` 和这几条断言用的是同一份数据。 */
+    g.layers.forEach(l => {
+      const cs = l.corridor || [];
+      const idx = [];
+      for (let i = 0; i < cs.length; i++) if (cs[i]) idx.push(i);
+      corrCols += idx.length;
+      if (!idx.length) { corrBad++; return; }
+      if (idx.some(i => (l.colHgt[i] || 0) > 1)) corrHBad++;
+      for (const i of idx) {
+        if (i > 0 && l.colHgt[i - 1] > 2) corrHiBad++;
+        if (i + 1 < cs.length && l.colHgt[i + 1] > 2) corrHiBad++;
+      }
+    });
+
     const dx = g.door ? g.door.x : -1;
     doorMin = Math.min(doorMin, dx); doorMax = Math.max(doorMax, dx);
     doorBand[dx < 400 ? 0 : dx < 600 ? 1 : 2]++;
@@ -1959,6 +2071,12 @@ group("四十、关卡：难度递进 / 没有死胡同 / 门不固定");
   ck("箱子预算越深越多（浅层 " + avgBox[0].toFixed(1) + " / 深层 " + avgBox[1].toFixed(1) + " 格）",
      avgBox[1] > avgBox[0], avgBox.map(v => v.toFixed(1)).join(" vs "));
   ck("200 个种子里每层每列都走得到（没有孤段）", missBad === 0, missBad + " 层有走不到的列");
+  /* 主通道：**这是用户「主通道没有视觉提示」落地之后的形状。**
+     几何上是硬的（0 格 + 邻列 ≤2），画面上是一对粉笔箭头（drawTrail）。
+     断言守结构，图守观感 —— 两边都不许单独退化。 */
+  ck("每层都有主通道（共 " + corrCols + " 列）", corrBad === 0, corrBad + " 层没有通道");
+  ck("主通道列高度 ≤1（0 是常态，1 是填坑兜底）", corrHBad === 0, corrHBad + " 层有高过 1 格的通道列");
+  ck("主通道相邻列 ≤2 格（从路上爬得上任何箱山）", corrHiBad === 0, corrHiBad + " 处高差 3");
 
   /* 门：**三段都得出现过，而且最左能到 <400、最右能到 >600。**
      原来写死 12~17 列 = 576~816，doorMin 永远是 576 —— 这条断言就是

@@ -349,11 +349,19 @@ function standNearDoor() {
 }
 shot("hall", () => { freezeFoes(); standNearDoor(); });
 
-/* 6) 门露出 */
+/* 6) 门露出。
+   **门现在是藏在木箱里的**（2026-10-29），所以"砸冰"这一手不再有效 ——
+   必须砸掉压在门矩形上的那几口箱子。判据和结算那张图共用。 */
+function boxOnDoor(b) {
+  const d = S.door;
+  if (!d) return false;
+  return !(b.x + b.w <= d.x + 1 || b.x >= d.x + d.w - 1 ||
+           b.y + b.h <= d.y + 1 || b.y >= d.y + d.h - 1);
+}
 shot("door", () => {
   freezeFoes();
   standNearDoor();
-  S.boxes.filter(b => b.mat === "ice").forEach(b => L.breakBox(b, "ball"));
+  S.boxes.filter(b => !b.dead && (b.mat === "ice" || boxOnDoor(b))).forEach(b => L.breakBox(b, "ball"));
   for (let i = 0; i < 30; i++) L.step(DT);
 });
 

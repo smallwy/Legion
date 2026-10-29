@@ -535,6 +535,35 @@ function genLevel(seed) {
         break;
       }
     }
+    /* **兜底：这一层一个口都没放下。**
+       每个口试 26 次，撞的全是那三条"同层隔 48 / 层间留 24 / 任何一段不少于 96"。
+       三条都合理，但它们**合起来可能无解** —— 上面一层放了两个宽口，
+       这层就怎么摆都撞线，结果是"这一层根本没有出口"：
+       玩家掉下来就困在里头，不是难度，是死局。
+       实测 200 个种子里 1 个（种子 119 的第 1 层）。
+
+       兜底顺序是**先放宽间距、最后才放宽段宽** —— 段宽是唯一
+       "放宽了就变成孤岛"的一条，能不动就不动。三段都试不出来
+       就硬开在屏幕中间，并且**不封口**（封住的兜底出口等于没兜底）。 */
+    if (!holes.length && k < nF - 1) {
+      const fw = tier >= 0.60 ? 96 : 144;
+      const fitsAt = (x, gapPrev, minSeg) => {
+        if (x < 0 || x + fw > 960) return false;
+        if (prevHoles.some(h => x < h.x + h.w + gapPrev && x + fw + gapPrev > h.x)) return false;
+        const segMin = Math.min(x, 960 - x - fw);
+        return segMin >= minSeg;
+      };
+      let placed = false;
+      for (const [minSeg, gap] of [[96, 24], [96, 0], [48, 0]]) {
+        for (let x = 0; x + fw <= 960 && !placed; x += 48) {
+          if (!fitsAt(x, gap, minSeg)) continue;
+          holes.push({ x, w: fw, cover: 'none', floorY: floors[k] });
+          placed = true;
+        }
+        if (placed) break;
+      }
+      if (!placed) holes.push({ x: 432, w: 96, cover: 'none', floorY: floors[k] });
+    }
     holes.sort((a, b) => a.x - b.x);
     layers.push({ floorY: floors[k], holes, tier });
     prevHoles = holes;
@@ -803,15 +832,34 @@ function genLevel(seed) {
     break;
   }
   const doorX = 48 * doorCol;
-  const door = { x: doorX, y: lastY - 92, w: 48, h: 92, open: false, openT: 0 };
+  /* ================= 门：小门，而且藏在箱子里 =================
+     用户 2026-10-29：「门不需要那么大啊　需要隐藏到箱子里」。
+
+     原来门是 48×92 —— 一格宽、将近两格高，两侧还各垫两格冰墙当门框。
+     结果整块门厅最显眼的东西就是它：**一进去就看见门，只剩"砸冰"一个动作**，
+     探索的部分（找到门）等于没做。
+
+     现在门只有 32×40（一格之内，两格高一格宽的门框感靠画法给），
+     而且**整扇被压在木箱底下**：门所在那一格就是一口普通木箱，
+     门画在箱子后面（绘制顺序：门先、箱子后）。砸开那一口，门才露出来 ——
+     `stepDoor` 里本来就有"从被盖住变成露出来"的那一次闪光和飘字
+     （「找到门了」），这个机制一直都在，只是原来门太大了，
+     冰壳一碎整个人比门还窄，"藏"这件事根本没发生。
+
+     **埋多深跟深度走**：门厅 tier ≥ 0.55 埋两层（要连拆两口），
+     否则只埋一层。这就是"机制随深度多样"里最便宜的一条 ——
+     不加新东西，只是让深层的终点多花一发弹药。 */
+  const DOOR_W = 32, DOOR_H = 40;
+  const door = {
+    x: doorX + 8, y: lastY - DOOR_H, w: DOOR_W, h: DOOR_H,
+    open: false, openT: 0,
+  };
   const hallTaken = [];        // 门厅里已被占掉的 x，箱山要避开
-  for (const cx of [doorX - 48, doorX]) {
-    if (cx < 0 || cx + 48 > 960) continue;
-    B(cx, lastY - 48, 'ice');
-    B(cx, lastY - 96, 'ice');
-    hallTaken.push(cx);
-  }
-  hallTaken.push(doorX - 96);  // 门前留一格空地，不然打不开的门等于墙
+  const buryH = (layers[nF - 2].tier >= 0.55 ? 2 : 1);
+  for (let j = 0; j < buryH; j++) B(doorX, lastY - 48 * (j + 1), 'wood');
+  hallTaken.push(doorX);
+  hallTaken.push(doorX - 48);   // 门前留一格空地，不然打不开的门等于墙
+  hallTaken.push(doorX - 96);
   /* 门厅喂球木箱。**注意它们不再是"喂球"用的了** —— 球撞箱子已经不涨体积
      （2026-10-28），涨体积只认吞敌人。留 5 口的原因是**弹药经济**：
      门厅的怪会挡枪，先拆几口清出射界；顺带也是"箱子能堆"的最后一次演示。 */
@@ -848,8 +896,22 @@ function genLevel(seed) {
        冰在这一关里只有两个意思：封住下行口的墙、包住门的外壳。
        让它也当普通材质之后，"这是一堵墙"和"这是一口能砸的箱子"
        长得一模一样 —— 一种视觉语言一旦有两种解释，就等于没有。 */
+    /* ---- 机制登场表（按 tier，不按 k）----
+       用户 2026-10-29：「后期复杂化 机制多样化」。
+       **"多样化"不是"什么都多一点"，是"每一段深度有一个新东西第一次出现"**：
+
+         tier 0     ：木箱 / 石箱 / 霜箱（教学层：箱子能爬、能拆、能挖穿）
+         tier ≥.30  ：runner（会追人的怪）
+         tier ≥.45  ：铁箱（砸不动的墙 —— 逼玩家绕路或者养大球）
+         tier ≥.55  ：门厅的门压两层箱子（要连拆两口才看见门）
+         tier ≥.60  ：窄洞 96 + 冰封洞口（越深越少敞开的口）
+         tier 越高   ：金箱越容易出（探索奖励在深层要更明显）
+
+       全部用 tier 判，**不用 k 判** —— 否则 3 层关的 k 只到 2，
+       一半机制在短关里永远不出现，同一份难度曲线在两种关长上不是一回事。 */
+    const tierL = l.tier || 0;
     const matRoll = r => r < pWood ? 'wood'
-      : (r < pWood + (1 - pWood) * 0.52 ? 'stone' : (k >= 2 ? 'iron' : 'stone'));
+      : (r < pWood + (1 - pWood) * 0.52 ? 'stone' : (tierL >= 0.45 ? 'iron' : 'stone'));
 
     /* ---- ① 列模型 ---- */
     const HGT = new Array(COLS).fill(0);
@@ -1005,6 +1067,22 @@ function genLevel(seed) {
     const MAXH = MAX0.slice();               // 本列最高能堆几层
     for (let i = 0; i < COLS; i++) if (HGT[i] > 0) LOCK[i] = HGT[i];
 
+    /* ---- ②-0 出生点那一列不摆箱子 ----
+       **玩家就站在这一列，箱子会把他埋住。** 原来是在全部生成完之后
+       "把这一列的箱子删掉"（见下面「出生点清箱」），可那时候 `topUp` 早就
+       按 HGT 把箱子数补到门槛了 —— 删完只剩 7 口，门槛 8 口，校验红。
+       实测 200 个种子里 3 个首掷死在这里：种子 68 的 H 合计 8 口、
+       实际只剩 7 口；种子 153 的 H 合计 9 口、实际只剩 6 口（邻列补丁又删了 2 口）。
+
+       现在改成"生成前就标成不可摞"，箱子数从源头就是对的，
+       也省掉了"删完再补"这种自己骗自己的循环。
+       **洞口 / 覆霜盖板 / 井梯列除外** —— 那些列的箱子是"出口的封口"，
+       清掉等于把这一层的出口拆了。 */
+    if (k === 0 && canAdd[startCol] && holeCol[startCol] === -1 &&
+        !wells.some(w => startCol >= w[0] && startCol <= w[1])) {
+      HGT[startCol] = 0; MAXH[startCol] = 0; canAdd[startCol] = false;
+    }
+
     /* ---- ②-1 切游程：连续"能摞箱子"的列 ---- */
     const freeCol = new Array(COLS).fill(false);
     for (let i = 0; i < COLS; i++) if (canAdd[i] && LOCK[i] < 0) freeCol[i] = true;
@@ -1039,7 +1117,10 @@ function genLevel(seed) {
     for (const run of runs) {
       /* 起点在游程内抖 0~1 列，**不能固定从 run[0] 开始** ——
          否则每层走廊都落在 0、4、9、13 列，纵向看下去是一排等距竖井。 */
-      let c = run[0] + Math.floor(R() * 2);
+      /* **起点不许越过游程末端。** 长 1 的游程（一列）配上门 0~1 的抖动，
+         有 50% 的机会直接跳过整段 —— 整层的游程都短的时候就是"这一层
+         一条走廊都没有"，断言里 800 个层位中撞了 3 次。 */
+      let c = Math.min(run[1], run[0] + Math.floor(R() * 2));
       while (c <= run[1]) {
         if (!nearWell(c)) corridor[c] = true;
         /* **4~6 列一条，不是 3~5。** 3 列一条时一屏有 6 条走廊，
@@ -1048,6 +1129,21 @@ function genLevel(seed) {
            不需要多到像网 —— 一屏 4 条已经很够走了。 */
         c += 4 + Math.floor(R() * 3);
       }
+    }
+    /* **兜底：一条走廊都没划出来。** 游程太碎（都被洞口 / 地形切成单列），
+       或者仅有的几条游程紧贴井梯（`nearWell` 把它们全排除了）。
+       这时挑最长的那条游程的中点当走廊 —— **有路可回**这件事比
+       "走廊落在好看的节奏上"重要得多。 */
+    if (!corridor.some(v => v)) {
+      const offWell = r => { for (let i = r[0]; i <= r[1]; i++) if (!nearWell(i)) return i; return -1; };
+      let pick = -1, bestLen = -1;
+      for (const r of runs) {
+        const i = offWell(r);
+        if (i < 0) continue;
+        if (r[1] - r[0] > bestLen) { bestLen = r[1] - r[0]; pick = i; }
+      }
+      if (pick < 0) for (const r of runs) if (r[1] - r[0] > bestLen) { bestLen = r[1] - r[0]; pick = r[0]; }
+      if (pick >= 0) corridor[pick] = true;
     }
     for (let i = 0; i < COLS; i++) {
       if (!corridor[i]) continue;
@@ -1076,7 +1172,14 @@ function genLevel(seed) {
        深层铺满，横向移动就得先拆出一条路。
        **上限只有 0.80，不给 1.0**：铺满整层之后主通道也没了，
        那不是我想要的那种难。 */
-    let budget = Math.round(COLS * (0.58 + (l.tier || 0) * 0.22));
+    /* **总内容量按层数补偿。**（2026-10-29 用户：「层数与内容量需要差异化补偿」）
+       同一条 tier 曲线，3 层关只有 2 个内容层、5 层关有 4 个 ——
+       按每层固定密度算，短关的总箱子数只有长关的 55%，玩起来"这一关像半关"。
+       补偿系数取**半补偿**（开方）：3 层 ×1.41、4 层 ×1.15、5 层 ×1.0。
+       全补偿（×2）会让短关每层堆到 22 格，那是我自己都打不过去的密度；
+       半补偿之后三档总量落在 34 / 48 / 56 格，差得没那么刺眼了。 */
+    const szK = Math.sqrt(4 / Math.max(1, nF - 1));
+    let budget = Math.round(COLS * (0.58 + (l.tier || 0) * 0.22) * szK);
     l.boxBudget = budget;          // 只给断言看：这是"难度预算"，和实际的箱子数略有出入
     for (const run of runs) {
       const a = run[0], b = run[1];
@@ -1122,17 +1225,46 @@ function genLevel(seed) {
        **顺序是"先给已有的堆加高、再填堆间的空地"**：
        加高只是让堆更鼓，平地还在；反过来先填空地，整层又会变回连续地形，
        那就等于没改。只有在堆全部顶到 MAXH 还凑不够时才去填空地，
-       而且填出来只有 1 格（矮台，不挡视线、不挡路）。 */
-    {
+       而且填出来只有 1 格（矮台，不挡视线、不挡路）。
+
+       **做成函数而不是一次性代码块**（2026-10-29）：坑修（②-4）会压低
+       某些列，压完箱子数可能掉到门槛以下（实测 6 个种子的地表层掉到 7 口）。
+       所以要在坑修之后再补一次 —— 两处用同一套逻辑，只能是一个函数。 */
+    const makesPit = (i, v) => {
+      const H = HGT.slice();
+      H[i] = v;
+      for (const j of [i - 1, i, i + 1]) {
+        if (j <= 0 || j >= COLS - 1) continue;
+        if (H[j - 1] - H[j] >= 2 && H[j + 1] - H[j] >= 2) return true;
+      }
+      return false;
+    };
+    function topUp() {
       /* **地表层（k = 0）门槛再低一档。** 它同时被"两个下行口 + 地形 + 出生点列"
          吃掉，能摞的列常常只剩十来列；下面每一层都有完整地板，按 10 走。 */
-      const need = (k === 0 || k === nF - 1) ? 8 : 10;
+      /* **门槛要和"这层几何上摞得下几口"取小。**
+         有的种子地表层被地形 / 洞口缘 / 走廊 / 楼板断口吃掉大半列，能摞箱子的
+         只剩 2~6 列 —— 这时"8 口"是物理上达不到的，`topUp` 跑完还是 4 口，
+         校验红，`buildLevel` 只好重掷。实测种子 68 的地表只有 13、14 两列能摞。
+         这不是"生成器差一点"，是"门槛没有考虑地形"，所以门槛自己要让步：
+         上限 = Σ(能摞的列 × 它的层数上限) + Σ(锁死的列已经有的箱数)。
+         断言那边用同一条公式（读 `l.colMax`），两边不会各说各话。 */
+      const cap = (() => {
+        let s = 0;
+        for (let i = 0; i < COLS; i++) s += canAdd[i] ? MAXH[i] : HGT[i];
+        return s;
+      })();
+      const need = Math.min((k === 0 || k === nF - 1) ? 8 : 10, cap);
       let cnt = 0;
       for (let i = 0; i < COLS; i++) cnt += HGT[i];
       const grow = (i, room) => {
         if (!canAdd[i] || LOCK[i] >= 0) return 0;
         const add = Math.min(room, MAXH[i] - HGT[i]);
         if (add <= 0) return 0;
+        /* **补箱子不许造出新坑。** 加高一列会把它的邻居变成沟底 ——
+           这正是"补到门槛"和"没有球坑"两条约束打架的地方，
+           打架的结果必须是"少一口箱子"，不能是"多一个球坑"。 */
+        if (makesPit(i, HGT[i] + add)) return 0;
         HGT[i] += add;
         cnt += add;
         return add;
@@ -1147,6 +1279,7 @@ function genLevel(seed) {
         }
       }
     }
+    topUp();
 
     /* 削坡：相邻不得超过 2 格。**优先抬高矮的那一边**（不损失箱子），
        矮的那边不能加（地形 / 落点带）时才压高的。 */
@@ -1164,30 +1297,121 @@ function genLevel(seed) {
       }
       HGT[j] = hv;
     };
-    for (let round = 0; round < 10; round++) {
-      let moved = false;
-      for (let i = 0; i + 1 < COLS; i++) {
-        const df = HGT[i] - HGT[i + 1];
-        if (Math.abs(df) <= 2) continue;
-        moved = true;
-        if (df > 2) {
-          if (canAdd[i + 1]) setH(i + 1, HGT[i] - 2);
-          else setH(i, HGT[i + 1] + 2);
-        } else {
-          if (canAdd[i]) setH(i, HGT[i + 1] - 2);
-          else setH(i + 1, HGT[i] + 2);
+    const smooth = () => {
+      for (let round = 0; round < 10; round++) {
+        let moved = false;
+        for (let i = 0; i + 1 < COLS; i++) {
+          const df = HGT[i] - HGT[i + 1];
+          if (Math.abs(df) <= 2) continue;
+          moved = true;
+          if (df > 2) {
+            if (canAdd[i + 1]) setH(i + 1, HGT[i] - 2);
+            else setH(i, HGT[i + 1] + 2);
+          } else {
+            if (canAdd[i]) setH(i, HGT[i + 1] - 2);
+            else setH(i + 1, HGT[i] + 2);
+          }
         }
+        if (!moved) break;
+      }
+    };
+
+    /* ---- ②-4 填掉"球坑" ----
+       用户 2026-10-29：「主要是球进入了死胡同 比如上坡 完全推不上去了」。
+       削坡保证的是"人能翻过去"（高差 ≤2 格），**对球没有任何保证** ——
+       球只会被水平推。两座 3 格箱山夹一条 1 列宽的缝，球滚进缝底
+       就永远出不来：左脚 144、右脚 144，中间 48。
+
+       修法：**抬沟底，不削两邻。** 削邻居会连锁（削完右边又是新的高差，
+       而削一次就少一格箱子）；抬自己只动一列，而且抬完的高度正好是
+       "比矮的那边低一格" —— 球滚进去也翻得出来。
+       抬不动（地形/落点带锁死）就压低高的那一侧。 */
+    const fillPits = () => {
+    for (let round = 0; round < 4; round++) {
+      const pits = ballPits(HGT);
+      if (!pits.length) break;
+      for (const i of pits) {
+        const lo = Math.min(HGT[i - 1], HGT[i + 1]);
+        /* 抬自己：抬到"比矮的那边还低一格"。`MAXH` 可能是 0（走廊列），
+           那样就抬不动 —— 这时必须落到下面压邻居的分支，
+           不能 `continue`（第一版就是这里 continue 了，5 轮全白跑，
+           200 个种子里 56 个卡在"还剩一个球坑"）。 */
+        const raiseTo = Math.min(lo - 1, MAXH[i]);
+        if (canAdd[i] && raiseTo > HGT[i]) { HGT[i] = raiseTo; continue; }
+        /* 压邻居：挑**矮的**那一边压到 `HGT[i]+1`，变化最小。
+           高的那边压下来要连降两级，会把一座箱子山挖平。 */
+        /* `LOCK[j] <= HGT[i]` 这一条不能少：覆霜盖板列 `canAdd` 是 true，
+           但 `LOCK` 把它的下限锁在 2 格 —— 不排除的话 setH 会"设置成功"
+           却什么都没变（clamp 回 2），然后在 `continue` 里把最后一招也跳过。 */
+        const cands = [i - 1, i + 1].filter(j =>
+          j > 0 && j < COLS - 1 && canAdd[j] && HGT[j] > HGT[i] + 1 && LOCK[j] <= HGT[i]);
+        cands.sort((a, b) => HGT[a] - HGT[b]);
+        if (cands.length) { setH(cands[0], HGT[i] + 1); continue; }
+        /* 最后一招：**在主通道里垫一格。**
+           走到这里说明两边的邻居都压不下去（它们是洞口盖板，被 `LOCK`
+           锁死在 2 格）而自己是走廊列、抬不动。实测 200 个种子里还有 4 个
+           卡在这种"2-0-2 且两边都是盖板"的位置上。
+           走廊的保证本来是"从它爬上任何箱山，高差 ≤2 格"——
+           垫到 1 格（差 1 格）这条保证仍然成立，只是多了一口能砸的木箱。
+           一条 1 格高的雪坎，比"球滚进去 16 秒出不来"划算得多。 */
+        if (LOCK[i] < 0 && !l.terrain.some(t => i * 48 + 48 > t.x && i * 48 < t.x + t.w)) {
+          HGT[i] = 1; MAXH[i] = Math.max(MAXH[i], 1);
+        }
+      }
+    }
+    };
+    /* ================= 三条约束互相打架，只能轮流收敛 =================
+       ① 相邻高差 ≤ 2（人爬得上去）
+       ② 没有球坑（球滚不进去出不来）
+       ③ 箱子够门槛（不然这一层没内容）
+       它们不是独立的：补箱子会造出高差和球坑，削坡会削掉箱子，
+       填坑又会抬出一列新的高差。**所以不能各自跑一遍就完事** ——
+       实测补箱子跑在削坡之后，直接把地表层造出"3 格紧挨 0 格"，
+       整段 8~19 列判成走不到。
+
+       现在的顺序：削坡 / 填坑 交替 3 轮 → 补箱子 → 再交替 2 轮 →
+       最后才是 ②-5（够不够得着）和木桶/金箱的选点。
+       补箱子用 `grow` 里的 makesPit 守卫，削坡和填坑都用 clamp，
+       所以这套交替一定收敛。 */
+    for (let it = 0; it < 3; it++) { smooth(); fillPits(); }
+    topUp();
+    for (let it = 0; it < 2; it++) { smooth(); fillPits(); }
+
+    /* ---- ②-5 "3 格以上的列，至少要有一侧够得着" ----
+       削坡保证的是"相邻高差 ≤ 2"，但它抬不动被 LOCK 锁死的列 ——
+       井梯（3 格）就是锁死的那种。于是一个 3 格井梯和两边的 0 格并排时，
+       削坡改不了任何一边，**这一整段从外面进不来**（高差 144 > 跳高 123）。
+
+       判据和 `unreachableCols` 用的是同一条：想站上 h 格，得先有一侧 ≥ h-2。
+       修法是抬一侧（补一口箱子），抬不动就把自己压到 2 格。
+       抬高只抬到 h-2，不会和削坡打架。 */
+    for (let round = 0; round < 3; round++) {
+      let moved = false;
+      /* **首尾两列也要查。** 第 0 列左边是墙、只能从右边上，
+         所以它"够不够得着"的判据和中间一样，跳过它就会留下
+         "3 格贴墙 + 邻列 0 格"的死段（实测 3 个种子栽在这里）。 */
+      for (let i = 0; i < COLS; i++) {
+        if (HGT[i] < 3) continue;
+        const okL = i > 0 && HGT[i - 1] >= HGT[i] - 2;
+        const okR = i < COLS - 1 && HGT[i + 1] >= HGT[i] - 2;
+        if (okL || okR) continue;
+        const inSeg = j => l.segs.some(s => j * 48 >= s.x && (j + 1) * 48 <= s.x + s.w);
+        const v = HGT[i] - 2;
+        const cand = [i - 1, i + 1].filter(j =>
+          j > 0 && j < COLS - 1 && inSeg(j) && canAdd[j] && MAXH[j] >= v &&
+          LOCK[j] <= v && HGT[j] < v && !makesPit(j, v));
+        if (cand.length) { HGT[cand[0]] = v; moved = true; }
+        else { HGT[i] = 2; moved = true; }
       }
       if (!moved) break;
     }
-
     /* 金箱放在最高的那一列顶上（h >= 3 才有）。**这是"探索"的奖励落点** ——
        爬上去才够得着，砸开有东西。每层最多一个。 */
     let lootCol = -1;
     {
       const tops = [];
       for (let i = 0; i < COLS; i++) if (HGT[i] >= 2 && canAdd[i]) tops.push(i);
-      if (tops.length && chance(0.72)) lootCol = tops[Math.floor(R() * tops.length)];
+      if (tops.length && chance(0.50 + (l.tier || 0) * 0.40)) lootCol = tops[Math.floor(R() * tops.length)];
     }
 
     /* ---- 桶 ----
@@ -1238,8 +1462,28 @@ function genLevel(seed) {
        **不能再假设"地面就是 floorY"**：箱子铺开之后地面几乎全被占了。 */
     l.colHgt = HGT;
     l.colAdd = canAdd;
+    /* **每列"还能补几口箱子"的上限。** 断言要靠它算"这一层几何上最多能有几口" ——
+       有的种子地表层被地形 / 洞口缘 / 走廊 / 楼板断口吃掉大半列，只剩两三列能摞，
+       这时"门槛 8 口"是物理上达不到的，不是生成器的锅，也不该靠重掷去碰运气。
+       两条不能算进去的：
+       · `LOCK >= 0` 的列（洞口盖板 / 井梯）高度是锁死的，只能算现有的箱数
+         —— 种子 154 的第 19 列栽在这上面：覆霜盖板锁在 2 格，按 `MAXH` 算出来的
+         门槛永远补不满；
+       · **再往上加就造出球坑的格子不算**。判据和 `topUp` 里的守卫是同一个
+         `makesPit` —— 种子 154 第 19 列本身能从 1 补到 2，可那样第 18 列
+         （0 格）就成了"2-0-2"的死沟，所以它其实补不上。 */
+    l.colCap = [];
+    for (let i = 0; i < COLS; i++) {
+      if (!canAdd[i] || LOCK[i] >= 0) { l.colCap.push(HGT[i]); continue; }
+      let v = HGT[i];
+      while (v < MAXH[i] && !makesPit(i, v + 1)) v++;
+      l.colCap.push(v);
+    }
     l.colTop = [];
     for (let i = 0; i < COLS; i++) l.colTop.push(l.floorY - 48 * HGT[i]);
+    /* 主通道要能被画出来（见 drawTrail）。**这不是装饰** ——
+       走廊在几何上是硬的，可玩家看不出哪一列是"路"、哪一列只是"恰好没摆箱子"。 */
+    l.corridor = corridor;
   });
 
   /* ---- 出生点清箱 + 重算列顶 ----
@@ -1262,6 +1506,30 @@ function genLevel(seed) {
        整条命都在同一列里，删不到隔壁。 */
     if (b.x === startCol * 48 &&
         b.y + b.h > GEN.topY - 140 && b.y < GEN.topY + 20) boxes.splice(i, 1);
+  }
+
+  /* ---- 出生点清箱的补丁：两侧邻列压到 2 格 ----
+     **削坡跑在清箱之前，它以为出生点那一列还是原来的高度。**
+     清成 0 之后，紧挨着的 3 格井梯就变成"高差 144"的硬墙（跳高只有 123），
+     那一整段（含井梯本身）从出生点根本过不去 —— BFS 会把它们全判成走不到。
+
+     实测种子 68：地表 HGT = 0,0,0,0,0,0,**0**,3,0,…，
+     出生点清掉第 6 列之后，第 7 列的 3 格井梯把 8~19 列整段封在后面。
+
+     修法是删掉两侧邻列最高那一口箱子（压到 2 格）。
+     代价是那一格井梯只剩 2 格、回不到上一层 —— 但那条路本来就是"回头"的
+     备选，而"整段过不去"是硬伤。两害相权，压井梯。 */
+  for (const jc of [startCol - 1, startCol + 1]) {
+    if (jc <= 0 || jc >= 19) continue;
+    for (let i = boxes.length - 1; i >= 0; i--) {
+      const b = boxes[i];
+      if (b.x !== jc * 48) continue;
+      if (!(b.y + b.h > GEN.topY - 200 && b.y < GEN.topY + 20)) continue;
+      /* 只删"第 3 格及以上"（y 比第 2 格还高）—— 删到剩 2 格为止，
+         第 1、2 格必须留着，否则又变成新的高差。 */
+      if (b.y >= GEN.topY - 96 - 1) continue;
+      boxes.splice(i, 1);
+    }
   }
 
   /* 重算列顶：只认"属于本层"的箱子（底边在本层地板上，顶不超过 3 格）。 */
@@ -1294,8 +1562,10 @@ function genLevel(seed) {
        阈值 0.22 / 0.60 而不是 1/3、2/3：5 层关的 tier 是 0/0.25/0.5/0.75/1，
        用三等分会把第 1、2 层都压成 2 只，前两层一样空。 */
     const tier = l.tier || 0;
+    /* **层数补偿**：3~4 层关每层多一只（见 ②-2 里箱子预算的同一段注释）。
+       门厅不动 —— 门厅那 3 只是 killTarget 的死局线。 */
     const want = (k === nF - 1) ? 3
-      : 2 + (tier >= 0.22 ? 1 : 0) + (tier >= 0.60 ? 1 : 0);
+      : 2 + (tier >= 0.22 ? 1 : 0) + (tier >= 0.60 ? 1 : 0) + (nF <= 4 ? 1 : 0);
     /* **候选点按"列"取，不按 8px 步长扫。**
        箱子铺开之后地面几乎每一处都摞着东西，用连续扫描的话一层的候选点
        会被 200 口箱子切成几十个碎点，"取不住"就成了缺怪。
@@ -1470,6 +1740,11 @@ function genLevel(seed) {
           if (l.holes.some(h => cxp + 30 > h.x - 16 && cxp - 30 < h.x + h.w + 16)) continue;
           if (k === 0 && Math.abs(cxp - startX) < 96) continue;
           if (door && cxp + 30 > door.x - 20 && cxp - 30 < door.x + door.w + 20) continue;
+          /* **不摆在斜坡上。** `colTop` 只认箱子，认不出坡面 ——
+             摆上去就是"一只 30×30 的小箱浮在坡面上"，玩家走过去会被它
+             反复顶起来又掉下去（实测在下坡那条断言里量到 13 次落地翻转）。
+             这条规则放怪那一处早就有（见 ⑥），道具这里一直漏着。 */
+          if (l.terrain.some(t => t.kind === 'ramp' && t.x - 24 < cxp + 30 && t.x + t.w + 24 > cxp - 30)) continue;
           const top = (l.colTop && l.colTop[c] != null) ? l.colTop[c] : l.floorY;
           px = cxp; py = top;
         }
@@ -1691,21 +1966,62 @@ function unreachableCols(L, k) {
     for (const j of [i - 1, i + 1]) {
       if (j < 0 || j >= COLS || seen[j] || !stand[j]) continue;
       /* **只限上坡，不限下坡。** 从 3 格箱顶走到地面是"走下去"（会掉下来），
-         不是"跳上去"—— 用 |差值| 判会把所有台阶都判成走不通，
-         实测通过率因此从 98% 掉到 22%。 */
-      if (top[j] <= top[i] + 96) q.push(j);
+         不是"跳上去" —— 判据必须是"j 最多比 i 高 96"。
+
+         **原来的写法 `top[j] <= top[i] + 96` 是反的**（2026-10-29 发现）：
+         y 向下增大，`top` 小 = 高，于是这条式子限制的是"j 最多比 i 低 96"，
+         也就是**下坡限 96、上坡不限** —— 正好和注释相反。
+         它一直没暴露，是因为削坡保证了 |高差| ≤ 2，两个方向都在 96 内；
+         这一版"井梯 3 格 + 邻列 0 格"的组合（削坡动不了井梯，它被 LOCK 锁死）
+         让它现形：地表层整段 8~19 列被判成"走不到"。 */
+      if (top[j] >= top[i] - 96) q.push(j);
     }
     /* ② 跳过洞 */
     for (const d of [-1, 1]) {
       let j = i + d, gap = 0;
       while (j >= 0 && j < COLS && !stand[j]) { gap += 48; j += d; }
       if (j < 0 || j >= COLS || seen[j] || gap <= 0) continue;
-      if (gap <= 144 && top[j] <= top[i] + 96) q.push(j);
+      if (gap <= 144 && top[j] >= top[i] - 96) q.push(j);
     }
   }
   const miss = [];
   for (let i = 0; i < COLS; i++) if (stand[i] && !seen[i]) miss.push(i);
   return miss;
+}
+
+/* ================= 球有没有"死胡同" =================
+   用户 2026-10-29：「空间设计要合理 不要有死胡同路 …… 主要是球进入了死胡同
+   　比如上坡 完全推不上去了」。
+
+   **这和 `unreachableCols` 是两个问题。** 那个问的是"人走不走得到"（人有二段跳、
+   能翻 2 格），这个问的是"球推不推得出来" —— 球不会跳，只能被水平推，
+   被推进一个四周都比它高一格以上的坑里就永久卡死（冰墙、铁箱、石台都砸不动）。
+
+   判据只看列高：**左右相邻列都比本列高 ≥2 格** = 一格宽、两格深的窄沟。
+   为什么是 2 格而不是 1 格：1 格的台阶球能翻过去（见 `ballHitBox` 里的
+   "翻越"分支），2 格翻不过。这一条的实物形态就是"两座三格箱山夹一条缝"，
+   一眼就能在结构图上认出来。
+
+   **多列宽的坑不在这里管。** 它们靠 `colTop` 之外的通用约束兜（堆间至少留一列、
+   走廊两侧限高 2 格），而且宽坑里球能横向滚，玩家也进得去推。 */
+function ballPits(H) {
+  const out = [];
+  for (let i = 1; i + 1 < H.length; i++) {
+    if (H[i - 1] - H[i] >= 2 && H[i + 1] - H[i] >= 2) out.push(i);
+  }
+  return out;
+}
+
+/** 一层里"球推不出来"的列。洞口列（脚下没地板）不算 —— 球掉下去是设计好的。 */
+function ballStuckCols(L, k) {
+  const COLS = 20;
+  const l = L.layers[k];
+  const stand = new Array(COLS).fill(false);
+  for (let i = 0; i < COLS; i++) {
+    const x = i * 48;
+    stand[i] = l.segs.some(s => x >= s.x && x + 48 <= s.x + s.w);
+  }
+  return ballPits(l.colHgt || new Array(COLS).fill(0)).filter(i => stand[i]);
 }
 
 /** 生成后的自检。**这些不是"最好有"，是"没有就得死局"。** */
@@ -1791,8 +2107,12 @@ function validateLevel(L, verbose) {
     const cnt = L.boxes.filter(b => b.y < F[k] - 1 && b.y + b.h > F[k] - 200).length;
     /* 14 口是下限，不是目标 —— 生成侧的实际中位数在 20 上下走。
        **门槛设太高会让 buildLevel 反复重掷**，而重掷只会换种子，
-       不会让某一层突然多出箱子（地形占的列是固定的）。 */
-    const need = (k === 0 || k === N - 1) ? 8 : 10;
+       不会让某一层突然多出箱子（地形占的列是固定的）。
+       **门槛还要和"这一层几何上摞得下几口"取小**（和生成侧 `topUp` 同一条公式）：
+       地形 / 洞口缘 / 走廊 / 楼板断口会把地表层的可摞列吃到只剩两三列，
+       这时 8 口是物理上达不到的，红在这条上只会让 buildLevel 白重掷几十次。 */
+    const cap = (l.colCap && l.colCap.length) ? l.colCap.reduce((a, b) => a + b, 0) : Infinity;
+    const need = Math.min((k === 0 || k === N - 1) ? 8 : 10, cap);
     if (cnt < need) bad.push('第' + k + '层箱子只有 ' + cnt + '（要 ≥' + need + '）');
     /* 10. 相邻列高差 ≤ 2 格（96 < 跳高 123）—— 再高就爬不上去，箱山变墙 */
     for (let i = 0; i + 1 < H.length; i++) {
@@ -1815,6 +2135,16 @@ function validateLevel(L, verbose) {
   for (let k = 0; k < N; k++) {
     const miss = unreachableCols(L, k);
     if (miss.length) bad.push('第' + k + '层有 ' + miss.length + ' 列走不到（列 ' + miss.slice(0, 4).join(',') + '）');
+  }
+
+  /* 14. **球不会跳，所以"人能走到"不等于"球推得出来"。**（2026-10-29）
+     判据见 ballPits：左右都比本列高 2 格 = 一条 1 列宽的深沟，
+     球滚进去之后怎么推都出不来（只能等它 16 秒后自己化掉）。
+     这一条和 13 是互补的：13 管人、14 管球，缺一个都会在实机上出现
+     "我在上面看着球，推不到它" —— 那不是难度，是关卡的错。 */
+  for (let k = 0; k < N; k++) {
+    const pits = ballStuckCols(L, k);
+    if (pits.length) bad.push('第' + k + '层有 ' + pits.length + ' 个球坑（列 ' + pits.slice(0, 4).join(',') + '）');
   }
 
   if (verbose && bad.length) console.log('  ✗ 校验未过：' + bad.join(' / '));
@@ -2215,6 +2545,20 @@ function stepBody(o, dt) {
     if (!aabb(o, s)) continue;
     // 站在这块上面（脚底贴着顶面）就不算撞墙
     if (o.y + o.h <= s.y + 2) continue;
+    /* ---- 台阶助步（step-up）----
+       坡顶和台面接头处有一个 `半身宽 × 坡度` ≈ 18px 的垂直落差：
+       贴坡面用的是**身体中心**那一点的高度（斜坡要这样才不抖，
+       见上面那段注释），所以走到坡顶时脚底还差 18px 才到台面，
+       于是被台面的侧面摁住 —— **永远走不到坡顶**，球也就跟着推不上去
+       （用户 2026-10-29：「比如上坡 完全推不上去了」）。
+
+       给"站着"的身体一次 ≤20px 的抬腿，和 2D 平台游戏里的台阶助步一样。
+       只抬 20px：箱子是 48 一格、平台离地 96/114，都跨不过去，
+       所以这条只对"坡与台面的缝"生效，不会变成"人能直接上箱子"。 */
+    if (o.onGround) {
+      const stepUp = (o.y + o.h) - s.y;
+      if (stepUp > 0.5 && stepUp <= 20) { o.y = s.y - o.h; o.vy = 0; o.onGround = true; continue; }
+    }
     if (o.vx > 0) { o.x = s.x - o.w; }
     else if (o.vx < 0) { o.x = s.x + s.w; }
     else {
@@ -2551,7 +2895,23 @@ function stepBalls(dt) {
            `b.y + b.r > top - 4` 就成立（球底当然在坡面以下），
            球会被一发瞬移到那个坡顶上 —— 看起来像"球凭空飞上去了"。
            加 prevBottom 之后，只有真的从坡上方落下来才贴面。 */
-        if (b.vy >= 0 && prevBottom <= top + 16 && b.y + b.r > top - 4) {
+        /* ---- 接触是"连续的"，不是"每帧重新判"（2026-10-29）----
+           用户原话：「球进入了死胡同　比如上坡　完全推不上去」。
+           斜坡上坡时球没有任何东西把它抬起来 —— 它靠的是
+           "这一帧水平走了 dx，坡面高了 dx×坡度，落差 ≤16 就当接住"。
+           dx 一大就接不住：助跑推 1209 px/s 在 60fps 一帧走 20px，
+           0.79 的坡度抬 15.9px（擦线），30fps 走 40px 抬 31.7px（必穿）。
+           **一旦穿下去，坡面从此再也接不到它** —— 球在坡体内部，
+           看不见、推不动，这就是"完全推不上去"。
+
+           修法：上一帧球底就贴着坡面（`wasOn`）时，不论这一帧坡面抬多少
+           都直接贴过去。接触本来就是连续的，不该每帧重新证明一次。
+           `wasOn` 用的是 prevX 那一点的坡面，所以"从坡脚平地上坡"也成立
+           （低端坡面高度 == 地面高度）；而在下面一层滚的球，
+           prevTop 在几十米之上，`wasOn` 为假 —— 不会误吸。 */
+        const prevTop = surfY(pl, prevX);
+        const wasOn = prevBottom <= prevTop + 6;
+        if (b.vy >= 0 && (wasOn || prevBottom <= top + 16) && b.y + b.r > top - 4) {
           b.y = top - b.r; b.vy = 0; b.onGround = true;
           b.vx += (pl.rise > 0 ? -1 : 1) * 420 * dt;
         }
@@ -2561,6 +2921,13 @@ function stepBalls(dt) {
       const overlapY = b.y + b.r > pl.y && b.y - b.r < pl.y + pl.h;
       if (!overlapX || !overlapY) continue;
       if (b.vy > 0 && prevBottom <= pl.y + 12) {
+        b.y = pl.y - b.r; b.vy = 0; b.onGround = true;
+      } else if ((b.y + b.r) - pl.y <= 24) {
+        /* **台阶助步：坡顶与台面之间有 ≈18px 的缝。**
+           球的贴面用圆心高度（和玩家同一套理由：斜坡要这样才不抖），
+           滚到坡顶时球底比台面低 `半径 × 坡度` ≈ 17px，于是侧面把它
+           原样弹回去 —— 这就是"推到坡顶再也不动"。
+           和 stepBody 一样给一次 ≤24px 的抬腿（球比人宽，给宽 4px）。 */
         b.y = pl.y - b.r; b.vy = 0; b.onGround = true;
       } else {
         b.x = prevX; b.vx *= -0.35;
@@ -2622,6 +2989,28 @@ function ballHitBox(b, box, dir, vDown) {
     hitStop(0.045);
   } else {
     // 砸不动：反弹 + 冒火花。**「太硬」这件事必须让玩家在物理上感到**
+    /* ---- 但"砸不动的一格台阶"不该是一堵墙（2026-10-29）----
+       用户原话：「球进入了死胡同　比如上坡　完全推不上去了」。
+       球没有跳跃，被推进一个四周都比它高一格的坑里就永远出不来 ——
+       只要那个坑壁是砸不动的（铁箱 / 冰墙 / 地形石台），推一百下也是弹回来。
+
+       规则改成：**球能翻过它砸不动的一格台阶。** 判据用"箱顶比球底高多少"：
+         ≤ 56（一格 + 一点余量）→ 起跳翻上去；
+         ≥ 96（两格）→ 仍然是墙，得绕、或者换更大的球。
+       这样"铁箱 = 墙"这条没被破坏（墙都是两格起的），而
+       "一格高的硬边 = 死胡同"这条被消掉了。起跳高度按 60px 反算，
+       刚好让球落到箱顶而不是飞过去。
+       这一跳只在**被推着撞上去**时发生（|vx| ≥ 200）：轻轻蹭一下还是弹回来，
+       否则球会在硬墙前面自己弹弹跳跳，看起来很傻。 */
+    const stepH = (b.y + b.r) - box.y;
+    if (!vDown && stepH > 4 && stepH <= 56 && Math.abs(b.vx) >= 200) {
+      b.y = box.y - b.r - 1;
+      b.vy = -Math.sqrt(2 * 2100 * 60);
+      b.vx *= 0.86;
+      addFrag(b.x, b.y + b.r, 6, '#EAF6FF', 180);
+      S.shake = Math.max(S.shake, 3);
+      return;
+    }
     if (vDown) {
       b.y = box.y - b.r; b.vy = 0; b.onGround = true;   // 落在箱顶，不动
     } else {
@@ -3303,7 +3692,7 @@ function checkDoor() {
     S.door.openT = 0;
     S.flash = Math.max(S.flash, 0.16);
     S.shake = Math.max(S.shake, 10);
-    addText(S.door.x + S.door.w / 2, S.door.y - 20, '门开了', '#9BE86E', 24, 1.8);
+    addText(S.door.x + S.door.w / 2, S.door.y - S.door.h - 16, '门开了', '#9BE86E', 24, 1.8);
   }
 }
 
@@ -3320,7 +3709,7 @@ function stepDoor(dt) {
     d.revealT = 0;
     S.flash = Math.max(S.flash, 0.18);
     S.shake = Math.max(S.shake, 8);
-    addText(d.x + d.w / 2, d.y - 18, '找到门了', '#FFE08A', 24, 1.8);
+    addText(d.x + d.w / 2, d.y - d.h - 14, '找到门了', '#FFE08A', 24, 1.8);
     checkDoor();
   }
   d.wasBlocked = blocked;
@@ -4412,6 +4801,14 @@ function draw() {
   // 平台
   for (const pl of S.plats) drawPlat(g, pl);
 
+  /* 主通道的地面标记。**画在平台之后、箱子之前** ——
+     它贴在地面上，箱子站在旁边会压住它一点，这正是想要的前后关系。 */
+  for (let k = 0; k < LAYERS.length; k++) {
+    const cs = LAYERS[k].corridor;
+    if (!cs) continue;
+    for (let i = 0; i < cs.length; i++) if (cs[i]) drawTrail(g, i * 48, LAYERS[k].floorY);
+  }
+
   // 洞光落在地板上的光斑（地板之后、箱子之前：箱子会站上去遮住一块，对）
   for (let k = 0; k + 1 < FLOORS.length; k++) {
     for (const h of LAYERS[k].holes) {
@@ -4869,6 +5266,87 @@ function drawRamp(g, pl) {
   }
 }
 
+/* =========================================================================
+   主通道的地面标记
+   ---------------------------------------------------------------------------
+   用户 2026-10-29：「主通道没有视觉提示」。
+
+   走廊现在是**几何上的硬保证**（那一列恒 0 格、相邻列 ≤2 格），
+   可玩家看不出来 —— 在一屏「两堆箱山 + 若干空地」里，"这条空列是路"
+   和"这条空列只是恰好没摆箱子"长得一模一样。于是玩家的走法变成
+   "哪里高往哪里爬"，而不是"沿着路走"。
+
+   画法只有两件东西：
+     ① 地面上一段被踩脏的暗带（两端渐隐），像被人反复踩过的木板；
+     ② 后墙上一对粉笔画的箭头（⌃⌃），30px 高，**这一对才是给人看的**。
+   两次试错：
+     · 第一版画"浅色亮带 + 三粒暖点"—— 地板本身就是奶白的，0.2 的奶白色
+       画上去等于没画，出图上一块都找不到；
+     · 第二版画"一对脚印"—— 3px 的椭圆在 1× 下和地板上原本就有的小石子
+       长得一样，读成污渍。
+   所以提示必须**离开地面、画到墙面上去**：那里是空的，而且粉笔箭头
+   本来就是这个工坊世界里的东西（墙上有管道、铆钉、蛛网）。
+   ========================================================================= */
+function drawTrail(g, x, fy) {
+  const cx = x + 24;
+  /* **地表层没有后墙** —— 它是最上面那层雪地，后面直接是天空/远山。
+     粉笔箭头画在那里会变成"浮在空中的两个 V"（出图才看出来），
+     所以室外只留"被踩实的雪"，箭头留给有墙的下面几层。 */
+  const outdoor = Math.abs(fy - GEN.topY) < 1;
+  if (outdoor) {
+    /* 踩实的雪：一条比周围略灰、略低的带子 —— 雪被踩过就是这个样子。
+       低那一条用两道极淡的暗线暗示"陷下去"，比画脚印稳（48px 一格里
+       脚印只有 7px，读出来是石子）。 */
+    const sg = g.createLinearGradient(cx - 24, 0, cx + 24, 0);
+    sg.addColorStop(0, 'rgba(150,170,196,0)');
+    sg.addColorStop(0.5, 'rgba(150,170,196,.26)');
+    sg.addColorStop(1, 'rgba(150,170,196,0)');
+    g.fillStyle = sg;
+    g.fillRect(cx - 24, fy - 4, 48, 4);
+    g.strokeStyle = 'rgba(120,142,170,.22)'; g.lineWidth = 1.4;
+    g.beginPath(); g.moveTo(cx - 14, fy - 6); g.lineTo(cx + 14, fy - 6); g.stroke();
+    /* 箭头**压在雪面线上**（往上一步就进天空了）。雪是白的，
+       所以这里让暗描边说话、亮面几乎不管 —— 和室内正好反过来。 */
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    for (let i = 0; i < 2; i++) {
+      const by = fy - 15 - i * 9;
+      const path = () => {
+        g.beginPath();
+        g.moveTo(cx - 9, by + 7);
+        g.lineTo(cx, by);
+        g.lineTo(cx + 9, by + 7);
+      };
+      g.strokeStyle = 'rgba(58,72,96,.34)'; g.lineWidth = 4.4; path(); g.stroke();
+      g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = 2; path(); g.stroke();
+    }
+    return;
+  }
+  /* ① 被踩脏的地面 */
+  const lg = g.createLinearGradient(cx - 24, 0, cx + 24, 0);
+  lg.addColorStop(0, 'rgba(92,62,36,0)');
+  lg.addColorStop(0.5, 'rgba(92,62,36,.13)');
+  lg.addColorStop(1, 'rgba(92,62,36,0)');
+  g.fillStyle = lg;
+  g.fillRect(cx - 24, fy - 4, 48, 4);
+  /* ② 粉笔箭头：两个 ⌃ 叠起来 = "从这里往上"。
+     **描两遍**：先一道暗底再一道亮面，等于给箭头自带描边 ——
+     砖墙有深有浅，只描一遍时在浅墙上"看不见"、在深墙上"像裂缝"。
+     这和整个游戏"万物一圈 COL.ink"的视觉语言同源，不是新发明。 */
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  for (let i = 0; i < 2; i++) {
+    const by = fy - 26 - i * 11;
+    const path = () => {
+      g.beginPath();
+      g.moveTo(cx - 10, by + 8);
+      g.lineTo(cx, by);
+      g.lineTo(cx + 10, by + 8);
+    };
+    g.strokeStyle = 'rgba(44,28,16,.26)'; g.lineWidth = 5; path(); g.stroke();
+    g.strokeStyle = 'rgba(255,250,232,.62)'; g.lineWidth = 2.4; path(); g.stroke();
+  }
+}
+
 function drawPlat(g, pl) {
   if (pl.kind === 'ramp') { drawRamp(g, pl); return; }
   const seed = Math.round(pl.x) + Math.round(pl.y);
@@ -5289,33 +5767,85 @@ function drawBox(g, b) {
      桶身比格子收窄 4px：不收的话它和旁边的木箱严丝合缝贴在一起，
      又变回一块方砖了。 */
   if (b.barrel) {
-    const bx = b.x + 4, bw = b.w - 8;
-    const top = b.y + 6, bot = b.y + b.h - 3;
+    /* ================= 木桶重画（2026-10-29）=================
+       用户：「箱子 桶 门 都需要重新规划　太不像了」。
+
+       上一版是"两条二次曲线 + 一个椭圆 + 两道横线"：曲线鼓得不够、
+       箍是两根直棍、桶口是一个扁椭圆 —— 48px 上读起来像一个**枕头**。
+
+       这一版按真桶的三件事拆：
+         ① **桶板（staves）**：竖着的 4 条微弯缝，从桶口通到桶底。
+            没有它，桶就是一个上色的圆柱。
+         ② **箍（hoops）**：不是两条线，是两条**带子** —— 有上沿高光、
+            有下沿暗边、还比桶身宽 2px（真箍是箍在外面的）。
+         ③ **桶口**：一个椭圆环（外沿亮、内圈暗）+ 一撮"里面是空的"的暗。
+            原来的桶口是纯色椭圆，读起来像"桶封着盖"。
+       桶身收口：上下各收 3px，中间鼓出去 —— 三条弧线定轮廓。 */
+    const bx = b.x + 5, bw = b.w - 10;
+    const top = b.y + 7, bot = b.y + b.h - 2;
     const mid = (top + bot) / 2;
+    const cx = bx + bw / 2;
+    const belly = bw / 2 + 2.5;        // 腰最鼓处
+    const neck = bw / 2 - 3;           // 口/底收进来
+
+    /* 桶身轮廓：上口 → 腰 → 底，左右各一条三次曲线 */
+    const body = () => {
+      g.beginPath();
+      g.moveTo(cx - neck, top);
+      g.bezierCurveTo(cx - belly, top + (bot - top) * 0.30, cx - belly, top + (bot - top) * 0.70, cx - neck, bot);
+      g.lineTo(cx + neck, bot);
+      g.bezierCurveTo(cx + belly, top + (bot - top) * 0.70, cx + belly, top + (bot - top) * 0.30, cx + neck, top);
+      g.closePath();
+    };
+    body();
     g.fillStyle = hit ? '#FFE4BE' : '#C98F52';
-    g.beginPath();
-    g.moveTo(bx, top + 4);
-    g.quadraticCurveTo(bx - 4, mid, bx, bot - 4);
-    g.lineTo(bx + bw, bot - 4);
-    g.quadraticCurveTo(bx + bw + 4, mid, bx + bw, top + 4);
-    g.closePath(); g.fill();
-    g.strokeStyle = COL.ink; g.lineWidth = 3; g.lineJoin = 'round'; g.stroke();
-    // 桶口（上椭圆）
-    g.fillStyle = hit ? '#F6DFC0' : '#B87B42';
-    g.beginPath(); g.ellipse(b.x + b.w / 2, top + 4, bw / 2, 5.6, 0, 0, Math.PI * 2); g.fill();
-    g.strokeStyle = COL.ink; g.lineWidth = 2.6; g.stroke();
-    // 两道铁箍
-    g.strokeStyle = 'rgba(86,60,36,.72)'; g.lineWidth = 4;
-    for (const yy of [top + 15, bot - 15]) {
-      g.beginPath(); g.moveTo(bx + 1, yy); g.lineTo(bx + bw - 1, yy); g.stroke();
+    g.fill();
+
+    /* 桶板缝：跟着轮廓微微外扩。**只在桶身内部**，用 clip 保证不出界。 */
+    g.save(); body(); g.clip();
+    g.strokeStyle = 'rgba(122,80,42,.42)'; g.lineWidth = 1.5;
+    for (const t of [-0.62, -0.21, 0.21, 0.62]) {
+      g.beginPath();
+      g.moveTo(cx + neck * t, top + 1);
+      g.bezierCurveTo(cx + belly * t, top + (bot - top) * 0.30, cx + belly * t, top + (bot - top) * 0.70, cx + neck * t, bot);
+      g.stroke();
     }
-    // 竖向的木条缝 + 一侧高光
-    g.strokeStyle = 'rgba(120,80,44,.32)'; g.lineWidth = 1.6;
-    for (const dx of [0.34, 0.66]) {
-      g.beginPath(); g.moveTo(bx + bw * dx, top + 9); g.lineTo(bx + bw * dx, bot - 8); g.stroke();
+    /* 左侧受光（光源统一左上）：一条竖着的高光，宽度只有桶身的 1/5 */
+    const hl = g.createLinearGradient(bx, 0, bx + bw, 0);
+    hl.addColorStop(0, 'rgba(255,240,214,.42)');
+    hl.addColorStop(0.38, 'rgba(255,240,214,0)');
+    hl.addColorStop(1, 'rgba(72,42,18,.20)');
+    g.fillStyle = hl; g.fillRect(bx - 4, top, bw + 8, bot - top);
+    g.restore();
+
+    /* 箍：**带子，不是线。** 比桶身宽 2px，上有高光下有暗边。 */
+    for (const t of [0.30, 0.72]) {
+      const hy = top + (bot - top) * t;
+      const hw = belly * (0.86 + 0.14 * Math.sin(Math.PI * t));
+      g.fillStyle = 'rgba(74,58,44,.95)';
+      rr(g, cx - hw - 1, hy - 3, hw * 2 + 2, 6, 2.4); g.fill();
+      g.fillStyle = 'rgba(236,214,186,.5)';
+      g.fillRect(cx - hw, hy - 2.6, hw * 2, 1.4);
     }
-    g.fillStyle = 'rgba(255,244,224,.42)';
-    g.beginPath(); g.ellipse(bx + bw * 0.26, mid, 3.4, (bot - top) * 0.30, 0, 0, Math.PI * 2); g.fill();
+
+    /* 桶口：外沿 + 内圈暗 + 板头 */
+    g.fillStyle = hit ? '#F6DFC0' : '#A96C36';
+    g.beginPath(); g.ellipse(cx, top, neck + 0.5, 5.2, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = 'rgba(58,36,18,.55)';
+    g.beginPath(); g.ellipse(cx, top + 0.6, neck - 3.2, 3.4, 0, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = 'rgba(255,240,214,.55)'; g.lineWidth = 1.2;
+    for (const t of [-0.55, 0, 0.55]) {
+      g.beginPath();
+      g.moveTo(cx + (neck - 3) * t, top - 1.6);
+      g.lineTo(cx + (neck - 3) * t, top + 3.2);
+      g.stroke();
+    }
+
+    /* 统一描边（和木箱同一套） */
+    g.strokeStyle = COL.ink; g.lineWidth = 3; g.lineJoin = 'round';
+    body(); g.stroke();
+    g.strokeStyle = COL.ink; g.lineWidth = 2.4;
+    g.beginPath(); g.ellipse(cx, top, neck + 0.5, 5.2, 0, 0, Math.PI * 2); g.stroke();
     return;
   }
 
@@ -5353,20 +5883,62 @@ function drawBox(g, b) {
   }
 
   if (b.mat === 'wood') {
+    /* ================= 木箱重画（2026-10-29）=================
+       用户：「箱子 桶 门 都需要重新规划　太不像了」。
+
+       上一版是"填色 + 一圈木框 + 一条腰板 + 一条顶亮"。
+       问题是这三笔都在说同一件事（"这是个盒子"），而且都在**平面**上：
+       一整层铺过去就是一片带横线的色块，用户读成"砖墙"。
+
+       这一版补的是**结构**，不是装饰：
+         ① 竖板缝 —— 证明箱壁是几块板拼的；
+         ② **对角撑 X** —— "板条箱"最省也最准的一笔（不斜撑扛不住竖着摞），
+            也是上一版最缺的一笔；
+         ③ 四角护铁 —— "钉起来的"，不是糊起来的；
+         ④ 顶盖亮边 —— 光源统一左上。
+       全部走"细、淡、贴着轮廓"的路子，因为一屏有几十口箱子：
+       任何一笔重了，整层就变成噪点。 */
+    const X = b.x, Y = b.y, W = b.w, H = b.h;
     g.fillStyle = hit ? '#FFDDB0' : COL.wood;
-    rr(g, b.x, b.y, b.w, b.h, 6); g.fill();
-    /* 木框 + 一条横腰板：**这是"木箱"最省的两笔**。
-       只填色 + 描边的话看起来是个纸盒，加了框才有"钉起来的箱子"那味。 */
-    g.strokeStyle = 'rgba(122,81,39,.55)';
-    g.lineWidth = 5;
-    rr(g, b.x + 5, b.y + 5, b.w - 10, b.h - 10, 3); g.stroke();
-    g.beginPath();
-    g.moveTo(b.x + 6, b.y + b.h * 0.52);
-    g.lineTo(b.x + b.w - 6, b.y + b.h * 0.52);
-    g.stroke();
-    // 顶面高光
-    g.fillStyle = 'rgba(255,246,228,.55)';
-    rr(g, b.x + 4, b.y + 3, b.w - 8, 6, 3); g.fill();
+    rr(g, X, Y, W, H, 5); g.fill();
+
+    /* ① 板缝 */
+    g.strokeStyle = 'rgba(132,90,46,.20)'; g.lineWidth = 1.4;
+    for (const t of [0.26, 0.5, 0.74]) {
+      g.beginPath(); g.moveTo(X + W * t, Y + 4); g.lineTo(X + W * t, Y + H - 4); g.stroke();
+    }
+
+    /* ② 对角撑 X（裁在箱体内） */
+    g.save();
+    rr(g, X, Y, W, H, 5); g.clip();
+    g.strokeStyle = 'rgba(206,158,100,.88)'; g.lineWidth = 5.5; g.lineCap = 'round';
+    g.beginPath(); g.moveTo(X + 6, Y + 6); g.lineTo(X + W - 6, Y + H - 6); g.stroke();
+    g.beginPath(); g.moveTo(X + W - 6, Y + 6); g.lineTo(X + 6, Y + H - 6); g.stroke();
+    /* 斜撑下沿一根暗线：给出"板条压在箱面上"的厚度，不至于两条亮带飘着 */
+    g.strokeStyle = 'rgba(112,72,34,.45)'; g.lineWidth = 1.6; g.lineCap = 'butt';
+    g.beginPath(); g.moveTo(X + 8, Y + 10); g.lineTo(X + W - 10, Y + H - 8); g.stroke();
+    g.beginPath(); g.moveTo(X + W - 10, Y + 10); g.lineTo(X + 8, Y + H - 8); g.stroke();
+    g.restore();
+
+    /* ③ 木框（内缩一圈的深色边）。**X 之后必须有它** ——
+       只有 X 的话箱面是一块"打了叉的板"，加上这圈框才读成"箱体"。 */
+    g.strokeStyle = 'rgba(122,81,39,.42)'; g.lineWidth = 3.5;
+    rr(g, X + 4, Y + 4, W - 8, H - 8, 3); g.stroke();
+
+    /* ④ 四角护铁 + 钉眼 */
+    for (const sx of [0, 1]) {
+      for (const sy of [0, 1]) {
+        const px = X + (sx ? W - 12 : 1), py = Y + (sy ? H - 12 : 1);
+        g.fillStyle = 'rgba(78,54,32,.42)';
+        rr(g, px, py, 11, 11, 3); g.fill();
+        g.fillStyle = 'rgba(232,206,170,.55)';
+        g.beginPath(); g.arc(px + (sx ? 8 : 3), py + (sy ? 8 : 3), 1.2, 0, Math.PI * 2); g.fill();
+      }
+    }
+
+    /* ⑤ 顶盖亮边 */
+    g.fillStyle = 'rgba(255,246,228,.50)';
+    rr(g, X + 4, Y + 3, W - 8, 5, 2.5); g.fill();
   } else if (b.mat === 'stone') {
     g.fillStyle = hit ? '#E2D3BE' : COL.stone;
     rr(g, b.x, b.y, b.w, b.h, 6); g.fill();
@@ -5889,39 +6461,118 @@ function drawDoor(g, d) {
   /* 被箱子盖着就不画。**不是画成"模糊的门"** —— 门只要露头，
      玩家就会去撞箱子试，那就又变成"逐箱砸过去"的扫图了。 */
   if (doorBlocked()) return;
-  // 门框
-  g.fillStyle = '#3E4A52';
-  rr(g, d.x - 6, d.y - 6, d.w + 12, d.h + 6, 8); g.fill();
-  g.fillStyle = d.open ? '#8FE3B4' : COL.door;
-  rr(g, d.x, d.y, d.w, d.h, 6); g.fill();
-  // 拱顶
-  g.fillStyle = d.open ? '#B6F2CE' : '#5C8C78';
-  g.beginPath(); g.arc(d.x + d.w / 2, d.y + 12, d.w / 2, Math.PI, 0); g.fill();
+  /* ================= 一扇小拱门（2026-10-29 重画）=================
+     用户：「箱子 桶 门 都需要重新规划　太不像了」「门不需要那么大」。
+
+     上一版是"48×92 的圆角矩形 + 一条拱顶 + 一个大红锁"：
+     尺寸上是两格高，画法上是三块色块叠起来，**读不出"这是一扇门"** ——
+     没有门框、没有门板缝、没有把手、没有铰链，只有"一个绿色的洞"。
+
+     这一版按真实的木门来组：门洞（拱）→ 门框（厚木）→ 门板（三块竖板）→
+     两条铁横带 + 铆钉 → 把手。尺寸收到 32×40（一格之内），
+     靠"门框比门板厚"和"竖板缝"把"门"这个东西说清楚，
+     不再靠尺寸大来显眼。 */
+  const { x, y, w, h } = d;
+  const cx = x + w / 2;
+  const R = w / 2;                      // 拱顶半径
+  const arch = () => {
+    g.beginPath();
+    g.moveTo(x, y + h);
+    g.lineTo(x, y + R);
+    g.arc(cx, y + R, R, Math.PI, 0);
+    g.lineTo(x + w, y + h);
+    g.closePath();
+  };
+
+  /* ① 门框：比门板外扩 4，深木色。**这一圈是"门"和"洞"的分界** ——
+     没有它，门在深色墙上就是一个亮块。 */
+  g.save();
+  g.translate(cx, y + h / 2);
+  g.scale((w + 8) / w, (h + 4) / h);
+  g.translate(-cx, -(y + h / 2));
+  arch();
+  g.fillStyle = d.open ? '#3E6B52' : '#4A3324';
+  g.fill();
+  g.restore();
+  g.strokeStyle = COL.ink; g.lineWidth = 2.6; g.lineJoin = 'round';
+  g.save(); g.translate(cx, y + h / 2); g.scale((w + 8) / w, (h + 4) / h);
+  g.translate(-cx, -(y + h / 2)); arch(); g.stroke(); g.restore();
+
+  /* ② 门板 */
+  arch();
+  g.fillStyle = d.open ? '#8FE3B4' : '#B3803F';
+  g.fill();
 
   if (d.open) {
-    // 开锁特效：门口一团往上飘的光
+    /* 开着的门：洞里的光 + 一层往外的光晕。**先画光再画门框的暗边**，
+       否则门框会把光切成一个方框，看起来像"亮着的矩形"。 */
     const k = Math.min(1, d.openT * 2.2);
-    g.globalAlpha = 0.35 + 0.25 * Math.sin(S.t * 6);
+    g.save(); arch(); g.clip();
+    const lg = g.createLinearGradient(0, y, 0, y + h);
+    lg.addColorStop(0, 'rgba(232,255,240,.95)');
+    lg.addColorStop(1, 'rgba(150,225,180,.55)');
+    g.fillStyle = lg; g.fillRect(x, y, w, h);
+    g.restore();
+    g.globalAlpha = 0.30 + 0.16 * Math.sin(S.t * 6);
     g.fillStyle = '#DFFFEE';
-    rr(g, d.x + 4, d.y + 4, d.w - 8, d.h - 8, 5); g.fill();
+    g.beginPath(); g.ellipse(cx, y + h * 0.62, w * 0.85, h * 0.5, 0, 0, Math.PI * 2); g.fill();
     g.globalAlpha = 1;
-    g.strokeStyle = '#9BE86E'; g.lineWidth = 3;
-    rr(g, d.x - 3, d.y - 3, d.w + 6, d.h + 6, 8); g.stroke();
     if (k < 1) {
-      g.globalAlpha = 1 - k;
-      g.fillStyle = '#FFFFFF';
-      g.beginPath(); g.arc(d.x + d.w / 2, d.y + d.h / 2, 30 + k * 90, 0, Math.PI * 2); g.fill();
+      g.globalAlpha = 1 - k; g.fillStyle = '#FFFFFF';
+      g.beginPath(); g.arc(cx, y + h * 0.5, 16 + k * 54, 0, Math.PI * 2); g.fill();
       g.globalAlpha = 1;
     }
   } else {
-    // 红锁：**未达成时门一定是锁着的**，而且锁要看得见
-    g.fillStyle = COL.doorLock;
-    g.beginPath(); g.arc(d.x + d.w / 2, d.y + d.h * 0.55, 9, 0, Math.PI * 2); g.fill();
-    g.strokeStyle = COL.doorLock; g.lineWidth = 4;
-    g.beginPath(); g.arc(d.x + d.w / 2, d.y + d.h * 0.55 - 9, 7, Math.PI, 0); g.stroke();
-    g.fillStyle = '#8A2E27';
-    g.fillRect(d.x + d.w / 2 - 2, d.y + d.h * 0.55, 4, 8);
+    /* ③ 门板：三块竖板 + 板缝。**缝要压在板子上，不能只画两条线** ——
+       两条细线在 32px 宽的门上读成"划痕"，三条带阴影的缝才读成"拼板"。 */
+    g.save(); arch(); g.clip();
+    g.strokeStyle = 'rgba(92,60,30,.55)'; g.lineWidth = 2;
+    for (const t of [0.34, 0.67]) {
+      g.beginPath();
+      g.moveTo(x + w * t, y + 2); g.lineTo(x + w * t, y + h);
+      g.stroke();
+      g.strokeStyle = 'rgba(255,226,180,.35)'; g.lineWidth = 1.4;
+      g.beginPath();
+      g.moveTo(x + w * t + 2, y + 2); g.lineTo(x + w * t + 2, y + h);
+      g.stroke();
+      g.strokeStyle = 'rgba(92,60,30,.55)'; g.lineWidth = 2;
+    }
+    /* ④ 两条铁横带 + 铆钉。**横带是"门"的第二身份证**：
+       竖板只说明"这是木板拼的"，加上横带才说明"这是能开合的门"。 */
+    for (const t of [0.30, 0.74]) {
+      const by = y + h * t;
+      g.fillStyle = 'rgba(74,84,94,.92)';
+      g.fillRect(x + 1, by, w - 2, 5);
+      g.fillStyle = 'rgba(190,206,220,.55)';
+      g.fillRect(x + 1, by, w - 2, 1.6);
+      g.fillStyle = '#CFD9E2';
+      for (const dx of [0.22, 0.78]) {
+        g.beginPath(); g.arc(x + w * dx, by + 2.5, 1.6, 0, Math.PI * 2); g.fill();
+      }
+    }
+    g.restore();
+
+    /* ⑤ 把手：一个圆环 + 一点高光。**位置靠右上**，因为门是朝右开的
+       （把手永远在开合边的反侧）。 */
+    const hx = x + w * 0.74, hy = y + h * 0.56;
+    g.strokeStyle = '#E8C66A'; g.lineWidth = 2.6;
+    g.beginPath(); g.arc(hx, hy, 4.2, 0, Math.PI * 2); g.stroke();
+    g.fillStyle = 'rgba(255,246,206,.85)';
+    g.beginPath(); g.arc(hx - 1.2, hy - 1.4, 1.2, 0, Math.PI * 2); g.fill();
+    /* 锁：门没开的时候要能看出"锁着"。比原来那个大圆锁小一半 ——
+       32 宽的门上再挂一个 18px 的锁，门就只剩锁了。 */
+    if (!d.open) {
+      const lx = x + w * 0.30, ly = y + h * 0.56;
+      g.fillStyle = COL.doorLock;
+      rr(g, lx - 4.5, ly - 3, 9, 8, 2); g.fill();
+      g.strokeStyle = COL.doorLock; g.lineWidth = 2.4;
+      g.beginPath(); g.arc(lx, ly - 3, 3.4, Math.PI, 0); g.stroke();
+    }
   }
+
+  /* ⑥ 门板的外描边压在最上面（在门框之后画，免得被框吃掉） */
+  g.strokeStyle = COL.ink; g.lineWidth = 2.4; g.lineJoin = 'round';
+  arch(); g.stroke();
 }
 /* 三种**敌人**的配色。**剪影决定"这是谁"，颜色只是加分项** ——
    在 34×30 的尺寸上，外轮廓的体块关系比色相可读得多：
@@ -7408,10 +8059,14 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 const API = {
   NUM, S, W, H,
   reset, newLevel, step, shoot, draw,
-  genLevel, validateLevel, buildLevel, surfY, unreachableCols,
+  genLevel, validateLevel, buildLevel, surfY, unreachableCols, ballPits, ballStuckCols,
   bellyTier, snowNeed, ballTier, ballR, ballPow,
   coatFoe, makeBallFrom, ballHitBox, shotBox, breakBox, hurtPlayer,
   checkDoor, doorBlocked, groundAt, stepDoor,
+  /* 出图工具用：把单个箱子/门画到任意画布上（**只为评审，不参与游戏逻辑**）。
+     道具（箱/桶/门）是这一版重画的重点，靠整关截图看不出"这一笔对不对" ——
+     放大到 3~4 倍单独看才判得了。 */
+  drawBox, drawDoor,
   /* `pet` 可选：测试要能点名"给我一只兔子 / 一只狗"。
      不传就按 kind 自动挑（见 breedOf），和生成器走同一条路。 */
   spawnFoe: (x, y, kind, breed) => {

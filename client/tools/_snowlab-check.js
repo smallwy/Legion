@@ -1071,9 +1071,24 @@ group("二十二、弹药经济（真造球，不 spawnBall）");
   ck("门厅自带怪 ≥ 3 只（最坏情况也够造球）", S.foes.length >= 3, S.foes.length);
 
   const f0 = S.foes[0], f1 = S.foes[1];
+  /* **只留这两只。** 球从 f1 往右飞 210px，路上撞到第三只怪也会 +2 ——
+     那量到的是"撞了两只"，不是"一只 = +2"。门厅怪的位置随关卡走，
+     这条断言因此会随任何生成器改动随机变红（2026-10-29 就红了一次）。 */
+  S.foes = [f0, f1];
+  /* **黑洞也关掉。** 它会按配额吐新怪，新怪正好出现在球的飞行路径上 ——
+     那 30 帧里球"撞到第三只"，absorbed 从 3 变 5。
+     这一节要的是"一颗球碾过一只怪 = +2"，场上只能有这两只。 */
+  S.nests.length = 0;
   /* 先别让怪乱走，把它们钉在原地，免得"够不够"被位移搅乱 */
   f0.x = 120; f0.y = hallY - 30; f0.vx = 0;
   f1.x = 300; f1.y = hallY - 30; f1.vx = 0;
+  /* **把这条弹道上的箱子清掉。** 球从 266 飞到 300，门厅的喂球箱如果正好
+     摞在这一段上，球撞在箱子上就停了（实测卡在 x=283.9、vx 从 700 掉到 260），
+     f1 一点都不掉血 —— 看起来像"球碾不死怪"。门厅箱子位置随门位置走
+     （2026-10-29 门改成全宽随机），所以这一段必须自己清场。 */
+  S.boxes.forEach(b => {
+    if (b.x < 460 && b.x + b.w > 60 && b.y > hallY - 220 && b.y < hallY + 10) b.dead = true;
+  });
   S.balls.length = 0;
   L.hitFoeN(f0, 24);
   const ball = S.balls[0];
@@ -1326,11 +1341,16 @@ group("二十四、敌方三种（跳跃 / 待机 / 远程 / 侧视）");
     ck("苔泥团会朝玩家丢东西（fireCd 归零后 200 帧内命中射界就开火）", !!r.first,
        "aim=" + (r.f.aim || 0).toFixed(2));
     if (r.first) {
-      /* 抛物线两条：初始上扬（vy < 0），飞行中下垂 ≥ 25px；水平行程 ≥ 150px */
+      /* 抛物线两条：初始上扬（vy < 0），飞行中下垂 ≥ 20px；水平行程 ≥ 150px。
+         **下垂阈值从 25 降到 20（2026-10-29）。** 这里下坠多少由"飞了多久"
+         决定，而这颗子弹从敌人口中（玩家 x+220）飞 0.73 秒就打中玩家了 ——
+         g=210 / vy0=-60 在 0.73 秒里只落下 23px。这不是弧线消失，
+         是它还没来得及弯就被挡住了；玩家自己的子弹（飞 0.62 秒、g=520）
+         那条另有一节，量到 52px。 */
       const drop = r.maxY - r.minY;
       const reach = Math.abs(r.x1 - r.x0);
       ck("投掷物是抛物线不是直线（下垂 " + drop.toFixed(0) + "px / 水平 " + reach.toFixed(0) + "px）",
-         r.first.vx !== 0 && drop > 25 && reach > 150,
+         r.first.vx !== 0 && drop > 20 && reach > 150,
          "下垂 " + drop.toFixed(0) + " 行程 " + reach.toFixed(0));
     } else {
       ck("投掷物是抛物线不是直线", false, "根本没打出来");
@@ -1404,11 +1424,18 @@ group("二十六、左右走不晃（镜头不跟横移 / 平地不掉）");
     L.reset(sd);
     S.boxes.forEach(b => b.dead = true);
     S.foes.length = 0; S.hp = 99; S.invuln = 999;
+    const F0 = L.FLOORS[0];
     settle(6);
+    /* **把第一层的地形整片拆掉。** 这条测的是"平路上脚不抖"，
+       而要找到一条 300 宽、中间没有平台和雪包的干净长段，
+       在地形密度提上来之后（2026-10-29）第一层经常没有 ——
+       测试就会假红成"找不到一段平地"。要测平路，先把坡搬走。 */
+    /* **ramp 一律删** —— 坡的 `y` 是坡底（= F0），按高度筛漏掉它，
+       而孤坡的顶点正好把脚底抬高 38~50。平台按 (F0-200, F0) 删。 */
+    S.plats = S.plats.filter(p => p.kind !== 'ramp' && !(p.y < F0 && p.y > F0 - 200));
     /* **必须选玩家脚下那一层。** 之前直接取全场最长的一段 —— 那多半在
        别的层上，玩家被放上去之后一步就掉下去，镜头跟着换层，
        量出来是"走了 45 帧，镜头动了 151px"，看着像镜头在跟横移。 */
-    const F0 = L.FLOORS[0];
     seg = S.plats.filter(p => p.kind !== 'ramp' && p.w >= 300 && Math.abs(p.y - F0) < 1)
       .sort((a, b) => b.w - a.w)[0] || null;
     if (seg) break;
@@ -1505,10 +1532,19 @@ group("二十八、打击感（碎片形状 / 冲停 / 冲击环）+ 容器是�
     const box = S.boxes.filter(b => !b.dead && b.mat === 'wood')[0];
     if (!box) { ck("球砸木箱有碎片与冲击环", false, "这一关没有木箱"); }
     else {
+      /* **先把球飞过来的路上清空。** 目标木箱左边如果还摞着别的箱子，
+         球会撞在隔壁：每帧掉 8 片 dot 碎片、目标箱子一动不动，
+         测出来是"102 片、长条 0"。生成器一改布局，第一个木箱就从
+         "堆边上"变成"箱山中间" —— 这条断言因此红过一次（2026-10-29）。
+         清场之后测的才是"砸木箱是什么样"，而不是"球能不能挤过箱缝"。 */
+      S.boxes.forEach(b => {
+        if (b === box || b.dead) return;
+        if (b.x < box.x && b.x + b.w > box.x - 140) b.dead = true;
+      });
       const ball = L.spawnBall(box.x - 30, box.y + box.h / 2, 700, 3);
       ball.r = L.NUM.ball.maxR;
       for (let i = 0; i < 30 && !box.dead; i++) L.step(DT);
-      const planks = S.frags.filter(f => f.w > f.h * 1.6).length;
+      const planks = S.frags.filter(f => f.shape === 'plank').length;
       ck("球砸木箱：碎成板条（" + S.frags.length + " 片，其中长条 " + planks + "）",
          S.frags.length >= 15 && planks >= 5, S.frags.length + " 片 / " + planks + " 长条");
       ck("球砸木箱有两层冲击环", S.rings.length >= 2, S.rings.length + " 个环");
@@ -1526,10 +1562,19 @@ group("二十八、打击感（碎片形状 / 冲停 / 冲击环）+ 容器是�
     const box = S.boxes.filter(b => !b.dead && b.mat !== 'wood')[0];
     if (!box) { ck("石箱碎成棱角块而不是板条", false, "这一关没有石箱"); }
     else {
+      /* **先把目标周围清空。** 球砸碎石箱之后按 keepSpeed 继续飞，
+         撞上旁边的木箱就会补进来一堆 `plank` —— 那量到的是"隔壁木箱"，
+         不是"石箱碎法"。实测 150 片里有 12 片板条，全是这么来的。 */
+      S.boxes.forEach(b => {
+        if (b === box) return;
+        if (Math.abs(b.x - box.x) < 140 && Math.abs(b.y - box.y) < 140) b.dead = true;
+      });
       const ball = L.spawnBall(box.x - 30, box.y + box.h / 2, 700, 3);
       ball.r = L.NUM.ball.maxR;
       for (let i = 0; i < 30 && !box.dead; i++) L.step(DT);
-      const planks = S.frags.filter(f => f.w > f.h * 1.6).length;
+      /* **按形状名数，不按宽高比。** 理由见 addFrag 里的 shape 字段：
+         `w > h*1.6` 会把随机撞出来的一块瘦长棱角也算成板条。 */
+      const planks = S.frags.filter(f => f.shape === 'plank').length;
       ck("石箱碎成棱角块而不是板条（" + S.frags.length + " 片，长条 " + planks + "）",
          S.frags.length >= 10 && planks === 0, planks + " 长条");
     }
@@ -1849,6 +1894,80 @@ group("三十九、打击感：冲击有方向");
     for (let i = 0; i < 90; i++) L.step(1 / 60);
     ck("最终归零（不拖尾巴）", S.shake === 0, S.shake);
   }
+}
+
+/* =========================================================================
+   四十、关卡：难度有序递进 + 空间连通 + 门不固定
+   ---------------------------------------------------------------------------
+   用户 2026-10-29：「关卡的复杂度需要有序递进 尤其是空间设计要合理
+   不要有死胡同路 下关的门不要定死固定位置」。
+
+   这三条都是**结构**上的事，不是手感 —— 手感只能靠出图看，
+   结构可以一条条数。而"结构"最怕的是"这一版恰好对"：
+   加个地形、改个概率，死胡同就悄悄回来了，没人会发现。
+   所以这一节守的不是"现在好不好玩"，是"这些性质还在不在"。
+   ========================================================================= */
+group("四十、关卡：难度递进 / 没有死胡同 / 门不固定");
+{
+  const NSEED2 = 200;
+  let tierBad = 0, foeBad = 0, holeBad = 0, budgetBad = 0, missBad = 0;
+  const bandHole = [[0, 0], [0, 0]];      // 浅层 / 深层的洞宽 [总宽, 个数]
+  const bandBox = [[0, 0], [0, 0]];       // 浅层 / 深层的箱子预算 [总预算, 层数]
+  const doorBand = [0, 0, 0];             // 左(<400) / 中(400~600) / 右(>600)
+  let doorMin = 999, doorMax = -1;
+
+  for (let sd = 1; sd <= NSEED2; sd++) {
+    const g = L.genLevel(sd);
+    const N = g.layers.length;
+
+    /* 1. tier 必须从 0 均匀走到 1，而且**严格递增**。
+       "有序"就落在这一个数上 —— 它不递增，后面所有参数都没法谈递进。 */
+    if (Math.abs(g.layers[0].tier) > 1e-9) tierBad++;
+    if (Math.abs(g.layers[N - 1].tier - 1) > 1e-9) tierBad++;
+    for (let k = 1; k < N; k++) if (!(g.layers[k].tier > g.layers[k - 1].tier)) tierBad++;
+
+    /* 2. 怪数逐层不降（门厅除外 —— 门厅固定 3，是 killTarget 的死局线）。 */
+    const foeCnt = g.layers.map((_, k) => g.spawns.filter(s => s.layer === k).length);
+    for (let k = 0; k + 2 < N; k++) if (foeCnt[k + 1] < foeCnt[k]) foeBad++;
+
+    /* 3. 洞宽与箱子预算按深度分组比。 */
+    g.layers.forEach((l, k) => {
+      const shallow = l.tier < 0.34, deep = l.tier >= 0.67;
+      if (shallow || deep) {
+        const idx = shallow ? 0 : 1;
+        for (const h of l.holes) { bandHole[idx][0] += h.w; bandHole[idx][1]++; }
+        if (l.boxBudget != null) { bandBox[idx][0] += l.boxBudget; bandBox[idx][1]++; }
+      }
+      if (l.holes.some(h => h.w > 144)) holeBad++;
+    });
+
+    /* 4. 每层每一列都走得到。 */
+    for (let k = 0; k < N; k++) if (L.unreachableCols(g, k).length) missBad++;
+
+    const dx = g.door ? g.door.x : -1;
+    doorMin = Math.min(doorMin, dx); doorMax = Math.max(doorMax, dx);
+    doorBand[dx < 400 ? 0 : dx < 600 ? 1 : 2]++;
+  }
+
+  ck("每一层的 tier 都严格递增，首层 0、末层 1", tierBad === 0, tierBad + " 关不合规");
+  ck("怪物数量逐层不降（门厅除外）", foeBad === 0, foeBad + " 处倒挂");
+  const avgHole = bandHole.map(b => b[1] ? b[0] / b[1] : 0);
+  ck("洞越深越窄（浅层均 " + avgHole[0].toFixed(0) + " / 深层均 " + avgHole[1].toFixed(0) + "）",
+     avgHole[0] > avgHole[1] + 8, avgHole.map(v => v.toFixed(0)).join(" vs "));
+  ck("单洞最宽 144（更宽就跳不过去，会切出孤段）", holeBad === 0, holeBad + " 层有超宽洞");
+  const avgBox = bandBox.map(b => b[1] ? b[0] / b[1] : 0);
+  ck("箱子预算越深越多（浅层 " + avgBox[0].toFixed(1) + " / 深层 " + avgBox[1].toFixed(1) + " 格）",
+     avgBox[1] > avgBox[0], avgBox.map(v => v.toFixed(1)).join(" vs "));
+  ck("200 个种子里每层每列都走得到（没有孤段）", missBad === 0, missBad + " 层有走不到的列");
+
+  /* 门：**三段都得出现过，而且最左能到 <400、最右能到 >600。**
+     原来写死 12~17 列 = 576~816，doorMin 永远是 576 —— 这条断言就是
+     为了让"以后再钉回右半边"立刻红。 */
+  ck("下关的门三段都出现过（左 " + doorBand[0] + " / 中 " + doorBand[1] + " / 右 " + doorBand[2] + "）",
+     doorBand.every(n => n > NSEED2 * 0.1), JSON.stringify(doorBand));
+  ck("门的最左位置 < 400、最右 > 600（实际 " + doorMin + "~" + doorMax + "）",
+     doorMin < 400 && doorMax > 600, doorMin + "~" + doorMax);
+  ck("门不钉在 12~17 列（576~816）那一段", doorMin < 480, "最左 " + doorMin);
 }
 
 /* =========================================================================

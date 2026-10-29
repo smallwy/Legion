@@ -344,7 +344,7 @@ if (climbInfo) {
 /* 5) 门厅：冰墙封着门，门还看不见。**站到门左边 260px** ——
       这一段的意义就是"看见一堵冰墙挡着门"，站太远只能看到一片黑。 */
 function standNearDoor() {
-  L.placePlayer(Math.max(48, S.door.x - 260), L.GROUND_Y - 42);
+  L.placePlayer(Math.max(48, S.door.x - 260), L.GROUND_Y - S.p.h);
   for (let i = 0; i < 70; i++) L.step(DT);
 }
 shot("hall", () => { freezeFoes(); standNearDoor(); });
@@ -362,7 +362,7 @@ shot("balls", () => {
   freezeFoes();
   S.foes.length = 0;
   S.boxes.forEach(b => { b.dead = true; });
-  L.placePlayer(780, L.GROUND_Y - 42);
+  L.placePlayer(780, L.GROUND_Y - S.p.h);
   for (let i = 0; i < 50; i++) L.step(DT);
   L.spawnBall(110, L.GROUND_Y - L.ballR(0), 0, 0);
   L.spawnBall(280, L.GROUND_Y - L.ballR(3), 0, 3);
@@ -371,7 +371,7 @@ shot("balls", () => {
   for (let i = 0; i < 4; i++) L.step(DT);
   /* 站到最大那颗球旁边 —— **这张图也要能看出"怎么推"**：
      球停在脚边时才会浮出「走过去顶它」的提示，站远了什么都不显示。 */
-  L.placePlayer(560, L.GROUND_Y - 42);
+  L.placePlayer(560, L.GROUND_Y - S.p.h);
   for (let i = 0; i < 3; i++) L.step(DT);
 });
 
@@ -389,7 +389,7 @@ shot("clear", () => {
     .forEach(b => L.breakBox(b, "ball"));
   S.killed = S.killedTarget;
   L.checkDoor();
-  L.placePlayer(S.door.x + 4, L.GROUND_Y - 42);
+  L.placePlayer(S.door.x + 4, L.GROUND_Y - S.p.h);
   for (let i = 0; i < 20; i++) L.step(DT);
 });
 

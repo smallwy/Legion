@@ -427,6 +427,23 @@ function genLevel(seed) {
   const NAME_POOL = ['地表', '浅井', '箱室', '工坊', '门厅'];
   const layerCN = floors.map((_, k) => (k === nF - 1 ? '门厅' : NAME_POOL[Math.min(k, NAME_POOL.length - 1)]));
 
+  /* ================= ⓪ 深度 → 难度 =================
+     用户 2026-10-29：「关卡的复杂度需要有序递进」。
+
+     **"有序"这两个字是关键，不是"越深越难"。** 原来每层参数各自掷骰子
+     （`chance(0.55)` 决定多一个口、`pickOne` 决定堆多高、`chance(0.30)`
+     决定有没有 runner），于是第 2 层可能比第 4 层还热闹 —— 玩家读不出
+     "我在往下走"，只觉得"随机"。随机负责新鲜，**曲线负责节奏**，两者不能
+     互相冒充。
+
+     现在所有参数都从 `tierOf(k)` 这一个数来：0 = 地表，1 = 门厅。
+     它只做一次除法，但从此"这一层该有多难"只有一个答案，
+     断言也能直接验：`tier[k+1] > tier[k]`，且各项难度指标单调不降。
+
+     **tier 只是"难度预算"，不是"层数"。** 3 层和 5 层的一关，
+     tier 都是 0 → 0.5 → 1，这样短关不会因为层少就一路简单到底。 */
+  const tierOf = k => (nF <= 1 ? 0 : k / (nF - 1));
+
   /* ================= ① 下行口 =================
      **每层 1~3 个，平均 1.9 个 —— 楼板不许再是一整条。**
 
@@ -452,8 +469,12 @@ function genLevel(seed) {
           （200 个种子里撞到 2 次"第 1 层没有出口"）。
        所以从"多加口"改成"加宽口"：1~2 个口，但最宽 240 —— 洞本身在
        画面上就占了四分之一屏，"一屏里三个通行点"这件事照样成立。 */
+    /* **递进第一项：洞越深越窄。**
+       浅层给宽口（192）—— 一进关就看见"这里能下去"，是教学；
+       深层给窄口（96）—— 要贴着边找、跳下去还得对准，那是难度。
+       这是"复杂度递进"里唯一一条纯空间的部分，其余都是数量。 */
+    const tier = tierOf(k);
     const want = 1 + (chance(0.55) ? 1 : 0);
-    const depth = nF > 2 ? k / (nF - 2) : 0;
     const holes = [];
     for (let i = 0; i < want; i++) {
       for (let t = 0; t < 26; t++) {
@@ -468,32 +489,57 @@ function genLevel(seed) {
            一层只剩 10 列能摞箱子，而地表层还要被地形和出生点各吃掉一两列 ——
            200 个种子里有 4 个卡在"第 0 层箱子 9 口"（门槛 12）。
            总宽控制在 288 以内之后，最窄也还有 13 列。 */
-        const w = i === 0 ? pickOne([96, 144, 144, 192, 192]) : pickOne([96, 96, 144]);
+        /* **最宽 144（2026-10-29）。** 原来浅层有 192 的"大豁口"，
+           但 192 把楼板切成两段之后**跳不过去**：水平 300 × 滞空 0.686
+           = 205px，理论够，实际要起跳点、落点、速度全对，十几像素的余量
+           不是容错。我按"能不能走过去"做了 BFS（见 unreachableCols）：
+           192 的洞在 200 个种子里制造了几百个走不到的孤段 ——
+           而孤段里的怪打不到，门就永远打不开，是硬死局。
+           "大豁口"的视觉改由"两个洞"承担（下一行），不靠单个洞加宽。 */
+        const w = i === 0
+          ? (tier >= 0.60 ? pickOne([96, 144, 144]) : 144)
+          : pickOne([96, 96, 144]);
         const x = 48 * ri(0, Math.floor((912 - w) / 48));
         /* 同层两个口之间至少隔一列（48）—— 隔着 0 就不是两个口，是一条豁口。 */
         if (holes.some(h => x < h.x + h.w + 48 && x + w + 48 > h.x)) continue;
         /* 层间留 24：**校验用的就是 24**，生成侧比它松一点才不会自己把自己锁死
            （写 48 时，上一层放两个 192 的洞，下一层就一个口都放不下了）。 */
         if (prevHoles.some(h => x < h.x + h.w + 24 && x + w + 24 > h.x)) continue;
+        /* **任何一段不少于 96（两列）。**
+           一列宽（48）的碎段是真正的孤岛：玩家掉进去，两侧都是 144 的箱墙、
+           上面是楼板，除了砸箱子没有出路，而砸出来的空间还是只有一列。
+           实测这种段在浅层出现得最多（浅层洞宽、段也少）。
+           判据放在"接受这个洞之前" —— 事后筛会把整层的洞删光。 */
+        {
+          const all = holes.concat([{ x, w }]).sort((a, b) => a.x - b.x);
+          let segMin = 960, cxx = 0;
+          for (const h of all) { segMin = Math.min(segMin, h.x - cxx); cxx = h.x + h.w; }
+          segMin = Math.min(segMin, 960 - cxx);
+          if (segMin < 96) continue;
+        }
         const r = R();
         /* **封口只给本层的第一个口。** 口多了的意义就是"好几条路都通"，
-           全都封上就白改了。冰墙仍然只从第 3 层开始（前面几层玩家还没有
+           全都封上就白改了。冰墙仍然只从 t ≥ 0.4 开始（前面几层玩家还没有
            够档的球，封上等于直接关死）；霜箱从地表就有 —— 它是"这底下
-           还有一层"这条探索线的第一个老师。 */
+           还有一层"这条探索线的第一个老师。
+
+           概率跟着 tier 走：地表 34%、门厅 86%（冰 + 霜合计）。
+           **这不是"随机得更凶"，是"越深越少敞开的口"** —— 玩家在浅层
+           学会"口可能有盖板"，深层就该为这件事付出更多弹药。 */
         let cover = 'none';
         if (i === 0) {
-          if (k >= 2 && r < 0.14 + depth * 0.22) cover = 'ice';
-          else if (r < 0.46) cover = 'frost';
+          if (tier >= 0.4 && r < 0.10 + tier * 0.30) cover = 'ice';
+          else if (r < 0.34 + tier * 0.26) cover = 'frost';
         }
         holes.push({ x, w, cover, floorY: floors[k] });
         break;
       }
     }
     holes.sort((a, b) => a.x - b.x);
-    layers.push({ floorY: floors[k], holes });
+    layers.push({ floorY: floors[k], holes, tier });
     prevHoles = holes;
   }
-  layers.push({ floorY: floors[nF - 1], holes: [] });      // 门厅：没有下行口
+  layers.push({ floorY: floors[nF - 1], holes: [], tier: 1 });   // 门厅：没有下行口
 
   /* ================= ② 地板段 =================
      被洞切开。段宽决定了这一层能不能放平台/怪。 */
@@ -554,8 +600,14 @@ function genLevel(seed) {
          但平台占的列是死的、箱子占的列是能拆的。箱子变核心之后，
          平台从"每层多半有"降到"偶尔一个"，宽度也从 3~4 格收到 2~3 格 ——
          它现在的角色是"石头打的台子"，给箱堆丘陵一个材质对比。 */
-      const wide = l.segs.filter(s => s.w >= 240);
-      const wantRamp = chance(0.68);
+      /* **候选段门槛 240 → 144。** 240 是"平台最窄 96 + 坡 144"算出来的，
+         但那个数只对**带坡**的那种成立；一台不带坡的平台只要 96~144。
+         之前把门槛写成 240，等于要求"每一台平台都必须配得起坡" ——
+         一层被两个洞切成三段时，中间那段常常只有 144~192 宽，
+         于是整层的平台全被否掉，一关只剩 0.8 条坡。
+         现在分开：平台只要 144，带坡的另找 ≥ 240 的段（下一行）。 */
+      const wide = l.segs.filter(s => s.w >= 144);
+      const wantRamp = chance(0.78);
       /* **坡长也要抖开。** 原来固定 144，于是每一关每一层看到的都是
          同一条 38° 的坡 —— 用户说的"太规矩"有一半是这个：不是画法问题，
          是**全场的坡都长得一样**。现在 144 / 168 / 192 三档，坡度落在
@@ -565,7 +617,7 @@ function genLevel(seed) {
       /* **0.4 → 0.58。** 楼板断成两三段之后，"每层都放得下地形"的段
          少了，斜坡掉到平均 0.76 条/关。用户抱怨过"斜坡太规矩"——
          变成"几乎没有斜坡"显然更糟。 */
-      if (wide.length && chance(0.58)) {
+      if (wide.length && chance(0.78 + tierOf(k) * 0.12)) {
         /* **候选段池按"平台 + 坡"的总宽挑。**
            只要平台的话 240 就够，可一旦带坡，平台 96~192 + 坡 144~192
            就是 240~384 —— 从 240 宽的段里随机取位，坡**必然**跨到段尾外面，
@@ -575,57 +627,66 @@ function genLevel(seed) {
            平台宽是 96~144，所以最省的一条路是 96 + 144 = 240。
            原来写 192 + 144 = 336 —— 楼板断成两三段之后，一条 336 的段
            已经很少见了，斜坡直接从"平均 1.1 条"掉到 0.8 条。 */
-        const pool0 = wantRamp ? wide.filter(s => s.w >= 96 + RAMP_W) : wide;
-        const pool = pool0.length ? pool0 : wide;
-        /* **位置重试，不是"撞上就整块丢掉"。**
-           落点带上不能有地形（会把人接在半空），但直接丢弃的话，
-           一半以上的层会连一台平台都没有 —— 地形多样性直接没了。 */
-        for (let t = 0; t < 12 && !placed; t++) {
-          const cand = pickOne(pool);
-          const cw = 48 * ri(2, 3);
-          const room = Math.max(0, Math.floor((cand.w - cw) / 48));
-          const cx = cand.x + 48 * ri(0, room);
-          if (!freeOf(cx, cw)) continue;
-          /* **台面高度两档：96 / 114。** 跳高是 123，两档都在射程内；
-             原来固定 114，全场的台子顶面在同一条水平线上，一眼就是
-             "编辑器里刷的"。96 那一档还能让人从台子上直接跳上 2 格箱顶。 */
-          const py = l.floorY - (chance(0.45) ? 114 : 96);
-          /* **坡和平台是一个整体，要么整段放得下，要么这个坡不要。**
-             先随机排左右顺序，再挑第一个"整段都在本层地板里、且不压洞口"
-             的一边 —— 不能先定边再验，否则随机选中的那一边正好压洞口时，
-             只能把整台平台一起扔掉。 */
-          let ramp = null;
-          if (wantRamp) {
-            const sides = chance(0.5) ? ['R', 'L'] : ['L', 'R'];
-            for (const sd of sides) {
-              if (sd === 'R' && cx + cw + RAMP_W <= cand.x + cand.w && cx + cw + RAMP_W <= 912 && freeOf(cx + cw, RAMP_W)) {
-                /* 坡在平台右侧：左端接台面（高），右端接地面（低）→ rise 为负 */
-                ramp = { x: cx + cw, y: py, w: RAMP_W, h: GEN.thick, base: l.floorY, rise: py - l.floorY, kind: 'ramp' };
-                break;
+        /* **两轮：先试"平台 + 坡"，这一轮全失败再退成"光平台"。**
+           原来只有一轮，`pool0`（≥240 的段）非空就直接用它 —— 可是
+           `freeOf` 还要躲开本层洞和上层落点带的 ±24，一个 240 宽的段
+           被躲掉两头之后常常只剩一百多，带坡永远凑不齐 240（平台 96 +
+           坡 144）。12 次重试全白跑，`placed` 保持 false，于是这一层
+           连一台光平台都没有 —— 实测 68% 的地形掷骰最后只落地 46%。
+           **"放不下坡"不等于"放不下台子"**，这两个不该绑在一起失败。 */
+        for (const withRamp of (wantRamp ? [true, false] : [false])) {
+          const pool0 = withRamp ? l.segs.filter(s => s.w >= 96 + RAMP_W) : wide;
+          const pool = pool0.length ? pool0 : wide;
+          /* **位置重试，不是"撞上就整块丢掉"。**
+             落点带上不能有地形（会把人接在半空），但直接丢弃的话，
+             一半以上的层会连一台平台都没有 —— 地形多样性直接没了。 */
+          for (let t = 0; t < 12 && !placed; t++) {
+            const cand = pickOne(pool);
+            const cw = 48 * ri(2, 3);
+            const room = Math.max(0, Math.floor((cand.w - cw) / 48));
+            const cx = cand.x + 48 * ri(0, room);
+            if (!freeOf(cx, cw)) continue;
+            /* **台面高度两档：96 / 114。** 跳高是 123，两档都在射程内；
+               原来固定 114，全场的台子顶面在同一条水平线上，一眼就是
+               "编辑器里刷的"。96 那一档还能让人从台子上直接跳上 2 格箱顶。 */
+            const py = l.floorY - (chance(0.45) ? 114 : 96);
+            /* **坡和平台是一个整体，要么整段放得下，要么这个坡不要。**
+               先随机排左右顺序，再挑第一个"整段都在本层地板里、且不压洞口"
+               的一边 —— 不能先定边再验，否则随机选中的那一边正好压洞口时，
+               只能把整台平台一起扔掉。 */
+            let ramp = null;
+            if (withRamp) {
+              const sides = chance(0.5) ? ['R', 'L'] : ['L', 'R'];
+              for (const sd of sides) {
+                if (sd === 'R' && cx + cw + RAMP_W <= cand.x + cand.w && cx + cw + RAMP_W <= 912 && freeOf(cx + cw, RAMP_W)) {
+                  /* 坡在平台右侧：左端接台面（高），右端接地面（低）→ rise 为负 */
+                  ramp = { x: cx + cw, y: py, w: RAMP_W, h: GEN.thick, base: l.floorY, rise: py - l.floorY, kind: 'ramp' };
+                  break;
+                }
+                if (sd === 'L' && cx - RAMP_W >= cand.x && cx - RAMP_W >= 48 && freeOf(cx - RAMP_W, RAMP_W)) {
+                  /* 坡在平台左侧：左端接地，右端接台面 → rise 为正 */
+                  ramp = { x: cx - RAMP_W, y: l.floorY, w: RAMP_W, h: GEN.thick, base: l.floorY, rise: l.floorY - py, kind: 'ramp' };
+                  break;
+                }
               }
-              if (sd === 'L' && cx - RAMP_W >= cand.x && cx - RAMP_W >= 48 && freeOf(cx - RAMP_W, RAMP_W)) {
-                /* 坡在平台左侧：左端接地，右端接台面 → rise 为正 */
-                ramp = { x: cx - RAMP_W, y: l.floorY, w: RAMP_W, h: GEN.thick, base: l.floorY, rise: l.floorY - py, kind: 'ramp' };
-                break;
-              }
+              /* 带坡的这次没谈成就不算数，换位置重来 —— 否则会出现
+                 "平台摆在段中间、两边都是空地却没有坡"的怪形状。 */
+              if (!ramp) continue;
             }
-            /* 带坡的这次没谈成就不算数，换位置重来 —— 否则会出现
-               "平台摆在段中间、两边都是空地却没有坡"的怪形状。 */
-            if (!ramp) continue;
+            /* **h 18 → 34。** 18px 是一块"板"，画出来就是一条横着的厚线，
+               再怎么加纹理也还是直尺画的边。34 才够画成一个"悬在墙上的
+               土石台子"，底面能做出瘤状起伏。碰撞只认顶面和侧面，
+               加厚不影响跳跃和阻挡（净空 200，台底下照样走得过人）。 */
+            out.push({ x: cx, y: py, w: cw, h: 34 });
+            if (ramp) out.push(ramp);
+            placed = true;
           }
-          /* **h 18 → 34。** 18px 是一块"板"，画出来就是一条横着的厚线，
-             再怎么加纹理也还是直尺画的边。34 才够画成一个"悬在墙上的
-             土石台子"，底面能做出瘤状起伏。碰撞只认顶面和侧面，
-             加厚不影响跳跃和阻挡（净空 200，台底下照样走得过人）。 */
-          out.push({ x: cx, y: py, w: cw, h: 34 });
-          if (ramp) out.push(ramp);
-          placed = true;
         }
       }
       /* **0.30 → 0.44。** 楼板断成两三段之后，能放"平台带坡"的段少了
          （那要求段 ≥ 240 并且整段让开洞口），坡就只剩土丘这一条来源。
          土丘一次贡献两段坡，提概率是最省的做法。 */
-      if (!placed && chance(0.44)) {
+      if (!placed && chance(0.72 + tierOf(k) * 0.12)) {
         /* **孤坡必须是"上坡 + 下坡"两段,不能是一条单边楔子。**
            单边楔子的高端悬空:一堵 76px 的垂直墙(斜坡不做水平阻挡,
            因为整块包围盒会造成"坡变成墙"),玩家从高端那头走进来会直接
@@ -647,12 +708,18 @@ function genLevel(seed) {
         /* **两侧坡度必须不一样。** 96 + 144 的坡长配 40 左右的落差，
            迎风面 23°、背风面 15° —— 对称的两个人字拼起来一定是"三角屋顶"
            （这是上一版被一眼看穿的地方），一边陡一边缓才像被风堆出来的雪梁。
-           总宽锁 240：每多 48 就是一列箱子没了（门槛 12 口，试过 132 就红）。 */
-        const wL = chance(0.5) ? 96 : 144;
-        const wR = 240 - wL;
+
+           **总宽 192 / 240 两档（2026-10-29）。** 原来锁死 240，而一层被
+           两个洞切过之后，"不压落点带的连续 240"经常凑不出来 —— 雪包
+           是唯一一次能贡献两条坡的地形，它放不下，平均坡数就上不去。
+           192 档用 96 + 96，配 38~50 的落差是 21°~27°，不比 240 档陡。
+           代价是多吃掉一列箱子的可能（192 占 4 列，240 占 5 列）—— 换得回来。 */
+        const MOUND_W = chance(0.45) ? 192 : 240;
+        const wL = MOUND_W === 192 ? 96 : (chance(0.5) ? 96 : 144);
+        const wR = MOUND_W - wL;
         for (let t = 0; t < 8; t++) {
-          const rx = 48 * ri(1, Math.floor((912 - 240) / 48));
-          if (!freeOf(rx, 240)) continue;
+          const rx = 48 * ri(1, Math.floor((912 - MOUND_W) / 48));
+          if (!freeOf(rx, MOUND_W)) continue;
           /* cap: 1 → 顶点扣一顶东西（画在 drawRamp 里）：室内是压一块石头，
              地表是一顶雪帽。人字顶点太尖，顶一下才不像三角屋顶。 */
           out.push({ x: rx, y: l.floorY, w: wL, h: GEN.thick, base: l.floorY, rise: MOUND_RISE, kind: 'ramp', cap: 1 });
@@ -717,10 +784,29 @@ function genLevel(seed) {
      顺序本身就是一条正确性约束，不是排版偏好。
      喂球箱从 3 口提到 5 口：箱子变成核心玩法之后，弹药经济也得松一点。 */
   const lastY = floors[nF - 1];
-  const doorX = 48 * ri(12, 17);
+  /* **门不再钉在右半边。**（2026-10-29，用户：「下关的门不要定死固定位置」）
+
+     原来 `48 * ri(12, 17)` = 576~816，也就是永远在画面右侧 60%~85%。
+     玩三关就会形成习惯："门在右边"。于是整层的前半段变成纯赶路，
+     空间设计退化成一条从左上到右下的斜线。
+
+     现在 3~17 列全宽随机（144~816），只躲一条：**上一层的落点带**。
+     不是为了好看 —— 从上面掉下来正好落在门壳顶上，人会卡在两格冰之间
+     往上爬，而门在脚底下，读起来像"掉到门上"。
+     40 次里挑不到合适的就退回中间偏右（一关最多一次，不影响观感）。 */
+  const hallDrop = layers[nF - 2].holes.map(h => [h.x - 48, h.x + h.w + 48]);
+  let doorCol = 12;
+  for (let t = 0; t < 40; t++) {
+    const c = 3 + Math.floor(R() * 15);          // 3 ~ 17 列
+    if (hallDrop.some(z => c * 48 < z[1] && (c + 1) * 48 > z[0])) continue;
+    doorCol = c;
+    break;
+  }
+  const doorX = 48 * doorCol;
   const door = { x: doorX, y: lastY - 92, w: 48, h: 92, open: false, openT: 0 };
   const hallTaken = [];        // 门厅里已被占掉的 x，箱山要避开
   for (const cx of [doorX - 48, doorX]) {
+    if (cx < 0 || cx + 48 > 960) continue;
     B(cx, lastY - 48, 'ice');
     B(cx, lastY - 96, 'ice');
     hallTaken.push(cx);
@@ -778,9 +864,13 @@ function genLevel(seed) {
        井梯固定摞在洞口的左列（见下），玩家爬上去也是往左扒 —— 左侧才是
        真正要用的那块落脚台面，右侧留不留空对"能不能跳上去"没有影响。 */
     const rimCol = new Array(COLS).fill(false);
+    /* 洞口**右**邻列：只限高、不腾空（限高不损失箱数） */
+    const rimRCol = new Array(COLS).fill(false);
     for (const o of l.holes) {
       const li = Math.ceil(o.x / 48) - 1;
       if (li >= 0 && li < COLS) rimCol[li] = true;
+      const ri2 = Math.floor((o.x + o.w) / 48);
+      if (ri2 >= 0 && ri2 < COLS) rimRCol[ri2] = true;
     }
     /* **薄层不腾井口缘。** 地表层经常是"2 个洞吃掉 4 列 + 地形吃 3 列"，
        再抠掉井口缘就只剩 6~10 列，箱子直接掉到 6 口（门槛 12）——
@@ -833,6 +923,11 @@ function genLevel(seed) {
          加高解决不了"没地方站"。
          留出这一列之后，井口边上就有一块 48 宽的台面可以扒、可以落。 */
       if (rimOK && rimCol[i]) { HGT[i] = 0; canAdd[i] = false; MAX0[i] = 0; continue; }
+      /* **洞口右邻列限高 2 格。** 左邻是井口缘（0 格），右边如果是 3 格，
+         跨这个洞就只有"从右往左"能用 —— 往左是下坡，往右要上 3 格
+         （144 > 跳高 123）。单向通行在 BFS 里就是半个死胡同：
+         从左边那段出发，永远过不到右边。 */
+      if (rimRCol[i]) MAX0[i] = Math.min(MAX0[i], 2);
       const hole = l.holes.find(o => x + 48 > o.x && x < o.x + o.w);
       if (hole) {
         holeCol[i] = hole.cover;
@@ -922,14 +1017,67 @@ function genLevel(seed) {
       i = j;
     }
 
+    /* ---- ②-1.5 主通道：先划走廊，再摆箱子 ----
+       用户 2026-10-29：「空间设计要合理 不要有死胡同路」。
+
+       **"死胡同"在这里不是"被墙围住"—— 箱子都能砸。** 它指的是：
+       玩家钻进两座 3 格箱山之间的缝里，前后都被 144 挡住（跳高只有 123），
+       唯一的出路是"砸"。一次两次叫战斗，整关都是就叫"没有空间设计"。
+
+       原来的做法是"堆之间至少留 1 列平地"，但那是**副产品**：
+       堆宽 1~4 随机、空地 30% 才给 2 列，于是有的段连着五六列全是堆。
+       现在反过来 —— **先按 3~5 列的节奏把走廊钉死，箱子只能堆在走廊之间。**
+       走廊列恒为 0 格（不摆堆、补箱也不碰），相邻列限高 2 格：
+       于是从走廊爬上任何一座箱山，高差都不超过 2 格（96 < 跳高 123）。
+       这是"任何一处都能回到主路"的几何保证，不是靠概率碰运气。
+       它同时是 BFS 校验（见 validateLevel 第 13 条）的物理基础。 */
+    const corridor = new Array(COLS).fill(false);
+    /* **井梯列和它左右一列不许当走廊。** 井梯是硬性的 3 格（那是"上到上一层"
+       唯一的路），走廊是硬的 0 格 —— 两者贴在一起就是高差 3（144 > 跳高 123），
+       走廊自己成了沟底。第一版没排除，200 个种子里 204 次撞"相邻列高差 3"。 */
+    const nearWell = i => wells.some(w => i >= w[0] - 1 && i <= w[1] + 1);
+    for (const run of runs) {
+      /* 起点在游程内抖 0~1 列，**不能固定从 run[0] 开始** ——
+         否则每层走廊都落在 0、4、9、13 列，纵向看下去是一排等距竖井。 */
+      let c = run[0] + Math.floor(R() * 2);
+      while (c <= run[1]) {
+        if (!nearWell(c)) corridor[c] = true;
+        /* **4~6 列一条，不是 3~5。** 3 列一条时一屏有 6 条走廊，
+           吃掉的箱子列太多：200 个种子里首掷通过率从 98% 掉到 96%
+           （"这一层箱子只有 8 口 < 门槛 10"）。走廊是"能回到主路"的保证，
+           不需要多到像网 —— 一屏 4 条已经很够走了。 */
+        c += 4 + Math.floor(R() * 3);
+      }
+    }
+    for (let i = 0; i < COLS; i++) {
+      if (!corridor[i]) continue;
+      HGT[i] = 0;
+      MAXH[i] = 0;
+      canAdd[i] = false;                   // 补箱子那一轮也填不进来
+    }
+    /* 走廊两侧限高 2 格。**这一条比"走廊本身是 0 格"更关键**：
+       走廊 0、旁边 3 的话高差 3 = 144 > 跳高 123，走廊就成了沟底，
+       主路自己变成了死胡同。 */
+    for (let i = 0; i < COLS; i++) {
+      if (corridor[i]) continue;
+      if ((i > 0 && corridor[i - 1]) || (i + 1 < COLS && corridor[i + 1]))
+        MAXH[i] = Math.min(MAXH[i], 2);
+    }
+
     /* ---- ②-2 摆堆 ---- */
     /* **整层的箱子预算。** 堆模型不管住总数的话，撞上"可用列特别多"的层
        还是会铺到 30 多格 —— 那就是用户说的"密密麻麻"。
-      14 格是"20 列平均 0.7 格"：看起来是一堆一堆的，不是一片地面。
        （第一版给到 26，中位数还是 23 口 —— 加上井梯和洞口盖板就满了，
        而用户说的"密密麻麻"正是这个中位数。）
        预算用完就停止摆堆，剩下的列保持平地（正好是想要的呼吸）。 */
-    let budget = Math.round(COLS * 0.7);
+    /* **递进第二项：箱子越深越密。**
+       预算 = 20 列 × (0.58 → 0.80)。地表 12 格、门厅 16 格。
+       浅层箱子少是为了"看得清路"—— 玩家刚进来要先学会箱山能爬；
+       深层铺满，横向移动就得先拆出一条路。
+       **上限只有 0.80，不给 1.0**：铺满整层之后主通道也没了，
+       那不是我想要的那种难。 */
+    let budget = Math.round(COLS * (0.58 + (l.tier || 0) * 0.22));
+    l.boxBudget = budget;          // 只给断言看：这是"难度预算"，和实际的箱子数略有出入
     for (const run of runs) {
       const a = run[0], b = run[1];
       let c = a;
@@ -937,9 +1085,19 @@ function genLevel(seed) {
         /* 堆宽 1~4。**宽度取随机而不是固定 3**，不然整层是等宽的方块阵列，
            又回到"规矩"上去了。 */
         const gw = Math.min(b - c + 1, 1 + Math.floor(R() * 4));
-        const peak = Math.min(3, pickOne([1, 2, 2, 3, 3]));
+        /* **递进第三项：堆越深越高。**
+           地表最多 2 格（3 格箱山在浅层只当"远处的高处"看，不当路），
+           门厅才允许整层都是 3 格。跳高 123、一格 48 ——
+           2 格差 96 随便跳，3 格差 144 跳不上去，必须绕。
+           "绕"就是深度换来的复杂度，而且它不需要加任何新机制。 */
+        const peak = Math.min(3, (l.tier || 0) < 0.34
+          ? pickOne([1, 1, 2, 2])
+          : (l.tier || 0) < 0.67 ? pickOne([1, 2, 2, 3, 3])
+            : pickOne([2, 2, 3, 3, 3]));
         for (let t = 0; t < gw; t++) {
           if (budget <= 0) break;
+          /* 走廊列不摆。堆在走廊处断开，断口就是通道。 */
+          if (corridor[c + t]) continue;
           let h = peak;
           /* 堆形：宽堆的两端矮一级。窄堆不降 —— 1 列再降就是平地，堆就消失了。 */
           if (gw >= 3 && (t === 0 || t === gw - 1)) h = Math.max(1, peak - 1);
@@ -951,9 +1109,11 @@ function genLevel(seed) {
           HGT[c + t] = hh;
         }
         c += gw;
-        /* 堆间空地：1 列是底线，30% 的地方给 2 列。
-           **两堆紧贴着的话玩家还是在连续的高低地形上走**，等于没改。 */
-        if (c <= b) c += 1 + (chance(0.30) ? 1 : 0);
+        /* 堆间空地：1 列是底线，浅层 42% 的地方给 2 列，深层只有 12%。
+           **两堆紧贴着的话玩家还是在连续的高低地形上走**，等于没改；
+           反过来全留两列空地，深层就变成了"一堆孤岛"，那也不难，只是空。
+           空地从 42% 收到 12%，就是"越往下越挤"最直接的表达。 */
+        if (c <= b) c += 1 + (chance(0.42 - (l.tier || 0) * 0.30) ? 1 : 0);
       }
     }
 
@@ -1127,7 +1287,15 @@ function genLevel(seed) {
        怪就是弹药 —— 裹住一只才有一颗球，球碾死一只才够档破冰。
        怪少的时候"没球可推"不是数值问题，是材料问题。
        门厅固定 3 只不动，那个数是死局线（见 NUM.killTarget 的注释）。 */
-    const want = (k === nF - 1) ? 3 : 2 + (chance(0.55) ? 1 : 0) + (chance(0.3) ? 1 : 0);
+    /* **递进第五项：怪越深越多，2 → 3 → 4，不再掷骰子。**
+       用户 2026-10-28 说过「怪物可以搞多点」，但"每层随机 2~4 只"的问题是
+       第 2 层可能比第 4 层更满 —— 数量是玩家最能直接感到的难度，
+       它必须单调。门厅固定 3 只（那是 killTarget 的死局线）。
+       阈值 0.22 / 0.60 而不是 1/3、2/3：5 层关的 tier 是 0/0.25/0.5/0.75/1，
+       用三等分会把第 1、2 层都压成 2 只，前两层一样空。 */
+    const tier = l.tier || 0;
+    const want = (k === nF - 1) ? 3
+      : 2 + (tier >= 0.22 ? 1 : 0) + (tier >= 0.60 ? 1 : 0);
     /* **候选点按"列"取，不按 8px 步长扫。**
        箱子铺开之后地面几乎每一处都摞着东西，用连续扫描的话一层的候选点
        会被 200 口箱子切成几十个碎点，"取不住"就成了缺怪。
@@ -1212,7 +1380,12 @@ function genLevel(seed) {
       used.push(c.x);
       spawns.push({
         x: Math.round(c.x), y: Math.round(c.y) - FOE_H, layer: k,
-        kind: (k > 1 && chance(0.30 + k * 0.05)) ? 'runner' : 'crawler',
+        /* **递进第六项：会追人的 fang 越深越多。**
+           地表 0%、第 2 层约 27%、门厅约 57%。追击型敌人逼玩家换位，
+           巡逻型只看距离 —— 前者是"复杂"，后者只是"多"。
+           **不用 `k > 1` 判**：3 层关的 k 只有 0/1/2，按 k 判的话
+           短关一只 fang 都没有，同一份难度曲线在 3 层和 5 层上不一样。 */
+        kind: (tier >= 0.30 && chance(0.10 + tier * 0.50)) ? 'runner' : 'crawler',
       });
     }
   });
@@ -1468,6 +1641,73 @@ function genLevel(seed) {
   };
 }
 
+/** **每层的"走不走得通"，用脚量，不用眼看。**
+
+    用户 2026-10-29：「空间设计要合理 不要有死胡同路」。
+
+    生成器里已经有"主通道"（②-1.5）保证走廊列恒为 0、相邻列 ≤2 格，
+    但那是**局部**的：它保证"从走廊上得去任何一座箱山"，不保证
+    "任何一座箱山都连得上走廊"。地形（平台/雪包）会把走廊切断，
+    洞会把楼板切成几段，箱子塌下来又会改列顶 —— 这些组合起来
+    只能靠一遍 BFS 量。
+
+    **移动能力就是判据，不是拍脑袋的阈值：**
+      · 相邻列高差 ≤ 2 格（96）→ 直接走过去（跳高 123）
+      · 中间隔着洞、洞宽 ≤ 144 → 跳过去（水平 300 × 滞空 0.686 = 205px，
+        留 60px 给"落点没对准"；192 宽的洞理论上也够，但太紧，不认）
+      · 地形（平台 96/114 高）不算阻挡：净空 214 − 114 = 100 > 身高 42，
+        人从台子底下直接走过去，BFS 按地板算正好。
+
+    返回没走到的列号。空数组 = 这一层是连通的。 */
+function unreachableCols(L, k) {
+  const COLS = 20;
+  const l = L.layers[k];
+  const stand = new Array(COLS).fill(false);
+  for (let i = 0; i < COLS; i++) {
+    const x = i * 48;
+    stand[i] = l.segs.some(s => x >= s.x && x + 48 <= s.x + s.w);
+  }
+  const top = l.colTop || new Array(COLS).fill(l.floorY);
+  const seen = new Array(COLS).fill(false);
+  const q = [];
+  if (k === 0) q.push(clamp(Math.floor(L.start.x / 48), 0, COLS - 1));
+  else for (const h of L.layers[k - 1].holes) {
+    for (let i = 0; i < COLS; i++) {
+      const x = i * 48;
+      if (x + 48 > h.x && x < h.x + h.w) q.push(i);
+    }
+  }
+  /* **没有入口的层不算"走不到"，直接放行。**
+     上一层如果没开出洞（生成残缺），这一层的起点集合就是空的，
+     全 20 列都会被报成"走不到" —— 那是另一件事，由校验第 3 条
+     「每层都得有洞」负责报。两条一起红会把失败原因指错地方
+     （实测 seed 119 报的是"20 列走不到"，真因是上一层没出口）。 */
+  if (!q.length) return [];
+  while (q.length) {
+    const i = q.pop();
+    if (i < 0 || i >= COLS || seen[i] || !stand[i]) continue;
+    seen[i] = true;
+    /* ① 走到隔壁 */
+    for (const j of [i - 1, i + 1]) {
+      if (j < 0 || j >= COLS || seen[j] || !stand[j]) continue;
+      /* **只限上坡，不限下坡。** 从 3 格箱顶走到地面是"走下去"（会掉下来），
+         不是"跳上去"—— 用 |差值| 判会把所有台阶都判成走不通，
+         实测通过率因此从 98% 掉到 22%。 */
+      if (top[j] <= top[i] + 96) q.push(j);
+    }
+    /* ② 跳过洞 */
+    for (const d of [-1, 1]) {
+      let j = i + d, gap = 0;
+      while (j >= 0 && j < COLS && !stand[j]) { gap += 48; j += d; }
+      if (j < 0 || j >= COLS || seen[j] || gap <= 0) continue;
+      if (gap <= 144 && top[j] <= top[i] + 96) q.push(j);
+    }
+  }
+  const miss = [];
+  for (let i = 0; i < COLS; i++) if (stand[i] && !seen[i]) miss.push(i);
+  return miss;
+}
+
 /** 生成后的自检。**这些不是"最好有"，是"没有就得死局"。** */
 function validateLevel(L, verbose) {
   const bad = [];
@@ -1567,6 +1807,15 @@ function validateLevel(L, verbose) {
   }
   /* 12. 全关至少一口金箱（探索的奖励落点，没有它就只剩"搬箱子"） */
   if (!L.boxes.some(b => b.loot)) bad.push('没有金箱');
+
+  /* 13. **每层都走通，不许有走不到的列。**（2026-10-29）
+     "走不到"在这个玩法里不是小事：那一列的箱子/怪玩家永远够不着，
+     钱箱可能就埋在里面；如果是怪，**杀不够数门就不开** —— 那是硬死局。
+     判据见 unreachableCols，按真实移动能力（2 格高差 / 144 宽的洞）。 */
+  for (let k = 0; k < N; k++) {
+    const miss = unreachableCols(L, k);
+    if (miss.length) bad.push('第' + k + '层有 ' + miss.length + ' 列走不到（列 ' + miss.slice(0, 4).join(',') + '）');
+  }
 
   if (verbose && bad.length) console.log('  ✗ 校验未过：' + bad.join(' / '));
   return bad.length === 0;
@@ -1789,6 +2038,11 @@ function addFrag(x, y, n, color, spd, shape, bias) {
       t: 0, life: rnd(0.35, 0.8), color,
       r: rnd(2, 4.5), rot: rnd(0, Math.PI * 2), vr: rnd(-11, 11),
       w: 0, h: 0,
+      /* **碎片带着自己的形状名。** 「木碎成板条 / 石碎成棱角块」这条
+         只能查形状，不能查 `w > h*1.6` —— 后者会把随机撞出来的一块瘦长
+         棱角也算成板条（实测石箱 156 片里 22 片被判成板条，全是几何巧合，
+         看起来像"石箱也碎出木板了"）。 */
+      shape: shape || 'dot',
     };
     if (shape === 'plank') { f.w = rnd(7, 15); f.h = rnd(2.4, 4.2); }
     else if (shape === 'slab') {
@@ -7154,7 +7408,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 const API = {
   NUM, S, W, H,
   reset, newLevel, step, shoot, draw,
-  genLevel, validateLevel, buildLevel, surfY,
+  genLevel, validateLevel, buildLevel, surfY, unreachableCols,
   bellyTier, snowNeed, ballTier, ballR, ballPow,
   coatFoe, makeBallFrom, ballHitBox, shotBox, breakBox, hurtPlayer,
   checkDoor, doorBlocked, groundAt, stepDoor,

@@ -2190,6 +2190,10 @@ const S = {
   ammo: 0, belly: 0, hp: 0, invuln: 0,
   killed: 0, killedTarget: 0,
   shake: 0, flash: 0, hitStop: 0,
+  /* **上一次震屏点火的时间与连击数，按来源分开记。**
+     球连着碾碎四口箱是"一个动作"，不是四次冲击 —— 每次都用满力点火，
+     画面会连抖 2.2 秒（探针实测）。见 kickShake。 */
+  kick: {},
   /* 最近一次冲击的**方向**（单位向量）。震屏只给幅度的话，
      画面是"在抖"；给了方向，才是"被从右边撞了一下"。
      不设的时候是 (0,0) —— 纯震颤，适合没有明确来向的坠落/爆裂。 */
@@ -2250,7 +2254,7 @@ function reset(seed) {
      **这是"探索"唯一的量化反馈**，没有它玩家不知道自己漏了东西。 */
   S.loot = 0;
   S.lootTotal = L.boxes.filter(b => b.loot).length;
-  S.shake = 0; S.flash = 0; S.hitStop = 0;
+  S.shake = 0; S.flash = 0; S.hitStop = 0; S.kick = {};
   S._taught = {};
   S.stat = {
     shots: 0, hitFoe: 0, hitBox: 0,
@@ -2762,7 +2766,7 @@ function makeBallFrom(f) {
     life: NUM.ball.life, onGround: false, chain: 0, hitCd: 0, dead: false,
   });
   addText(f.x + f.w / 2, f.y - 18, '裹成球了', '#9BE86E', 18, 1.1);
-  S.shake = Math.max(S.shake, 5);
+  kickShake(3.5, 'wrap');
   hitStop(0.04);
 }
 
@@ -2810,7 +2814,7 @@ function pushBalls(dt) {
     b.life = NUM.ball.life;
     if (runUp > 0.85) {
       addText(b.x, b.y - b.r - 12, '助跑推!', '#FFE9A8', 16, 0.7);
-      S.shake = Math.max(S.shake, 6);
+      kickShake(3, 'push');
     }
   }
 }
@@ -2981,11 +2985,15 @@ function ballHitBox(b, box, dir, vDown) {
 
     /* **撞碎箱子不给体积。**
        即时回报已经够了：`keepSpeed` 让球继续滚、`chain` 记连碎数、
-       9 点震屏 + 45ms 顿帧。体积只认"吞掉敌人"这一条来源，
+       震屏 + 45ms 顿帧。体积只认"吞掉敌人"这一条来源，
        否则裹怪这个核心操作会被"随便砸三口箱"替代掉。 */
     S.stat.ballChain = b.chain;
     S.stat.ballChainMax = Math.max(S.stat.ballChainMax, b.chain);
-    S.shake = Math.max(S.shake, 9);
+    /* **这里原本还有一行 `S.shake = Math.max(S.shake, 9)`，已删。**
+       它是重复点火：`breakBox` 内部刚按动量点过一次（当时上限 14），
+       出来又被 9 强行抬一次 —— 等于不管怎么调 breakBox 里的公式，
+       实际峰值永远 ≥9，那行参数根本管不到真正的画面。
+       震屏只该有一个出口（`kickShake`），否则"调了半天没变化"。 */
     hitStop(0.045);
   } else {
     // 砸不动：反弹 + 冒火花。**「太硬」这件事必须让玩家在物理上感到**
@@ -3008,7 +3016,9 @@ function ballHitBox(b, box, dir, vDown) {
       b.vy = -Math.sqrt(2 * 2100 * 60);
       b.vx *= 0.86;
       addFrag(b.x, b.y + b.r, 6, '#EAF6FF', 180);
-      S.shake = Math.max(S.shake, 3);
+      /* **这里故意不震。** 翻上一格台阶是"顺滑通过"的动作 ——
+         球在箱山上一路滚会连翻好几次，每次抖 3px 读起来就是
+         "画面在自己抽搐"。碎片已经说清"磕了一下"。 */
       return;
     }
     if (vDown) {
@@ -3018,7 +3028,8 @@ function ballHitBox(b, box, dir, vDown) {
       b.vx = -dir * Math.max(140, Math.abs(b.vx) * 0.4);
     }
     addFrag(b.x, b.y, 8, '#FFE0A0', 220);
-    S.shake = Math.max(S.shake, 5);
+    /* 撞上去但没碎 = 最轻的一档，2px 只够让人觉得"有接触" */
+    kickShake(2, 'bonk');
     if (box.mat === 'ice' && tier < def.minTier) {
       once('ice_tier', box.x + box.w / 2, box.y - 14, '球再大点才行', '#9AD8F5');
     } else {
@@ -3042,6 +3053,45 @@ function burstBall(b) {
    2026-10-29 补第四条：
      ④ **碎片和震屏都要有方向。** 全向均匀炸开读作"爆了"，
         沿撞击方向喷出去才叫"被撞碎"。`dirX/dirY` 是冲击的单位向量。 */
+/* ---------------------------------------------------------------- 震屏点火
+   **为什么需要这个函数，而不是到处写 `S.shake = Math.max(S.shake, n)`：**
+
+   实测（`tools/_shake-who.js`，40 秒一局）——碎箱占全部震屏点火量的 **2/3**，
+   而且球推过箱堆时能连着点 4~5 次，画面**连续抖 2.2 秒不停止**。
+   玩家读到的是"满屏在震"，而不是"撞碎了一口箱子"。
+
+   根因不在单次幅度，在**频率**：每一次碎箱都重新把衰减到一半的震动抬回峰值。
+   所以这里做两件事：
+
+     ① 幅度降一档（碎箱 8+5k/上限 14 → 3.2+2.2k/上限 6.5）。
+        960 宽的屏幕上 6.5px 已经"看得出来被撞了"，14px 是"整屏在跳"。
+     ② **同源连击递减**：0.35 秒内同一来源再点火，强度 ×0.6 逐次衰减到约 1/8。
+        第一口按满力（力度还在），后面几口只剩余震 —— 一个动作只有一次"顶"。
+
+   0.35 秒的窗口是量出来的：碎箱两口的间隔中位数约 0.1~0.2 秒，
+   而"打完一口、走两步、再打下一口"通常 >0.5 秒。窗口取在两者之间，
+   连续碾碎会被吞、独立两次冲击仍是两次满力。
+
+   `key` 分开记（碎箱 / 打怪 / 受伤各算各的），免得打怪时碎箱被连带衰减。
+   ------------------------------------------------------------------------- */
+const SHAKE_WINDOW = 0.35;
+const SHAKE_FALLOFF = 0.6;
+function kickShake(px, key) {
+  const k = key || '_';
+  const rec = S.kick[k];
+  let f = 1;
+  if (rec && S.t - rec.t < SHAKE_WINDOW) {
+    rec.n = Math.min(rec.n + 1, 6);        // 封顶：第 7 次之后不再继续衰减到 0
+    f = Math.pow(SHAKE_FALLOFF, rec.n);
+  } else {
+    S.kick[k] = { n: 0, t: 0 };
+  }
+  S.kick[k].t = S.t;
+  const v = px * f;
+  if (v > S.shake) S.shake = v;
+  return v;
+}
+
 function breakBox(box, how, pow, dirX, dirY) {
   box.dead = true;
   const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
@@ -3076,8 +3126,10 @@ function breakBox(box, how, pow, dirX, dirY) {
     /* 球有动量，顿帧和震动跟着动量走。`pow` 是 ballPow（速度 × 体径比）。 */
     const k = clamp((pow || 1) / 2.6, 0.55, 1.5);
     hitStop(0.05 + 0.04 * k);
-    /* **震屏上限压到 14。** 再大整个画面就在"跳"，玩家会晕。 */
-    S.shake = Math.max(S.shake, Math.min(14, 8 + 5 * k));
+    /* **上限压到 6.5。** 原来是 14 —— 960 宽的屏上抖 14px 是"整屏在跳"，
+       玩家会晕。6.5 是"明显被撞了一下"，再往上收益就只剩眩晕。
+       连击递减交给 kickShake（球碾过箱堆时不该有 5 次满力撞击）。 */
+    kickShake(Math.min(6.5, 3.2 + 2.2 * k), 'box');
     /* 方向跟着冲击走：横向撞是球的速度方向，落砸是"从上往下"。 */
     S.shakeDX = dirX || 0;
     S.shakeDY = dirY || 0;
@@ -3089,7 +3141,9 @@ function breakBox(box, how, pow, dirX, dirY) {
     /* 第二圈慢半拍、暗一档：两圈才有"冲击波"的层次，一圈只是一个圆 */
     S.rings.push({ x: cx, y: cy, r: 4, r0: 4, r1: 82 + 34 * k, t: -0.05, life: 0.36, color: 'rgba(255,226,170,.85)' });
   } else {
-    S.shake = Math.max(S.shake, 3);
+    /* 子弹碎箱。**弹是一点一点啃的**，不该有整屏反馈 ——
+       1.6px 只在连续射击时"有一点毛刺感"，单独打一口几乎看不见。 */
+    kickShake(1.6, 'box');
   }
 
   if (how === 'ball') S.stat.boxByBall++; else S.stat.boxByShot++;
@@ -3128,7 +3182,8 @@ function killFoe(f, byBall) {
      **不加的话，怪就是"凭空变成一堆碎片"** —— 玩家感受不到自己打中了。 */
   S.rings.push({ x: f.x + f.w / 2, y: f.y + f.h / 2, r: 5, r0: 5, r1: 30, t: 0, life: 0.2, color: '#FFE8D8' });
   if (byBall) hitStop(0.055);
-  S.shake = Math.max(S.shake, 7);
+  /* 打怪比碎箱"重"：7 → 4.5。连杀时同样走递减。 */
+  kickShake(4.5, 'foe');
   if (byBall) {
     byBall.absorbed = Math.min(NUM.ball.maxAbsorb, byBall.absorbed + NUM.ball.absorbFoe);
     byBall.r = ballR(byBall.absorbed);
@@ -3562,7 +3617,11 @@ function separateFoes() {
 function hurtPlayer() {
   S.hp--;
   S.invuln = NUM.hpInvuln;
-  S.shake = Math.max(S.shake, 12);
+  /* **受伤的震屏不能是最强的。** 12px 是全场最大的一档，可受伤本身
+     已经是负反馈（掉血 + 红光 + 无敌闪烁），再叠一个最重的晕眩加成，
+     玩家的体感是"被惩罚了两次"，尤其是连续失误时。
+     6px 够说清"你被打了"，剩下的交给 flash 和掉血。 */
+  kickShake(6, 'hurt');
   S.flash = Math.max(S.flash, 0.10);
   const p = S.p;
   p.vx = -p.face * 260;
@@ -3691,7 +3750,7 @@ function checkDoor() {
     S.door.open = true;
     S.door.openT = 0;
     S.flash = Math.max(S.flash, 0.16);
-    S.shake = Math.max(S.shake, 10);
+    kickShake(5, 'door');
     addText(S.door.x + S.door.w / 2, S.door.y - S.door.h - 16, '门开了', '#9BE86E', 24, 1.8);
   }
 }
@@ -3708,7 +3767,7 @@ function stepDoor(dt) {
   if (d.wasBlocked && !blocked) {
     d.revealT = 0;
     S.flash = Math.max(S.flash, 0.18);
-    S.shake = Math.max(S.shake, 8);
+    kickShake(4, 'door');
     addText(d.x + d.w / 2, d.y - d.h - 14, '找到门了', '#FFE08A', 24, 1.8);
     checkDoor();
   }
@@ -4723,8 +4782,14 @@ function draw() {
      否则每一颗子弹打到箱子都让画面横移，会晕。 */
   const sh = S.shake;
   if (sh > 0) {
-    const tt = S.t * 42;
-    const dirK = Math.min(1, sh / 14) * 0.55;
+    /* **42 → 30。** 42 rad/s ≈ 6.7Hz，落在这个频率上的位移读作"嗡"——
+       画面像是在高频颤动，而不是"被撞了一下弹回来"。
+       30 rad/s ≈ 4.8Hz，同样幅度下更"重"、更像一次冲击。
+       两条非整数倍频（1.0 / 2.31）保持不变，那是"不像机械摆动"的来源。 */
+    const tt = S.t * 30;
+    /* 方向偏置的门限从 14 跟到新的上限 6.5：只有"重击"那一档才吃得进方向，
+       2~3px 的小触发保持纯震颤，否则连点子弹都会让画面横移。 */
+    const dirK = Math.min(1, sh / 6.5) * 0.55;
     const dx = (Math.sin(tt) * 0.62 + Math.sin(tt * 2.31 + 1.7) * 0.38) * sh + S.shakeDX * sh * dirK;
     const dy = (Math.cos(tt * 1.37) * 0.55 + Math.sin(tt * 3.07) * 0.45) * sh + S.shakeDY * sh * dirK;
     g.translate(dx, dy);

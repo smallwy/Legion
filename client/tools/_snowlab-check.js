@@ -1640,7 +1640,15 @@ group("二十八、打击感（碎片形状 / 冲停 / 冲击环）+ 容器是�
       /* 顿帧：球破箱的 hitStop 必须比雪弹大 —— 那是"重"和"轻"的区别 */
       ck("球砸有顿帧（" + (S.hitStop || 0).toFixed(3) + "s）", (S.hitStop || 0) > 0.05,
          String(S.hitStop));
-      ck("球砸有震屏（" + Math.round(S.shake) + "px）", S.shake >= 8, String(S.shake));
+      /* **震屏判据 2026-10-29 改过，别照抄旧数字。**
+         原判据是 `>= 8`（峰值上限当时是 14）。用户反馈「满屏的震动」之后
+         峰值压到 6.5，8 永远不可能达到 —— 但直接改成 `>= 5` 只是"让红的变绿"，
+         真正该守的是两条线：
+           · 下限：球砸箱必须"看得见"（≥5px，960 宽的屏上约 0.5%）；
+           · 上限：**任何一次震屏都不许超过 8px**。上限比下限重要 ——
+             以后谁把 14 加回来，下限照样过，只有上限能拦住。 */
+      ck("球砸有震屏（" + S.shake.toFixed(1) + "px，≥5）", S.shake >= 5, S.shake.toFixed(2));
+      ck("震屏不超过 8px（" + S.shake.toFixed(1) + "px）", S.shake <= 8, S.shake.toFixed(2));
     }
   }
 
@@ -1970,7 +1978,40 @@ group("三十九、打击感：冲击有方向");
     L.breakBox(box, "ball", 3.0, 1, 0);
     ck("向右撞 → 震屏方向向右", S.shakeDX === 1 && S.shakeDY === 0,
       S.shakeDX + "," + S.shakeDY);
-    ck("震屏幅度 ≥ 8（" + S.shake.toFixed(1) + "）", S.shake >= 8, S.shake.toFixed(1));
+    /* 方向偏置只在"重击"档生效（`dirK = min(1, sh/6.5) * 0.55`），
+       所以这里只要证明"这一下有分量"即可。pow=3.0 → 约 5.7px。
+       **门槛从 8 改到 4，不是因为做不到 8，而是 8 已经超出新上限。** */
+    ck("震屏幅度 ≥ 4（" + S.shake.toFixed(1) + "）", S.shake >= 4, S.shake.toFixed(1));
+    /* ---- 同源连击递减（2026-10-29 新增）----------------------------
+       用户说"满屏的震动"，探针归因后发现 2/3 的震动量来自碎箱，
+       而球碾过箱堆时能连着点 4~5 次，画面**连续抖 2.2 秒不停**。
+       机制是：0.35 秒内同一来源再点火，强度 ×0.6。
+
+       **测法为什么要把 shake 手动清 0**：`kickShake` 用的是 max 语义，
+       递减后的小值不会把已经很高的 shake 抬高 —— 也就看不出递减。
+       清 0 等于"假设前一下已经衰减干净"，此时再点火，
+       读到的才是这一下**真正能抬到多高**。 */
+    S.shake = 0; S.kick = {};
+    const mkBox = () => ({ x: 240, y: 320, w: 48, h: 48, mat: "wood", hp: 1, barrel: false, loot: false });
+    const seq = [];
+    for (let i = 0; i < 5; i++) {
+      L.breakBox(mkBox(), "ball", 3.0, 1, 0);
+      seq.push(S.shake);
+      S.shake = 0;
+    }
+    ck("连碎 5 口：震幅逐次递减（" + seq.map(v => v.toFixed(1)).join(" → ") + "）",
+      seq[0] >= 5 && seq[4] < seq[0] * 0.45 && seq[4] < 1.2,
+      seq.map(v => v.toFixed(2)).join(","));
+
+    /* 窗口外再点火要恢复满力 —— 否则"打过一口之后这辈子都是小震" */
+    const tSave = S.t;
+    S.shake = 0;
+    S.t += 1.0;
+    L.breakBox(mkBox(), "ball", 3.0, 1, 0);
+    ck("隔 1 秒再碎：恢复满力（" + S.shake.toFixed(1) + "px）",
+      Math.abs(S.shake - seq[0]) < 0.2, S.shake.toFixed(2) + " vs " + seq[0].toFixed(2));
+    S.t = tSave;
+
     const right = S.frags.filter(f => f.vx > 0).length;
     ck("碎片多数朝撞击方向飞（" + right + "/" + S.frags.length + "）",
       S.frags.length > 10 && right >= S.frags.length * 0.7,

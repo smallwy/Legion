@@ -16,6 +16,7 @@
    =========================================================================== */
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { execFileSync } = require('child_process');
 const { JSDOM } = require('jsdom');
 
@@ -23,8 +24,15 @@ const ROOT = path.resolve(__dirname, '..');
 const PROTO = path.join(ROOT, 'prototype', 'snowlab.html');
 const TS_DIR = path.join(ROOT, 'assets', 'scripts', 'snowlab');
 const BUILD = path.join(ROOT, 'tools', '_sl-build');
-const TSC = process.env.TSC ||
-  'C:/Users/汪宇/.workbuddy/binaries/node/workspace/node_modules/typescript/bin/tsc';
+/* **tsc 的位置按"先找就近的、再找编辑器自带的"顺序探。**
+   原来写死的是 `C:/Users/汪宇/...`，换到 `yu.wang` 这台机器直接找不到 ——
+   而 TypeScript 本来就装在 Cocos 编辑器里，没必要依赖某个用户目录。
+   两台机器上都有的那份是编辑器自带的，所以它做兜底。 */
+const TSC_CANDIDATES = [
+  path.join(os.homedir(), '.workbuddy', 'binaries', 'node', 'workspace', 'node_modules', 'typescript', 'bin', 'tsc'),
+  'C:/ProgramData/cocos/editors/Creator/3.8.8/resources/app.asar.unpacked/node_modules/typescript/bin/tsc',
+];
+const TSC = process.env.TSC || TSC_CANDIDATES.find(p => fs.existsSync(p)) || TSC_CANDIDATES[0];
 
 let pass = 0, fail = 0;
 const ok = (name, good, extra) => {

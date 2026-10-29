@@ -22,16 +22,40 @@ import { SnowlabBattle } from './snowlab/SnowlabBattle';
 /**
  * 出发进战斗跑哪套玩法。
  *
- *   'grove'   —— 推球（雪人兄弟式）。当前交付的玩法，
- *                场景里只建一台相机 + 一块离屏画布，玩法在 GroveRuntime 里跑。
- *   'snowlab' —— **第二套关卡**（雪人兄弟式 + 可破坏地形 + 挖穿楼层）。
+ *   'snowlab' —— **当前默认**（雪人兄弟式 + 可破坏地形 + 挖穿楼层 + 推球）。
  *                玩法在 SnowlabRuntime 里跑，挂载逻辑和 grove 同形。
- *                还差存档结算和角色选择（主角写死 cat），所以默认不开。
+ *   'grove'   —— 推球第一版。留作对照，不再迭代。
+ *                场景里只建一台相机 + 一块离屏画布，玩法在 GroveRuntime 里跑。
  *   'mow'     —— 割草自动战斗垂直切片（CR-015 甲方案）。留作对照，不再迭代。
  *
- * 改这一行就切玩法，三套代码都还在，谁也没被删掉。
+ * 两种切法，按场合选用：
+ *   ① 改下面这一行的字面量（要长期换主线时用这个）；
+ *   ② 预览/构建的地址后面加 `?mode=grove`（临时对比用这个，不用改代码、
+ *      不用等编辑器重编，刷新一下就是另一套）。
+ * 三套代码都还在，谁也没被删掉。
  */
-const MODE: 'grove' | 'snowlab' | 'mow' = 'grove';
+const DEFAULT_MODE: 'grove' | 'snowlab' | 'mow' = 'snowlab';
+
+/**
+ * 从地址栏读 `?mode=`，认不出来就回落默认。
+ * **只认这三个值**：写错一个字母不该静默跑成别的玩法 —— 那会让人
+ * 以为是"新玩法没生效"，而真相是拼写错了。
+ */
+function pickMode(): 'grove' | 'snowlab' | 'mow' {
+    try {
+        if (typeof location !== 'undefined' && location.search) {
+            const m = /[?&]mode=([a-z]+)/.exec(location.search);
+            if (m && (m[1] === 'grove' || m[1] === 'snowlab' || m[1] === 'mow')) {
+                return m[1];
+            }
+        }
+    } catch (e) {
+        /* 某些平台没有 location（原生/小游戏）。不是错误，回落默认即可。 */
+    }
+    return DEFAULT_MODE;
+}
+
+const MODE = pickMode();
 
 let bootedScene: Node | null = null;
 

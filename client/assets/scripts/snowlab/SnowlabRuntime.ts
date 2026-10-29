@@ -2732,9 +2732,17 @@ function solids() {
 /** 某个 x 处、y 下方最近的可站立面。碎片落地、找回掉出世界的敌人要用。
     直接拿 GROUND_Y 当"地面"在单屏时代是对的，三层之后不对了 ——
     底层掉下来的碎片会一路穿过 L2、L3 的地面落到底。 */
-function groundAt(x, y) {
+/* `noRamp` = 只找"台阶"，不找斜坡。（2026-10-29 第十一轮，用户第 2 条反馈）
+   爬行类的"蹭坎"是靠 `groundAt` 探前方 8px 的落差来决定要不要抬脚的。
+   而 `surfY` 对斜坡返回的是**坡面**，于是"前面那段坡比我脚下高 19px"
+   被读成"一道 19px 的坎"，一帧把整只怪抬上去 —— 用户原话
+   「现在按左右 就跳了一个敌方 感觉很奇怪 是在设定如此 还是有 bug 很突兀」。
+   斜坡有它自己的贴地分支（`stepBody` 里 `s.kind === 'ramp'` 那段），
+   会顺着坡面一帧一两像素地爬，根本不需要蹭坎帮忙。 */
+function groundAt(x, y, noRamp) {
   let best = WORLD_H;
   for (const s of solids()) {
+    if (noRamp && s.kind === 'ramp') continue;
     if (x < s.x || x > s.x + s.w) continue;
     const top = surfY(s, x);
     if (top < y - 6) continue;          // 只找脚底下的
@@ -3952,7 +3960,7 @@ function stepFoes(dt) {
                      Math.abs(f.x - f.banX) > 24;
       if (canTry) {
         const ahead = f.face > 0 ? f.x + f.w + 8 : f.x - 8;
-        const rise = (f.y + f.h) - groundAt(ahead, f.y + f.h - 112);
+        const rise = (f.y + f.h) - groundAt(ahead, f.y + f.h - 112, true);
         /* **会不会跳，由体态决定，不由关卡决定。**
            多足甲虫（jump = 0）永远走这条 else：矮坎直接蹭上去、高坎掉头。
            以前它被塞进和四足兽同一套跳跃里，一遇到箱堆就原地连蹦 ——
@@ -3964,12 +3972,20 @@ function stepFoes(dt) {
             f.jumpCd = 0.75;
             f.tryN++;
           }
-        } else if (rise >= 4 && rise <= NUM.crawlStep) {
+        } else if (rise >= 4 && rise <= NUM.crawlStep && f.vx !== 0) {
           /* 蹭坎：**位移不是跳，是贴着地往上抬**。一点点把脚落上去，
              不做抛物线、不改 vy，读起来就是"爬过去了"。
              **门槛从 2 抬到 4。** 2~3px 的落差是浮点和对齐的毛刺（箱子边缘、
              斜坡接缝），抬上去只是让它每帧抖 1px —— 探针量到一只 grub
-             连续 50 帧"抬幅 1px"。真坎至少 4px 起。 */
+             连续 50 帧"抬幅 1px"。真坎至少 4px 起。
+
+             **`f.vx !== 0` 不能省。**（2026-10-29 第十一轮）
+             蹭坎是"**走**上矮坎"：它把整只怪抬到坎面上，靠的是下一帧继续
+             向前走进那块坎的支撑范围（`stepBody` 里只要 2px 重叠就算站住）。
+             站着的怪（`vx = 0`，瞄准或者被 `idleT` 停住）抬上去**一步都不走**，
+             重心还在坎外 → 下一帧踩空掉回来 → 再抬：`_movejump-probe.js`
+             量到一只 moss 在种子 8 里每 8 帧原地"跳"17.4px，无限循环。
+             这一条挡掉的就是它，和上面「斜坡不算坎」是同一次反馈的两半。 */
           f.y -= Math.min(rise, NUM.crawlStep);
           f.tryN++;
         }
@@ -9637,6 +9653,10 @@ Object.defineProperties(API, {
   LAYERS: { get: () => LAYERS },
   LAYER_CN: { get: () => LAYER_CN },
   SEED: { get: () => LEVEL_SEED },
+  /* 地面查询。**导出是为了让断言能直接验"斜坡不算坎"**（2026-10-29）：
+     两条闸（`noRamp` / 站着不爬）的症状完全一样，只看"有没有原地跳"
+     分不出是哪一条被改回去了。 */
+  groundAt: (x, y, noRamp) => groundAt(x, y, noRamp),
   /* HUD 芯片矩形表（度量与断言共用）。深潜的「深度」芯片曾经整块
      压在「试验台」面板下面，只有出图才看得出来 —— 现在断言直接量。 */
   HUD_RECTS: { get: () => HUD_RECTS },

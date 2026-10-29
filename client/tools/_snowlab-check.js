@@ -14,7 +14,9 @@ const path = require("path");
 const { JSDOM } = require("jsdom");
 
 const ROOT = path.resolve(__dirname, "..");
-const FILE = path.join(ROOT, "prototype", "snowlab.html");
+/* `PROTO=` 可以换一份 html 跑同一套断言 —— **用来做变异测试**：
+   把修复改回旧写法，这套断言必须变红，否则它守不住任何东西。 */
+const FILE = process.env.PROTO || path.join(ROOT, "prototype", "snowlab.html");
 
 let pass = 0, fail = 0;
 const bad = [];
@@ -2617,6 +2619,77 @@ group("四十三、主线 48 关（stage 曲线 + 骨架发牌）");
      [...new Set(skels)].length === 6, [...new Set(skels)].join("/"));
 
   /* 收尾：把状态还给默认，别让后面的东西接着跑 stage=48。 */
+  S.stage = null;
+  L.reset(3);
+}
+
+/* =========================================================================
+   四十四、「按左右就跳了一个敌方」—— 原地反复上移
+   ---------------------------------------------------------------------------
+   用户 2026-10-29：「现在按左右 就跳了一个敌方 感觉很奇怪 是设定如此
+   还是有 bug 很突兀」。
+
+   **量的是"重复"，不是"幅度"。** 爬上矮坎本来就是一次 4~20px 的整段抬升
+   （设计如此，`蹭坎`），一次不算问题。问题是抬上去站不住 → 掉回来 → 再抬，
+   同一只怪在同一处一秒抬三次以上，画面上就是原地抽搐式的"跳"。
+
+   判据：同一只怪、1 秒内、x 跨度 <6px、上移 ≥4px 且没起跳（vy >= -1）≥3 次。
+
+   改前（HEAD）20 关 8 秒有 **9 处**；改后 0 处。两处根因：
+     · `groundAt` 把**斜坡**也当"坎" → 一帧把整只怪抬 19px（`noRamp` 参数）
+     · 站着的怪（vx=0）也蹭坎 → 抬上去一步不走、重心在坎外，必然掉回来
+   ========================================================================= */
+group("四十四、敌方不会原地反复往上跳");
+{
+  const DT = 1 / 60;
+  const LIFT = 4, SPREAD = 6, LIMIT = 3;
+  let bad = 0, worst = null;
+
+  for (const seed of [1, 3, 5, 8, 9, 13, 17, 21]) {
+    L.newLevel(seed);
+    const ev = new Map();
+    for (const f of S.foes) ev.set(f, []);
+    const prev = new Map();
+    for (let fr = 0; fr < 60 * 8; fr++) {
+      for (const f of S.foes) prev.set(f, f.y);
+      L.step(DT);
+      for (const f of S.foes) {
+        const dy = f.y - (prev.get(f) === undefined ? f.y : prev.get(f));
+        /* 前 5 帧不计：出生点被箱子挤出来时会有一次大幅修正，那不是"边玩边跳" */
+        if (fr > 5 && dy <= -LIFT && f.vy >= -1 && ev.get(f)) ev.get(f).push({ frame: fr, x: f.x, y: f.y });
+      }
+    }
+    for (const [f, list] of ev) {
+      for (let i = 0; i + LIMIT - 1 < list.length; i++) {
+        const win = list.slice(i, i + LIMIT);
+        if (win[LIMIT - 1].frame - win[0].frame > 60) continue;
+        const xs = win.map(e => e.x);
+        if (Math.max(...xs) - Math.min(...xs) > SPREAD) continue;
+        bad++;
+        if (!worst) worst = { seed, breed: f.breed, x: Math.round(win[0].x), y: Math.round(win[0].y) };
+        break;
+      }
+    }
+  }
+  ck("没有一只怪在原地反复往上跳（8 关 × 8 秒）", bad === 0,
+     bad ? bad + " 处，最狠 " + worst.breed + " @" + worst.x + "," + worst.y + "（种子 " + worst.seed + "）" : "0 处");
+
+  /* 蹭坎的两条闸。**单独守一遍**：它们和上面那条总判据症状一样，
+     只看"有没有原地跳"分不出是哪一条被改回去了。 */
+  {
+    const ramp = S.level.plats.find(p => p.kind === "ramp");
+    if (!ramp) {
+      ck("（本关没有斜坡，跳过 noRamp 判据）", true, "");
+    } else {
+      const cx = ramp.x + ramp.w / 2;
+      const y0 = ramp.y + 400;
+      const withRamp = L.groundAt(cx, y0, false);
+      const noRamp = L.groundAt(cx, y0, true);
+      ck("`groundAt(...,true)` 跳过斜坡（坡面 " + Math.round(withRamp) + " / 实际地面 " + Math.round(noRamp) + "）",
+         noRamp > withRamp + 1, "withRamp=" + withRamp + " noRamp=" + noRamp);
+    }
+  }
+
   S.stage = null;
   L.reset(3);
 }

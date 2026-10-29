@@ -27,9 +27,12 @@
   阈值 0。tsc 那 2200+ 条 implicit-any 技术债会把真 bug 埋掉，所以单开一道）。
 - 需要 tsc 时用编辑器自带的那份：
   `C:/ProgramData/cocos/editors/Creator/3.8.8/resources/app.asar.unpacked/node_modules/typescript/bin/tsc`
-- node 就 `node`（PATH 里是 `C:/Users/汪宇/.workbuddy/binaries/node/versions/22.22.2-6`）。
-  **注意用户名是 `汪宇` 不是 `yu.wang`** —— 老日志里那批 `C:/Users/yu.wang/...` 是上一台机器的路径，照抄会 `No such file`。
-- 依赖统一装在 `C:/Users/汪宇/.workbuddy/binaries/node/workspace/node_modules`，
+- node 就 `node`（PATH 里那份是 WorkBuddy 隔离版 22.22.2）。
+- **依赖目录一律用 `$HOME` 展开，不要写死用户名。** 账户名在两台机器上分别是
+  `yu.wang` 和 `汪宇`，写死哪一边都会在另一边 `Cannot find module`（2026-10-29 又踩一次）。
+  正确写法：`NODE_PATH="$HOME/.workbuddy/binaries/node/workspace/node_modules"`，
+  bash 会把它转成 `C:/Users/<谁>/...`，node 认。
+  依赖统一装在 `~/.workbuddy/binaries/node/workspace/node_modules`，
   跑工具前带 `NODE_PATH` 指过去：`@napi-rs/canvas`（渲染图）、`jsdom`（snowlab 验收）、
   `typescript`、`playwright`。缺包就 `cd` 到 workspace 里 `npm install <包>`，
   不要装在仓库里（会被 .gitignore 掉，换机器又丢）。
@@ -109,11 +112,21 @@
 
 ## snowlab（prototype/snowlab.html，单文件原型）
 
-- 验收：`tools/_snowlab-check.js`（**183 项**结构+玩法闭环）、
+- 验收：`tools/_snowlab-check.js`（**235 项**结构+玩法闭环，首掷判据已焊死 100%）、
   `tools/_snowlab-feel2.js`（手感探针，只打印数字不判 pass/fail）、
   `tools/_snowlab-shot.js`（全量出图，种子固定 7）、
   `tools/_crop.js <图> <x,y,w,h> <倍数> <输出>`（放大看局部）。
-  都要 `NODE_PATH=C:/Users/汪宇/.workbuddy/binaries/node/workspace/node_modules`。
+  都要 `NODE_PATH="$HOME/.workbuddy/binaries/node/workspace/node_modules"`。
+- **关卡生成器现在有三条"必须机器守"的硬保证**（2026-10-29 收口，首掷 200/200）：
+  ① 每层都有主通道（`l.corridor`，通道列恒 0 格 / 邻列 ≤2 格）；
+  ② 门槛和 `l.colCap` 取小 —— 地形吃掉可摞列时 8 口物理上达不到，
+     `colCap` 只算"真能补上去"的格子（锁死盖板列只算现有箱数，
+     加一格就造球坑的也不算）；反向钉"最空的一层 ≥4 口"防它偷懒；
+  ③ 每个洞口 / 每层都有兜底落位（三条间距约束合起来可能无解）。
+- **主通道画面上是一对粉笔箭头**（`drawTrail`）：必须暗底+亮面描两遍，
+  单描一遍是"浅墙上看不见、深墙上像裂缝"；地表层没有后墙，改成压在雪面线上。
+  48px 一格里**放不下"小物件"**（脚印会被读成地板上的小石子），提示必须离开地面。
+
 - **房间画法是"盒子"不是"矩形"**（`drawRoomWall`）：后墙左右内收 `DI=54`、
   上下内收 `DY=11`，两侧侧墙 + AO，内角一条亮缝，后墙压一层极淡暖灰。
   `DI` 小于 40 读不出透视，大于 70 会吃掉一整列箱子（列宽 48）。

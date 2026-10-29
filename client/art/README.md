@@ -27,6 +27,12 @@
   **以前这四张躺在 `assets/bg/raw/` 里**，会被 asset-db 导入、被算进包体，但场景一张都没引用，
   等于白背 7.8MB —— 所以搬出来了。
 - `05-style/` —— 四张风格选型图（chunky / pixel / q-vector / 对比图），定风格时的证据
+- `04-gate/` —— 出征页玩法立绘的 AI 原图（1536×1024，3:2，带平台水印）。
+  成品是 `assets/resources/grove/gate/{trail,nest,snow}.png`（768×432 16:9）。
+  **原图留着是为了换裁切位置**：现在都是"中心偏上 20px 裁 16:9"，
+  以后卡面比例变了（比如竖版卡）要重裁，不用重新出图花钱。
+  `snow` 这张的水印正好被 16:9 裁切切掉，所以 `01-source/` 里那张仍带水印 ——
+  **不要直接拿它当资产用**。
 
 ### `02-concept/` 概念图
 
@@ -69,6 +75,12 @@ AI 出图里通过初筛、但没进最终资产的。改立绘时先来这里�
 - `10-snowlab` —— 雪山挖箱原型（`prototype/snowlab.html`）：箱子堆 + 地面道具、
   挂灯笼 / 吊灯 / 枝形吊灯的光斑、三种宠物的投掷物、爬出井口。
   图由 `tools/_snowlab-shot.js` 生成，这个目录只留"当时长什么样"的凭据
+- `25-skeletons-dive` —— 推球的**六种骨架 + 深潜无尽**：六张同档不同骨架的关卡缩略图
+  （粉框标出每层的下行口）、深潜的玩法画面与死亡结算。
+  图由 `tools/_skeletons-shot.js` 生成（`node _skeletons-shot.js` / `... dive`）
+- `26-gate-snow` —— **出征页接上推球玩法**：三扇门 / 副行报关号 / 进关的进度芯片 /
+  通关结算。前三张是这条链路的四个状态，不是四张独立截图。
+  图由 `tools/_entry-shot.js` + `tools/grove-shot3.js portals:0 portals:2:snow` 生成
 
 ### `05-archive/` 归档
 

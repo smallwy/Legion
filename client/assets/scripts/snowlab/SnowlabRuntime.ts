@@ -2516,6 +2516,69 @@ function newLevel(seed) {
   reset();
 }
 
+/* ---------------------------------------------------------------- 主线关号
+   **出征页 → 第 N 关 → 通关 → 第 N+1 关。** 这一条链路是 CR-031 落地时
+   漏掉的最后一环：STAGES 表和 48 关骨架都在，但玩家手里没有"关号"，
+   通关只是停在结算卡片上按 R 换一张随机图 —— 那不是 48 关，那是无尽模式。
+
+   **种子由关号派生，不随机。** 第 7 关在谁的机器上都是同一张图 ——
+   否则"我卡在第 7 关"没法复现，也没法把种子发给别人试。
+   （深潜正好相反：那边一命往下，图必须换，所以走 seed + depth 的混合。） */
+const SNOW_SAVE_KEY = 'pawpack.snow';
+const STAGE_MAX = 48;
+
+/* 从出征页进来的入参。**和 grove.html 的 URLP 同款防御写法** ——
+   无头沙箱里既没有 location 也可能没有 URLSearchParams，
+   降级成"没有参数"，那样 from=grove 恒为 false，行为和改造前一模一样。 */
+const SNOW_URLP = (() => {
+  try {
+    const q = (typeof location !== 'undefined' && location.search) ? location.search : '';
+    return new URLSearchParams(q);
+  } catch (e) { return { get() { return null; } }; }
+})();
+const FROM_GROVE = SNOW_URLP.get('from') === 'grove';
+
+/** 回出征页。**带 ?from=home** —— grove 只有见到这个参数才直接落到出征页，
+ *  不带的话它按"老门口流程"开打，玩家会发现自己回到了战斗里而不是门前。 */
+function leaveToGrove() {
+  try {
+    if (typeof location !== 'undefined' && location.href) location.href = 'grove.html?from=home';
+  } catch (e) { /* 沙箱里没有 location，静默 */ }
+}
+
+function readSnowProgress() {
+  try {
+    const o = JSON.parse((typeof localStorage !== 'undefined' && localStorage.getItem(SNOW_SAVE_KEY)) || '{}');
+    return o && typeof o === 'object' ? o : {};
+  } catch (e) { return {}; }
+}
+function writeSnowProgress(o) {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(SNOW_SAVE_KEY, JSON.stringify(Object.assign(readSnowProgress(), o)));
+  } catch (e) { /* 无痕模式 / 沙箱 —— 存不下就不存，不能因此崩掉 */ }
+}
+
+/** 关号 → 种子。过 `mix32` 的理由和深潜一样：`n * 7919` 这种线性递增
+ *  首输出区分度不够，相邻关会撞出连续好几关同一骨架的箱子分布。 */
+function stageSeed(n) {
+  return mix32((Math.max(1, n | 0) * 0x9E3779B1) >>> 0);
+}
+
+/** 进第 n 关（主线）。这是**唯一**的主线换关出口 ——
+ *  散着调 `reset(stageSeed(k), k)` 一定会漏掉存档那一步。 */
+function startStage(n) {
+  const k = clamp(Math.max(1, n | 0), 1, STAGE_MAX);
+  reset(stageSeed(k), k);
+  writeSnowProgress({ stage: k });
+  /* 飘字带上骨架名。**进关那一瞬间是唯一"玩家会读这一行"的时刻** ——
+     芯片里那行 12px 要一直挂着、只能报个名字，飘字可以多说一句
+     "这关要走哪种路"，正好把六种骨架从"内部实现"变成"玩家认得出的东西"。 */
+  const sk = S.level && S.level.skel;
+  const cn = (sk && SKELETONS[sk]) ? (' · ' + SKELETONS[sk].cn) : '';
+  addText(W / 2, 200, '第 ' + k + ' 关' + cn, '#EAF8FF', 26, 1.2);
+}
+
 function reset(seed, stage) {
   if (seed != null) LEVEL_SEED = seed >>> 0;
   if (LEVEL_SEED == null) LEVEL_SEED = (Math.random() * 1e9) >>> 0;
@@ -4432,6 +4495,13 @@ function stepDoor(dt) {
       S.phase = 'clear';
       S.clearT = 0;
       S.flash = Math.max(S.flash, 0.3);
+      /* 主线：通关 = 进度推到下一关。**现在就写，不等玩家按 Enter** ——
+         打完直接关页面是常态，等他按键才记等于丢进度。
+         第 48 关通关后停在 48：再往前没有内容，写 49 会让出征页显示
+         「第 49 关」，点进去被 clamp 回 48 —— 一个玩家看得见的假数字。 */
+      if (S.stage != null && S.stage > 0) {
+        writeSnowProgress({ stage: Math.min(STAGE_MAX, S.stage + 1) });
+      }
     }
   }
 }
@@ -4441,11 +4511,25 @@ function onKey(e, down) {
   const k = e.key;
   S.keys[k] = down;
   /* R 换一关（不是重开）。**布局是随机的，重开等于没有 R 键。**
-     深潜结算画面上 R = 再来一局。 */
+     深潜结算画面上 R = 再来一局。
+     **有主线关号时 R = 重打本关**，不是换一张随机图 ——
+     关号一旦存在，"第 7 关"就必须永远是同一张图，
+     否则玩家会发现自己重开之后地图变了。 */
   if (down && (k === 'r' || k === 'R')) {
     if (S.phase === 'dead' && S.dive) startDive();
+    else if (S.stage != null && S.stage > 0) startStage(S.stage);
     else newLevel();
   }
+  /* Enter / 空格 = 进下一关（只在通关结算上）。**和 R 分开**：
+     R 是"这一关再来一次"，Enter 是"往前走了"，两个动作不能共一个键。 */
+  if (down && (k === 'Enter' || k === ' ') && S.phase === 'clear' && !S.dive) {
+    if (S.stage != null && S.stage > 0) startStage(S.stage + 1);
+    else newLevel();
+    if ([' '].indexOf(k) >= 0) e.preventDefault();
+  }
+  /* Esc = 回出征页。只在从出征页进来时生效（直接开这个文件测试时不跳走 —
+     跳到 grove.html 会打断出图和断言）。 */
+  if (down && k === 'Escape' && FROM_GROVE) leaveToGrove();
   /* D = 进深潜。主线是"出门 48 次"，深潜是"一命往下"，
      两者共用同一套生成器和关卡，所以这个入口不需要额外内容。 */
   if (down && (k === 'd' || k === 'D') && S.phase !== 'dead') startDive();
@@ -9264,10 +9348,20 @@ function drawPlayer(g, p) {
    这种 bug **断言抓不到也读代码看不出来**（两边都是硬编码数字，
    改一处不会提醒另一处），只有出图才会看见。
    现在两边都从这里取，断言只做一件简单的事：任两个矩形不许相交。 */
+/* 顶栏之外的常驻 HUD 矩形。**集中成一张表**，断言才能直接量"任两个不相交",
+   而不是靠人肉对数字。加一项就必须过一遍"任两矩形不许相交"那条断言。
+
+   `progChip` = **进度芯片（一整块，两行）**：主线报关号 + 骨架名，
+   深潜报深度 + 最佳。早先拆成 `diveChip`(34 高) + `diveBest`(14 高)
+   上下相接的两块，结果第二行**没有底板、直接压在亮雪地上** ——
+   12px 灰黄字在雪地背景上基本读不出来（出图才看见）。
+   合并成 48 高的一块，两个模式共用：它们本来就互斥。 */
 const HUD_RECTS = {
   meter:    { x: W - 256, y: 82,  w: 240, h: 88 },   // 试验台面板
-  diveChip: { x: W - 154, y: 178, w: 138, h: 34 },   // 深度
-  diveBest: { x: W - 154, y: 212, w: 138, h: 14 },   // 最佳（贴在芯片下沿）
+  /* 138 宽太窄：第二行（骨架名 / 最佳）只有 114px 可用，13px 的中文
+     两个字就要 26px，加上"最佳 1234"这种五位数会贴边。164 宽之后
+     左边距到 780，和试验台面板（704 起）仍然上下错开，不相交。 */
+  progChip: { x: W - 180, y: 178, w: 164, h: 48 },   // 第 N 关 / 深度 + 骨架 / 最佳
 };
 function drawHud(g) {
   if (S.showHud === false) return;
@@ -9280,18 +9374,32 @@ function drawHud(g) {
      806..944 × 74..108 —— 整块被面板盖住，「最佳」那行还正好落在面板第三行字上。
      改到左上（16..154 × 74..108）又撞操作提示条（y=96）。
      最后落在**同一列的 y=178**：右侧自上而下读作「试验台 → 深度 → 最佳」，不挤任何人。 */
-  if (S.dive) {
+  /* **进度芯片**：深潜报深度，主线报关号。两者互斥，**共用一块矩形** ——
+     写成两个 key 会让「任两矩形不许相交」的断言直接红（同坐标必然相交），
+     那就变成断言在管一件根本不存在的冲突。
+     第二行：深潜是「最佳」，主线是**这一关的骨架名** ——
+     六种骨架的意义是"这关要走哪种路"，不报名字玩家只会觉得
+     "怎么这次洞在左边"，而不是"这是螺旋骨架"。
+     主线关号在这里出现，也是"48 次出门"这条链路唯一对玩家可见的进度。 */
+  const dr = HUD_RECTS.progChip;
+  const chipMain = S.dive ? ('深度 ' + S.dive.depth)
+    : (S.stage != null && S.stage > 0 ? ('第 ' + S.stage + ' 关') : null);
+  if (chipMain) {
     g.textAlign = 'right';
     g.font = '800 22px "PingFang SC","Microsoft YaHei",sans-serif';
     g.fillStyle = 'rgba(14,22,28,.62)';
-    const dr = HUD_RECTS.diveChip;
     rr(g, dr.x, dr.y, dr.w, dr.h, 10); g.fill();
     g.fillStyle = '#FFE08A';
-    g.fillText('深度 ' + S.dive.depth, dr.x + dr.w - 12, dr.y + 24);
-    g.font = '600 12px "PingFang SC","Microsoft YaHei",sans-serif';
-    g.fillStyle = 'rgba(255,224,138,.66)';
-    const br2 = HUD_RECTS.diveBest;
-    g.fillText('最佳 ' + (S.dive.best || 0), br2.x + br2.w - 12, br2.y + br2.h - 0);
+    g.fillText(chipMain, dr.x + dr.w - 12, dr.y + 23);
+    /* 13px 而不是 12px。12px 在 960×600 的画布上只有 12 个设备像素，
+       中文的横画直接糊成一条 —— 出图量出来的是"有字但读不清"，
+       而断言量不出这个（它只验矩形不相交）。 */
+    g.font = '700 13px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillStyle = 'rgba(255,224,138,.8)';
+    const skelCn = (S.level && S.level.skel && SKELETONS[S.level.skel])
+      ? SKELETONS[S.level.skel].cn : '';
+    const chipSub = S.dive ? ('最佳 ' + (S.dive.best || 0)) : skelCn;
+    if (chipSub) g.fillText(chipSub, dr.x + dr.w - 12, dr.y + 42);
   }
   const inClear = S.phase === 'clear';
 
@@ -9437,7 +9545,10 @@ function drawHud(g) {
     rr(g, 16, 76, 330, 30, 8); g.fill();
     g.fillStyle = '#C8DCE6';
     g.font = '600 13px "PingFang SC","Microsoft YaHei",sans-serif';
-    g.fillText('A/D 移动 · W 跳 · J 吐雪 · 走过去顶球 = 推 · R 换一关', 30, 96);
+    /* 主线有关号之后 R 不再是"换一关"（换一关就是换一张随机图，
+       那会让"第 7 关永远是同一张图"这条不成立），所以文案跟着改成"重打"。 */
+    const tipR = (S.stage != null && S.stage > 0) ? 'R 重打' : 'R 换一关';
+    g.fillText('A/D 移动 · W 跳 · J 吐雪 · 走过去顶球 = 推 · ' + tipR, 30, 96);
     g.globalAlpha = 1;
   }
 
@@ -9506,11 +9617,16 @@ function drawClear(g) {
   g.textAlign = 'center';
   g.fillStyle = '#EAF8FF';
   g.font = '800 38px "PingFang SC","Microsoft YaHei",sans-serif';
-  g.fillText('进 门 了', W / 2, cy + 68);
+  /* 有主线关号时标题报关号 —— 「进门了」是"这一张图过了"，
+     「第 7 关」才是"我往前走了"；48 次出门全靠这一句给进度感。 */
+  const clampedStage = (S.stage != null && S.stage > 0) ? clamp(S.stage, 1, STAGE_MAX) : 0;
+  g.fillText(clampedStage ? ('第 ' + clampedStage + ' 关') : '进 门 了', W / 2, cy + 68);
 
   g.fillStyle = 'rgba(155,232,110,.7)';
   g.font = '600 14px "PingFang SC","Microsoft YaHei",sans-serif';
-  g.fillText('这一屏的量具数据', W / 2, cy + 96);
+  /* 「屏」是古道那一套的说法，这里是"关" —— 两套轴混用会让玩家
+     以为推球也有 27 屏。（grove 用了六年的"屏"，snowlab 从 CR-031 起是"关"。） */
+  g.fillText('这一关的量具数据', W / 2, cy + 96);
 
   const st = S.stat;
   const avg = st.shotsPerCoat.length
@@ -9540,7 +9656,16 @@ function drawClear(g) {
   g.textAlign = 'center';
   g.fillStyle = '#7FA3B5';
   g.font = '600 15px "PingFang SC","Microsoft YaHei",sans-serif';
-  g.fillText('按 R 换一关（布局每局随机）', W / 2, cy + ch - 24);
+  /* **两个动作两个键**：Enter = 往前走，R = 这一关再来一次。
+     以前只有 R（换一张随机图），因为那时候没有关号，
+     "下一关"和"换一关"在玩家眼里是同一件事。 */
+  if (clampedStage >= STAGE_MAX) {
+    g.fillText('主线到这里 · 按 D 下深潜', W / 2, cy + ch - 24);
+  } else if (clampedStage > 0) {
+    g.fillText('Enter 进第 ' + (clampedStage + 1) + ' 关   ·   R 重打本关', W / 2, cy + ch - 24);
+  } else {
+    g.fillText('按 R 换一关（布局每局随机）', W / 2, cy + ch - 24);
+  }
 }
 
 /* =========================================================================
@@ -9550,10 +9675,14 @@ function drawClear(g) {
    进了 Cocos 由 SnowlabBattle.update(dt) 调 snowlabTick / snowlabRender。
    两条 rAF 一起跑会让步进变双倍速 —— 这类"手感忽然变快"最难查。 */
 
-/* **启动交给 Cocos。**原型的启动段做了四件事：挂键盘、reset、起 rAF 自转、
+/* **启动交给 Cocos。**原型的启动段做了四件事：挂键盘、选关、起 rAF 自转、
    兜底画一帧。进 Cocos 之后 rAF 由组件 update() 驱动（不能两条循环一起跑，
    那会让步进变成双倍速），键盘监听留着 —— Web 构建里 window 是有的，
    而且它和原型是同一份代码，键位不会漂。
+
+   **选关这一段不进 Cocos**：原型里靠 `?from=grove` 读存档决定从第几关开始、
+   再挂一个「← 出征」的 DOM 返回钮，那是网页路由的事。Cocos 里关卡号
+   由存档组件持有，要进指定关直接调 `startStage(n)`（已在 API 导出）。
 
    `_domBound` 挡住重复挂监听：组件销毁重建（切场景再回来）会二次进这里，
    不挡就是一次按键走两遍 onKey。 */
@@ -9580,6 +9709,11 @@ const API = {
   /* 深潜三件套。导出是为了断言能走完整的"过门 → 下一关 → 死"链路，
      而不是只验 genLevel(-n) 的形状。 */
   startDive, diveNext, endDive,
+  /* 主线关号链路（出征页 → 第 N 关 → 通关 → 第 N+1 关）。
+     导出是为了断言能验"关号派生种子可复现 / 不同关不同图 / 通关推进 /
+     48 关封顶"，这四条里只有第一条在图上看得见。 */
+  startStage, stageSeed, readSnowProgress, writeSnowProgress, STAGE_MAX,
+  HUD_RECTS, SKELETONS,
   genLevel, validateLevel, buildLevel, surfY, unreachableCols, ballPits, ballStuckCols,
   bellyTier, snowNeed, ballTier, ballR, ballPow,
   coatFoe, makeBallFrom, ballHitBox, shotBox, breakBox, hurtPlayer,

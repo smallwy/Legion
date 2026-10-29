@@ -211,18 +211,24 @@ let ctx: any = null;
   }
 }''')
 
-    # ④ 启动段（挂 DOM 监听 + reset + rAF 自转）换成显式入口
-    body = must(body, '''if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-  window.addEventListener('keydown', e => onKey(e, true));
-  window.addEventListener('keyup', e => onKey(e, false));
-  window.addEventListener('blur', () => { S.keys = {}; });
-  reset();
-  if (typeof requestAnimationFrame === 'function' && ctx) requestAnimationFrame(loop);
-  else draw();
-}''', '''/* **启动交给 Cocos。**原型的启动段做了四件事：挂键盘、reset、起 rAF 自转、
+    # ④ 启动段（挂 DOM 监听 + 选关 + rAF 自转）换成显式入口
+    # **用正则而不是整段字面量。** 这一段是"页面入口"，注定会变
+    # （2026-10-30 加"从出征页进来接关号 + 返回按钮"就整段换了），
+    # 每改一次原型都要人肉同步抄一遍字面量，太脆 —— 第一次改完直接
+    # `锚点命中 0 次`，生成物停在上一个版本还不报错，正是 snowlab
+    # 在 cce5c23 卡过四轮的那种坑。正则只锚**首尾两行**，中间随便长。
+    _bootRE = re.compile(
+        r"if \(typeof window !== 'undefined' && typeof document !== 'undefined'\) \{\n"
+        r"  window\.addEventListener\('keydown', e => onKey\(e, true\)\);.*?\n"
+        r"  else draw\(\);\n\}", re.S)
+    body, _n = _bootRE.subn('''/* **启动交给 Cocos。**原型的启动段做了四件事：挂键盘、选关、起 rAF 自转、
    兜底画一帧。进 Cocos 之后 rAF 由组件 update() 驱动（不能两条循环一起跑，
    那会让步进变成双倍速），键盘监听留着 —— Web 构建里 window 是有的，
    而且它和原型是同一份代码，键位不会漂。
+
+   **选关这一段不进 Cocos**：原型里靠 `?from=grove` 读存档决定从第几关开始、
+   再挂一个「← 出征」的 DOM 返回钮，那是网页路由的事。Cocos 里关卡号
+   由存档组件持有，要进指定关直接调 `startStage(n)`（已在 API 导出）。
 
    `_domBound` 挡住重复挂监听：组件销毁重建（切场景再回来）会二次进这里，
    不挡就是一次按键走两遍 onKey。 */
@@ -237,7 +243,9 @@ export function snowlabBoot(seed?: number): void {
   snowlabInitBackdrop();
   snowlabInitArt();
   reset(seed as any);
-}''')
+}''', body)
+    if _n != 1:
+        raise SystemExit('启动段锚点命中 %d 次（期望 1）' % _n)
 
     # ⑤ 主循环整段删掉 —— 由 SnowlabBattle.update() 驱动
     i = body.index('let last = 0;\nfunction loop(ts) {')

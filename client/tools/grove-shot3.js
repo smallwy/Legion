@@ -41,9 +41,10 @@ if (!args.length) { console.log("给个 tag，例如 s1 / clear:3"); process.exi
       "head-cat", "head-dog", "head-ham", "head-rab", "head-ox", "head-fox",
       "ui-arrow", "ui-belly", "ui-btn", "ui-coin", "ui-cream", "ui-pip",
       "ui-pip-on", "ui-prog", "ui-res", "ui-ring", "ui-star", "ui-tip",
-      /* 出征页的玩法立绘（768×432）。少了这两张，出征页会走简笔回退分支，
-         截出来和真机不是一个东西。 */
-      "gate-trail", "gate-nest",
+      /* 出征页的玩法立绘（768×432）。少了这几张，出征页会走简笔回退分支，
+         截出来和真机不是一个东西。**条数必须跟 GATES 一样多** ——
+         新加门忘了加这里，截图只会"那张卡是简笔画"，不会报错。 */
+      "gate-trail", "gate-nest", "gate-snow",
     ];
     /* 资源按用途分目录：pet-cat -> grove/pet/cat.png。
        只替换第一个 '-'，'ui-pip-on' 才会变成 ui/pip-on 而不是 ui/pip/on。 */
@@ -174,6 +175,14 @@ if (!args.length) { console.log("给个 tag，例如 s1 / clear:3"); process.exi
         }
         /* `portals:1:tip` = 点一下那扇没开的门，验提示条真的画出来 */
         if (parts[1] === "tip") G.enterGate(1);
+        /* `portals:2:snow` = 塞一份"推到第 24 关"的推球存档，
+           验第三扇门的副行真的报关号（而不是永远「还没出发」）。
+           键名和结构必须和 snowlab.html 里的 SNOW_SAVE_KEY 逐字一致 ——
+           两个文件只能靠 localStorage 见面，写错一个字母就是静默不显示。 */
+        if (parts[1] === "snow") {
+          try { localStorage.setItem("pawpack.snow", JSON.stringify({ stage: 24 })); } catch (e) {}
+          G.render();
+        }
       }, s === undefined ? "" : s);
     } else if (kind === "nest") {
       /* 深巢第 N 层（`nest:7`）。**走真实入口 enterNest** —— 手工拼一个

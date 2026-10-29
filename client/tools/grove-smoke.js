@@ -2407,7 +2407,15 @@ console.log("\n=== 27. 出征页进门语义 / 全通存档语义（挑一屏 20
     ok(sameY === 0, "★ 所有玩法卡在同一水平线上（横排）", "不同 y 的 " + sameY);
     eq(cells[0].x, P.GATE.marginX, "★ 首卡贴左边距");
     const last = cells[cells.length - 1];
-    eq(960 - (last.x + last.w), P.GATE.marginX, "★ 末卡贴右边距（宽度公式铺满 840）");
+    /* **容差 2px，不是恰好等于边距。** 卡宽是 `floor((840-(n-1)*20)/n)`：
+       3 张时 800/3 = 266.67 → 266，余下 2px 必然落在右缘。
+       这是 GATE.w 的注释里写明的取舍（用 round 会算出 267，右缘反而
+       超出 1px、且会半像素错位）。原断言要求 `=== 60`，
+       两扇门时能过、三扇门时必然红 —— 标准本身写错了，不是代码错。 */
+    const gapR = 960 - (last.x + last.w);
+    ok(Math.abs(gapR - P.GATE.marginX) <= 2,
+       "★ 末卡贴右边距（宽度公式铺满 840，容差 2px）",
+       gapR + " vs " + P.GATE.marginX);
 
     let zout = 0;
     for (let i = 0; i < cells.length; i++) {

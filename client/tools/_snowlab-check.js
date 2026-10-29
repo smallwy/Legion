@@ -2550,18 +2550,24 @@ group("四十二、深潜（无尽模式）");
 
   /* ⑨ HUD 芯片互不重叠。**这条是"只有出图才看得见"那类 bug 的补丁。**
      「深度」芯片原本在 806..944 × 74..108，「试验台」面板是 704..944 × 82..170
-     —— 整块盖住，一句话都读不到。断言量矩形，不靠眼睛。 */
+     —— 整块盖住，一句话都读不到。断言量矩形，不靠眼睛。
+     2026-10-30：拆成「芯片 34 + 最佳 14 上下相接两块」之后，第二行**没有底板**，
+     12px 灰黄字直接压在亮雪地上读不出来（又是出图才看见）。合并成一整块 48。
+     所以「互不相交」从 3 块两两比变成 2 块一次比 —— 少的那条不是漏了，
+     是两行现在本来就画在同一块板上。 */
   const HR = L.HUD_RECTS;
   const ov = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-  ck("HUD 矩形表有 3 块（试验台 / 深度 / 最佳）", Object.keys(HR).length === 3,
+  ck("HUD 矩形表有 2 块（试验台 / 进度芯片）", Object.keys(HR).length === 2,
      Object.keys(HR).join(","));
-  ck("「深度」芯片不和「试验台」面板重叠", !ov(HR.diveChip, HR.meter),
-     JSON.stringify(HR.diveChip) + " vs " + JSON.stringify(HR.meter));
-  ck("「最佳」不和「试验台」面板重叠", !ov(HR.diveBest, HR.meter), "");
-  ck("「深度」和「最佳」不互相重叠（只许贴边）", !ov(HR.diveChip, HR.diveBest), "");
-  ck("「深度」芯片在屏幕内（不越右边界、不压顶栏 16..66）",
-     HR.diveChip.x + HR.diveChip.w <= 960 && HR.diveChip.x >= 16 && HR.diveChip.y > 66,
-     HR.diveChip.y + "");
+  ck("「进度芯片」不和「试验台」面板重叠", !ov(HR.progChip, HR.meter),
+     JSON.stringify(HR.progChip) + " vs " + JSON.stringify(HR.meter));
+  ck("「进度芯片」在屏幕内（不越右边界、不压顶栏 16..66）",
+     HR.progChip.x + HR.progChip.w <= 960 && HR.progChip.x >= 16 && HR.progChip.y > 66,
+     HR.progChip.y + "");
+  /* 两行字必须都在板内。芯片 h=48、主行基线 +24、次行基线 +42 ——
+     次行 12px 字顶在 +30、字底在 +45，硬塞进 48 高，不贴边也不溢出。 */
+  ck("进度芯片装得下两行字（主行 +24 / 次行 +42，板高 48）",
+     HR.progChip.h >= 42 + 4, HR.progChip.h + "");
 
   /* 收尾：把状态还给主线，别让后面（或调用方）接着跑深潜。 */
   S.dive = null;
@@ -2691,6 +2697,128 @@ group("四十四、敌方不会原地反复往上跳");
   }
 
   S.stage = null;
+  L.reset(3);
+}
+
+/* =========================================================================
+   四十五、主线关号（出征页 → 第 N 关 → 通关 → 第 N+1 关）
+   ---------------------------------------------------------------------------
+   用户 2026-10-30：「最初的出征 又玩法界面 我需要你用上」。
+   查下来不只是"没入口"：snowlab 里压根**没有关号** —— STAGES 表和 48 关
+   骨架都在，但玩家手里没有"我在第几关"，通关只是停在结算卡上按 R
+   换一张随机图。那不是 48 关，那是无尽模式。
+
+   这一组守四条：
+     ① 同关号 → 同种子（"第 7 关在谁的机器上都是同一张图"）
+     ② 不同关号 → 不同种子（否则 48 关其实是 1 关）
+     ③ 48 关每关都能生成合法关卡（不能出现"第 33 关进不去"）
+     ④ 通关把进度推到 N+1，且封顶在 48（不能写出「第 49 关」）
+   ========================================================================= */
+{
+  group("四十五、主线关号（出征页 → 第 N 关 → 通关 → 第 N+1 关）");
+
+  const SEED_MAX = L.STAGE_MAX;
+  ck("主线封顶是 48 关", SEED_MAX === 48, String(SEED_MAX));
+
+  /* ① 可复现 */
+  const s7a = L.stageSeed(7), s7b = L.stageSeed(7);
+  ck("同关号派生同一种子（第 7 关两次一致）", s7a === s7b, s7a + " vs " + s7b);
+
+  /* ② 48 关两两不同 */
+  {
+    const set = new Set();
+    for (let i = 1; i <= SEED_MAX; i++) set.add(L.stageSeed(i));
+    ck("48 关的种子两两不同（没有两关是同一张图）", set.size === SEED_MAX,
+       set.size + " / " + SEED_MAX);
+  }
+
+  /* ③ 每关都能生成合法关卡。**必须逐关跑一遍** ——
+     STAGES 只决定层数，洞的位置是骨架 + 约束一起算的，
+     "第 33 关刚好撞上某条约束、重掷 80 次也过不了"这种事只有全跑才知道。 */
+  {
+    let bad = 0, worstStage = 0, minFloors = 9, maxFloors = 0;
+    for (let n = 1; n <= SEED_MAX; n++) {
+      const lv = L.genLevel(L.stageSeed(n), n);
+      if (!lv || !L.validateLevel(lv)) { bad++; worstStage = n; continue; }
+      minFloors = Math.min(minFloors, lv.nFloors);
+      maxFloors = Math.max(maxFloors, lv.nFloors);
+    }
+    ck("48 关全部通过 validateLevel（失败 " + bad + " 关）", bad === 0,
+       bad ? "第 " + worstStage + " 关" : "");
+    ck("层数在 2~5 之间（" + minFloors + "~" + maxFloors + "）",
+       minFloors >= 2 && maxFloors <= 5, minFloors + "~" + maxFloors);
+  }
+
+  /* ④ 进关：clamp + 存档。**存档是这条链路的唯一持久状态**，
+     出征页读不到它就永远显示"还没出发"（那样门就是死的装饰）。 */
+  {
+    try { localStorage.removeItem("pawpack.snow"); } catch (e) {}
+    L.startStage(24);
+    ck("startStage(24) → S.stage = 24", L.S.stage === 24, String(L.S.stage));
+    ck("进关同时把进度写进存档", (L.readSnowProgress() || {}).stage === 24,
+       JSON.stringify(L.readSnowProgress()));
+
+    L.startStage(0);
+    ck("startStage(0) 被夹到第 1 关", L.S.stage === 1, String(L.S.stage));
+    L.startStage(999);
+    ck("startStage(999) 被夹到第 48 关", L.S.stage === 48, String(L.S.stage));
+
+    /* 通关 = 进度推到 N+1。走真实入口（门 + 玩家重叠）而不是直接写存档 ——
+       "写存档"和"通关时写存档"是两件事，只有后者会漏。 */
+    /* 进门要三个条件同时成立：门开着、没被箱子埋、人站在门里。
+       `d.open = true` 只满足了第一个 —— 门是被箱子埋着的（那是玩法：
+       先拆箱才能看见门），所以要像玩家一样把门口那几口箱子清掉。
+       **不这么做的话测试会假通过**：stepDoor 直接 return，
+       phase 一直是 play，而"存档还停在 48"这类判据照样成立。 */
+    L.startStage(24);
+    const S2 = L.S;
+    const d = S2.door;
+    ck("第 24 关有门", !!d, d ? "" : "door=null");
+    const clearDoorArea = (dd) => {
+      for (const b of L.S.boxes) {
+        if (b.x + b.w <= dd.x + 1 || b.x >= dd.x + dd.w - 1) continue;
+        if (b.y + b.h <= dd.y + 1 || b.y >= dd.y + dd.h - 1) continue;
+        b.dead = true;
+      }
+    };
+    if (d) {
+      clearDoorArea(d);
+      d.open = true; d.openT = 1;
+      d.wasBlocked = false;
+      S2.phase = "play";
+      S2.dive = null;
+      S2.p.x = d.x + d.w / 2 - S2.p.w / 2;
+      S2.p.y = d.y + d.h - S2.p.h;
+      L.stepDoor(1 / 60);
+      ck("穿过门 → phase = clear", S2.phase === "clear", S2.phase);
+      ck("通关把进度推到第 25 关", (L.readSnowProgress() || {}).stage === 25,
+         JSON.stringify(L.readSnowProgress()));
+    }
+
+    /* 第 48 关通关不能再往前 —— 写 49 会让出征页显示「第 49 关」，
+       点进去被 clamp 回 48，一个玩家看得见的假数字。 */
+    L.startStage(48);
+    const d2 = L.S.door;
+    if (d2) {
+      clearDoorArea(d2);
+      d2.open = true; d2.openT = 1; d2.wasBlocked = false;
+      L.S.phase = "play";
+      L.S.p.x = d2.x + d2.w / 2 - L.S.p.w / 2;
+      L.S.p.y = d2.y + d2.h - L.S.p.h;
+      L.stepDoor(1 / 60);
+      /* 先确认"真的进门了"，否则下面那条封顶判据是假通过 */
+      ck("第 48 关也能进门（phase = clear）", L.S.phase === "clear", L.S.phase);
+      ck("第 48 关通关后进度仍停在 48（不写出「第 49 关」）",
+         (L.readSnowProgress() || {}).stage === 48,
+         JSON.stringify(L.readSnowProgress()));
+    } else {
+      ck("（第 48 关没有门，跳过封顶判据）", false, "door=null");
+    }
+  }
+
+  /* 收尾 */
+  try { localStorage.removeItem("pawpack.snow"); } catch (e) {}
+  L.S.stage = null;
   L.reset(3);
 }
 

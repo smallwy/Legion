@@ -9065,7 +9065,11 @@ function tickFx(dt) {
 
   for (const s of S.stumps) if (s.shake > 0) s.shake = Math.max(0, s.shake - dt);
 
-  S.shake = Math.max(0, S.shake - dt * 34);
+  /* **指数衰减，不是线性。**（2026-10-29，和 snowlab 同步）
+     线性的毛病在尾段：从 14 掉到 1 和从 1 掉到 0 用的时间一样长，
+     最后那一下是"匀速停下"，读起来是机械。指数是先猛后缓。
+     -6.5 是照着原来的 34/s 配的：15 → 0.4 约 0.56 秒，手感不变。 */
+  S.shake = S.shake > 0.4 ? S.shake * Math.exp(-6.5 * dt) : 0;
   S.flash = Math.max(0, S.flash - dt * 2.2);
 
   // 掉落物：抛出去 → 落到最近的平台 → 被玩家捡 / 掉进坑里烧掉 / 15 秒后消失。
@@ -18122,7 +18126,47 @@ const GATES = [
        GATE.slots 是 getter，两扇门都开时网格还是两行。 */
     open: true,
   },
+  {
+    /* 2026-10-30 第三扇门。**推球玩法（snowlab）此前没有任何入口** ——
+       它是独立的一个 html，game.html / index.html / HomeRuntime 对它的引用
+       是 0 次。48 关主线、六种骨架、深潜全都做完了却没有门能走进去，
+       用户原话：「最初的出征 又玩法界面 我需要你用上」。
+       和前两扇门的区别：它们都是 grove 内部的 phase（切状态，不换页），
+       这个真的跳页 —— 推球的物理/动画是另一套循环，塞进 grove 只会
+       让两边都变慢，而且它自己已经能独立跑。
+       跳转带 `?from=grove`：snowlab 靠它决定"显示返回按钮 + 接着存档那一关打"。 */
+    id: "snow",
+    name: "雪原推球",
+    sub: "把球顶进洞 · 一层层往下",
+    art: "gate-snow",
+    open: true,
+  },
 ];
+
+/** snowlab 的进度存档（和它那边同 key、同结构 —— 两个文件都在浏览器里跑，
+ *  只能靠 localStorage 见面）。读不到就当没打过，**不抛异常**：
+ *  无痕模式下 localStorage 会直接抛 SecurityError，出征页不能因此白屏。 */
+function readSnowSave() {
+  try {
+    const raw = (typeof localStorage !== "undefined") ? localStorage.getItem("pawpack.snow") : null;
+    const o = JSON.parse(raw || "{}");
+    return o && typeof o === "object" ? o : {};
+  } catch (e) { return {}; }
+}
+
+/* **推球玩法的跳转口，做成可替换的。**
+   原型里是真跳页（snowlab.html 是个独立文件，双击就能打开）；
+   但 **Cocos 构建产物里没有这个 html** —— 那边推球是 SnowlabBattle 组件。
+   写死 `location.href` 的后果是：原型跑得好好的，打包之后点第三扇门 404，
+   而且不是报错，是白页 —— 最难查的那一类。
+   所以入口留成变量：GroveBattle 在 onLoad 里调 `GROVE.setSnowlabEntry(fn)`
+   换成"切到推球组件"，原型侧一个字都不用改。 */
+let snowEntry = function () {
+  try {
+    if (typeof location !== "undefined" && location.href) location.href = "snowlab.html?from=grove";
+  } catch (e) { /* 无头环境没有 location，静默 */ }
+};
+function setSnowlabEntry(fn) { if (typeof fn === "function") snowEntry = fn; }
 
 /** 出征页的点击出口。预览卡已删（2026-10-25 第六次），点卡就是进 ——
  *  以前还要判一次"是不是点在大立绘上"，现在整页只有卡可点，少一条分支。 */
@@ -18196,6 +18240,12 @@ function enterGate(i) {
     } else {
       enterNest();
     }
+  } else if (p.id === "snow") {
+    /* **这是全项目第一个真跳页的门。** 另外两扇门是切 phase（同一个循环里
+       换一张表），推球是另一个 html、另一套物理循环，塞不进来。
+       跳转走 `snowEntry()` 而不是直接写 location —— 见那个变量的注释：
+       Cocos 构建里没有 snowlab.html，那边要把这个口换成"切组件"。 */
+    snowEntry();
   }
 }
 
@@ -18693,6 +18743,13 @@ function gateSubLine(p) {
     const d = readNestDepth();
     return d > 0 ? "最深 " + d + " 层" : "没下潜过";
   }
+  if (p.id === "snow") {
+    /* 报的是**下一次从哪开始**，不是"打完了第几关" ——
+       通关那一刻存档就推到 N+1 了，所以这里直接读就是"接着打 N+1"。
+       没有 `/48`：和另外两扇门同一条规矩，不暴露总数。 */
+    const st = readSnowSave().stage;
+    return (st > 0) ? "第 " + st + " 关" : "还没出发";
+  }
   if (!(S.progress > 0)) return "还没出发";
   const cur = clamp(S.progress, 0, LEVELS.length - 1);
   return "第 " + (cur + 1) + " 屏 · " + chapterOfStage(cur).name;
@@ -18705,6 +18762,10 @@ function gateSubLine(p) {
 function gateDetailLine(p) {
   if (!p.open) return "";
   if (p.id === "nest") return "每层都不一样 · 打不过只丢这一层";
+  /* 推球的两条规矩：一命到底（深潜）、箱子里埋着宝物（探索）。
+     卡高够（h>=170）时才是玩家的决策依据；3 张卡时 h=150 不画，
+     但先写好 —— 以后加第 4 门卡更窄，这里反而是唯一能读到的规则。 */
+  if (p.id === "snow") return "推球下洞 · 深潜一命到底";
   const cur = clamp(S.progress, 0, LEVELS.length - 1);
   const row = STAR_OF_STAGE[cur] || [];
   if (!row.length) return "";
@@ -20032,8 +20093,19 @@ function render() {
   g.save();
 
   // 震屏
+  /* **不能是白噪声。**（2026-10-29，和 snowlab 同步）
+     原来每帧独立 `rand(-S.shake, S.shake)`，帧与帧之间毫无关系 ——
+     肉眼读作"画面在抖"，而不是"被什么东西撞了一下"。
+     真实的冲击是「沿一个方向被推出去，然后弹回来」。
+
+     两条**非整数倍频**（1.0 / 2.31）的正弦叠加：非整数比意味着它不会
+     周期性回到同一点，看起来就不像机械摆动。幅度乘 0.4 沿用原来的
+     手感（S.shake 是 3~15 的分级值，直接当像素太猛）。 */
   if (S.shake > 0.4) {
-    g.translate(rand(-S.shake, S.shake) * 0.4, rand(-S.shake, S.shake) * 0.4);
+    const tt = S.t * 42;
+    const amp = S.shake * 0.4;
+    g.translate((Math.sin(tt) * 0.62 + Math.sin(tt * 2.31 + 1.7) * 0.38) * amp,
+                (Math.cos(tt * 1.37) * 0.55 + Math.sin(tt * 3.07) * 0.45) * amp);
   }
 
   drawForest(false);
@@ -21355,6 +21427,10 @@ export const GROVE: any = {
   /* 出征页：drawGates 给截图器，gateHit/gateTap/enterGate/openGates
      给冒烟验"点开着的门进当前进度那一屏、点没开的门不静默吞" */
   drawGates, gateHit, gateRect, gateZoomRect, gateTap, enterGate, openGates, GATES,
+  /* 第三扇门（推球）的跳转出口。**必须导出** —— Cocos 构建里没有
+     snowlab.html 这个文件，GroveBattle 要拿它换成"切到推球组件"，
+     否则真机点第三扇门是白页 404（原型侧一切正常，打包后才炸）。 */
+  setSnowlabEntry, readSnowSave,
   /* GATE 是网格/预览的布局常量：冒烟要用它验"槽位 = 玩法数（无空槽）"和
      "预览区不与网格重叠"，写死数字的断言迟早和界面漂移。 */
   GATE,

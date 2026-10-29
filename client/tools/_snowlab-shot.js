@@ -20,7 +20,11 @@ const { JSDOM } = require("jsdom");
 const { createCanvas } = require("@napi-rs/canvas");
 
 const ROOT = path.resolve(__dirname, "..");
-const SRC = path.join(ROOT, "prototype", "snowlab.html");
+/* `PROTO=` 指另一份 html 用来做「改前 / 改后」对比（和 _bg-shot.js 一致）。
+   以前这里是写死的 —— 想出旧图只能 `git stash`，而 stash 会把一次改动
+   里所有文件一起回滚，很容易手滑。 */
+const SRC = process.env.PROTO ? path.resolve(process.env.PROTO)
+                              : path.join(ROOT, "prototype", "snowlab.html");
 const OUT = path.join(ROOT, "shots");
 if (!fs.existsSync(OUT)) fs.mkdirSync(OUT, { recursive: true });
 
@@ -39,6 +43,11 @@ window.HTMLCanvasElement.prototype.getContext = function (t) { return t === "2d"
 window.requestAnimationFrame = () => 0;
 
 window.eval(m[1]);
+
+/* 离屏工厂：这个工具把 getContext 全指向同一块 ctx，静态层缓存必须另开一块，否则会画到主画布上。 */
+
+if (window.SNOWLAB && window.SNOWLAB.setOffscreen) window.SNOWLAB.setOffscreen((w, h) => createCanvas(w, h));
+
 const L = window.SNOWLAB;
 const S = L.S;
 const DT = 1 / 60;

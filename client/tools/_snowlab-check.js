@@ -2036,11 +2036,22 @@ group("三十九、打击感：冲击有方向");
       S.frags.length > 10 && right >= S.frags.length * 0.7,
       (right / Math.max(1, S.frags.length)).toFixed(2));
 
+    /* **量衰减之前必须把场上清干净。** 原来这里直接跑 12 帧 `step()` ——
+       而这 12 帧里球可能又碾碎一口箱子、又点了一次火，读数就变成
+       "点火 + 衰减"的混合物，这条断言于是时红时绿：
+       2026-10-29 把顿帧从 110ms 缩到 70ms 之后它立刻翻红（3.53 vs 2.87），
+       查了半天才发现不是衰减坏了，是这 12 帧里又碎了一口箱。
+       临时清空箱子与敌人，只留下"纯衰减"。 */
     const s0 = S.shake;
+    const keepBoxes = S.boxes, keepFoes = S.foes;
+    S.boxes = []; S.foes = [];
     for (let i = 0; i < 12; i++) L.step(1 / 60);
+    S.boxes = keepBoxes; S.foes = keepFoes;
     ck("0.2 秒后震屏已收掉大半（" + S.shake.toFixed(1) + " < " + (s0 * 0.5).toFixed(1) + "）",
       S.shake > 0 && S.shake < s0 * 0.5, S.shake.toFixed(2));
+    S.boxes = []; S.foes = [];
     for (let i = 0; i < 90; i++) L.step(1 / 60);
+    S.boxes = keepBoxes; S.foes = keepFoes;
     ck("最终归零（不拖尾巴）", S.shake === 0, S.shake);
   }
 }

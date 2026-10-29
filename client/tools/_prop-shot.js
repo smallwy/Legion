@@ -33,6 +33,9 @@ const probe = createCanvas(8, 8).getContext("2d");
 window.HTMLCanvasElement.prototype.getContext = () => probe;
 window.requestAnimationFrame = () => 0;
 window.eval(m[1]);
+/* 离屏工厂：这个工具把 getContext 全指向同一块 ctx，静态层缓存必须另开一块，否则会画到主画布上。 */
+if (window.SNOWLAB && window.SNOWLAB.setOffscreen) window.SNOWLAB.setOffscreen((w, h) => createCanvas(w, h));
+
 const L = window.SNOWLAB;
 /* **先清空场上对象。** `drawDoor` 的第一句就是"被箱子盖着就不画"，
    而这一步读的是 S.boxes —— 不清的话门在这张评审图上永远不出现，

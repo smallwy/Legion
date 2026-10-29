@@ -39,6 +39,9 @@ function boot(ctx) {
   window.HTMLCanvasElement.prototype.getContext = (t) => (t === "2d" ? ctx : null);
   window.requestAnimationFrame = () => 0;
   window.eval(m[1]);
+  /* 离屏工厂：这个工具把 getContext 全指向同一块 ctx，静态层缓存必须另开一块，否则会画到主画布上。 */
+  if (window.SNOWLAB && window.SNOWLAB.setOffscreen) window.SNOWLAB.setOffscreen((w, h) => createCanvas(w, h));
+
   return window.SNOWLAB;
 }
 

@@ -2200,6 +2200,8 @@ const S = {
      球连着碾碎四口箱是"一个动作"，不是四次冲击 —— 每次都用满力点火，
      画面会连抖 2.2 秒（探针实测）。见 kickShake。 */
   kick: {},
+  /* 帧率计。见 draw() 末尾的显示与 perfTick()。 */
+  perf: { on: false, last: 0, acc: 0, n: 0, fps: 0, ms: 0 },
   /* 最近一次冲击的**方向**（单位向量）。震屏只给幅度的话，
      画面是"在抖"；给了方向，才是"被从右边撞了一下"。
      不设的时候是 (0,0) —— 纯震颤，适合没有明确来向的坠落/爆裂。 */
@@ -2240,6 +2242,11 @@ function reset(seed) {
      后果不是"怪长错了"这种小事：同一个种子跑两遍，宠物的种类和初始朝向都不一样，
      "出图和断言可复现"这条直接作废（_snowlab-feel2.js 的⑤就是这么抓到的）。 */
   FR = rngFrom((LEVEL_SEED ^ 0x51ED) >>> 0);
+  /* 换关 → 静态层作废。**只在这里作废，别在别处** ——
+     箱子碎了不需要重建（箱子不在缓存里），地板也不会被破坏。 */
+  STATIC = null;
+  STATIC_TRIED = false;
+  BOX_TEX.clear();
   S.level = L;
   S.t = 0; S.phase = 'play'; S.clearT = 0;
   S.plats = L.plats;
@@ -3001,8 +3008,12 @@ function ballHitBox(b, box, dir, vDown) {
        它是重复点火：`breakBox` 内部刚按动量点过一次（当时上限 14），
        出来又被 9 强行抬一次 —— 等于不管怎么调 breakBox 里的公式，
        实际峰值永远 ≥9，那行参数根本管不到真正的画面。
-       震屏只该有一个出口（`kickShake`），否则"调了半天没变化"。 */
-    hitStop(0.045);
+       震屏只该有一个出口（`kickShake`），否则"调了半天没变化"。
+
+       下面这行 `hitStop(0.045)` 同理，也是**永远不生效的死代码**：
+       `breakBox` 内部（`byBall` 分支）已经调过 `hitStop(0.046~0.071)`，
+       而 `hitStop` 是 `Math.max` 语义 —— 0.045 更小，抬不动。
+       删掉，免得以后有人以为"球碎箱是 45ms"，去改一个不起作用的数字。 */
   } else {
     // 砸不动：反弹 + 冒火花。**「太硬」这件事必须让玩家在物理上感到**
     /* ---- 但"砸不动的一格台阶"不该是一堵墙（2026-10-29）----
@@ -3133,7 +3144,12 @@ function breakBox(box, how, pow, dirX, dirY) {
   if (byBall) {
     /* 球有动量，顿帧和震动跟着动量走。`pow` 是 ballPow（速度 × 体径比）。 */
     const k = clamp((pow || 1) / 2.6, 0.55, 1.5);
-    hitStop(0.05 + 0.04 * k);
+    /* **110ms → 70ms（2026-10-29）。** 用户反馈「总感觉一卡一卡的」。
+       顿帧是让 `step()` 直接 return 的那种停顿 —— 这一帧角色、球、粒子、
+       镜头**全都不动**，只有 `S.t` 推进 1/4。60fps 下 110ms = 6.6 帧画面完全静止。
+       业界常用的是 30~80ms；超过 80ms 读起来的就不再是"打中了"，而是"卡住了"。
+       0.032 + 0.026k → 46~71ms，仍然"够重"，但不再跨过那条线。 */
+    hitStop(0.032 + 0.026 * k);
     /* **上限压到 6.5。** 原来是 14 —— 960 宽的屏上抖 14px 是"整屏在跳"，
        玩家会晕。6.5 是"明显被撞了一下"，再往上收益就只剩眩晕。
        连击递减交给 kickShake（球碾过箱堆时不该有 5 次满力撞击）。 */
@@ -3797,6 +3813,10 @@ function onKey(e, down) {
   S.keys[k] = down;
   /* R 换一关（不是重开）。**布局是随机的，重开等于没有 R 键。** */
   if (down && (k === 'r' || k === 'R')) newLevel();
+  /* F 显示帧率。**这一条是给"用户说卡"这类反馈用的** ——
+     "一卡一卡"和"40 帧"和"15 帧"是三件不同的事，没有数字就只能猜。
+     开关状态放在 S.perf 上、不进 reset，换关不会把它关掉。 */
+  if (down && (k === 'f' || k === 'F')) S.perf.on = !S.perf.on;
   if (down && (k === 'j' || k === 'J' || k === 'k' || k === 'K')) shoot();
   if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].indexOf(k) >= 0) e.preventDefault();
 }
@@ -4836,9 +4856,78 @@ function drawSky(g) {
   g.globalAlpha = 1;
 }
 
+/* ================= 静态层预渲染 =================
+   **为什么需要它。** 用户反馈「总感觉一卡一卡的」。量下来一帧绘制 14.5ms，
+   分段之后大头是：箱子 5.5ms / 房间墙 5.0ms / 敌人 4.1ms / 平台 3.9ms。
+
+   其中**房间墙 + 平台 + 走廊标记**有一个共同特征：**整关之内一动不动** ——
+   它们只取决于关卡数据，不取决于 `S.t`、不取决于箱子碎没碎。
+   为了在 960×600 的屏幕上显示其中 2.5 层，每帧要把几百个砖缝、几百个
+   瘤状起伏的采样点重新走一遍路径 —— 纯浪费。
+
+   做法是标准的那一套：**开场画一次到离屏画布，之后每帧贴一张图。**
+   `drawImage` 一张整幅位图比重新走 6000 次路径便宜一个数量级。
+
+   **光柱不进来。** 它的强弱取决于"洞口上还压没压着箱子"（挖穿要变亮），
+   进缓存就会冻在初始状态 —— 那正是注释里反复强调过不能犯的错。
+   所以绘制顺序调成「房间墙+平台+走廊（缓存）→ 光柱 → 挂件 → …」，
+   光柱的起点从 `floorY` 挪到 `floorY + thick`（地板底面）。
+   两者本来就被地板截断，挪到地板下面画，视觉上完全等价。
+   ------------------------------------------------------------------------- */
+let STATIC = null;          // 预渲染好的静态层（null = 还没画）
+let STATIC_TRIED = false;   // 试过一次、没建出来（离屏上下文不可用）—— 别每帧重试
+let OFFSCREEN = null;       // 离屏画布工厂；测试工具会覆盖它（见 setOffscreen）
+
+function newOffscreen(w, h) {
+  if (OFFSCREEN) return OFFSCREEN(w, h);
+  /* **没有 DOM 就明说没有。** `snowlab-runtime-check.js` 把运行时编译成 CJS
+     直接调 `snowlabRender()`，那里没有 `document` —— 原来这里会直接抛
+     `ReferenceError`，而它抛在 draw 的最前面，看起来像"渲染坏了"。 */
+  if (typeof document === 'undefined' || !document.createElement) return null;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  return c;
+}
+
+function buildStatic() {
+  const ratio = Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+  /* 世界高得离谱时不缓存 —— 一张 960×3400 的位图（dpr 2 时 26MB）
+     换来的流畅不如省下的内存划算，那种关本来也没人做。 */
+  if (WORLD_H * ratio > 3400) return null;
+  const cv = newOffscreen(Math.round(W * ratio), Math.round(WORLD_H * ratio));
+  if (!cv) return null;
+  const c = cv.getContext('2d');
+  if (!c) return null;
+  c.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+  for (let k = 1; k < FLOORS.length; k++) drawRoomWall(c, k, FLOORS[k - 1] + GEN.thick, FLOORS[k]);
+  for (const pl of S.plats) drawPlat(c, pl);
+  for (let k = 0; k < LAYERS.length; k++) {
+    const cs = LAYERS[k].corridor;
+    if (!cs) continue;
+    for (let i = 0; i < cs.length; i++) if (cs[i]) drawTrail(c, i * 48, LAYERS[k].floorY);
+  }
+  return cv;
+}
+
+/* 帧间隔统计。**在 draw() 开头调**，量的就是"这一帧开始 - 上一帧开始"，
+   正好是玩家感知到的帧间隔（含 step + 浏览器空闲），不是 draw 本身的耗时。 */
+function perfTick() {
+  const P = S.perf;
+  const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  if (P.last > 0) {
+    const dt = now - P.last;
+    /* 切标签页回来会有一次数秒的间隔，别让它污染平均 */
+    if (dt > 0 && dt < 500) { P.acc += dt; P.n++; }
+    if (P.n >= 12) { P.ms = P.acc / P.n; P.fps = 1000 / P.ms; P.acc = 0; P.n = 0; }
+  }
+  P.last = now;
+}
+
 function draw() {
   if (!ctx) return;
   const g = ctx;
+  perfTick();
 
   /* 世界外的底色。**必须先铺满再画世界** —— 镜头一往下走，屏幕上方就是
      世界 y 之外的空白，不铺底会露出画布的黑。 */
@@ -4872,8 +4961,31 @@ function draw() {
     g.translate(dx, dy);
   }
 
-  // 镜头
-  g.translate(0, -S.cam.y);
+  /* 镜头**不取整**。试过 `Math.round(S.cam.y)`，想消掉静态层（位图）
+     和箱子/角色（矢量）在亚像素位置上的半像素偏差 —— 但量下来差异一点没变
+     （种子 3 仍是 1.87%，而且全在斜坡斜边的抗锯齿上，1:1 看不出来），
+     那就不值得为它牺牲镜头的平滑。 */
+  const camY = S.cam.y;
+  g.translate(0, -camY);
+
+  /* ================= 可见区剔除 =================
+     **这一条是给帧率用的，不是给画面用的。**
+
+     用户反馈「总感觉一卡一卡的」。量下来一帧绘制 14.5ms（中位）、
+     每帧 **11533 次路径操作 / 2069 次 fill / 270 个渐变** ——
+     而屏幕只有 960×600，一层 240 高，**屏幕里最多看得见 2.5 层**。
+     5 层的关却把 1540 高的世界整关画一遍：一半以上的东西画在屏幕外，
+     光栅化照样要把路径走完才丢弃。
+
+     更要紧的是 Cocos 那边按 dpr 把后备缓冲放大到 2 倍（1920×1200），
+     像素量 ×4 —— 探针在 dpr=1 就已经 15ms/帧，真机上只会更糟。
+
+     PAD 取 160（三分之二层高）。**宁可多画、不能少画**：
+     剔除判错会直接缺块，比卡顿严重得多。160 够覆盖
+     "挂在天花板下的道具 + 站在地板上的箱子"这一整条带。
+     ----------------------------------------------------------------- */
+  const VY0 = camY - 160, VY1 = camY + H + 160;
+  const vis = (yt, yb) => yb >= VY0 && yt <= VY1;
 
   /* ---- 地表 ----
      画在**世界坐标**里，不固定在屏幕上。这样它们只属于地表：
@@ -4884,8 +4996,27 @@ function draw() {
      每一层是一个**房间**，不是一个洞。层与层之间挨着，中间那条就是楼板。
      主题按层号换（木屋 → 砖房 → 石洞 → 地窖），形状语言跟着换。
      **地板不在这里画** —— 地板是实体（S.plats），由 drawPlat 负责。 */
-  for (let k = 1; k < FLOORS.length; k++) {
-    drawRoomWall(g, k, FLOORS[k - 1] + GEN.thick, FLOORS[k]);
+  /* 房间墙 + 平台 + 走廊标记：一次贴图搞定（见 buildStatic 的说明）。
+     缓存建不出来（离屏上下文拿不到）时退回逐帧画，功能不受影响。 */
+  if (!STATIC && !STATIC_TRIED) { STATIC = buildStatic(); STATIC_TRIED = true; }
+  if (STATIC) {
+    /* **只贴可见的那一条，不贴整张。** 整张是 960×1540（dpr 2 时 1920×3080），
+       而屏幕只看得见 600 高 —— 每帧让光栅化器去采样三倍于屏幕的位图，
+       纯属白给。裁出 `S.cam.y-160 ~ +160` 这一段（和 `vis` 的余量对齐）。 */
+    const r = STATIC.width / W;
+    const sy0 = Math.max(0, Math.floor(camY - 160));
+    const sy1 = Math.min(WORLD_H, Math.ceil(camY + H + 160));
+    if (sy1 > sy0) {
+      g.drawImage(STATIC, 0, sy0 * r, W * r, (sy1 - sy0) * r, 0, sy0, W, sy1 - sy0);
+    }
+  } else {
+    for (let k = 1; k < FLOORS.length; k++) drawRoomWall(g, k, FLOORS[k - 1] + GEN.thick, FLOORS[k]);
+    for (const pl of S.plats) drawPlat(g, pl);
+    for (let k = 0; k < LAYERS.length; k++) {
+      const cs = LAYERS[k].corridor;
+      if (!cs) continue;
+      for (let i = 0; i < cs.length; i++) if (cs[i]) drawTrail(g, i * 48, LAYERS[k].floorY);
+    }
   }
 
   /* ================= 洞里的光 =================
@@ -4895,6 +5026,8 @@ function draw() {
      只有敞开是靠眼睛找的，光就是在替玩家找。
      光柱画在地形**之前**，让地板把它自然截断；落地的光斑另画在地形之后。 */
   for (let k = 0; k + 1 < FLOORS.length; k++) {
+    /* 光柱从本层地板一直洒到下一层地板 —— 跨一整层，所以按 floorY~下一层判 */
+    if (!vis(FLOORS[k], FLOORS[k + 1])) continue;
     for (const h of LAYERS[k].holes) {
       /* **不能只看 `h.cover`。** 那是生成时的初始封法，砸开之后它不会变
          —— 结果"挖穿了却一点光都不漏"，最该有光的时刻反而没有。
@@ -4905,6 +5038,11 @@ function draw() {
          比"洞里有光"更像"贴了张色纸"。 */
       const a0 = covered ? 0.055 : 0.30;
       const y1 = FLOORS[k + 1];
+      /* **起点从地板顶面挪到地板底面。** 光柱原来画在地形之前、被地板自然截断；
+         现在房间墙和平台进了静态缓存、会在光柱之前画完，所以光柱必须改成
+         "从地板下面开始" —— 不然它会盖在地板上，把楼板糊成一片淡蓝。 */
+      const ly0 = h.floorY + GEN.thick;
+      if (y1 <= ly0) continue;
       /* **一整个梯形填上去，边是硬的** —— 看起来像贴了块半透明色板。
          改成 7 层由窄到宽的梯形叠加：中间叠得厚、边缘只有一两层，
          自然就有了"光越往外越淡"的软边。这是不依赖 blur 滤镜的做法。 */
@@ -4914,14 +5052,14 @@ function draw() {
         const tw = h.w * sfx + 6;
         const bw = (h.w + 84) * sfx;
         const al = a0 * 0.16;
-        const lg = g.createLinearGradient(0, h.floorY, 0, y1);
+        const lg = g.createLinearGradient(0, ly0, 0, y1);
         lg.addColorStop(0, 'rgba(202,236,252,' + al.toFixed(3) + ')');
         lg.addColorStop(0.45, 'rgba(200,236,252,' + (al * 0.55).toFixed(3) + ')');
         lg.addColorStop(1, 'rgba(200,236,252,0)');
         g.fillStyle = lg;
         g.beginPath();
-        g.moveTo(cxh - tw / 2, h.floorY);
-        g.lineTo(cxh + tw / 2, h.floorY);
+        g.moveTo(cxh - tw / 2, ly0);
+        g.lineTo(cxh + tw / 2, ly0);
         g.lineTo(cxh + bw / 2, y1);
         g.lineTo(cxh - bw / 2, y1);
         g.closePath(); g.fill();
@@ -4934,21 +5072,15 @@ function draw() {
      但箱子是 48×48、木桶只有 26 宽，只要相邻列高出一格，木桶就被整块盖掉 ——
      地表层箱子最密，整层的装饰在图上等于不存在（出图时才发现）。
      挂件本来就在箱子后面（挂在天花板下），落地件本来就该在最前面（踩在地上）。 */
-  for (const dc of S.deco) if (dc.ceil) drawDeco(g, dc);
+  /* 挂件挂在天花板下，本体在 `d.y` 上下各 60 左右；这里留 200 的余量。 */
+  for (const dc of S.deco) if (dc.ceil && vis(dc.y - 200, dc.y + 60)) drawDeco(g, dc);
 
   // 平台
-  for (const pl of S.plats) drawPlat(g, pl);
 
-  /* 主通道的地面标记。**画在平台之后、箱子之前** ——
-     它贴在地面上，箱子站在旁边会压住它一点，这正是想要的前后关系。 */
-  for (let k = 0; k < LAYERS.length; k++) {
-    const cs = LAYERS[k].corridor;
-    if (!cs) continue;
-    for (let i = 0; i < cs.length; i++) if (cs[i]) drawTrail(g, i * 48, LAYERS[k].floorY);
-  }
 
   // 洞光落在地板上的光斑（地板之后、箱子之前：箱子会站上去遮住一块，对）
   for (let k = 0; k + 1 < FLOORS.length; k++) {
+    if (!vis(FLOORS[k + 1] - 40, FLOORS[k + 1] + 40)) continue;
     for (const h of LAYERS[k].holes) {
       const covered = S.boxes.some(b => !b.dead && b.x < h.x + h.w && b.x + b.w > h.x &&
         b.y < h.floorY + 4 && b.y + b.h > h.floorY - 100);
@@ -4963,19 +5095,22 @@ function draw() {
   }
 
   // 箱子
-  for (const b of S.boxes) if (!b.dead) drawBox(g, b);
+  /* **最大的单笔省。** 一关 84 口箱，屏幕里只看得见二十来口，
+     而每一口要画板缝 + 对角撑 + 护铁 + 钉眼，是本文件最贵的绘制函数。 */
+  for (const b of S.boxes) if (!b.dead && vis(b.y, b.y + b.h)) drawBox(g, b);
 
   /* 落地件在箱子之后补画（见上面那段的说明）。玩家还在这之后，不会挡人。 */
-  for (const dc of S.deco) if (!dc.ceil) drawDeco(g, dc);
+  for (const dc of S.deco) if (!dc.ceil && vis(dc.y - 120, dc.y + 60)) drawDeco(g, dc);
 
   /* 黑洞画在箱子**之后**：它是个"贴在地面上的洞"，被箱子挡住就不像洞了。 */
-  for (const n of S.nests) drawNest(g, n);
+  for (const n of S.nests) if (vis(n.y - 260, n.y + 60)) drawNest(g, n);
 
   // 门
   drawDoor(g, S.door);
 
   // 雪之碎片
   for (const s of S.shards) {
+    if (!vis(s.y - 16, s.y + 16)) continue;
     g.save(); g.translate(s.x, s.y); g.rotate(s.t * 3);
     g.fillStyle = '#CFEFFF';
     g.beginPath();
@@ -4989,17 +5124,17 @@ function draw() {
   }
 
   // 敌人
-  for (const f of S.foes) drawFoe(g, f);
+  for (const f of S.foes) if (vis(f.y - 20, f.y + f.h + 20)) drawFoe(g, f);
 
   /* 宠物扔出来的东西。**画在敌人之后、玩家之前** —— 它必须压在宠物身上，
      不然宠物一走动就把自己扔出去的胡萝卜挡住了。 */
-  for (const b of S.ebullets) drawEBullet(g, b);
+  for (const b of S.ebullets) if (vis(b.y - 40, b.y + 40)) drawEBullet(g, b);
 
   // 球
-  for (const b of S.balls) drawBall(g, b);
+  for (const b of S.balls) if (vis(b.y - b.r * 2, b.y + b.r * 2)) drawBall(g, b);
 
   // 雪弹
-  for (const s of S.shots) drawShot(g, s);
+  for (const s of S.shots) if (vis(s.y - 40, s.y + 40)) drawShot(g, s);
 
   // 玩家
   drawPlayer(g, S.p);
@@ -5008,6 +5143,7 @@ function draw() {
 
   // 粒子
   for (const f of S.frags) {
+    if (!vis(f.y - 20, f.y + 20)) continue;
     g.globalAlpha = Math.max(0, 1 - f.t / f.life);
     g.fillStyle = f.color;
     if (f.vr) {
@@ -5026,6 +5162,7 @@ function draw() {
   /* 冲击环：画在碎片之上，一眼就看见"力是从哪发出来的" */
   for (const r of S.rings) {
     if (r.t < 0) continue;
+    if (!vis(r.y - r.r - 8, r.y + r.r + 8)) continue;
     const k2 = 1 - r.t / r.life;
     /* **环要"双色"。** 单画一圈浅黄，在雪地/木箱这种浅底色上等于隐形 ——
        第一次出图就是这样：碎片看得见，环完全找不到。
@@ -5041,6 +5178,7 @@ function draw() {
 
   // 飘字
   for (const t of S.texts) {
+    if (!vis(t.y - 40, t.y + 40)) continue;
     g.globalAlpha = Math.max(0, Math.min(1, (t.life - t.t) * 3));
     g.font = '700 ' + t.size + 'px "PingFang SC","Microsoft YaHei",sans-serif';
     g.textAlign = 'center';
@@ -5891,7 +6029,87 @@ function drawNest(g, n) {
 }
 
 
+/* ---------------------------------------------------------------- 箱子贴图
+   **箱子是本文件最贵的绘制函数**（322 行）。一关 84 口，屏幕里二十来口，
+   量下来单这一项 9.65ms、占一帧绘制的 63%。
+
+   可它的外观**只取决于几个字段**：材质 / 是不是桶 / 是不是陶罐 /
+   有没有覆霜 / 是不是宝箱 / 剩几滴血。这些全都不随时间变 ——
+   所以按这组字段预渲染成 56×56 的小贴图，之后每帧只 `drawImage`。
+
+   **三处动态必须留在外面**（`dyn = false` 时跳过，每帧补画）：
+     · 宝箱的呼吸光（"会闪"是它作为探索招牌的全部意义）
+     · 覆霜箱往上飘的寒气
+
+   `hitT > 0`（被打中闪白）时**直接走原路径**，不建贴图：
+   闪白只持续零点几秒，为它把每种箱子多存一份贴图不值得，
+   而同屏被打中的箱子通常只有一两口，重画代价可以忽略。
+   ------------------------------------------------------------------------- */
+const BOX_TEX = new Map();
+const BOX_PAD = 8;              // 3px 描边 + 桶身外扩 + 宝箱呼吸光的外沿
+
+function boxTex(b) {
+  /* 静态层建不出来（离屏画布不可用）时也别做这件事 ——
+     否则 newOffscreen 会拿到主画布的 ctx，把贴图画到屏幕上。 */
+  if (!STATIC) return null;
+  const ratio = STATIC.width / W;
+  const key = [b.mat, b.barrel ? 1 : 0, b.jar ? 1 : 0, b.frost ? 1 : 0, b.loot ? 1 : 0,
+               b.hp, Math.round(b.w), Math.round(b.h), ratio].join('|');
+  let e = BOX_TEX.get(key);
+  if (e) return e;
+  /* 上限只是防漏；正常一关最多产生三四十张 */
+  if (BOX_TEX.size > 600) BOX_TEX.clear();
+  const w = Math.round(b.w) + BOX_PAD * 2, h = Math.round(b.h) + BOX_PAD * 2;
+  const cv = newOffscreen(Math.round(w * ratio), Math.round(h * ratio));
+  if (!cv) return null;
+  const c = cv.getContext('2d');
+  if (!c) return null;
+  c.setTransform(ratio, 0, 0, ratio, 0, 0);
+  drawBoxBody(c, { ...b, x: BOX_PAD, y: BOX_PAD }, false);
+  e = { cv: cv, w: w, h: h };
+  BOX_TEX.set(key, e);
+  return e;
+}
+
+function drawBoxDyn(g, b) {
+  if (b.loot) {
+    const pulse = 0.35 + 0.25 * Math.sin(S.t * 3.4 + b.x * 0.02);
+    g.strokeStyle = 'rgba(255,224,130,' + pulse.toFixed(3) + ')';
+    g.lineWidth = 5;
+    rr(g, b.x - 3, b.y - 3, b.w + 6, b.h + 6, 9); g.stroke();
+  }
+  if (b.frost) drawBoxFrost(g, b);
+}
+
+/* 霜层 + 往上飘的三粒寒气。**透明度会呼吸**，所以不进静态贴图。 */
+function drawBoxFrost(g, b) {
+  g.globalAlpha = 0.55 + 0.14 * Math.sin(S.t * 2.2 + b.x * 0.03);
+  g.fillStyle = '#EAF8FF';
+  rr(g, b.x + 5, b.y + 4, b.w - 10, b.h - 10, 5); g.fill();
+  g.globalAlpha = 1;
+  g.strokeStyle = 'rgba(120,190,225,.9)';
+  g.lineWidth = 2;
+  rr(g, b.x + 7, b.y + 6, b.w - 14, b.h - 14, 4); g.stroke();
+  for (let i = 0; i < 3; i++) {
+    const ph = (S.t * 0.5 + i * 0.34 + b.x * 0.01) % 1;
+    g.globalAlpha = (1 - ph) * 0.65;
+    g.fillStyle = '#DCF4FF';
+    g.beginPath();
+    g.arc(b.x + 12 + i * 12, b.y - 3 - ph * 22, Math.max(0.6, 2.8 - ph * 1.6), 0, Math.PI * 2);
+    g.fill();
+  }
+  g.globalAlpha = 1;
+}
+
 function drawBox(g, b) {
+  if (b.hitT > 0) { drawBoxBody(g, b, true); return; }
+  const tex = boxTex(b);
+  if (!tex) { drawBoxBody(g, b, true); return; }
+  g.drawImage(tex.cv, b.x - BOX_PAD, b.y - BOX_PAD, tex.w, tex.h);
+  drawBoxDyn(g, b);
+}
+
+function drawBoxBody(g, b, dyn) {
   const def = NUM.box[b.mat];
   const hit = b.hitT > 0;
   /* **每一口箱子都有 3px 深描边。** 这一条是"Q 版卡通"最关键的东西 ——
@@ -6169,33 +6387,26 @@ function drawBox(g, b) {
     g.fillStyle = COL.lootInk;
     g.beginPath(); g.arc(b.x + b.w / 2, b.y + b.h * 0.46, 5, 0, Math.PI * 2); g.fill();
     g.fillRect(b.x + b.w / 2 - 2.5, b.y + b.h * 0.46, 5, 10);
-    // 呼吸光
-    const pulse = 0.35 + 0.25 * Math.sin(S.t * 3.4 + b.x * 0.02);
-    g.strokeStyle = 'rgba(255,224,130,' + pulse.toFixed(3) + ')';
-    g.lineWidth = 5;
-    rr(g, b.x - 3, b.y - 3, b.w + 6, b.h + 6, 9); g.stroke();
+    /* 呼吸光**不进静态贴图**（`dyn`）—— 它是这口箱子"会闪"的全部来源，
+       冻在贴图里就变成一圈固定的黄边。见 drawBox 的分工说明。 */
+    if (dyn) {
+      const pulse = 0.35 + 0.25 * Math.sin(S.t * 3.4 + b.x * 0.02);
+      g.strokeStyle = 'rgba(255,224,130,' + pulse.toFixed(3) + ')';
+      g.lineWidth = 5;
+      rr(g, b.x - 3, b.y - 3, b.w + 6, b.h + 6, 9); g.stroke();
+    }
   }
 
   /* 覆霜木箱。**这是"这里能挖穿"的唯一线索** ——
      不是图标、不是箭头，就是一层霜和几缕往上飘的寒气。 */
-  if (b.frost) {
-    g.globalAlpha = 0.55 + 0.14 * Math.sin(S.t * 2.2 + b.x * 0.03);
-    g.fillStyle = '#EAF8FF';
-    rr(g, b.x + 5, b.y + 4, b.w - 10, b.h - 10, 5); g.fill();
-    g.globalAlpha = 1;
-    g.strokeStyle = 'rgba(120,190,225,.9)';
-    g.lineWidth = 2;
-    rr(g, b.x + 7, b.y + 6, b.w - 14, b.h - 14, 4); g.stroke();
-    for (let i = 0; i < 3; i++) {
-      const ph = (S.t * 0.5 + i * 0.34 + b.x * 0.01) % 1;
-      g.globalAlpha = (1 - ph) * 0.65;
-      g.fillStyle = '#DCF4FF';
-      g.beginPath();
-      g.arc(b.x + 12 + i * 12, b.y - 3 - ph * 22, Math.max(0.6, 2.8 - ph * 1.6), 0, Math.PI * 2);
-      g.fill();
-    }
-    g.globalAlpha = 1;
-  }
+  /* **覆霜箱的霜层不进贴图，整个交给 `drawBoxDyn`。**
+     第一版图省事，把霜层烤进贴图、透明度取中值 0.62 ——
+     出图对比才发现后果：霜层压住的是**下面木箱的板缝**，
+     0.62 比原图中的某一帧（0.55）厚一点，那三条竖缝就整条消失了。
+     "这口箱子和别的箱子长得一样"是覆霜箱唯一的信息量（它代表"这里能挖穿"），
+     不能为了省零点几毫秒把它抹掉。
+     好在霜层只是两个圆角矩形，每帧重画很便宜 —— 贵的从来是箱子本体。 */
+  if (b.frost && dyn) drawBoxFrost(g, b);
 
   // 拆到一半：裂痕密度跟着 HP 走，玩家能看出"还差几发"
   if (def.hp !== Infinity && b.hp < def.hp) {
@@ -8112,6 +8323,22 @@ function drawHud(g) {
     }
   }
 
+  /* 帧率（F 键）。**放右下角**：左上和顶部被 HUD 占着，
+     放那儿会压住弹药/体力。 */
+  if (S.perf.on && S.perf.fps > 0) {
+    const P = S.perf;
+    const txt = P.fps.toFixed(0) + ' fps · ' + P.ms.toFixed(1) + 'ms';
+    g.font = '700 14px ui-monospace,Menlo,Consolas,monospace';
+    g.textAlign = 'left';
+    const tw = g.measureText(txt).width;
+    g.fillStyle = 'rgba(10,16,22,.62)';
+    rr(g, W - tw - 34, H - 42, tw + 22, 28, 7); g.fill();
+    /* 绿 / 黄 / 红三档：60 上下正常，40 以下已经能看出来顿，25 以下是"在卡" */
+    g.fillStyle = P.fps >= 55 ? '#9BE86E' : (P.fps >= 40 ? '#FFE08A' : '#FF8E7A');
+    g.fillText(txt, W - tw - 23, H - 22);
+    g.textAlign = 'left';
+  }
+
   /* 操作提示。**开局 9 秒后淡出** —— 常驻的话它会一直压在地面层，
      左下那条路是玩家反复要走的。 */
   const tipA = clamp(9 - S.t, 0, 1);
@@ -8226,6 +8453,11 @@ const API = {
      这条路径历史上是 `p.x = cw.x; p.y = cw.y` 一帧到位，
      光看代码能看出"没有过渡"，看不出多大的跳变。 */
   wellClimb, startClimb,
+  /* 离屏画布工厂。**测试工具必须覆盖它** —— 那些工具把
+     `HTMLCanvasElement.prototype.getContext` 整个换成同一个 ctx，
+     不覆盖的话 buildStatic 会把静态层直接画到主画布上。
+     传 null 恢复默认（document.createElement('canvas')）。 */
+  setOffscreen: f => { OFFSCREEN = f; STATIC = null; },
   /* 出图工具用：把单个箱子/门画到任意画布上（**只为评审，不参与游戏逻辑**）。
      道具（箱/桶/门）是这一版重画的重点，靠整关截图看不出"这一笔对不对" ——
      放大到 3~4 倍单独看才判得了。 */

@@ -1596,6 +1596,12 @@ function genLevel(seed) {
       const open = hiL >= gy - 8 && hiR >= gy - 8;
       /* 洞口正上方不放：那是"往下走"的地方，站着怪等于堵门。 */
       if (l.holes.some(h => x + 48 > h.x - 8 && x < h.x + h.w + 8)) continue;
+      /* **门的正前方不放。** 门是 32×40，怪是 34×33 —— 站上去正好把门
+         整块盖住，出图上就是"一扇门里塞了一只虫"，玩家根本看不见门。
+         门本来就被箱子埋着（那是设计），再被怪盖一层就找不着了。
+         只加在主筛里、**不加在兜底里**：兜底是"这层实在没地方了"，
+         那时缺怪是死局，挡门只是观感。 */
+      if (k === nF - 1 && x + 48 > door.x - 10 && x < door.x + door.w + 10) continue;
       /* 斜坡上不放：`colTop` 只认箱子，认不出坡面 —— 怪会站在坡体内部
          （脚的 y 停在坡底、坡面却高出一截，垂直贴面判据永远不成立）。 */
       if (l.terrain.some(t => t.kind === 'ramp' && t.x - 12 < x + 48 && t.x + t.w + 12 > x)) continue;
@@ -6549,6 +6555,19 @@ function drawDoor(g, d) {
       for (const dx of [0.22, 0.78]) {
         g.beginPath(); g.arc(x + w * dx, by + 2.5, 1.6, 0, Math.PI * 2); g.fill();
       }
+    }
+    /* ④-2 **合页。** 两条横带 + 一张锁脸 = "保险柜"，不是门 ——
+       出图上这一扇一直被读成"小型金库门"。合页是唯一能直接说出
+       "这扇门是绕着左边这条轴转的"的东西，比再加一条横带有效得多。
+       画在门板左缘（x+1 起，宽 5），跟着横带的高度走。 */
+    for (const t of [0.24, 0.76]) {
+      const hy = y + h * t;
+      g.fillStyle = 'rgba(78,88,98,.95)';
+      rr(g, x + 1.5, hy, 5, 8, 1.6); g.fill();
+      g.fillStyle = 'rgba(198,212,226,.60)';
+      g.fillRect(x + 2, hy + 0.8, 1.4, 6.4);
+      g.fillStyle = '#DCE6EE';
+      g.beginPath(); g.arc(x + 4, hy + 4, 1.1, 0, Math.PI * 2); g.fill();
     }
     g.restore();
 

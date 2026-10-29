@@ -1023,6 +1023,12 @@ ck("⑨ 碰门过关", S.phase === "clear", S.phase);
 group("二十一、能跳回上一层（逐层真跑）");
 {
   let tot = 0, ok = 0, miss = [];
+  /* **爬井过程里的单帧最大位移。** 2026-10-29 用户截图指出"这里跳上去
+     会很不自然的瞬间移动"—— 原来是 `p.x = cw.x; p.y = cw.y` 一帧到位，
+     144px 的井一帧走完。现在改成两段插值（竖直 → 水平），这一条守它。
+     阈值 24：60fps 正常走 5px/帧，爬的时候 smoothstep 峰值约 11px，
+     自由落体到终端速度约 14px。一帧到位是 144px，一眼能分辨。 */
+  let climbWorst = 0, climbSpot = "";
   for (let sd = 1; sd <= 12; sd++) {
     L.reset(sd);
     const N2 = L.FLOORS.length;
@@ -1051,13 +1057,26 @@ group("二十一、能跳回上一层（逐层真跑）");
       S.keys["w"] = true;
       L.step(DT);
       S.keys = {};
-      for (let i = 0; i < 50; i++) L.step(DT);
+      let px0 = S.p.x, py0 = S.p.y, mx = 0;
+      for (let i = 0; i < 50; i++) {
+        L.step(DT);
+        const dd = Math.hypot(S.p.x - px0, S.p.y - py0);
+        if (dd > mx) mx = dd;
+        px0 = S.p.x; py0 = S.p.y;
+      }
+      if (mx > climbWorst) { climbWorst = mx; climbSpot = "s" + sd + "k" + k; }
       if (S.p.y + S.p.h <= L.FLOORS[k - 1] + 2) ok++;
       else miss.push("s" + sd + "k" + k + " 停在 " + Math.round(S.p.y + S.p.h));
     }
   }
   ck("每一层的井梯都真能跳回上一层（" + ok + "/" + tot + "）",
      tot > 0 && ok === tot, miss.slice(0, 4).join("; "));
+  /* 原来这条路是"一帧把人搬到上一层"，用户的原话是"很不自然的瞬间移动"。
+     判据不是"有没有过渡帧"（那不好测），而是**单帧位移**：
+     一帧到位是 144px，插值之后最差 11px。 */
+  ck("爬井没有单帧瞬移（最差 " + climbWorst.toFixed(1) + "px/帧" +
+     (climbSpot ? "，" + climbSpot : "") + "）",
+     climbWorst < 24, climbWorst.toFixed(1));
 }
 
 /* =========================================================================

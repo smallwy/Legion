@@ -2275,6 +2275,8 @@ function reset(seed) {
     w: PLAYER_W, h: PLAYER_H, onGround: true, face: 1,
     runD: 0, lockT: 0, shotCd: 0, anim: 0, shotAnim: 0,
     jumps: NUM.hero.airJump, jumpHeld: false, onBall: null,
+    /* 攀爬中的位移插值（见 startClimb）。null = 没在爬。 */
+    climb: null,
     /* 从楼板上下跳的窗口（见 stepPlayer 里的"下跳"）。
        0 = 没在下跳；> 0 时 stepBody 会跳过楼板的碰撞。 */
     dropT: 0, downHeld: false,
@@ -3809,6 +3811,46 @@ function onKey(e, down) {
    井梯的视觉本来就是"井底竖着一把梯子"，那就按梯子处理：
    站在梯顶、头顶是敞开的洞口、按 W 就爬上去。
    盖板没砸开时爬不上去（洞口里还有箱子），正好复习一次"先砸开才能走"。 */
+/* ---------------------------------------------------------------- 攀爬过程
+   **为什么不能直接设坐标。**
+   用户 2026-10-29 截图指出：「这里跳上去 会很不自然的 瞬间移动」。
+
+   原来 `wellClimb` 命中时是 `p.x = cw.x; p.y = cw.y` —— 水平和垂直**同时到位**，
+   一帧之内人就从洞口底下出现在旁边地面上。那不是"爬上去"，是闪现：
+   玩家看不到过程，也就学不会"这里能上去"。
+
+   但 `wellClimb` 本身不能删：站在 2 格箱顶（144）时头顶就是上层楼板，
+   净空只剩 214 - 144 = 70px，而人高 63 —— **一跳只能再升 7px，跳不上去**。
+   把它删掉井梯就彻底走不通（那是"不卡关"的保底）。
+
+   所以留机制、补过程，**分两段而不是一条斜线**：
+
+     ① 竖直段：人贴着洞口内侧往上爬，x 不动 —— 这一段读作"顺着井往上"；
+     ② 水平段：到顶之后从洞口跨到旁边的地面上。
+
+   合成一条斜线（x 和 y 一起插值）看着像"飘"，因为现实中没人能斜着穿过
+   地板。两段的过场虽然只多 0.1 秒，但读法完全不同。
+
+   速度是定值不是比例：430 px/s 竖直、240 px/s 水平。144px 的井 = 0.33 秒，
+   玩家来得及看清，又不至于等到不耐烦。`smoothstep` 给首尾加减速 ——
+   匀速移动看起来像"被机器搬运"。
+   ------------------------------------------------------------------------- */
+function startClimb(p, cw) {
+  const dy = p.y - cw.y;                 // 向上为正
+  const dx = cw.x - p.x;
+  p.climb = {
+    x0: p.x, y0: p.y, x1: cw.x, y1: cw.y,
+    t: 0,
+    tv: Math.max(0.10, Math.abs(dy) / 430),
+    th: Math.abs(dx) < 1.5 ? 0 : Math.max(0.06, Math.abs(dx) / 240),
+  };
+  p.vx = 0; p.vy = 0;
+  p.onGround = true;
+  /* 爬的这段时间不打不挨打：人贴在洞口里，如果这时被雪弹打中，
+     位置会被击退逻辑改写，表现是"爬到一半掉回去"。 */
+  S.invuln = Math.max(S.invuln, p.climb.tv + p.climb.th + 0.2);
+}
+
 function wellClimb(p) {
   const L = S.level;
   if (!L) return null;
@@ -3881,6 +3923,34 @@ function stepPlayer(dt) {
   p.shotAnim = Math.max(0, p.shotAnim - dt);
   S.invuln = Math.max(0, S.invuln - dt);
 
+  /* ---- 攀爬中：接管位移，跳过整段正常物理 ----
+     **必须放在这里（时间戳计时器之后、按键之前）。** 放到后面的话，
+     同一帧里重力已经把 vy 加到 34、人往下沉半像素，下帧插值又拉回来 ——
+     144px 的井会看出"一段一段地顿"。 */
+  if (p.climb) {
+    const c = p.climb;
+    c.t += dt;
+    const sm = v => v * v * (3 - 2 * v);      // smoothstep：首尾减速
+    if (c.t < c.tv) {
+      /* ① 竖直段：x 锁死，人顺着井往上 */
+      p.x = c.x0;
+      p.y = c.y0 + (c.y1 - c.y0) * sm(c.t / c.tv);
+    } else if (c.t < c.tv + c.th) {
+      /* ② 水平段：y 锁死在落点高度，人从洞口跨出来 */
+      p.y = c.y1;
+      p.x = c.x0 + (c.x1 - c.x0) * sm((c.t - c.tv) / c.th);
+    } else {
+      p.x = c.x1; p.y = c.y1;
+      p.climb = null;
+      p.onGround = true;
+      p.jumps = NUM.hero.airJump;
+      once('well_climb', p.x + p.w / 2, p.y - 12, '爬上来了', '#CFEFFF');
+    }
+    p.vx = 0; p.vy = 0; p.onGround = true;
+    p.anim += dt;
+    return;
+  }
+
   const K = S.keys;
   const left = K['a'] || K['A'] || K['ArrowLeft'];
   const right = K['d'] || K['D'] || K['ArrowRight'];
@@ -3931,9 +4001,10 @@ function stepPlayer(dt) {
          二段跳 + 翻越能自己上去，这才是用户要的「轻松的上下层跳动」。 */
       const cw = wellClimb(p);
       if (cw) {
-        p.x = cw.x; p.y = cw.y; p.vx = 0; p.vy = 0; p.onGround = true;
-        p.jumps = NUM.hero.airJump;
-        once('well_climb', p.x + p.w / 2, p.y - 12, '爬上来了', '#CFEFFF');
+        /* 不再直接设坐标 —— 走 0.3 秒的攀爬（见 startClimb）。
+           原来一行 `p.x = cw.x; p.y = cw.y` 就是用户说的"瞬间移动"。 */
+        startClimb(p, cw);
+        return;
       } else {
         p.vy = -NUM.hero.jump;
         p.onGround = false;
@@ -3950,11 +4021,7 @@ function stepPlayer(dt) {
       /* 两次跳都用完还在空中，再按 W 才允许 `wellClimb` 接一把。
          此时人已经在上层楼板附近（它只认 `d ≤ 120`），补的是最后一截。 */
       const cw = wellClimb(p);
-      if (cw) {
-        p.x = cw.x; p.y = cw.y; p.vx = 0; p.vy = 0; p.onGround = true;
-        p.jumps = NUM.hero.airJump;
-        once('well_climb', p.x + p.w / 2, p.y - 12, '爬上来了', '#CFEFFF');
-      }
+      if (cw) { startClimb(p, cw); return; }
     }
   }
 
@@ -7618,7 +7685,14 @@ function drawPetSprite(g, img, x, footY, w, h, face, A, o, id) {
 }
 
 function drawPlayer(g, p) {
-  const cx = p.x + p.w / 2;
+  /* **爬井时要看得出"在使劲"。** 位置平滑之后人确实是逐帧上升的，
+     但一个**站着不动**的角色匀速上升，读起来还是"电梯"。
+     这里补两笔，都很便宜：
+       · 身体左右小幅摆动（0.35 秒一个来回、±2.2px）—— 手脚交替的节奏；
+       · 下面 `moveK` 抬到 0.5，让腿也蹬起来。
+     **位移只给绘制，不改 `p.x`**：改真值的话落点判定和洞口碰撞都会跟着晃。 */
+  const climbWob = p.climb ? Math.sin(S.t * 18) * 2.2 : 0;
+  const cx = p.x + p.w / 2 + climbWob;
   const by = p.y + p.h;           // 脚底
   const face = p.face;
   /* **跑动相位只算一次，腿 / 身体起伏 / 尾巴都读它。**
@@ -7626,7 +7700,8 @@ function drawPlayer(g, p) {
      这是最容易被一眼看穿的假。
      `moveK` 把起步和刹车平滑掉：直接写 `running ? sin : 0` 的话，
      一松键腿就从半空"啪"地弹回中位。 */
-  const moveK = clamp(Math.abs(p.vx) / 200, 0, 1);
+  /* 爬的时候没有水平速度，但腿得蹬 —— 固定给 0.5，配合上面的摆动。 */
+  const moveK = p.climb ? 0.5 : clamp(Math.abs(p.vx) / 200, 0, 1);
   const ph = S.t * 16;
   const step = Math.sin(ph) * moveK;
   const bob = Math.abs(Math.sin(ph)) * 1.2 * moveK + Math.sin(S.t * 2.1) * 0.4;
@@ -8147,6 +8222,10 @@ const API = {
   bellyTier, snowNeed, ballTier, ballR, ballPow,
   coatFoe, makeBallFrom, ballHitBox, shotBox, breakBox, hurtPlayer,
   checkDoor, doorBlocked, groundAt, stepDoor,
+  /* 井梯攀爬。**导出是为了量"爬上去有没有瞬移"** ——
+     这条路径历史上是 `p.x = cw.x; p.y = cw.y` 一帧到位，
+     光看代码能看出"没有过渡"，看不出多大的跳变。 */
+  wellClimb, startClimb,
   /* 出图工具用：把单个箱子/门画到任意画布上（**只为评审，不参与游戏逻辑**）。
      道具（箱/桶/门）是这一版重画的重点，靠整关截图看不出"这一笔对不对" ——
      放大到 3~4 倍单独看才判得了。 */
@@ -8195,6 +8274,8 @@ Object.defineProperties(API, {
   GEN: { get: () => GEN },
   FOE_W: { get: () => FOE_W },
   FOE_H: { get: () => FOE_H },
+  PLAYER_W: { get: () => PLAYER_W },
+  PLAYER_H: { get: () => PLAYER_H },
   /* 敌人贴图的尺寸表。断言要靠它核「形象宽度 ≤ 0.85 × 箱子」——
      这条用眼睛量不出来（图上"看着差不多"就够了），只能算。 */
   FOE_ART: { get: () => FOE_ART },

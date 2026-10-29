@@ -117,6 +117,16 @@
   `tools/_snowlab-shot.js`（全量出图，种子固定 7）、
   `tools/_crop.js <图> <x,y,w,h> <倍数> <输出>`（放大看局部）。
   都要 `NODE_PATH="$HOME/.workbuddy/binaries/node/workspace/node_modules"`。
+- **改完 `prototype/snowlab.html` 一律重抽运行时**：
+  `python client/tools/extract_snowlab_runtime.py` →
+  `node client/tools/snowlab-runtime-check.js`（14 项，四个种子 900 帧必须 0 偏差）。
+  **生成物过期不会报错**：2026-10-29 它在 `cce5c23` 停了四轮，用户在 Cocos 里
+  玩到的是"门还是大的、球还会卡死"的旧版本，和截图完全两回事。
+  和 grove.html → GroveRuntime.ts 是同一条规矩：两个生成器、两份运行时、两条路。
+- **Cocos 里的入口是 `BattleBoot.ts` 的 `DEFAULT_MODE`**（现为 `'snowlab'`），
+  预览地址后加 `?mode=grove` / `?mode=mow` 可临时切另一套。
+  只认三个字面值，写错回落默认。
+
 - **关卡生成器现在有三条"必须机器守"的硬保证**（2026-10-29 收口，首掷 200/200）：
   ① 每层都有主通道（`l.corridor`，通道列恒 0 格 / 邻列 ≤2 格）；
   ② 门槛和 `l.colCap` 取小 —— 地形吃掉可摞列时 8 口物理上达不到，

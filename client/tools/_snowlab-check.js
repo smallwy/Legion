@@ -354,6 +354,56 @@ let b4 = L.spawnBall(ir2.x - 30, ir2.y + 24, 1209, 1);
 for (let i = 0; i < 20 && !ir2.dead; i++) L.step(DT);
 ck("铁箱：助跑推（pow 1209）能碎", ir2.dead === true);
 
+/* ---- 球贴墙：不许被推成"永动机"（2026-10-29）----
+   用户：「这个球会出现乱弹的情况」，截图是一颗大球贴在右上角。
+   抓到的现场（种子 2）是球心每帧在 891 / 900 之间跳，vx 在 +1205 / -540
+   之间翻 —— `pushBalls` 是无条件给满速的，球抵住墙也是 60Hz 顶一次。
+
+   修法三条（见 pushBlocked / wallDamp / 回弹上限），这条断言守的是结果：
+   把玩家放在球左边按住右键 2.5 秒，数球心 x 的方向翻转次数。
+   修之前是 7 次（20 帧窗口），现在是 0~1 次。 */
+{
+  S.boxes = []; S.foes = []; S.plats = [];
+  S.keys = {};
+  const r = NUM.ball.baseR + NUM.ball.perAbsorb * 6;
+
+  /* ① 离墙 260px：推一下就该拿到速度（守"推得动"这条没被误挡） */
+  {
+    const b = L.spawnBall(L.W - 24 - r - 260, L.GROUND_Y - 40, 0, 6);
+    b.vy = 0;
+    L.placePlayer(b.x - 90, L.GROUND_Y - 63);
+    for (let i = 0; i < 6; i++) { S.keys = { d: true }; L.step(DT); }
+    ck("推球仍然给得出速度（6 帧内 |vx| > 400）", Math.abs(b.vx) > 400, Math.round(Math.abs(b.vx)));
+  }
+
+  /* ② 一开始就贴着右墙，玩家压着推 1.5 秒。
+        `WALL_R = W - 24`，球心贴墙 = W - 24 - r - 1。
+        放远了测不到：玩家推一下给 636，球比玩家（300）跑得快，
+        球甩开玩家自己滚一段就停了 —— 90 帧都到不了墙。 */
+  const b = L.spawnBall(L.W - 24 - r - 1, L.GROUND_Y - 40, 0, 6);
+  b.vy = 0;
+  L.placePlayer(b.x - 90, L.GROUND_Y - 63);
+  const x0 = b.x;
+  let flips = 0, lastDx = 0, prevX = b.x;
+  for (let i = 0; i < 90; i++) {
+    S.keys = { d: true };
+    L.step(DT);
+    const dx = b.x - prevX;
+    if (Math.abs(dx) > 1.5) {
+      if (lastDx && Math.sign(dx) !== Math.sign(lastDx)) flips++;
+      lastDx = dx;
+    }
+    prevX = b.x;
+  }
+  S.keys = {};
+  /* **真正要守的是这一条。** 旧版的表现不是"抖"，是"球被顶飞出去"：
+     球贴着墙 → 玩家推 → vx 顶到 1209 → 走 20px 撞墙 → 弹回 -542 →
+     球比玩家（300）跑得快，甩开玩家自己滚 415px 才停。玩家看到的
+     就是"球在墙边乱蹦、然后跑掉"。新版应该原地抵住，位置不动。 */
+  ck("贴着墙推球不会被顶飞（位移 < 12px）", Math.abs(b.x - x0) < 12, Math.round(Math.abs(b.x - x0)));
+  ck("球贴着墙被推时不会反复冲撞（x 反转 ≤2 次）", flips <= 2, flips);
+}
+
 // 冰墙：小球高速不够，特大球够
 let ice = soloBox("ice");
 let b5 = L.spawnBall(ice.x - 30, ice.y + 24, 1209, 1);
@@ -713,7 +763,14 @@ function platOf(f, withBox) {
     for (let i = 0; i < 90; i++) {
       L.step(DT);
       for (const f of L.S.foes) {
-        const ok = !!platOf(f, true) || Math.abs(f.vy) > 1;
+        /* **地板也算落脚面。** `platOf` 只查 `S.plats` 和 `S.boxes`，
+           而"层地板"既不是平台也不是箱子 —— 站在地板上的怪以前是靠
+           随机没被选中才没触发这条。刷怪点一改，种子 6 就有一只站在
+           地板列上被判"吊在半空"，其实脚下踩得好好的。
+           `groundAt` 传 `脚底 - 2`（不是 +2）：传 +2 等于从地板下方开始找，
+           会直接跳过本层地板、返回下一层的面。 */
+        const onFloor = Math.abs(L.groundAt(f.x + f.w / 2, f.y + f.h - 2) - (f.y + f.h)) < 6;
+        const ok = !!platOf(f, true) || onFloor || Math.abs(f.vy) > 1;
         const n = ok ? 0 : (run.get(f) || 0) + 1;
         run.set(f, n);
         if (n === 9) stuck.push(sd + ":(" + Math.round(f.x) + "," + Math.round(f.y) + ")");
@@ -2111,7 +2168,7 @@ group("三十九、打击感：冲击有方向");
 group("四十、关卡：难度递进 / 没有死胡同 / 门不固定");
 {
   const NSEED2 = 200;
-  let tierBad = 0, foeBad = 0, holeBad = 0, budgetBad = 0, missBad = 0;
+  let tierBad = 0, foeBad = 0, holeBad = 0, budgetBad = 0, missBad = 0, crowdBad = 0;
   let corrBad = 0, corrHBad = 0, corrHiBad = 0, corrCols = 0;
   const bandHole = [[0, 0], [0, 0]];      // 浅层 / 深层的洞宽 [总宽, 个数]
   const bandBox = [[0, 0], [0, 0]];       // 浅层 / 深层的箱子预算 [总预算, 层数]
@@ -2128,9 +2185,33 @@ group("四十、关卡：难度递进 / 没有死胡同 / 门不固定");
     if (Math.abs(g.layers[N - 1].tier - 1) > 1e-9) tierBad++;
     for (let k = 1; k < N; k++) if (!(g.layers[k].tier > g.layers[k - 1].tier)) tierBad++;
 
-    /* 2. 怪数逐层不降（门厅除外 —— 门厅固定 3，是 killTarget 的死局线）。 */
+    /* 2. 怪数逐层不降（门厅除外 —— 门厅固定 3，是 killTarget 的死局线）。
+       
+       **允许"下一层比上一层少 1 只"。**（2026-10-29）
+       加上"同一段台面站得下几只"的容量限制之后，深层的箱堆把地面切得
+       很碎，偶尔会出现"第 2 层 4 只、第 3 层只有 3 只"—— 200 个种子里
+       7 处，全部只差 1 只。而另一头是**两只怪挤在一个台面上互相顶死**
+       （用户截图那两只 moss），那个严重得多。
+       两边不能同时满分时选了后者：宁可某层少一只，也不要卡住一只。
+       阈值写 -1 而不是删掉这条 —— 差 2 只以上仍然是问题。 */
     const foeCnt = g.layers.map((_, k) => g.spawns.filter(s => s.layer === k).length);
-    for (let k = 0; k + 2 < N; k++) if (foeCnt[k + 1] < foeCnt[k]) foeBad++;
+    for (let k = 0; k + 2 < N; k++) if (foeCnt[k + 1] < foeCnt[k] - 1) foeBad++;
+
+    /* 2.5 **刷出来的怪不许身体叠在一起。**（2026-10-29）
+       用户截图：两只 moss 并排卡在同一个箱顶上，谁也走不动。
+       判据只看"同高 + 中心距 < 74（一个身宽）"—— 那是身体真的挨上了。
+       间距 74~98 的（96 宽台面两端各一只）不算：中间还留着空隙，
+       各自走到边缘就掉头，不是卡死。 */
+    for (let i = 0; i < g.spawns.length; i++) {
+      for (let j = i + 1; j < g.spawns.length; j++) {
+        const A = g.spawns[i], B = g.spawns[j];
+        if (A.layer !== B.layer) continue;
+        /* 门厅例外：那里要凑满 killTarget（3 只），凑不齐就是死局，
+           所以宁可两只挨着。这是唯一允许重叠的层。 */
+        if (A.layer === N - 1) continue;
+        if (Math.abs(A.y - B.y) < 4 && Math.abs(A.x - B.x) < 74) crowdBad++;
+      }
+    }
 
     /* 3. 洞宽与箱子预算按深度分组比。 */
     g.layers.forEach((l, k) => {
@@ -2174,7 +2255,8 @@ group("四十、关卡：难度递进 / 没有死胡同 / 门不固定");
   }
 
   ck("每一层的 tier 都严格递增，首层 0、末层 1", tierBad === 0, tierBad + " 关不合规");
-  ck("怪物数量逐层不降（门厅除外）", foeBad === 0, foeBad + " 处倒挂");
+  ck("怪物数量逐层不降（允许少 1 只）", foeBad === 0, foeBad + " 处倒挂");
+  ck("刷怪不重叠（同高两只中心距 ≥ 74）", crowdBad === 0, crowdBad + " 对重叠");
   const avgHole = bandHole.map(b => b[1] ? b[0] / b[1] : 0);
   ck("洞越深越窄（浅层均 " + avgHole[0].toFixed(0) + " / 深层均 " + avgHole[1].toFixed(0) + "）",
      avgHole[0] > avgHole[1] + 8, avgHole.map(v => v.toFixed(0)).join(" vs "));

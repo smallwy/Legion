@@ -1574,17 +1574,19 @@ function genLevel(seed) {
        地表层的可用列本来就少（箱子占掉大半），再挖掉出生点周围 130px，
        会出现一只怪都放不下的关（200 个种子里撞过一次）。
        怪贴脸是观感问题，缺怪是死局问题 —— 先保后者。 */
-    let cands = [];
+    const buildCands = (avoidStart, maxRise) => {
+    const cands = [];
     for (let i = 0; i < COLS; i++) {
       const x = i * 48;
       const inSeg = l.segs.some(s => x >= s.x && x + 48 <= s.x + s.w);
       if (!inSeg) continue;
-      if (k === 0 && Math.abs(x + 24 - startX) < 130) continue;   // 开局别贴脸
+      if (avoidStart && k === 0 && Math.abs(x + 24 - startX) < 130) continue;   // 开局别贴脸
       /* **落脚面是"箱子顶"，不是地板。** 怪站在箱山上是合理的 ——
          箱子是路，谁都能走；而且箱子被砸掉之后它自然会掉下来。 */
       const gy = (l.colTop && l.colTop[i] != null) ? l.colTop[i] : l.floorY;
-      /* **太高的箱顶不放**：雪弹是水平飞的，站在 2 格（96）以上玩家打不到。 */
-      if (l.floorY - gy > 100) continue;
+      /* **太高的箱顶不放**：雪弹是水平飞的，站在 2 格（96）以上玩家打不到。
+         但"打不到"是可以兜底放宽的 —— 见下面的三轮（`maxRise`）。 */
+      if (l.floorY - gy > maxRise) continue;
       /* **左右相邻列比自己高 = 站进凹槽里。** 怪宽 34、列宽 48，
          本列站得下，可旁边那列多摞一格，它往前走 7px 就撞到箱墙。
          这种位置不硬排除（排除之后有的层一只怪都挑不出来），
@@ -1594,6 +1596,23 @@ function genLevel(seed) {
       const hiL = (l.colTop && l.colTop[i - 1] != null) ? l.colTop[i - 1] : l.floorY;
       const hiR = (l.colTop && l.colTop[i + 1] != null) ? l.colTop[i + 1] : l.floorY;
       const open = hiL >= gy - 8 && hiR >= gy - 8;
+      /* **算出来的高度得真有一块东西托着。**
+         `colTop` 是"这一列最高的箱顶"，可它只按列做粗筛（`b.x + b.w > i*48`
+         这类），箱子斜着压过来半格的时候，会算出一个**列中心其实没有的
+         高度**。怪生成到那儿就是悬空，只靠 0.7px 的箱角被 `aabb` 接住
+         （判据是 `o.x < s.x + s.w`，重叠一丝就算碰到），看起来像"吊在半空"。
+
+         检查方式：`gy` 不是本层地板时，必须真有一个箱子的顶面等于 `gy`
+         且覆盖列中心。用箱子表直接查，不用 `groundAt` —— 那个会顺带
+         把"这一列有更高的箱子"也算成不匹配，误杀一大半候选。 */
+      if (Math.abs(gy - l.floorY) > 1) {
+        if (!boxes.some(b => b.x <= x + 24 && b.x + b.w >= x + 24 && Math.abs(b.y - gy) < 1)) continue;
+      } else if (Math.abs(groundAt(x + 24, gy) - gy) > 4) {
+        /* 地板列：洞口附近会算出 floorY，但那一格其实是空的。
+           只有这一类需要问 `groundAt`（箱顶列问它会因为"旁边有更高的箱子"
+           被误杀，实测会把怪数从 13.9 打到 13.0、逐层倒挂从 1/20 涨到 6/20）。 */
+        continue;
+      }
       /* 洞口正上方不放：那是"往下走"的地方，站着怪等于堵门。 */
       if (l.holes.some(h => x + 48 > h.x - 8 && x < h.x + h.w + 8)) continue;
       /* **门的正前方不放。** 门是 32×40，怪是 34×33 —— 站上去正好把门
@@ -1605,7 +1624,7 @@ function genLevel(seed) {
       /* 斜坡上不放：`colTop` 只认箱子，认不出坡面 —— 怪会站在坡体内部
          （脚的 y 停在坡底、坡面却高出一截，垂直贴面判据永远不成立）。 */
       if (l.terrain.some(t => t.kind === 'ramp' && t.x - 12 < x + 48 && t.x + t.w + 12 > x)) continue;
-      cands.push({ x: x + 7, y: gy, open });
+      cands.push({ x: x + 7, y: gy, open, col: i });
     }
     if (!cands.length) {
       for (let i = 0; i < COLS; i++) {
@@ -1619,9 +1638,25 @@ function genLevel(seed) {
         if (l.floorY - gy > 144) continue;
         if (l.holes.some(h => x + 48 > h.x - 8 && x < h.x + h.w + 8)) continue;
         if (l.terrain.some(t => t.kind === 'ramp' && t.x - 12 < x + 48 && t.x + t.w + 12 > x)) continue;
-        cands.push({ x: x + 7, y: gy, open: false });
+        cands.push({ x: x + 7, y: gy, open: false, col: i });
       }
     }
+      return cands;
+    };
+    /* **两轮：先躲出生点，候选不够再放开。**（这段注释一直在这里，
+       但"第二轮"其实从来没写 —— `avoidStart` 参数就是补上它。）
+       地表层的可用列本来就少（箱子占掉大半），再挖掉出生点周围 130px，
+       会出现"这一层放不满 want"的种子 —— 表现是深层比浅层怪还多，
+       撞在"怪物数量逐层不降"那条上（200 个种子里 7 处倒挂）。 */
+    let cands = buildCands(true, 100);
+    if (k === 0 && cands.length < want + 1) cands = buildCands(false, 100);
+    /* **第三轮：还不够就把"高到打不到"的箱顶也放出来。**
+       深层箱子预算大（浅层 13.8 格 / 深层 17.9 格），箱堆把地面切得
+       很碎，段容量加起来可能到不了 want —— 表现是第 2 层 4 只、
+       第 3 层只有 3 只，"数量逐层不降"倒挂（200 个种子里 6 处）。
+       站到 3 格高（144）玩家够不着，但这一轮只在前面两轮挑不满时才启用，
+       而且玩家有二段跳（123 + 149 = 272）爬得上去，不是死角。 */
+    if (cands.length < want + 1) cands = buildCands(k === 0, 144);
     if (!cands.length) return;
     /* **优先挑开阔位**：候选里够的话，先只用"左右不比它高"的那些。 */
     const openOnes = cands.filter(c => c.open);
@@ -1635,25 +1670,91 @@ function genLevel(seed) {
 
        `y` 也跟着改成 `FOE_H`：原来写死 -30 是旧身高（30），
        敌人加高到 33 之后，出生第一帧会陷进地面 3px。 */
+    /* **"分开了"要看台面有多长，不是只比 x。**
+       2026-10-29 用户截图：「这怪物生成的位置 也太奇怪了　要么互相对峙　
+       无法移动　要么一个」。图上两只 moss 并排卡在同一个箱顶上。
+
+       原因就在下面几行：判据只有 `Math.abs(o.x - u.x) >= 96`。
+       两格箱顶（96 宽）上各放一只，x 差正好 96 → 判"分开了"，
+       可它们脚踩**同一个高度**、中间没有阻挡，两只各宽 37 的放上去，
+       朝对方一走就顶住 —— 谁也走不动，玩家看到的就是"对峙"。
+
+       真正的判据是**这段台面站得下几只**：
+         一段 96 宽的两格箱顶 → 1 只（两只放上去必顶）；
+         一段 192 宽的走廊 → 2 只（各站一端，中间还空 118）；
+         一段 400 宽的大厅 → 3 只。
+       先把候选点按"同层 + 同高 + 列号连续"连成段，再按段长算容量。 */
+    let sid = -1;
+    for (let i = 0; i < all.length; i++) {
+      const c = all[i];
+      if (i === 0) sid = 0;
+      else if (!(c.col === all[i - 1].col + 1 && Math.abs(c.y - all[i - 1].y) < 4)) sid++;
+      c.seg = sid;
+    }
+    const segInfo = new Map();
+    for (const c of all) {
+      let s = segInfo.get(c.seg);
+      if (!s) { s = { lo: c.col, hi: c.col }; segInfo.set(c.seg, s); }
+      s.lo = Math.min(s.lo, c.col); s.hi = Math.max(s.hi, c.col);
+    }
+    for (const s of segInfo.values()) {
+      s.len = (s.hi - s.lo + 1) * 48;
+      /* 74 = 两个身宽，110 = 彼此让开的距离。
+         96 宽 → 1 只；192 宽 → 2 只；400 宽 → 3 只。 */
+      s.cap = Math.max(1, 1 + Math.floor((s.len - 74) / 110));
+    }
+
+    /* **高台上只站一只。** 用户原话：「如果是那种投射 无法移动的怪物
+       可以一个 站在高处」—— 箱顶是炮位，不是营地。同一层里第二只
+       再想上箱顶就没位置了，会退回地面。 */
+    const highUp = (o) => o.y < l.floorY - 4;
+    const apart = (o, u, d) => Math.abs(o.y - u.y) >= 4 || Math.abs(o.x - u.x) >= d;
+
     const used = [];
+    const segUsed = new Map();
     for (let i = 0; i < want; i++) {
-      let pool = all.filter(o => used.every(u => Math.abs(o.x - u) >= 96));
-      if (!pool.length) pool = all.filter(o => used.every(u => Math.abs(o.x - u) >= 56));
+      const ok = (o, d) => {
+        const s = segInfo.get(o.seg);
+        if ((segUsed.get(o.seg) || 0) >= (s ? s.cap : 1)) return false;
+        if (highUp(o) && used.some(u => highUp(u))) return false;
+        return used.every(u => apart(o, u, d));
+      };
+      let pool = all.filter(o => ok(o, 110));
+      /* 第二档只在**不同高度**时放行（一个在上一个在下，走不到一起）。
+         同高的近贴一律不给 —— 那正是"两只挤在一个台面上互相顶"。 */
       if (!pool.length) {
-        /* 两档都不够时**挑离已有怪最远的那个位置**，而不是干脆不放。
-           直接 break 会让"箱子把这一层塞满"的种子少一只怪
-           （5 号种子就掉到 7 只，撞在"一关至少 8 只"那条上）——
-           关卡生成的基本盘不能为了排布好看而缩水，最多是"离得近一点"。 */
+        pool = all.filter(o => used.every(u => Math.abs(o.y - u.y) >= 4));
+      }
+      if (!pool.length) {
+        /* **兜底：保数量，但绝不允许重叠。**
+           旧版这里是"两档都不够就挑最远的放"，于是一层里两只怪可以
+           只差 48px（相邻两列、身体叠在一起），就是用户截图那种对峙。
+           现在兜底也守一条硬线：**同高的两只中心距 ≥ 74（一个身宽）**。
+           74 之内身体挨着，谁也走不动；96 之外还剩 22px 空隙，
+           各自走到边缘就掉头，不算卡死。
+           连这条都满足不了就少放一只 —— 缺一只不影响玩法，
+           卡住一只怪才影响。
+
+         **门厅例外：那里少一只就是死局。** 门厅要 3 只、而
+         `killTarget` 也是 3，凑不齐就永远开不了门。所以门厅把 74
+         降到 40，宁可两只挨着，也不能少。 */
+        const minGap = (k === nF - 1) ? 40 : 74;
         let best = null, bestD = -1;
         for (const o of all) {
-          const d = used.reduce((m, u) => Math.min(m, Math.abs(o.x - u)), Infinity);
-          if (d > bestD) { bestD = d; best = o; }
+          let dmin = Infinity, blocked = false;
+          for (const u of used) {
+            if (Math.abs(o.y - u.y) < 4 && Math.abs(o.x - u.x) < minGap) { blocked = true; break; }
+            dmin = Math.min(dmin, Math.abs(o.x - u.x));
+          }
+          if (blocked) continue;
+          if (dmin > bestD) { bestD = dmin; best = o; }
         }
         if (!best) break;
         pool = [best];
       }
       const c = pool[Math.floor(R() * pool.length)];
-      used.push(c.x);
+      segUsed.set(c.seg, (segUsed.get(c.seg) || 0) + 1);
+      used.push({ x: c.x, y: c.y });
       spawns.push({
         x: Math.round(c.x), y: Math.round(c.y) - FOE_H, layer: k,
         /* **递进第六项：会追人的 fang 越深越多。**
@@ -2849,6 +2950,45 @@ function makeBallFrom(f) {
 }
 
 /* ---------------------------------------------------------------- 推球 */
+/* **推得动才推。**
+   2026-10-29 用户截图：「这个球会出现乱弹的情况」—— 一颗大球贴在右上角。
+   抓轨迹抓到的现场（种子 2，贴着右墙）：
+
+     f947  x 900.0  vx -534     撞墙（936 − r36）弹回
+     f952  x 885.0  vx +1205    玩家一推，顶到助跑满速
+     f953  x 900.0  vx -538     又撞墙
+     f955  x 900.0  vx -540     每帧在 891 / 900 之间反复跳 9px
+
+   **推球是无条件给速度的**（`b.vx = dir * pow`，满速 1209），所以球一旦
+   抵住墙，就是"顶满 → 撞墙 → 弹回 → 再顶满"，60Hz 无限循环。
+   画面上球在原地剧烈抖动，玩家完全推不动它。
+
+   判据分三类，只有**真的推不动**才算挡：
+     · 墙 —— 一律挡；
+     · 木箱 / 陶罐 —— 放行（会被撞碎，碎完继续滚）；
+     · 砸不动的箱子 —— 球底比箱顶高 ≤56（能翻上去）放行，否则挡。
+       这一条和 `ballHitBox` 里"翻一格台阶"用的是同一把尺子，
+       两处必须一致，否则球要么在硬边前自己弹、要么翻不上去。 */
+function pushBlocked(b, dir, pow) {
+  /* **探测距离要按"推起来之后一帧走多远"算，不是固定的 5px。**
+     助跑推是 1209 px/s，一帧 20px。只探测 5px 的话，球在离墙 44px 处
+     仍然判"推得动"，于是每帧给一次满速：推 → 撞墙 → 弹回 44px → 再推，
+     7 帧一个来回（8Hz）。看起来就是球在墙边反复冲撞。 */
+  const reach = Math.max(b.r + 5, b.r + (pow || 0) / 60 + 3);
+  const nx = b.x + dir * reach;
+  if (nx - b.r < WALL_L + 1 || nx + b.r > WALL_R - 1) return true;
+  for (const bx of S.boxes) {
+    if (bx.dead) continue;
+    if (nx + b.r <= bx.x || nx - b.r >= bx.x + bx.w) continue;
+    if (b.y - b.r >= bx.y + bx.h || b.y + b.r <= bx.y) continue;
+    const def = NUM.box[bx.mat];
+    if (!def || def.hp !== Infinity) continue;     // 木箱：撞得碎
+    if ((b.y + b.r) - bx.y <= 56) continue;        // 一格硬边：翻得上去
+    return true;
+  }
+  return false;
+}
+
 function pushBalls(dt) {
   const p = S.p;
   const runUp = clamp((p.runD || 0) / NUM.push.runFull, 0, 1);
@@ -2886,7 +3026,12 @@ function pushBalls(dt) {
     if (Math.abs(p.vx) < 10) continue;
     if (sign(p.vx) !== dir) continue;
     if (Math.abs(b.vx) >= pow) continue;
+    if (pushBlocked(b, dir, pow)) continue;
     b.vx = dir * pow;
+    /* **留一个"正在被推"的印记给撞墙用。**
+       被玩家压着撞墙不该回弹 45% —— 那是"撞上去"的力度。被压住的时候
+       球应该抵在墙上停住，否则就是"推 → 撞 → 弹回 → 再推"的循环。 */
+    b.pushT = 0.14;
     /* **推一次回满，不是回 60%。**
        "正在用的球不该中途蒸发" —— 回满之后，融化只清理被丢下的球。 */
     b.life = NUM.ball.life;
@@ -2902,6 +3047,7 @@ function stepBalls(dt) {
   for (const b of S.balls) {
     if (b.dead) continue;
     b.life -= dt;
+    b.pushT = Math.max(0, (b.pushT || 0) - dt);
     if (b.life <= 0) { burstBall(b); continue; }
 
     // 重力 + 水平移动
@@ -3017,8 +3163,14 @@ function stepBalls(dt) {
     }
 
     // --- 撞墙
-    if (b.x - b.r < WALL_L) { b.x = WALL_L + b.r; b.vx = Math.abs(b.vx) * 0.45; }
-    if (b.x + b.r > WALL_R) { b.x = WALL_R - b.r; b.vx = -Math.abs(b.vx) * 0.45; }
+    /* **被玩家压着撞墙 ≠ 自己撞上去。**
+       自己滚过去撞墙，弹回 45% 是对的（"撞了一下"）；被推着顶在墙上，
+       回弹 45% 就变成了永动机：推 → 撞 → 弹回 44px → 玩家还在推 → 再撞。
+       实测就是 8Hz 的反复冲撞（用户说的"乱弹"）。压着的时候只留 8%，
+       球抵住墙停住，玩家一看就知道"这面墙推不过去"。 */
+    const wallDamp = b.pushT > 0 ? 0.08 : 0.45;
+    if (b.x - b.r < WALL_L) { b.x = WALL_L + b.r; b.vx = Math.abs(b.vx) * wallDamp; }
+    if (b.x + b.r > WALL_R) { b.x = WALL_R - b.r; b.vx = -Math.abs(b.vx) * wallDamp; }
 
     // --- 地面摩擦
     if (b.onGround) {
@@ -3106,8 +3258,15 @@ function ballHitBox(b, box, dir, vDown) {
     if (vDown) {
       b.y = box.y - b.r; b.vy = 0; b.onGround = true;   // 落在箱顶，不动
     } else {
+      /* **反弹永远不许比入射快。**
+         原来写的是 `Math.max(140, |vx| * 0.4)` —— 那个 140 的下限在
+         慢速时是**加速**：100 px/s 撞上去，回来 140。球在两块硬箱之间
+         来回撞，速度就锁在 140 不衰减，永远停不下来。
+         `Math.min(..., |vx| * 0.92)` 保证每次都掉一点，最多 8%。 */
       b.x = dir > 0 ? box.x - b.r : box.x + box.w + b.r;
-      b.vx = -dir * Math.max(140, Math.abs(b.vx) * 0.4);
+      const back = Math.max(140, Math.abs(b.vx) * 0.4);
+      const boxDamp = b.pushT > 0 ? 0.1 : 0.92;
+      b.vx = -dir * Math.min(back, Math.abs(b.vx) * boxDamp);
     }
     addFrag(b.x, b.y, 8, '#FFE0A0', 220);
     /* 撞上去但没碎 = 最轻的一档，2px 只够让人觉得"有接触" */

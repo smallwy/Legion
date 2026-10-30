@@ -3611,6 +3611,65 @@ console.log("\n=== 五十一. 踩实：球的两个出口 ===");
 }
 
 /* =========================================================================
+   五十二. 音效：表要全，没有 AudioContext 也不能抛
+   -------------------------------------------------------------------------
+   **这一节最该防的是"新加了一种撞击、忘了配音"。** 那种漏法完全静默：
+   画面上一切正常，只是那一下没声音 —— 而玩家说不出哪里不对，
+   只会觉得"打击感有点空"。所以不手工维护清单，直接**扫源码里所有
+   `kickShake(x, 'key')` 的 key** 去对表：以后谁再加一种撞击而没配音，
+   这一条就红。
+   ========================================================================= */
+console.log("\n=== 五十二. 音效 ===");
+{
+  const lib = L.SFX_LIB;
+  ck("音效表不是空的", lib && Object.keys(lib).length >= 10,
+     String(Object.keys(lib || {}).length));
+
+  /* 每条都要有完整参数 —— 少一个 `w` 会让振荡器用默认正弦，
+     听起来"这个音不一样"，但代码不报错。 */
+  const bad = Object.keys(lib).filter(k => {
+    const t = lib[k];
+    return !(Array.isArray(t.f) && t.f.length === 2 && t.d > 0 && typeof t.w === 'string' && t.v > 0);
+  });
+  ck("每个音的参数都齐全（频率对 / 时长 / 波形 / 音量）", bad.length === 0, bad.join(","));
+
+  /* **有意的静音让位**：深潜结束时 `kickShake(8,'diveEnd')` 之后紧跟
+     一句 `sfx('dead')`，所以 'diveEnd' 故意不在表里（再配一个音会连响两声）。
+     这份白名单要写清楚理由，不然下一个人会以为漏了。 */
+  const SKIP = { diveEnd: '紧跟着发 dead，配了会连响两声' };
+  const src = require("fs").readFileSync(
+    require("path").join(__dirname, "..", "prototype", "snowlab.html"), "utf8");
+  const used = new Set();
+  for (const m of src.matchAll(/kickShake\([^)]*?'([a-zA-Z_]+)'\s*\)/g)) used.add(m[1]);
+  const missing = [...used].filter(k => !lib[k] && !SKIP[k]);
+  ck("★ 每一种撞击都有对应的音（加撞击忘配音会红）",
+     missing.length === 0, missing.join(","));
+  ck("扫到了足够多的撞击类型（正则没失效）", used.size >= 8, [...used].join("/"));
+
+  /* 没有 AudioContext 时（jsdom / 老浏览器）**必须静默返回**，
+     不能抛 —— 抛了的话第一帧就死，整个原型打不开。 */
+  let threw = null;
+  try {
+    for (const k of Object.keys(lib)) L.sfx(k);
+    L.sfx('不存在的键');
+  } catch (e) { threw = e; }
+  ck("★ 没有 AudioContext 时发声音不抛（jsdom 里照样能跑）",
+     threw === null, threw ? String(threw.message) : "");
+
+  /* 静音开关 */
+  L.SFX.on = false;
+  threw = null;
+  try { L.sfx('pin'); } catch (e) { threw = e; }
+  ck("静音状态下不抛", threw === null, threw ? String(threw.message) : "");
+  L.SFX.on = true;
+
+  /* 关键的三声必须单独存在：它们**不走 kickShake**，漏了就永远没有。 */
+  ck("吐弹 / 过关 / 深潜结束各有一个专门的音",
+     !!lib.shoot && !!lib.clear && !!lib.dead,
+     ["shoot", "clear", "dead"].filter(k => !lib[k]).join(","));
+}
+
+/* =========================================================================
    汇总
    ========================================================================= */
 console.log("\n" + "=".repeat(56));

@@ -24,6 +24,7 @@
 """
 
 import io
+import hashlib
 import os
 import re
 
@@ -222,6 +223,10 @@ let ctx: any = null;
     # 在 cce5c23 卡过四轮的那种坑。正则只锚**首尾两行**，中间随便长。
     _bootRE = re.compile(
         r"if \(typeof window !== 'undefined' && typeof document !== 'undefined'\) \{\n"
+        # **首行后面允许有别的行**：2026-10-30 往这儿插了一行"读静音存档"，
+        # 锚点立刻命中 0 次 —— 而它只是 raise 之后退出，生成物停在上版，
+        # 下游 runtime-check 全绿（它读的就是没更新的 .ts）。栽过两次了。
+        r"(?:[^\n]*\n)*?"
         r"  window\.addEventListener\('keydown', e => onKey\(e, true\)\);.*?\n"
         r"  else draw\(\);\n\}", re.S)
     body, _n = _bootRE.subn('''/* **启动交给 Cocos。**原型的启动段做了四件事：挂键盘、选关、起 rAF 自转、
@@ -267,7 +272,14 @@ export function snowlabBoot(seed?: number): void {
                 continue
             raise SystemExit('没抽干净：%r 还在（会静默走到 DOM 分支）' % bad)
 
-    out = HEADER + '\n' + body.rstrip() + '\n' + TAIL
+    # **给生成物打上源文件的指纹。** 抽取脚本的每个锚点都是"命中 0 次
+    # 就 raise"，但 raise 之后生成物**留在上一版**，而下游的
+    # build-rt / runtime-check 读的正是那份没更新的 .ts —— 所以它们全绿。
+    # 这个坑栽过两次（cce5c23 卡四轮、2026-10-30 加音效时又踩一次）。
+    # 指纹让"过期"变成可判定的：runtime-check 拿原型的 md5 对一次就知道。
+    _fp = hashlib.md5(io.open(SRC, 'rb').read()).hexdigest()
+    _stamp = '/* @src-md5 %s @src-lines %d */\n' % (_fp, len(html.split('\n')))
+    out = _stamp + HEADER + '\n' + body.rstrip() + '\n' + TAIL
     os.makedirs(OUT_DIR, exist_ok=True)
     io.open(OUT, 'w', encoding='utf-8', newline='').write(out)
     io.open(OUT_ART, 'w', encoding='utf-8', newline='').write(build_art(html))

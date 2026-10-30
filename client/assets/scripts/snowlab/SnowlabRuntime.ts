@@ -1,3 +1,4 @@
+/* @src-md5 7545f610a8afa63f1def8d0247abf2cb @src-lines 11496 */
 // @ts-nocheck
 /* ⚠ 自动生成，勿手改 —— 源：client/prototype/snowlab.html
    重新生成：python client/tools/extract_snowlab_runtime.py
@@ -3396,6 +3397,7 @@ function shoot() {
   }
   S.ammo--;
   S.stat.shots++;
+  sfx('shoot');
   const cfg = NUM.shot.pets[HERO_ID] || NUM.shot.pets.cat;
   p.shotCd = NUM.shot.cd;
   p.lockT = NUM.shot.lock;      // 喷时不能移动：这是「喷的代价」第 ②条
@@ -4255,6 +4257,101 @@ function burstBall(b) {
    ------------------------------------------------------------------------- */
 const SHAKE_WINDOW = 0.35;
 const SHAKE_FALLOFF = 0.6;
+/* ---------------------------------------------------------------- 音效
+   **全部现场合成，不加载任何音频文件。** 两个理由：
+     · 一是不用为十个动作攒素材；
+     · 二是这个原型的定位是"双击就能玩"—— 外链音频在 preview 的静态服务里
+       404 之后是**静默**的，玩家只会觉得"这游戏没声音"，而这类失败没有任何
+       报错可查。
+   WebAudio 的振荡器就够用了：这套动作全是短促的"打击/上扬"，本来就适合合成音。
+
+   **必须容忍"没有 AudioContext"。** 断言和出图工具跑在 jsdom 里，那里没有
+   这个类；不判一下，`_snowlab-check` 会从第一帧就抛。 */
+
+/* 每个音一条：`f` 起止频率、`d` 时长、`w` 波形、`v` 音量、`n` 噪声层强弱。
+   音高的关系是有意的 —— 好事上扬（裹住/合体/进门），坏事下坠（撞墙/受伤/死）。 */
+const SFX_LIB = {
+  wrap:     { f: [300, 660], d: 0.16, w: 'triangle', v: 0.50 },
+  fuse:     { f: [400, 880], d: 0.20, w: 'sine',     v: 0.52 },
+  push:     { f: [150,  92], d: 0.09, w: 'sawtooth', v: 0.30, n: 0.20 },
+  /* 撞上去但没砸碎（2px 震屏那一档）。**音量必须比 box 明显小** ——
+     它是"够不着"的反馈，不是"砸开了"，两者响度一样的话玩家会分不清
+     自己在推进还是在白推。 */
+  bonk:     { f: [190, 128], d: 0.07, w: 'sine',     v: 0.20 },
+  box:      { f: [230,  62], d: 0.13, w: 'square',   v: 0.40, n: 0.55 },
+  foe:      { f: [280, 110], d: 0.10, w: 'square',   v: 0.32, n: 0.30 },
+  pin:      { f: [180,  60], d: 0.19, w: 'triangle', v: 0.56, n: 0.40 },
+  door:     { f: [520, 780], d: 0.22, w: 'triangle', v: 0.42 },
+  hurt:     { f: [340,  90], d: 0.22, w: 'sawtooth', v: 0.45 },
+  boss:     { f: [300,  46], d: 0.36, w: 'sawtooth', v: 0.72, n: 0.85 },
+  bossweak: { f: [120,  78], d: 0.12, w: 'square',   v: 0.28 },
+  shoot:    { f: [620, 320], d: 0.07, w: 'square',   v: 0.16 },
+  clear:    { f: [523, 784], d: 0.34, w: 'triangle', v: 0.44 },
+  dead:     { f: [420,  80], d: 0.55, w: 'sawtooth', v: 0.50 },
+};
+
+/* `on` 在**定义时**就从存档取，不能等到第一次发声音。
+   等到那时候的话，静音玩家进游戏的第一声还是会响（判断已经过了）。
+   也不能写在启动段里 —— 抽取脚本用"首行紧邻"锚那段，多一行就命中 0 次，
+   而命中 0 次的症状是**生成物停在上版、下游全绿**（栽过两次）。 */
+const SFX = {
+  on: (function () { try { return readSnowProgress().mute !== true; } catch (e) { return true; } })(),
+  ctx: null, master: null, last: Object.create(null),
+};
+/** 静音状态跟着存档走：玩家关掉之后重开还得是关的，
+    否则他每进一次关都要再按一次 M。 */
+function sfxInit() {
+  if (SFX.ctx) return;
+  if (typeof window === 'undefined') return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  try {
+    SFX.ctx = new AC();
+    SFX.master = SFX.ctx.createGain();
+    SFX.master.gain.value = 0.26;
+    SFX.master.connect(SFX.ctx.destination);
+  } catch (e) { SFX.ctx = null; }
+}
+function sfxNoise(c, dur, vol) {
+  const n = Math.max(1, Math.floor(c.sampleRate * dur));
+  const buf = c.createBuffer(1, n, c.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+  const src = c.createBufferSource();
+  src.buffer = buf;
+  const g = c.createGain();
+  g.gain.value = vol;
+  const bp = c.createBiquadFilter();
+  bp.type = 'bandpass'; bp.frequency.value = 900; bp.Q.value = 0.8;
+  src.connect(bp); bp.connect(g); g.connect(SFX.master);
+  src.start();
+}
+function sfx(key) {
+  if (!SFX.on) return;
+  const t = SFX_LIB[key];
+  if (!t) return;
+  sfxInit();
+  const c = SFX.ctx;
+  if (!c) return;
+  /* **同一种音 45ms 内只响一次。** 一帧里连撞三口箱子会发三次，
+     叠起来是一声糊掉的爆音；而玩家听到的应该是一声"重"。
+     这也顺便替 `kickShake` 的重复点火兜了底。 */
+  const now0 = c.currentTime;
+  if (SFX.last[key] != null && now0 - SFX.last[key] < 0.045) return;
+  SFX.last[key] = now0;
+  if (c.state === 'suspended') { try { c.resume(); } catch (e) { } }
+  const o = c.createOscillator(), g = c.createGain();
+  o.type = t.w;
+  o.frequency.setValueAtTime(t.f[0], now0);
+  o.frequency.exponentialRampToValueAtTime(Math.max(24, t.f[1]), now0 + t.d);
+  g.gain.setValueAtTime(0.0001, now0);
+  g.gain.linearRampToValueAtTime(t.v, now0 + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0004, now0 + t.d);
+  o.connect(g); g.connect(SFX.master);
+  o.start(now0); o.stop(now0 + t.d + 0.02);
+  if (t.n) sfxNoise(c, Math.min(0.2, t.d), t.v * t.n);
+}
+
 function kickShake(px, key) {
   const k = key || '_';
   const rec = S.kick[k];
@@ -4268,6 +4365,11 @@ function kickShake(px, key) {
   S.kick[k].t = S.t;
   const v = px * f;
   if (v > S.shake) S.shake = v;
+  /* **震屏是"所有撞击"的唯一出口，所以音效也挂在这儿。**
+     分散到十几个调用点去发的话，早晚漏掉一两个 —— 而"这一下没声音"
+     不会报错，只会让打击感莫名其妙地缺一块。衰减过的重复点火
+     （f < 0.4）不再发声，否则连撞会变成一串爆音。 */
+  if (f > 0.4) sfx(k);
   return v;
 }
 
@@ -4943,6 +5045,9 @@ function endDive() {
   S.deadT = 0;
   S.flash = Math.max(S.flash, 0.34);
   kickShake(8, 'diveEnd');
+  /* 深潜结束是"死"，不是"过关"：主线的 clear 音是上扬的，
+     放这儿会让玩家误以为打完了。 */
+  sfx('dead');
 }
 
 function hurtPlayer() {
@@ -5137,6 +5242,9 @@ function stepDoor(dt) {
     if (aabb(S.p, d)) {
       /* 深潜：进门不是通关，是**下一关**。 */
       if (S.dive) { diveNext(); return; }
+      /* 进门 = 这一段唯一的"完成"反馈。**它不走 kickShake**（不震屏），
+         所以必须单独发，不然通关是全游戏里唯一一个安静的时刻。 */
+      sfx('clear');
       S.phase = 'clear';
       S.clearT = 0;
       S.flash = Math.max(S.flash, 0.3);
@@ -5193,6 +5301,15 @@ function onKey(e, down) {
   /* C = 踩实身边的球。**不能用 K** —— K 已经被绑成吐弹（和 J 同义），
      再绑一个动作会让"按 K"同时吐弹又踩实，而玩家只会觉得"这个键坏了"。 */
   if (down && (k === 'c' || k === 'C') && S.phase === 'play') tryPin();
+  /* M = 静音。**默认开声音**，但一定要给关掉的路 —— 玩家常常是
+     "在地铁上/在办公室"打开这个页面的，没有静音键就只能拔耳机。
+     状态写进存档：关掉之后重开还是关的。 */
+  if (down && (k === 'm' || k === 'M')) {
+    SFX.on = !SFX.on;
+    writeSnowProgress({ mute: !SFX.on });
+    if (S.p) once('mute', S.p.x + S.p.w / 2, S.p.y - 26,
+      SFX.on ? '声音开' : '静音', '#BFD8E8');
+  }
   if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].indexOf(k) >= 0) e.preventDefault();
 }
 
@@ -11231,6 +11348,9 @@ const API = {
   /* 踩实（C）。断言要验"贴地才让踩 / 踩完能站人 / 球真的从弹药里没了"，
      这三件事全在函数内部，只能导出来测。 */
   tryPin, pinCandidate, canPin, pinBall,
+  /* 音效。断言验的是"表全不全"和"没有 AudioContext 时会不会抛"——
+     jsdom 里没有这个类，出图/断言全都要能跑。 */
+  SFX_LIB, SFX, sfx,
   /* 井梯攀爬。**导出是为了量"爬上去有没有瞬移"** ——
      这条路径历史上是 `p.x = cw.x; p.y = cw.y` 一帧到位，
      光看代码能看出"没有过渡"，看不出多大的跳变。 */

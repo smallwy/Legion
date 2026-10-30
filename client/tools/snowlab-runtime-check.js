@@ -78,6 +78,24 @@ ok('两边导出同一批常量', A.FLOORS.length === B.FLOORS.length && artKeys
    数数型断言把"加了东西"和"丢了东西"报成同一件事。 */
 const _art = require(path.join(BUILD, 'SnowlabArt.js')).INLINE_ART;
 const _need = ['bg', 'pet-cat', 'foe-moss', 'foe-fang', 'foe-grub'];
+/* ================= **生成物过没过期** =================
+   抽取脚本每个锚点都是"命中 0 次就退出"，但退出之后 `.ts` **留在上一版**，
+   而本工具读的正是那份没更新的 `.ts` —— 于是它全绿，绿得毫无意义。
+   这个坑栽过两次：`cce5c23` 停了四轮；2026-10-30 加音效时往启动段插了一行，
+   锚点立刻命中 0，而 `build-rt` + 本工具全绿。
+   现在产物头上有源文件的 md5，**对不上就红** —— 这是唯一一条能在
+   "生成物没更新"时报警的判据，其余所有断言都跑在产物上。 */
+{
+  const crypto = require('crypto');
+  const md5 = crypto.createHash('md5').update(fs.readFileSync(PROTO)).digest('hex');
+  const gen = fs.readFileSync(path.join(TS_DIR, 'SnowlabRuntime.ts'), 'utf8');
+  const m = gen.match(/@src-md5 ([0-9a-f]{32})/);
+  ok('★ 生成物没过期（原型改过就必须重抽）',
+    !!m && m[1] === md5,
+    m ? ('产物 ' + m[1].slice(0, 8) + ' / 原型 ' + md5.slice(0, 8) +
+         '  → python tools/extract_snowlab_runtime.py') : '产物里没有指纹');
+}
+
 ok('内嵌贴图搬到了 SnowlabArt（原有 5 张一张不少）',
   _need.every(k => typeof _art[k] === 'string' && _art[k].length > 100),
   _need.filter(k => !_art[k]).join(',') || '');

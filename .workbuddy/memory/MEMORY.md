@@ -25,16 +25,16 @@
 ## 验收工具
 | 目标 | 命令 |
 |---|---|
-| snowlab 结构+玩法 | `_snowlab-check.js`（354 项） |
+| snowlab 结构+玩法 | `_snowlab-check.js`（368 项） |
 | 运行时等价 | `snowlab-runtime-check.js`（14 项 / 900 帧 0 偏差）、`grove-runtime-check.js`（39 项） |
 | 玩法冒烟 | `grove-smoke.js`（1488 项） |
 | **跨模块导出** | `import-export-check.js`（39 文件 / 0.2 秒，**提交前必跑**） |
 | **组件挂载 + 换手** | `_battle-mount-smoke.js`（cc 桩 + 真画布，验「点出发不黑屏」「点第三扇门能换到推球」） |
-| 出征页三扇门接线 | `_entry-wire.js`（11 项） |
+| 出征页门接线 | `_entry-wire.js`（11 项） |
 | 难度离散 / 形状 | `_diff-audit.js [N]`、`_shape-probe.js [N]` |
 | 行为 | `_jitter-probe.js`、`_foe-bounce.js`、`_ball-chaos.js` |
 | 性能 | `_ab-perf.js`（同进程 A/B，**只看比值**） |
-| 出图 | `_floors-shot.js`（锁镜 + `BEFORE=`）、`_goal-shot.js`（三种目标 + 残球特写）、`_entry-shot.js`（真浏览器验入口） |
+| 出图 | `_floors-shot.js`（锁镜 + `BEFORE=`）、`_goal-shot.js`（三种目标 + 残球特写）、`_pairs-shot.js`（撞/合四格序列）、`_entry-shot.js`（真浏览器验入口）；**真立绘要 `ART=1`** |
 | CJS 产物 | `build-rt.js`（**清完再编**；别直接 tsc，只增不删） |
 | 存量对照 | `_legacy-audit.js`（只读，两套关卡参数表） |
 
@@ -54,6 +54,12 @@ TS 语法检查要用 **Cocos 自带 typescript**（隔离 workspace 里没装�
 - 推球**无条件给满速**（1209）；抵住会变 60Hz 冲撞，靠 `pushBlocked()` / `pushT`（回弹 8%）挡；**反弹不许比入射快**（×0.92）。
 - 刷怪间距判据是**这段台面站得下几只**（`cap = 1+floor((段长−74)/110)`），不是比 x。
 - 清残留节点用**后缀**；自启动脚本 `if (!EDITOR)` 守卫；12px 一空格只有 3px。
+- **球与球**：碰撞按「重叠」判、**合体按「挨着」判（`minD+3`）** —— 位置分离会把两球
+  推到正好相切，下一帧 `d < minD` 就不成立，计时逐帧清零 → 永远合不上。
+- `drawBall` 必须过滤 `b.dead`，合体要**当场 splice 出数组**：一帧内死两颗加一颗，
+  只标 dead 的话本帧会多画两颗（"合完了还站着原来的"）。
+- **`@napi-rs/canvas` 的 `loadImage` 返回 Promise**，不是 Image；`.width` 直接取是 undefined。
+  注入 Cocos `ImageAsset` 用 `data` 字段（`_toDrawable` 读的就是它），不是 `image`。
 - **未解决**：每层装饰太满导致噪声，出生点有时在人缝里。
 
 ## 出征页 → 推球（`e1d4c93` / 0726 轮）
@@ -67,6 +73,9 @@ TS 语法检查要用 **Cocos 自带 typescript**（隔离 workspace 里没装�
 - 两套玩法换手走 `BattleSwitch.ts`（**中介，不许互相 import**）。
   `Component.destroy()` 是延迟销毁 → 必须等 `isValid` 变 false 再挂新的，
   否则两台 ClearCamera + 两块 DOM 层，症状是"画面定住"。
+- **出征页只摆一扇门**（`GATES` = snow），grove 的 27 屏 / 深巢留在 `GATES_LEGACY`
+  不摆出来。断言要测它们时**临时 `unshift(...GATES_LEGACY)`** ——
+  「不摆出来」和「坏掉了」外观完全一样。单卡时 `GATE.scale` 必须回到 1（840×1.2 出画布）。
 - **给 Cocos 用的函数必须 `export`**。原型里 `setSnowlabEntry` 只是文件内部用的，
   抽取时没加 export → `import` 拿到 undefined → **ESM 链接阶段就抛**，
   `addComponent` 拿不到类 → 一台相机都没建 → 点出发**纯黑屏、零日志**

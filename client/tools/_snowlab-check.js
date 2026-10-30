@@ -3311,6 +3311,35 @@ console.log("\n=== 四十九. 场景主题 ===");
   ck("★ 霜原地表顶面还是雪白（坡/板/碎石/雪包都从这里取色）",
      snow.cap[0] === "#FFFFFF" && snow.cap[1] === "#EDF7FE" && snow.cap[3] === "#A9C6DC",
      snow.cap.join(","));
+  /* ---- 地下岩层：换场景必须换到地下 ----
+     **这一组守的是"四个场景是不是真的四个地方"。** 上一轮只换了地表，
+     而 48 关里绝大部分时间在四层房间里 —— 那四层一直是同一套灰蓝/紫，
+     于是"第 37 关进了沙塚"看起来和第 1 关一模一样。
+     出图工具第一版四张图平均色差 0.1，原因不是配色没生效，而是
+     `STATIC` 静态层没作废（墙是预渲染进一张大位图的）。 */
+  {
+    const ids = L.themes();
+    const pal = id => { L.applyTheme(id); return [1, 2, 3].map(k => L.roomOf(k).bg1); };
+    const tabs = ids.map(pal);
+    let same = 0;
+    for (let i = 0; i < tabs.length; i++) for (let j = i + 1; j < tabs.length; j++) {
+      if (tabs[i].join(",") === tabs[j].join(",")) same++;
+    }
+    ck("★ 四个场景的地下岩层色互不相同", same === 0, "有 " + same + " 对重复");
+    ck("每层岩层都有背景/砖缝/台面三组色（少一组会画成纯色块）",
+       [1, 2, 3].every(k => {
+         const p = L.roomOf(k);
+         return p && p.bg1 && p.line && p.slab.length === 3 && p.cap.length === 3;
+       }), JSON.stringify(L.roomOf(2).slab));
+    /* 霜原是回归基线：地下也必须还是原来那套。**只验地表不够** ——
+       混色函数改错时，地表走的是 THEME 字段、根本不受影响。 */
+    L.applyTheme("snow");
+    ck("★ 霜原的地下岩层还是原来那套（回归基线）",
+       L.roomOf(1).bg1 === "#FAE2B8" && L.roomOf(3).bg1 === "#CDD6DB" &&
+       L.roomOf(3).slab[0] === "#B9C1C7",
+       [L.roomOf(1).bg1, L.roomOf(3).bg1, L.roomOf(3).slab[0]].join(" / "));
+  }
+
   ck("霜原的介质系数是 1（第一段不该被任何系数污染）",
      snow.medium.speedK === 1 && snow.medium.needK === 1,
      JSON.stringify(snow.medium));

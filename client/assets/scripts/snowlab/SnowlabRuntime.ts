@@ -6132,7 +6132,16 @@ function themeOf(stage) {
    每个都走一遍 themeOf 是白花钱；而且"这一关是什么场景"本来就只有一个答案，
    存在这里能让断言直接读 `THEME.id` 核对。 */
 let THEME = THEMES[0];
-function applyTheme(t) { THEME = t || THEMES[0]; return THEME; }
+function applyTheme(t) {
+  THEME = t || THEMES[0];
+  ROOM = roomsOf(THEME.id);
+  /* **换场景必须把静态层作废。** 墙和平台是预渲染进一张大位图的，只换表
+     不换位图的话，屏幕上还是旧那张 —— 症状是"改了颜色没生效"。
+     出图工具会直接调 applyTheme 换场景，第一版四张图色差 0.1（等于没换）。 */
+  STATIC = null;
+  STATIC_TRIED = false;
+  return THEME;
+}
 
 /* ---------------------------------------------------------------- 角色尺度
    **这一组数字决定"画面里的东西有多大"，是 2026-10-28 那一轮的落点。**
@@ -6224,7 +6233,7 @@ const FOE_W = 37, FOE_H = 33;
      glow          这层的光色 [r,g,b] —— 冷色房间配暖光，是"深度"最便宜的信号
      dark/lite     墙面上下的压暗与反光。**冷色房间不能用暖棕压**，
                    暖棕压在青灰上会发脏绿，一脏整层就"没画完"。 */
-const ROOM = [
+const ROOM_BASE = [
   null,
   { key: 'wood',
     bg1: '#FAE2B8', bg2: '#E7C392', line: '#C79A63',
@@ -6251,6 +6260,70 @@ const ROOM = [
     det: '24,18,36', lines: 0,
     glow: [206, 178, 255], dark: '24,18,38', lite: '236,228,255' },
 ];
+/* ---------------------------------------------------------------- 岩层色阶
+   **地下才是玩家待得最久的地方，所以"换场景"必须换到地下。**
+   上一轮只换了地表（天空/雪脊/飘落物），而 48 关里每一关的大部分时间
+   都在四层房间里面 —— 那四层一直是同一套灰蓝/紫。结果是"第 37 关进了沙塚"，
+   实际看起来和第 1 关一模一样，只有开头两秒的天空不同。
+
+   做法：每套场景给一条**四档色阶**（浅 → 深），地下四层各往对应那一档
+   靠 45%。不写 16 套完整调色板，因为那等于 16 份要一起改的手工值，
+   改一处落三处。往色阶靠拢之后四层之间的明暗次序原样保留
+   （"越深越暗"照样读得出），而"这是哪一段"由色相负责。
+
+   霜原**不在这张表里**（走原表）。它是回归基线：色值必须和改之前逐项一致，
+   否则每调一次别的场景都可能顺手把首段改掉，而首段是最多人看过的画面。 */
+const ROOM_RAMP = {
+  /* 熔炉要**更红更暗**：拉到和沙塚同一个明度的话，两段看起来是"同一个
+     洞换了块布" —— 都是暖褐色。这边压到发黑的红，沙塚那边抬到发黄的浅。 */
+  ember: ['#8A3A28', '#6A2A20', '#4A1A16', '#2A0E10'],
+  spore: ['#4E7A5C', '#3E6A50', '#2E5442', '#203C32'],
+  dune:  ['#C6A268', '#AE8850', '#8C6A3E', '#5E452A'],
+};
+
+const _rgbOf = h => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+const _hexOf = c => '#' + c.map(v => clamp(Math.round(v), 0, 255).toString(16).padStart(2, '0')).join('').toUpperCase();
+const _mixHex = (h, to, t) => {
+  const a = _rgbOf(h);
+  return _hexOf([0, 1, 2].map(i => a[i] + (to[i] - a[i]) * t));
+};
+const _mixRGB = (str, to, t) => str.split(',')
+  .map((v, i) => Math.round(Number(v) + (to[i] - Number(v)) * t)).join(',');
+
+function _tintPal(p, toHex, t) {
+  const to = _rgbOf(toHex);
+  return {
+    key: p.key,
+    bg1: _mixHex(p.bg1, to, t),
+    bg2: _mixHex(p.bg2, to, t),
+    line: _mixHex(p.line, to, t),
+    slab: p.slab.map(h => _mixHex(h, to, t)),
+    cap: p.cap.map(h => _mixHex(h, to, t)),
+    /* 细节线/暗部/亮部靠得少一点：它们本来就是"同色系的深一点/浅一点"，
+       跟着一起大幅偏色会把纹理糊成一块。 */
+    det: _mixRGB(p.det, to, t * 0.72),
+    lines: p.lines,
+    glow: p.glow.map((v, i) => Math.round(v + (to[i] - v) * t * 0.55)),
+    dark: _mixRGB(p.dark, to, t * 0.58),
+    lite: _mixRGB(p.lite, to, t * 0.34),
+  };
+}
+
+const ROOM_CACHE = {};
+function roomsOf(id) {
+  if (ROOM_CACHE[id]) return ROOM_CACHE[id];
+  const ramp = ROOM_RAMP[id];
+  const out = ramp
+    ? ROOM_BASE.map((p, k) => (p ? _tintPal(p, ramp[clamp(k, 1, ramp.length) - 1], 0.68) : null))
+    : ROOM_BASE;
+  ROOM_CACHE[id] = out;
+  return out;
+}
+
+/* **`ROOM` 是"当前场景的岩层表"，不是常量。** 所有绘制照旧读 `ROOM[k]`，
+   换场景时由 `applyTheme` 换掉这张表 —— 这样 6 处引用一行都不用改。 */
+let ROOM = ROOM_BASE;
+
 const roomOf = k => ROOM[clamp(k, 1, ROOM.length - 1)];
 /* 楼板/台子属于哪一层房间：y 落在 (FLOORS[k-1], FLOORS[k]] 里就是第 k 层。
    **不能用"最近的楼层"** —— 悬空台子的 y 在两层之间，取最近会在 50% 的情况下
@@ -11007,6 +11080,11 @@ const API = {
      `{get:...}` 这种描述符，直接写函数名会被当成描述符对象静默丢掉，
      `L.applyTheme` 就是 undefined。 */
   applyTheme: (id) => applyTheme(typeof id === 'string' ? THEMES.find(t => t.id === id) : id),
+  /* 岩层调色板是**按场景算出来的**（`ROOM_RAMP` + 混色），不是手写常量。
+     断言要验"四个场景的地下确实不同"就只能读这个，读 `THEME` 不够 ——
+     那只能验地表。 */
+  roomsOf,
+  roomOf,
   /** 出图工具用：注入宠物贴图。键名沿用 `GroveBattle.ts` 的 ART_MANIFEST
       （`pet-cat` / `pet-dog` …），两份清单用同一套名字，换角色时不会对不上。 */
   setArt: (map) => { for (const k in map) ART[k] = map[k]; },

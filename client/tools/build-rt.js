@@ -31,7 +31,15 @@ function req(name, absDir) {
     return require(absDir);
   }
 }
-const TSC_DIR = "C:/ProgramData/cocos/editors/Creator/3.8.8/resources/app.asar.unpacked/node_modules/typescript";
+/* **`TSC_DIR` 可以用环境变量覆盖。** 这个路径写死了 Cocos 编辑器自带的
+   typescript —— 而 Cocos 只装在某一台机器上，另一台（2026-10-30 实测）
+   根本没装，于是 `build-rt` 直接 MODULE_NOT_FOUND，而它的失败信息是
+   "✗ 编译失败" 加一段 loader 栈，看着像代码有问题。
+   覆盖示例：
+     TSC_DIR="$HOME/.workbuddy/binaries/node/workspace/node_modules/typescript" \
+       node client/tools/build-rt.js */
+const TSC_DIR = process.env.TSC_DIR ||
+  "C:/ProgramData/cocos/editors/Creator/3.8.8/resources/app.asar.unpacked/node_modules/typescript";
 
 /* ① 清干净。**这一步是重点**，不是顺手 —— 不清就等于允许"过期产物"存在。 */
 if (fs.existsSync(OUT)) {

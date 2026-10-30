@@ -1,4 +1,4 @@
-/* @src-md5 dcab99d9a567b0fababd1660d510cd09 @src-lines 12433 */
+/* @src-md5 48e0e4e283fd59112db8b514fd7c9167 @src-lines 12557 */
 // @ts-nocheck
 /* ⚠ 自动生成，勿手改 —— 源：client/prototype/snowlab.html
    重新生成：python client/tools/extract_snowlab_runtime.py
@@ -111,6 +111,8 @@ const NUM = {
      bounce 0.55：撞碎了壳的球被弹回来，但还留着 55% 的速度 ——
      玩家能立刻再推一次。**球不消失**：球是唯一通道，弄丢就是死局。 */
   boss: { shell: 3, breakPow: 1700, bounce: 0.55, weak: 0.7, spit: 2, spitCd: 3.2 },
+
+  /* 上面那个 `boss` 是**第 48 关的基准值**，也是断言和出图的对表口径。 */
 
   /* 裹成球要几发。三档饱食度。
      ** 6 / 4 的倒挂是待验证的疑点 **：饱的时候反而更费，说不过去。
@@ -368,6 +370,74 @@ const NUM = {
     vy: -60, g: 210, life: 2.4, r: 9, windup: 0.42, maxAlive: 7,
   },
 };
+
+/* ---------------------------------------------------------------- BOSS 档位
+   **每 8 关一只（第 3 步）。**
+
+   一开始想给六只 BOSS 各配一套机制（会巡逻 / 会吐怪 / 分阶段变形），
+   想清楚之后否了，两个理由：
+     · 那五关的差异化本来就来自**目标 × 骨架**（第 8 关切目标是寻宝、
+       第 16 关切是省球、第 24 关切是破门），BOSS 再变花是往上叠噪声；
+     · grove 27 屏每屏末波都有 BOSS，用的就是"同一只、越来越硬"，
+       玩家读得懂，也没人说它重复 —— 而 snowlab 一只都没有，
+       真正缺的是**里程碑**，不是六种新机制。
+
+   所以差异只有三样**看得见**的东西，一起递进：
+     shell 层数（画成几圈石环）、breakPow 破壳门槛、体型宽度。
+   三样同向，玩家不看 HUD 也知道"这只比上一只硬"。
+
+   门槛是量出来的，不是拍的。球动量 `max(|vx|,|vy|) × r/baseR`，
+   满速推球 1209，r 见 ballR、absorbFoe = 2.0（裹一只 = 2 点）：
+     裸球            r 22.0  系数 1.000 → 1209
+     裹 1 只（2 点）  r 27.6  系数 1.255 → 1516
+     裹 2 只（4 点）  r 33.2  系数 1.509 → 1824
+   → 1100：裸球就够。第 8 关是**第一次遇到**，要教的是"推球去撞它"，
+           不是"你还不够大"。
+     1300 / 1450：裸球不够、裹一只够 → 逼出"先裹再推"。
+     1600 / 1660：裹一只不够、裹两只够 → 逼出"攒着打"。
+     1700：第 48 关原值，一个字没改。它是量过的，而且前面有裂壳铺垫。
+
+   `bounce` 也跟着降：壳越硬，撞碎之后球飞得越近，玩家好接。
+   反过来的话（硬壳 + 球弹飞）等于双重惩罚，连续两次扑空就没人再试了。 */
+const BOSS_STAGES = [8, 16, 24, 32, 40, 48];
+const BOSS_TIERS = [
+  { shell: 1, breakPow: 1100, bounce: 0.72, weak: 0.70, w: 96,  cn: '初遇' },
+  { shell: 2, breakPow: 1300, bounce: 0.66, weak: 0.70, w: 114, cn: '双壳' },
+  { shell: 2, breakPow: 1450, bounce: 0.60, weak: 0.70, w: 114, cn: '双壳·硬' },
+  { shell: 3, breakPow: 1600, bounce: 0.56, weak: 0.70, w: 132, cn: '三壳' },
+  { shell: 3, breakPow: 1660, bounce: 0.55, weak: 0.70, w: 132, cn: '三壳·硬' },
+  { shell: 3, breakPow: 1700, bounce: 0.55, weak: 0.70, w: 132, cn: '终局' },
+];
+/** 关号 → 档位；不是 BOSS 关给 null。
+ *  **纯函数、不读 S** —— 断言要能直接问"第 N 关的 BOSS 有多硬"，
+ *  而 reset 之前 S.stage 还是上一关的值（和 `goalOf` 同一个理由）。 */
+function bossTierOf(stage) {
+  const i = BOSS_STAGES.indexOf(Math.floor(stage == null ? 0 : stage));
+  return i < 0 ? null : BOSS_TIERS[i];
+}
+
+/* ---------------------------------------------------------------- 深潜的 BOSS
+   **深巢每屏末波都有 BOSS，深潜一只都没有 —— 这是两种无尽模式最大的差别。**
+   （CR-032 第 4 步：合并的方向是"以深潜为唯一实现，把深巢真正提供深度的
+   东西搬过来"。）
+
+   深潜现在的压力只有一条**连续**曲线：饱食一路消耗。连续曲线的坏处是
+   玩家第 3 关就知道第 9 关长什么样，只是更久。BOSS 是**离散的台阶** ——
+   打得过说明这一局还能往下，打不过就是天花板，而且这个结论一秒就出。
+
+   **间隔 5 层，档位封顶在第三档（2 壳 / 1450）。** 为什么封顶：
+   深潜不是"越练越强就能赢"的模式，它的资源比主线紧得多 —— 一命到底、
+   过门只回 1 点血、词条里「厚甲」让裹一只多发 30%、「寒冬」让球寿命 -30%、
+   「重石」让推球变轻 15%。三条全开时，攒出一颗"裹 2 只"的球已经很吃紧。
+   档位再往上（1600 / 1660 / 1700 都要求裹 2 只）就变成"打不动且必死"，
+   而那是**死局**，不是难度。主线可以要求 1700，因为它每关满血满弹。 */
+const DIVE_BOSS_EVERY = 5;
+/** 深潜关号（负数）→ 档位；只在深度是 5 的倍数时给。 */
+function diveBossTier(stage) {
+  const d = -Math.floor(stage == null ? 0 : stage);
+  if (!(d > 0) || d % DIVE_BOSS_EVERY !== 0) return null;
+  return BOSS_TIERS[Math.min(d / DIVE_BOSS_EVERY - 1, 2)];
+}
 
 /* ---------------------------------------------------------------- 工具 */
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -2271,8 +2341,13 @@ function genLevel(seed, stage) {
           如果是 144 就变成"必须打掉才能过门"，那样打不过是死局，
           而不是"打不过是再来一次"。 */
   let boss = null;
-  if (stage === STAGE_MAX) {
-    const BW = 132, BH = 96;
+  /* 主线按关号查档位，深潜按深度（负数）—— 两套发牌规则，一个摆位算法。 */
+  const bTier = bossTierOf(stage) || diveBossTier(stage);
+  if (bTier) {
+    /* **宽度随档位（96 / 114 / 132），这不只是外观。** 摆位是"扫全宽、按
+       `costAt` 找空档"，宽 96 比 132 容易塞进去 —— 所以前几只 BOSS 更少需要
+       "腾地方清箱子"，而清箱子会改这一关的解法（少了几口可以推的掩体）。 */
+    const BW = bTier.w, BH = 96;
     const floorY = lastY;
     const dX = door ? door.x : -1;
 
@@ -2326,7 +2401,16 @@ function genLevel(seed, stage) {
         boxes.splice(i, 1);
       }
     }
-    if (bx != null) boss = { x: bx, y: floorY - BH, w: BW, h: BH };
+    /* 档位参数**直接挂在关卡数据上**：`reset` 只补运行时字段
+       （hitT / flash / dead），不再从 `NUM.boss` 取 —— 否则六只 BOSS 全长一样。 */
+    if (bx != null) {
+      boss = {
+        x: bx, y: floorY - BH, w: BW, h: BH,
+        shell: bTier.shell, shellMax: bTier.shell,
+        breakPow: bTier.breakPow, bounce: bTier.bounce, weak: bTier.weak,
+        tierCn: bTier.cn,
+      };
+    }
   }
 
   /* ================= ⑨'-0 第 43 关「悬台」 =================
@@ -3173,8 +3257,11 @@ function reset(seed, stage) {
   S.deco = L.deco || [];
   S.boxes = L.boxes.map(b => ({ ...b }));
   S.door = { ...L.door };
+  /* **不要在这里覆盖 `shell`。** 六只 BOSS 的壳层数来自档位表（1/2/3），
+     以前这行写死 `NUM.boss.shell` —— 加了档位之后它会把所有 BOSS 都变三层，
+     而症状是"第 8 关的 BOSS 要打三下才碎"，读起来像难度没调好。 */
   S.boss = L.boss
-    ? { ...L.boss, shell: NUM.boss.shell, hitT: 0, spitT: NUM.boss.spitCd, dead: false, flash: 0 }
+    ? { ...L.boss, hitT: 0, spitT: NUM.boss.spitCd, dead: false, flash: 0 }
     : null;
   S.foes = L.spawns.map(sp => makeFoe(sp.x, sp.y, sp.kind));
   /* ---- 图鉴：见过的东西自动记 ----
@@ -3199,6 +3286,34 @@ function reset(seed, stage) {
     }
   }
   S.nests = (L.nests || []).map(n => ({ ...n, born: 0, t: 0 }));
+  /* **巢也要挪出壳外。** 上面只挪了 `S.foes`（一次性生成的杂兵），可
+     `S.nests` 是**持续刷怪**的 —— 它落在 BOSS 体内时，玩家看到的是
+     "这只 BOSS 一直在吐怪"，而设计上它明确不吐怪（压力来自球有寿命、
+     撞完被弹开）。而且新刷的怪一出生就在壳里，会被位置解算顶出去或者卡住。
+
+     这个 bug 在第 48 关一直存在（那关的巢正好落在 678..810 里），
+     只是扩到六只之后，`_boss6-shot` 一眼就看出来了 —— 出图能抓到
+     断言抓不到的东西，这是第 N 次了。
+
+     挪到两侧 132px；两侧都放不下就**关掉这个巢**（`left = 0`），
+     比让它从壳里吐怪强：少一窝怪只是这层安静一点，从壳里吐怪是设计事故。 */
+  if (S.boss && S.nests.length) {
+    const B = S.boss;
+    for (const n of S.nests) {
+      if (n.y < B.y - 40 || n.y > B.y + B.h + 40) continue;   // 不同层
+      if (n.x + 24 <= B.x - 12 || n.x >= B.x + B.w + 12) continue;
+      /* 落点必须在地板上，否则巢会悬空吐怪（掉下去、看着像 bug）。 */
+      const grounded = x => (S.plats || []).some(p =>
+        Math.abs(p.y - n.y) < 4 && x >= p.x + 8 && x + 24 <= p.x + p.w);
+      let moved = false;
+      for (const x of [B.x - 132, B.x + B.w + 132]) {
+        if (x < 16 || x > W - 32) continue;
+        if (!grounded(x)) continue;
+        n.x = x; moved = true; break;
+      }
+      if (!moved) n.left = 0;
+    }
+  }
   S.shots = []; S.balls = []; S.frags = []; S.texts = []; S.shards = []; S.rings = [];
   /* 踩实的球属于**这一关的地形**，换关必须一起清。忘记清的症状是
      "上一关的冰墩留在了下一关的半空中"—— 而它照样能站人，所以
@@ -4293,7 +4408,9 @@ function bossTakeHit(b) {
   if (b.hitCd > 0) return;
   const pow = Math.max(Math.abs(b.vx), b.vy) * (b.r / NUM.ball.baseR);
 
-  if (pow >= NUM.boss.breakPow) {
+  /* **门槛读 BOSS 自己的档位，不读全局 `NUM.boss`。** 六只 BOSS 的
+     破壳阈值是 1100→1700 递进的；读全局的话后五关都是同一个手感。 */
+  if (pow >= B.breakPow) {
     B.shell--;
     B.flash = 1;
     B.hitT = 0;
@@ -4308,12 +4425,12 @@ function bossTakeHit(b) {
     /* **球不消失，只被弹开。** 球是这一关唯一的通道：
        弄丢一颗就少一颗，而"球掉进洞里"在这套地形里太容易发生了。
        弹开 55% 速度，玩家能立刻追上去再推一次。 */
-    b.vx = -outX * Math.min(Math.abs(b.vx) * NUM.boss.bounce, 780);
+    b.vx = -outX * Math.min(Math.abs(b.vx) * B.bounce, 780);
     b.vy = -320;
     b.hitCd = 0.3;
     if (B.shell <= 0) B.dead = true;
   } else {
-    b.vx = -outX * Math.min(Math.abs(b.vx) * NUM.boss.weak, 520);
+    b.vx = -outX * Math.min(Math.abs(b.vx) * B.weak, 520);
     b.vy = -180;
     b.hitCd = 0.3;
     kickShake(3, 'bossweak');
@@ -9865,7 +9982,9 @@ function drawBoss(g) {
   if (!B) return;
   const cx = B.x + B.w / 2;
   const baseY = B.y + B.h;
-  const k = B.dead ? 0 : B.shell / NUM.boss.shell;
+  /* `shellMax` 是本关档位的满壳数（1/2/3），不是全局常量 ——
+     否则第 8 关那只单壳 BOSS 会按 1/3 的半径画出来。 */
+  const k = B.dead ? 0 : B.shell / B.shellMax;
   const R0 = B.w * 0.40;
   const R = R0 * (0.62 + 0.38 * k);
   const cy = baseY - 8 - R;
@@ -9933,7 +10052,7 @@ function drawBoss(g) {
      读作"这里能撬开"）。
      每圈画两遍：深色 4px 压出壳缝，再压 1.6px 暖色当缝里透的光。
      单画深色在暗处糊掉，单画暖色像装饰纹，两道叠起来缩略图里才数得清。 */
-  for (let i = 0; i < NUM.boss.shell; i++) {
+  for (let i = 0; i < B.shellMax; i++) {
     const rr = R * (0.98 - i * 0.2);
     const alive = i < B.shell;
     g.setLineDash(alive ? [] : [4, 6]);
@@ -9951,7 +10070,7 @@ function drawBoss(g) {
   /* 裂纹：**破了几层就有几道**。圈数说"还剩多少"，裂纹说"已经被打过"，
      两个方向的信息都要有 —— 只看圈的话，第一层壳刚破时和"本来就只有
      两层"长得一模一样。 */
-  const cracks = NUM.boss.shell - B.shell;
+  const cracks = B.shellMax - B.shell;
   for (let c = 0; c < cracks; c++) {
     const a0 = -Math.PI * 0.62 + c * 1.9;
     g.strokeStyle = 'rgba(14,16,22,.55)';
@@ -12259,6 +12378,11 @@ const API = {
      `goalMet` 同理：门开判据是两条完全不同的分支，只测"门能开"验不出
      "寻宝关的门是不是被击杀数顺带撞开的"。 */
   goalOf, goalMet, GOAL_LIST, GOAL_CN, GOAL_SAY, GOAL_STRONG_BALLS,
+  /* BOSS 档位（第 3 步：每 8 关一只）。
+     **`bossTierOf` 必须导出**，理由和 `goalOf` 一样：壳数/门槛是纯函数，
+     断言要能直接问"第 16 关的 BOSS 要裹几只球" —— 出图只能看出"它长得
+     比上一个大"，量不出门槛有没有真的递进。 */
+  bossTierOf, diveBossTier, BOSS_STAGES, BOSS_TIERS, DIVE_BOSS_EVERY,
   /* 主线关号链路（出征页 → 第 N 关 → 通关 → 第 N+1 关）。
      导出是为了断言能验"关号派生种子可复现 / 不同关不同图 / 通关推进 /
      48 关封顶"，这四条里只有第一条在图上看得见。 */

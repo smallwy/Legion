@@ -3442,12 +3442,16 @@ console.log("\n=== 五十. BOSS：第 48 关的三层壳 ===");
 {
   const hasBoss = [];
   for (let n = 1; n <= L.STAGE_MAX; n++) { L.startStage(n); if (L.S.boss) hasBoss.push(n); }
-  ck("★ 只有第 48 关有 BOSS（不是每关都有）",
-     hasBoss.length === 1 && hasBoss[0] === L.STAGE_MAX, hasBoss.join(","));
-  L.startStage(1);
-  ck("前 47 关没有 BOSS", !L.S.boss, String(!!L.S.boss));
+  /* **第 3 步：每 8 关一只。** 判据写成"和 BOSS_STAGES 完全相等"，
+     不是"数量是 6" —— 后者在两关被改成同一关时照样通过。 */
+  ck("★ BOSS 在 8/16/24/32/40/48（每 8 关一只）",
+     hasBoss.join(",") === L.BOSS_STAGES.join(","), hasBoss.join(","));
+  L.startStage(7);
+  ck("★ 非 BOSS 关一只都没有（第 7 关）", !L.S.boss, String(!!L.S.boss));
+  L.startStage(9);
+  ck("非 BOSS 关一只都没有（第 9 关）", !L.S.boss, String(!!L.S.boss));
   L.startDive(20261030);
-  ck("深潜没有 BOSS（它是无尽模式，不该有终点怪）", !L.S.boss, String(!!L.S.boss));
+  ck("深潜第 1 层没有 BOSS（第 5 层才有，见五十·补）", !L.S.boss, String(!!L.S.boss));
 
   L.startStage(L.STAGE_MAX);
   const S = L.S, B = S.boss;
@@ -3549,6 +3553,175 @@ console.log("\n=== 五十. BOSS：第 48 关的三层壳 ===");
     const outside = L.S.foes.filter(f => f.x < 0 || f.x + f.w > L.W);
     ck("挪开的杂兵还在房间内（没被推出墙外）", outside.length === 0,
        "越界 " + outside.length + " 只");
+  }
+
+  L.startStage(1);
+}
+
+/* =========================================================================
+   五十·补. BOSS 档位：六只，越往后越硬
+   -------------------------------------------------------------------------
+   **为什么不能只验"有 6 只"：** 六只 BOSS 如果全是三层壳、同一个门槛，
+   那"每 8 关一个"就只是把同一场战斗放五分钟。玩家第五次遇到它会开始
+   无视 —— 而它是横穿不是必经，跳过完全可行。
+
+   这里守三件事：
+     ① 壳数递进（1 → 2 → 3），画出来是几圈石环，玩家不看 HUD 也读得出；
+     ② 门槛**能达成、且不白送**：每档恰好卡在"必须裹到第 N 只"；
+     ③ 第 48 关不许被顺手改掉（1700 / 三层 / 0.55 是量过的终局）。
+
+   ②的算法：满速推球 1209，球动量 = 1209 × ballR(absorb) / 22。
+   对每档求"最少裹几只才过线"，再验**少一颗就过不去** ——
+   只验前者的话，门槛调到 100 也会通过（裸球就够，等于没有门槛）。
+   ========================================================================= */
+console.log("\n=== 五十·补. BOSS 档位（每 8 关一只） ===");
+{
+  const POW_FULL = 1209;
+  const powAt = a => POW_FULL * (L.ballR(a) / L.NUM.ball.baseR);
+  const shells = [], pows = [], widths = [], needs = [];
+  for (const st of L.BOSS_STAGES) {
+    const t = L.bossTierOf(st);
+    shells.push(t.shell); pows.push(t.breakPow); widths.push(t.w);
+    /* absorbFoe = 2，所以档位只可能是 0 / 2 / 4 / 6（裹整只）。 */
+    let need = null;
+    for (let a = 0; a <= 24; a += 2) if (powAt(a) >= t.breakPow) { need = a; break; }
+    needs.push(need);
+  }
+  ck("★ 六只 BOSS 都有档位（没有 null）", needs.every(n => n !== null), needs.join(","));
+  ck("★ 壳数按 1→2→3 递进（画出来是几圈石环）",
+     shells.join(",") === "1,2,2,3,3,3", shells.join(","));
+  ck("★ 破壳门槛单调不减", pows.every((v, i) => i === 0 || v >= pows[i - 1]), pows.join(","));
+  ck("体型随壳数变大（96/114/132）",
+     widths.every((v, i) => i === 0 || v >= widths[i - 1]), widths.join(","));
+  /* 第 8 关必须裸球就破：第一次遇到，要教的动词是"推球撞它"，
+     不是"你还不够大"（那时候玩家还没学会攒球）。 */
+  ck("★ 第 8 关裸球就能破（教学：先学会撞它）", needs[0] === 0, "要裹 " + needs[0]);
+  ck("★ 第 16/24 关要裹 1 只（裸球不够）",
+     needs[1] === 2 && needs[2] === 2, needs.join(","));
+  ck("★ 第 32/40/48 关要裹 2 只（裹一只不够）",
+     needs[3] === 4 && needs[4] === 4 && needs[5] === 4, needs.join(","));
+  const slack = L.BOSS_STAGES.map((st, i) => {
+    const lower = needs[i] - 2;
+    return lower < 0 ? 999 : L.bossTierOf(st).breakPow - powAt(lower);
+  });
+  ck("★ 每档都卡得住（少裹一颗就过不去）", slack.every(v => v > 0), slack.join(","));
+  /* **终局不许被顺手改掉。** 症状是"第 48 关好像变简单了"，
+     而没人会为了这句话去 diff 数值表。 */
+  const last = L.bossTierOf(L.STAGE_MAX);
+  ck("★ 第 48 关仍是原值（三层 / 1700 / 0.55）",
+     last.shell === L.NUM.boss.shell && last.breakPow === L.NUM.boss.breakPow &&
+     last.bounce === L.NUM.boss.bounce,
+     last.shell + " / " + last.breakPow + " / " + last.bounce);
+  ck("非 BOSS 关的档位是 null（第 7 关）", L.bossTierOf(7) === null);
+  ck("深潜的负数关号拿不到档位（不该中途冒出终点怪）", L.bossTierOf(-3) === null);
+
+  /* ---- 六关都要真的摆得下 ----
+     **单独验一遍，因为宽度变了。** 第 48 关那套"48 个种子摆得下"是在
+     132 宽上验的；前几只虽然更窄（更容易塞），但门厅层的箱子密度不同 ——
+     第 8 关是 3 层、第 32 关是 4 层，`costAt` 的"能清几口"完全不是一回事。
+     一条恒真式（"更窄所以更宽松"）就是那种写完永远绿、坏了也不响的断言。 */
+  for (const st of L.BOSS_STAGES) {
+    let miss = 0, ovl = 0, dblk = 0, loot = 0;
+    for (let i = 0; i < 24; i++) {
+      const seed = Math.imul(i + 7, 2654435761) >>> 0;
+      const g = L.genLevel(seed, st);
+      if (!g.boss) { miss++; continue; }
+      const B = g.boss;
+      for (const b of g.boxes) {
+        if (b.dead) continue;
+        if (b.x + b.w <= B.x + 1 || b.x >= B.x + B.w - 1) continue;
+        if (b.y + b.h <= B.y + 1 || b.y >= B.y + B.h - 1) continue;
+        if (b.loot) loot++;
+        ovl++; break;
+      }
+      if (!(B.x + B.w <= g.door.x + 1 || B.x >= g.door.x + g.door.w - 1)) dblk++;
+    }
+    ck("★ 第 " + st + " 关：24 个种子都摆得下（缺 " + miss + " / 压箱 " + ovl +
+       " / 压金箱 " + loot + " / 挡门 " + dblk + "）",
+       miss === 0 && ovl === 0 && loot === 0 && dblk === 0);
+  }
+
+  /* ---- 单壳 BOSS 也必须"打三下才碎"的判据不能套用 ----
+     第 8 关是 1 层壳：**裸球撞一次就该碎**。这条防的是 reset 里又把
+     `shell` 覆盖成 `NUM.boss.shell`（3）—— 那个症状是"第 8 关要撞三次"，
+     而它和"门槛调高了"在画面上完全一样。 */
+  L.startStage(8);
+  const B8 = L.S.boss;
+  ck("★ 第 8 关进关时只有一层壳", B8 && B8.shell === 1 && B8.shellMax === 1,
+     B8 ? B8.shell + "/" + B8.shellMax : "没有 BOSS");
+  if (B8) {
+    /* **起点必须紧贴壳边缘（26px），不能"离 90px 助跑"。**
+       第一版放远 90px，球在 x=446 就停在箱子上了 —— 门厅层 BOSS 左边
+       常有一摞木箱，而`costAt` 只保证 BOSS 自己不压箱，不管助跑路径。
+       症状是"裸球撞不破"，看起来像门槛设高了，实际球压根没到。 */
+    const bb = L.spawnBall(B8.x - 26, B8.y + B8.h * 0.5, 1209, 0);
+    for (let i = 0; i < 42; i++) { if (bb.dead) break; L.stepBalls(1 / 60); }
+    ck("★ 第 8 关裸球一次就破壳（门槛真的接到了这一关）",
+       B8.shell === 0 && B8.dead === true, "shell " + B8.shell);
+  }
+  /* ---- 巢不能落在壳里 ----
+     **这是既有的 bug，不是这次加的。** 第 48 关的刷怪巢一直在 678..810 的
+     BOSS 体内（六只之后才被 `_boss6-shot` 一眼看出来）。`reset` 里原来
+     只挪一次性生成的 `S.foes`，没管 `S.nests` —— 而巢是**持续刷怪**的，
+     玩家看到的是"这只 BOSS 一直在吐怪"，偏偏设计上它明确不吐怪。
+
+     断言原来没有这一条，因为所有断言都在验"存在/数值"，没有一条在验
+     「"两个物件不该重叠"」这种空间关系 —— 而它是最容易悄悄发生的。 */
+  {
+    const bad = [];
+    for (const st of L.BOSS_STAGES) {
+      L.startStage(st);
+      const B = L.S.boss;
+      if (!B) { bad.push(st + ":无BOSS"); continue; }
+      const inside = L.S.nests.filter(n =>
+        n.left > 0 && n.x + 24 > B.x && n.x < B.x + B.w &&
+        n.y > B.y - 40 && n.y <= B.y + B.h + 40);
+      if (inside.length) bad.push(st + ":" + inside.length + "个");
+    }
+    ck("★ 刷怪巢没落在壳里（否则 BOSS 看起来在吐怪）", bad.length === 0, bad.join(" / "));
+  }
+
+  /* ---- 深潜也有 BOSS（CR-032 第 4 步）----
+     深巢每屏末波都有 BOSS，深潜原来一只都没有 —— 于是它的压力只有一条
+     **连续**曲线（饱食一路消耗），玩家第 3 关就知道第 9 关长什么样。
+     BOSS 是离散的台阶：打得过说明这局还能往下，打不过就是天花板。 */
+  ck("★ 深潜深度 5 出 BOSS（深巢的末波 BOSS 搬过来了）",
+     !!L.genLevel(1234, -5).boss);
+  ck("深潜深度 4 不出 BOSS（间隔是 " + L.DIVE_BOSS_EVERY + "）",
+     !L.genLevel(1234, -4).boss);
+  {
+    const tiers = [5, 10, 15, 20, 40].map(d => L.diveBossTier(-d));
+    ck("★ 深潜档位按深度递进并封顶（壳 1→2→2→2→2）",
+       tiers.map(t => t && t.shell).join(",") === "1,2,2,2,2",
+       tiers.map(t => t && t.shell).join(","));
+    /* 封顶的理由是**资源**：深潜一命到底、过门只回 1 点血、词条还会
+       让裹球更费。门槛超过 1450 就要求"裹 2 只"，而深度 40 之后
+       攒不出来 —— 那是死局，不是难度。 */
+    ck("★ 深潜封顶在 1450（再高就攒不出裹 2 只的球）",
+       tiers[4].breakPow === 1450, String(tiers[4].breakPow));
+  }
+  /* 深潜固定 5 层，门厅层更窄、箱子更密 —— 主线那套"48 个种子摆得下"
+     不能替它背书（层数不同等于另一张桌子）。 */
+  {
+    let miss = 0, ovl = 0, dblk = 0;
+    for (const d of [5, 10, 15]) {
+      for (let i = 0; i < 16; i++) {
+        const seed = Math.imul(i + 3, 2654435761) >>> 0;
+        const g = L.genLevel(seed, -d);
+        if (!g.boss) { miss++; continue; }
+        const B = g.boss;
+        for (const b of g.boxes) {
+          if (b.dead) continue;
+          if (b.x + b.w <= B.x + 1 || b.x >= B.x + B.w - 1) continue;
+          if (b.y + b.h <= B.y + 1 || b.y >= B.y + B.h - 1) continue;
+          ovl++; break;
+        }
+        if (!(B.x + B.w <= g.door.x + 1 || B.x >= g.door.x + g.door.w - 1)) dblk++;
+      }
+    }
+    ck("★ 深潜 48 个样本都摆得下 BOSS，且不压箱、不挡门",
+       miss === 0 && ovl === 0 && dblk === 0,
+       "缺 " + miss + " / 压箱 " + ovl + " / 挡门 " + dblk);
   }
 
   L.startStage(1);

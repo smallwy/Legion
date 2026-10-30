@@ -55,6 +55,16 @@ async function boot(protoPath) {
      `if (bg) return;`，程序化的雪脊一次都不执行 —— 这张图就成了
      "一格是照片、三格是代码"，没法比。 */
   L.setBackdrop({ snow: null, ember: null, spore: null, dune: null });
+  /* **ART=1 要在这里用 `loadImage` 真读文件。** 靠 HTML 里那两块 base64
+     是不行的：jsdom 不实现 canvas，`Image` 的 onload 永远不触发 ——
+     背景看着"没挂上"，而文件明明内嵌了。 */
+  if (WITH_ART) {
+    const bg = {};
+    for (const [f, id] of [["bg-surface.jpg", "snow"], ["bg-forge.jpg", "ember"]]) {
+      try { bg[id] = await loadImage(path.join(ROOT, "assets", "snowlab", f)); } catch (e) { bg[id] = null; }
+    }
+    L.setBackdrop(bg);
+  }
   try { L.setArt((await require("./_snowlab-art").loadArt()).map); } catch (e) { }
   return { L, S: L.S, real, g };
 }

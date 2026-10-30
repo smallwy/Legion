@@ -3344,6 +3344,39 @@ console.log("\n=== 四十九. 场景主题 ===");
      snow.medium.speedK === 1 && snow.medium.needK === 1,
      JSON.stringify(snow.medium));
 
+  /* ---- 立绘按场景挂，不许串 ----
+     **这一组守的是"给熔炉加图会不会把霜原弄没"**。`setBackdrop` 第一版
+     最后一个分支写死 `BG_IMGS.snow = arg`，于是给 ember 挂图挂到了 snow 上 ——
+     症状是"熔炉还是矢量、霜原变成了熔炉的图"，而两件事在单场景截图里
+     都看不出来（各自"有一张图"）。 */
+  {
+    const fake = { width: 960, height: 340, __tag: "forge" };
+    L.setBackdrop(fake, "ember");
+    ck("★ 按场景挂图不会串（挂 ember 不会改 snow）",
+       L.bgFor("ember") === fake && L.bgFor("snow") === null,
+       "ember=" + (L.bgFor("ember") ? "有" : "无") + " snow=" + (L.bgFor("snow") ? "有" : "无"));
+
+    /* 没画图的场景必须是 null —— `bgOf` 返回 undefined 的话，
+       `if (bg)` 判断成立、`drawImage(undefined)` 直接抛，整帧不画。 */
+    ck("没画图的场景取到的是 null（不是 undefined）",
+       L.bgFor("spore") === null && L.bgFor("dune") === null,
+       String(L.bgFor("spore")));
+
+    L.applyTheme("ember");
+    ck("切到熔炉时确实用上了熔炉那张", L.bgFor("ember") === fake);
+    L.applyTheme("snow");
+    ck("切回霜原时没有沾到熔炉的图", L.bgFor("snow") === null);
+
+    /* `setBackdrop(null)` 是**老工具的清理调用**，只该清霜原。
+       顺带清掉所有场景的话，出图工具连着挂两张时后一张会把前一张抹掉。 */
+    L.setBackdrop(fake, "snow");
+    L.setBackdrop(null);
+    ck("setBackdrop(null) 只清霜原，不动别的场景",
+       L.bgFor("snow") === null && L.bgFor("ember") === fake,
+       "snow=" + String(L.bgFor("snow")) + " ember=" + (L.bgFor("ember") ? "有" : "无"));
+    L.setBackdrop({ snow: null, ember: null, spore: null, dune: null });
+  }
+
   L.startStage(1);
 }
 

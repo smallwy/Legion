@@ -73,8 +73,17 @@ A.reset(1); B.reset(1);
 const artKeys = [...(B.FOE_ART ? Object.keys(B.FOE_ART) : [])].sort().join(',');
 ok('两边导出同一批常量', A.FLOORS.length === B.FLOORS.length && artKeys === 'fang,grub,moss',
   '层数 ' + A.FLOORS.length + '/' + B.FLOORS.length + '，敌人 ' + artKeys);
-ok('内嵌贴图搬到了 SnowlabArt（5 张）',
-  Object.keys(require(path.join(BUILD, 'SnowlabArt.js')).INLINE_ART).length === 5);
+/* **验"有哪些"，不是"有几个"。** 写死 `=== 5` 的版本在给熔炉加了一张
+   背景之后直接红 —— 而真正该守的是"原来那五张一张没丢 + 新加的背景也在"。
+   数数型断言把"加了东西"和"丢了东西"报成同一件事。 */
+const _art = require(path.join(BUILD, 'SnowlabArt.js')).INLINE_ART;
+const _need = ['bg', 'pet-cat', 'foe-moss', 'foe-fang', 'foe-grub'];
+ok('内嵌贴图搬到了 SnowlabArt（原有 5 张一张不少）',
+  _need.every(k => typeof _art[k] === 'string' && _art[k].length > 100),
+  _need.filter(k => !_art[k]).join(',') || '');
+ok('背景图按场景各有一块（bg / bg-ember）',
+  typeof _art['bg'] === 'string' && typeof _art['bg-ember'] === 'string',
+  Object.keys(_art).filter(k => k.startsWith('bg')).join(','));
 
 /* ---------- ③ 逐帧对坐标 ---------- */
 const DT = 1 / 60;
@@ -138,7 +147,11 @@ ok('没有残留 window.SNOWLAB 赋值', !/window\.SNOWLAB\s*=/.test(src));
 ok('没有残留自发 rAF 主循环', !/requestAnimationFrame\(loop\)/.test(src));
 ok('画布是注入的（let cv = null）', /let cv: any = null;/.test(src));
 ok('启动段改成了 snowlabBoot', /export function snowlabBoot/.test(src));
-ok('贴图从 INLINE_ART 读，不再问 DOM', /INLINE_ART\[k\]/.test(src) && /INLINE_ART\["bg"\]/.test(src));
+/* 背景那段现在走 `INLINE_ART[bgElId(id).replace("art-", "")]` —— 验的是
+   "**从 INLINE_ART 取**、且不再问 DOM"，不是某个具体下标。 */
+ok('贴图从 INLINE_ART 读，不再问 DOM',
+  /INLINE_ART\[k\]/.test(src) && /INLINE_ART\[bgElId\(/.test(src) &&
+  !/document\.getElementById/.test(src));
 
 /* ---------- ⑥ 走一遍 Cocos 组件真正会走的那条路：注入画布 → boot → draw ----------
    **这一节才是"能不能在 Cocos 里跑"的实证。** 上面几节只证明逻辑没变，

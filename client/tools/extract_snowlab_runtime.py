@@ -172,15 +172,21 @@ let ctx: any = null;
     # 下游 runtime-check 一片绿（它读的是没更新的 .ts）。
     pat_bg = re.compile(r'\(function initBackdrop\(\) \{.*?\n\}\)\(\);', re.S)
     assert len(pat_bg.findall(body)) == 1, len(pat_bg.findall(body))
+    # **遍历 `BG_IMGS`，不要写死 snow。** 写死的版本给 ember 加了图也不读，
+    # 而症状是"base64 块在 HTML 里、进游戏却不显示" —— 块没错，是代码不看它。
+    # key 的换算跟原型 `bgElId` 同源：id="art-bg" → INLINE_ART["bg"]，
+    # id="art-bg-ember" → INLINE_ART["bg-ember"]。
     body = pat_bg.sub(lambda _m: '''function snowlabInitBackdrop() {
   if (typeof Image === "undefined") return;
-  const src = (INLINE_ART["bg"] || "").trim();
-  if (!src) return;
-  const im = new Image();
-  /* 按场景存（`BG_IMGS`），不是一张全局图 —— 见原型里的长注释。 */
-  im.onload = () => { BG_IMGS.snow = im; };
-  im.onerror = () => { BG_IMGS.snow = null; };
-  im.src = src;
+  for (const id of Object.keys(BG_IMGS)) {
+    const src = (INLINE_ART[bgElId(id).replace("art-", "")] || "").trim();
+    if (!src) continue;
+    const im = new Image();
+    /* 按场景存（`BG_IMGS`），不是一张全局图 —— 见原型里的长注释。 */
+    im.onload = () => { BG_IMGS[id] = im; };
+    im.onerror = () => { BG_IMGS[id] = null; };
+    im.src = src;
+  }
 }''', body)
 
     # ③ 角色贴图：同上

@@ -6711,19 +6711,26 @@ function drawRoomWall(g, k, cY, fY) {
    四个场景全被同一张图盖住，`THEME` 等于白写。所以改成按 `theme.id` 存：
    **给哪个场景画了图，哪个场景就用图；没画图的走程序化**，不是"没图就空白"。
    这也让"加一个场景"变成"往 `BG_IMGS` 里多塞一张"，不用碰任何绘制代码。 */
-const BG_IMGS = { snow: null };
+const BG_IMGS = { snow: null, ember: null };
+/** 立绘块的 DOM id。**`snow` 用的还是历史那个 `art-bg`** ——
+    `_inline-art.js`（角色贴图）和 `_snowlab-embed-bg.js` 都锚着它，
+    改 id 会让角色贴图块插不进来，症状是"人物变成代码图形了"。
+    其余场景一律 `art-bg-<场景 id>`。两处（这里 + embed 脚本）必须一致。 */
+function bgElId(id) { return id === "snow" ? "art-bg" : "art-bg-" + id; }
 /** 当前场景有没有立绘。**别把 `BG_IMG` 直接当"有没有图"用** ——
     有图的是 snow，而玩家打到第 13 关时看的是 ember。 */
 function bgOf(t) { return (t && BG_IMGS[t.id]) || null; }
 function snowlabInitBackdrop() {
   if (typeof Image === "undefined") return;
-  const src = (INLINE_ART["bg"] || "").trim();
-  if (!src) return;
-  const im = new Image();
-  /* 按场景存（`BG_IMGS`），不是一张全局图 —— 见原型里的长注释。 */
-  im.onload = () => { BG_IMGS.snow = im; };
-  im.onerror = () => { BG_IMGS.snow = null; };
-  im.src = src;
+  for (const id of Object.keys(BG_IMGS)) {
+    const src = (INLINE_ART[bgElId(id).replace("art-", "")] || "").trim();
+    if (!src) continue;
+    const im = new Image();
+    /* 按场景存（`BG_IMGS`），不是一张全局图 —— 见原型里的长注释。 */
+    im.onload = () => { BG_IMGS[id] = im; };
+    im.onerror = () => { BG_IMGS[id] = null; };
+    im.src = src;
+  }
 }
 
 /* ---- 宠物贴图（可选；没有就走下面的代码图形） ----
@@ -11062,13 +11069,20 @@ const API = {
   /* **两种调用都认**：传一张 Image = 给霜原换图（现存二十多个出图工具全是
      这么调的，一条都不改）；传 `{ snow: img, ember: img }` = 按场景挂图。
      传 null 清掉**当前场景**那张 —— 老工具清的是霜原，行为不变。 */
-  setBackdrop: (arg) => {
-    if (!arg) { BG_IMGS[THEME.id] = null; return; }
+  /* 挂背景图。三种用法：
+       `setBackdrop(img, 'ember')`  → 只挂熔炉那张（出图 / 断言按场景验）
+       `setBackdrop({ snow: img })` → 一次挂多张
+       `setBackdrop(null)`          → 清掉（默认清霜原，保持老工具的行为）
+     **第二个参数默认 `snow` 而不是 `THEME.id`**：老工具都是
+     `loadImage(失败) → setBackdrop(null)`，那时还没 applyTheme，
+     按当前场景清会清错地方，而"清错了"和"清了"看不出区别。 */
+  setBackdrop: (arg, id) => {
+    if (!arg) { BG_IMGS[id || 'snow'] = null; return; }
     if (typeof arg === 'object' && !('width' in arg) && !('naturalWidth' in arg)) {
       for (const k of Object.keys(arg)) BG_IMGS[k] = arg[k] || null;
       return;
     }
-    BG_IMGS.snow = arg || null;
+    BG_IMGS[id || 'snow'] = arg || null;
   },
   themes: () => THEMES.map(t => t.id),
   themeOf,

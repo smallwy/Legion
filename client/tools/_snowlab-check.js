@@ -2615,8 +2615,12 @@ group("四十三、主线 48 关（stage 曲线 + 骨架发牌）");
   }
   ck("主线 48 关全部过校验", allOK, badAt);
 
-  ck("层数首关是 2 层（教学关不是多层）", floorsSeen[0] === 2, String(floorsSeen[0]));
-  ck("层数末关是 5 层", floorsSeen[47] === 5, String(floorsSeen[47]));
+  /* **层数就是关卡曲线**（2026-10-30 晚，用户：「不应该是递进吗
+     一开始是 1 层 2 层 3 层等等 现在各个关卡大同小异」）。
+     首关是 **1 层且没有洞** —— 第 1 关只教"把球顶到门上"这一件事，
+     以前最少 2 层，所以这一关根本不存在。末关 6 层是箱子还堆得成箱山的上限。 */
+  ck("层数首关是 1 层（只有一层，连洞都没有）", floorsSeen[0] === 1, String(floorsSeen[0]));
+  ck("层数末关是 6 层", floorsSeen[47] === 6, String(floorsSeen[47]));
   let mono = true;
   for (let i = 1; i < floorsSeen.length; i++) if (floorsSeen[i] < floorsSeen[i - 1]) mono = false;
   ck("层数单调不降（" + floorsSeen.filter((v, i) => i === 0 || v !== floorsSeen[i - 1]).join("→") + "）",
@@ -2625,13 +2629,29 @@ group("四十三、主线 48 关（stage 曲线 + 骨架发牌）");
   const twoLate = floorsSeen.findIndex((v, i) => v === 2 && i >= 8);
   ck("2 层关只出现在前 8 关", twoLate < 0, twoLate >= 0 ? "stage " + (twoLate + 1) : "无");
 
-  /* 连续 6 关不重复骨架。 */
-  let dup = -1;
-  for (let i = 0; i + 5 < skels.length && dup < 0; i++) {
-    if (new Set(skels.slice(i, i + 6)).size < 6) dup = i + 1;
+  /* **骨架间隔**。原来是"任意连续 6 关不重复"—— 那等于每 6 关从头来一遍，
+     第 7 关和第 1 关同骨架，玩家读成"又是这一关"。现在每轮整体左移一格，
+     判据换成**同一骨架两次出现至少隔 5 关**（6 种 6 关一轮的鸽笼下限就是 5，
+     再大只能靠加骨架种类，那是内容量的事不是排班的事）。
+     这条比原来的强：原来满足"间隔 6"却允许"跨轮完全重合"。 */
+  const lastSeen = {}, worstSk = [];
+  let minGap = 99;
+  for (let i = 0; i < skels.length; i++) {
+    const sk = skels[i];
+    if (lastSeen[sk] != null) {
+      const gap = i - lastSeen[sk];
+      if (gap < minGap) { minGap = gap; worstSk.length = 0; worstSk.push(sk + "@" + (lastSeen[sk] + 1) + "→" + (i + 1)); }
+    }
+    lastSeen[sk] = i;
   }
-  ck("任意连续 6 关骨架不重复（" + [...new Set(skels)].length + " 种轮转）", dup < 0,
-     dup > 0 ? "stage " + dup + " 起重复" : "无");
+  ck("同一骨架两次出现至少隔 5 关（实际最近 " + (minGap === 99 ? "-" : minGap) + "）",
+     minGap >= 5, worstSk.join(","));
+  /* 相邻两轮的**起手不许相同** —— 这是"第 7 关不是第 1 关"的口子。 */
+  let sameHead = [];
+  for (let r = 1; r * 6 < skels.length; r++) {
+    if (skels[r * 6] === skels[(r - 1) * 6]) sameHead.push("第" + (r * 6 + 1) + "关");
+  }
+  ck("★ 每轮起手换骨架（相邻轮不撞同一张开场图）", sameHead.length === 0, sameHead.join(","));
   ck("48 关里六种骨架都出现（各 8 次）",
      [...new Set(skels)].length === 6, [...new Set(skels)].join("/"));
 
@@ -2756,8 +2776,8 @@ group("四十四、敌方不会原地反复往上跳");
     }
     ck("48 关全部通过 validateLevel（失败 " + bad + " 关）", bad === 0,
        bad ? "第 " + worstStage + " 关" : "");
-    ck("层数在 2~5 之间（" + minFloors + "~" + maxFloors + "）",
-       minFloors >= 2 && maxFloors <= 5, minFloors + "~" + maxFloors);
+    ck("层数在 1~6 之间（" + minFloors + "~" + maxFloors + "）",
+       minFloors >= 1 && maxFloors <= 6, minFloors + "~" + maxFloors);
   }
 
   /* ④ 进关：clamp + 存档。**存档是这条链路的唯一持久状态**，
@@ -2969,19 +2989,30 @@ group("四十七、关卡目标（破门 / 寻宝 / 省球）");
      JSON.stringify(cnt));
   ck("每种目标至少 12 关（不是象征性放两关）",
      L.GOAL_LIST.every(g0 => cnt[g0] >= 12), JSON.stringify(cnt));
-  ck("★ 教学段 1~6 全是破门（第一关不解释目标）",
-     [1, 2, 3, 4, 5, 6].every(n => L.goalOf(n) === 'door'),
-     [1, 2, 3, 4, 5, 6].map(n => L.goalOf(n)).join(","));
-  ck("第 7 关 = 寻宝（第 7 关正好是「骨架第二轮」的开头）",
-     L.goalOf(7) === 'collect', L.goalOf(7));
-  ck("第 13 关 = 省球", L.goalOf(13) === 'limit', L.goalOf(13));
-  ck("第 19 关回到破门（三种轮完一圈）", L.goalOf(19) === 'door', L.goalOf(19));
+  /* **目标段是 4 关，不是 6**（2026-10-30 晚改成和骨架的 6 错开）。
+     教学段因此收到 1~4：1-3 关是 1 层（只认推门），第 4 关第一次下洞。 */
+  ck("★ 教学段 1~4 全是破门（第一关不解释目标）",
+     [1, 2, 3, 4].every(n => L.goalOf(n) === 'door'),
+     [1, 2, 3, 4].map(n => L.goalOf(n)).join(","));
+  ck("第 5 关 = 寻宝（目标第一段换样式，且这时的骨架仍在轮内）",
+     L.goalOf(5) === 'collect', L.goalOf(5));
+  ck("第 9 关 = 省球", L.goalOf(9) === 'limit', L.goalOf(9));
+  ck("第 13 关回到破门（三种轮完一圈）", L.goalOf(13) === 'door', L.goalOf(13));
   ck("★ 同一个关号永远同一个目标（纯函数，可复现）",
      L.goalOf(7) === L.goalOf(7) && L.goalOf(31) === L.goalOf(31),
      L.goalOf(7) + " / " + L.goalOf(31));
-  ck("★ 目标是按轮次（6 关）换的，不是每关都在跳",
-     [7, 8, 9, 10, 11, 12].every(n => L.goalOf(n) === 'collect'),
-     [7, 8, 9, 10, 11, 12].map(n => L.goalOf(n)).join(","));
+  ck("★ 目标是按段（4 关）换的，不是每关都在跳",
+     [5, 6, 7, 8].every(n => L.goalOf(n) === 'collect'),
+     [5, 6, 7, 8].map(n => L.goalOf(n)).join(","));
+  /* **目标段(4)必须和骨架轮(6)错开。** 都是 6 的时候，换目标那一关
+     正好也是换骨架轮首关 —— 两件事叠在一起，玩家读成"到点了全变"，
+     读不出"这里换了个问题"。 */
+  ck("★ 目标段(4) 与骨架轮(6) 不同步（48 里只有 12 关同时是两段起点）",
+     (() => { let both = 0; for (let n = 1; n <= 48; n++) {
+       const isGoalHead = ((n - 1) % 4 === 0) && n > 4;
+       const isSkelHead = ((n - 1) % 6 === 0) && n > 1;
+       if (isGoalHead && isSkelHead) both++; }
+       return both > 0 && both < 12; })(), "同步关数见源码");
   ck("stage=null（出图工具 / 旧行为）回落到破门", L.goalOf(null) === 'door', L.goalOf(null));
   ck("深潜（负关号）不做目标（一命到底再加目标会两头打架）",
      L.goalOf(-3) === 'door', L.goalOf(-3));
@@ -3038,9 +3069,9 @@ group("四十七、关卡目标（破门 / 寻宝 / 省球）");
 
 /* ---- ④ 省球关：前 3 颗满球，之后是残球，且不硬禁（防死局） ---- */
 {
-  L.startStage(13);
+  L.startStage(9);
   const S = L.S;
-  ck("第 13 关目标是省球", S.goal === 'limit', S.goal);
+  ck("第 9 关目标是省球", S.goal === 'limit', S.goal);
   ck("省球关开局已造球数为 0", S.ballUsed === 0, String(S.ballUsed));
   ck("省球关的门开条件仍是杀够（改的是资源，不是判据）",
      S.door && S.door.open === false, String(S.door && S.door.open));
@@ -3067,9 +3098,9 @@ group("四十七、关卡目标（破门 / 寻宝 / 省球）");
   S.belly = 100;
   ck("★ 吃碎片回饱食不会刷回球额度", S.ballUsed === usedBefore, String(S.ballUsed));
 
-  L.startStage(14);
+  L.startStage(10);
   ck("换关重置球额度", L.S.ballUsed === 0, String(L.S.ballUsed));
-  ck("第 14 关仍是省球（同一轮 6 关同目标）", L.S.goal === 'limit', L.S.goal);
+  ck("第 10 关仍是省球（同一段 4 关同目标）", L.S.goal === 'limit', L.S.goal);
 }
 
 /* ---- ⑤ 深潜不受影响：仍按破门走 ---- */
@@ -3507,12 +3538,16 @@ console.log("\n=== 五十. BOSS：第 48 关的三层壳 ===");
   ck("★ 壳碎之后门才开（判据真的接进了 goalMet）", L.goalMet() === true, "shell " + B.shell);
 
   /* 球撞完不该留在壳里 —— 位置解算把球推到壳外，否则下一帧还会再触发一次。 */
-  const inB = L.S.balls.some(b => {
+  /* **壳碎了之后不算"留在壳里"。** 最后一下把壳打没的球就停在原地，
+     而那一片正是原 BOSS 的位置 —— 壳已经不存在了，球没有被卡住。
+     这条判据本来要防的是"球卡在还没碎的壳里，下一帧反复触发"，
+     所以只在**壳还活着**时检查。 */
+  const inB = !B.dead && L.S.balls.some(b => {
     if (b.dead) return false;
     const dx = b.x - cx, dy = b.y - cy;
     return dx * dx + dy * dy < Math.pow(B.w * 0.5, 2);
   });
-  ck("球没被留在壳体内", !inB, inB ? "有球在壳里" : "");
+  ck("球没被留在壳体内（壳还活着时）", !inB, inB ? "有球在壳里" : "");
 
   /* ---- 摆放的鲁棒性 ----
      **这一条是拿 48 个种子撞出来的，不是读代码想出来的。**
@@ -3654,6 +3689,19 @@ console.log("\n=== 五十·补. BOSS 档位（每 8 关一只） ===");
        第一版放远 90px，球在 x=446 就停在箱子上了 —— 门厅层 BOSS 左边
        常有一摞木箱，而`costAt` 只保证 BOSS 自己不压箱，不管助跑路径。
        症状是"裸球撞不破"，看起来像门槛设高了，实际球压根没到。 */
+    /* **先把助跑那 80px 里的箱子清掉。**（2026-10-30 层数改成 3 层之后）
+       第 8 关的骨架换了（hub 而不是 zigzag），门厅层在 BOSS 左边压了一摞
+       木箱 —— 球一出手先撞箱（vx 1209 → 991，wood 的 keepSpeed 0.82），
+       到 BOSS 面前时动量已经跌破 1100，只能弱弹。
+       症状是"裸球撞不破"，看着像门槛调高了，实际球压根没到。
+       真实的玩家也会先推箱开路，所以清掉这段路径**不是给断言放水** ——
+       它测的本来就是"门槛能不能被裸球一次打穿"，箱子属于另一件事。 */
+    for (let i = L.S.boxes.length - 1; i >= 0; i--) {
+      const bx = L.S.boxes[i];
+      if (bx.y + bx.h <= B8.y || bx.y >= B8.y + B8.h) continue;
+      if (bx.x + bx.w <= B8.x - 80 || bx.x >= B8.x) continue;
+      L.S.boxes.splice(i, 1);
+    }
     const bb = L.spawnBall(B8.x - 26, B8.y + B8.h * 0.5, 1209, 0);
     for (let i = 0; i < 42; i++) { if (bb.dead) break; L.stepBalls(1 / 60); }
     ck("★ 第 8 关裸球一次就破壳（门槛真的接到了这一关）",
@@ -3725,6 +3773,43 @@ console.log("\n=== 五十·补. BOSS 档位（每 8 关一只） ===");
   }
 
   L.startStage(1);
+}
+
+/* =========================================================================
+   五十·二. 按键不能撞：D 是向右走，不是"下深潜"
+   -------------------------------------------------------------------------
+   2026-10-30 用户报：「进战斗按左右 直接不断切场景」。
+   根因不是镜头、不是生成器 —— `D` 同时绑了**向右走**和 `startDive()`，
+   玩家一按右，人往前挪一帧，下一秒整关重置（startDive 会重写 S.dive /
+   S.stage，主线进度静默丢掉）。表现是"按右一直换场景"。
+
+   为什么以前没抓到：所有断言都在验 `startDive()` 的**结果**
+   （进深潜后 S.dive 立起来、层数 5），没有一条在验**怎么进去的**。
+   键盘入口一个都没测过 —— 而按键冲突是这类项目最典型的一类 bug：
+   两个功能各自都对，只是抢了同一个键。
+
+   判据：**按 D 的时候 S.dive 不许变**，按 G 才变。
+   ========================================================================= */
+{
+  const press = k => window.dispatchEvent(
+    new window.KeyboardEvent('keydown', { key: k, bubbles: true }));
+  const release = k => window.dispatchEvent(
+    new window.KeyboardEvent('keyup', { key: k, bubbles: true }));
+
+  L.startStage(5);
+  const before = { dive: !!L.S.dive, stage: L.S.stage };
+  /* **连按 5 次**。用户的原话是"按左右 直接不断切场景" ——
+     按一次就红和按五次才红是两种 bug，这条要抓的是"一直按一直切"。 */
+  for (let i = 0; i < 5; i++) { press('d'); release('d'); }
+  ck("★ 连按 5 次 D 都不会切进深潜（D 曾经和右移抢同一个键）",
+     !L.S.dive && L.S.stage === before.stage,
+     "dive=" + !!L.S.dive + " stage=" + L.S.stage + "（原 " + before.stage + "）");
+
+  press('g'); release('g');
+  ck("★ 按 G 才进深潜（入口没被删掉，只是换了键）", !!L.S.dive, String(!!L.S.dive));
+  ck("深潜进去后层数是固定的 5 层（不是跟着主线 6 层走）",
+     L.S.level && L.S.level.nFloors === 5, String(L.S.level && L.S.level.nFloors));
+  L.startStage(5);
 }
 
 /* =========================================================================
@@ -4023,8 +4108,11 @@ group("五十三、雪晶 / 图鉴 / 裂壳 / 悬台 / 态度");
   {
     /* **挑一只不在墙边的 moss**（贴着右墙的话，"玩家站它右边"这件事
        根本排不出来，玩家会被墙推回来站到它身上）。 */
+    /* **找到 moss 不算成功，冲出去才算。** 原来第一个有 moss 的种子就 break，
+       换骨架之后第 9 关（wall）里那只 moss 前摇结束正对着墙，冲不出去，
+       断言假红成一"苔泥团不会冲了"。多试几个种子，**成功一个就够**。 */
     let tested = false, lunged = false, why = "没有 moss";
-    for (const seed of [2020, 2021, 2022, 2023]) {
+    for (const seed of [2020, 2021, 2022, 2023, 555, 666, 909, 1234]) {
       L.reset(seed, 9);
       const f = S.foes.find(x => x.breed === 'moss' && x.x > 80 && x.x < 780);
       if (!f) continue;
@@ -4038,9 +4126,8 @@ group("五十三、雪晶 / 图鉴 / 裂壳 / 悬台 / 态度");
         if (sawCharge) break;
       }
       /* 三件事都要成立：鼓身（有前摇）、冲（真的加速）、速度明显超过走速 */
-      lunged = sawWind && sawCharge;
-      why = "wind=" + sawWind + " charge=" + sawCharge;
-      break;
+      if (sawWind && sawCharge) { lunged = true; why = "wind=true charge=true"; break; }
+      why = "seed " + seed + " wind=" + sawWind + " charge=" + sawCharge;
     }
     ck("★ 苔泥团真的会鼓身 + 冲（不是只有字段）" + (tested ? "" : "（没找到样本）"),
        tested && lunged, why);

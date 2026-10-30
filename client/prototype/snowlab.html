@@ -641,10 +641,26 @@ const SKELETONS = {
     return Array.from({ length: nF - 1 }, (_, k) => [seq[k % 4]]);
   } },
 };
-/* **发牌顺序就是出关顺序**：六种一轮，所以任意连续 6 关的骨架都不重复
-   （CR-031 验收判据"连续 3 关不许同骨架"的超额满足）。
-   第一张给 shaft：教学关就该是一条直井，玩家先学会"洞会带我往下"。 */
+/* **发牌顺序就是出关顺序，但每轮起点往后挪一格。**（2026-10-30 晚）
+
+   原来是 `SKEL_ORDER[(n-1) % 6]` —— 第 1 关和第 7 关、第 13 关、第 19 关…
+   全都是 `shaft`。连续 6 关不重复这条满足了，可**跨轮完全重合**：
+   第 7 关 = 第 1 关 + 一层，玩家在第 7 关看到的是刚见过的直井，
+   只是多了个洞。48 关 = 同一批走法走 8 遍，这就是"各个关卡大同小异"。
+
+   现在每轮整体左移一格（轮次 r 的第 k 张取 `SKEL_ORDER[(k+r)%6]`）：
+     r0  shaft zigzag hub  wall  helix twin
+     r1  zigzag hub   wall helix twin  shaft
+     r2  hub   wall  helix twin  shaft zigzag
+   相邻轮永远不会用同一起手，整个排列的周期从 6 拉长到 36 关。
+   层数封顶在 6 之后，**关与关的差别主要就靠这一条**（空间走向换着来）。 */
 const SKEL_ORDER = ['shaft', 'zigzag', 'hub', 'wall', 'helix', 'twin'];
+function pickSkeleton(stage) {
+  const n = Math.max(1, stage | 0) - 1;
+  const r = Math.floor(n / SKEL_ORDER.length);   // 第几轮
+  const k = n % SKEL_ORDER.length;               // 轮内第几张
+  return SKEL_ORDER[(k + r) % SKEL_ORDER.length];
+}
 /* **32 位混淆。** 深潜的种子是 `base + depth * 7919` —— 线性递增，
    而 `rngFrom` 的**首个输出**对相邻种子区分度不够：实测连续 6 关的骨架
    是 hub/twin/hub/twin/hub/shaft，等于半个循环，"深潜不可预测"就没了。
@@ -655,9 +671,6 @@ function mix32(x) {
   x = (x ^ (x >>> 15)) >>> 0;
   x = Math.imul(x, 0x846ca68b) >>> 0;
   return (x ^ (x >>> 16)) >>> 0;
-}
-function pickSkeleton(stage) {
-  return SKEL_ORDER[(Math.max(1, stage | 0) - 1) % SKEL_ORDER.length];
 }
 
 /* ==================== ⓪-1 主线阶段 ====================
@@ -673,14 +686,31 @@ function pickSkeleton(stage) {
 
    `stage` 传 null 时保持旧行为（骰子）—— 200+ 项断言和出图工具全部按
    "随机层数"写死，一次性切过去会把它们全打红。先做成可选，再逐个切。 */
+/* **层数就是关卡曲线。**（2026-10-30 晚，用户第三次打回：
+   「这个战斗内容 不应该是递进吗 一开始是 1 层 2 层 3 层等等
+    不应该是关卡递进原则吗 现在各个关卡大同小异」）
+
+   上一版是 2/3/3/4/4/5/5 —— 前 6 关全是 2 层，第 7 到第 20 关全是 3 层。
+   也就是说**第 7 关和第 20 关在结构上是同一关**：同层数、同洞数、
+   同骨架周期，只有箱子多了十口。玩家说"大同小异"不是感觉，是读数。
+
+   现在按"每 3~7 关加一层"走完 1→6：
+     1-3 关 1 层 —— 只有一层，**连洞都没有**。第 1 关只教一件事：
+                    把球顶到门上。这一关以前不存在，因为最少 2 层。
+     4-6 关 2 层 —— 第一次"推下去"，洞和井梯各出现一次。
+     7-10 / 11-15 / 16-22 每档往上加一层。
+     23 关起 6 层封顶（GEN 的注释写过：层再多每层只够十来口箱子，
+     "很多木箱"和"层数多"打架，6 是箱子还堆得成箱山的上限）。
+
+   封顶之后靠**骨架不再按 6 循环**继续分（见 pickSkeleton 的拉丁方）——
+   层数只能涨到 6，剩下的差异得从空间走向上出。 */
 const STAGES = [
-  { to: 6,  floors: 2, cn: '教学' },      // 推球 / 下洞 / 井梯
-  { to: 12, floors: 3, cn: '入门' },      // 石箱 / 斜坡
-  { to: 20, floors: 3, cn: '进阶' },      // 追人 / 霜封 / 投掷
-  { to: 28, floors: 4, cn: '硬核' },      // 冰墙 / 铁箱
-  { to: 36, floors: 4, cn: '深层' },      // 下穿 / 窄洞
-  { to: 44, floors: 5, cn: '深潜前' },    // 压门 / 竖井
-  { to: 48, floors: 5, cn: '混合' },
+  { to: 3,  floors: 1, cn: '第一课' },   // 只有一层：学会推球
+  { to: 6,  floors: 2, cn: '教学' },     // 下洞 / 井梯
+  { to: 10, floors: 3, cn: '入门' },     // 石箱 / 斜坡
+  { to: 15, floors: 4, cn: '进阶' },     // 追人 / 霜封 / 投掷
+  { to: 22, floors: 5, cn: '硬核' },     // 冰墙 / 铁箱
+  { to: 48, floors: 6, cn: '深层' },     // 下穿 / 窄洞 / 压门 / 竖井
 ];
 function stageCfg(stage) {
   const n = Math.max(1, stage | 0);
@@ -1141,7 +1171,12 @@ function genLevel(seed, stage) {
      不是为了好看 —— 从上面掉下来正好落在门壳顶上，人会卡在两格冰之间
      往上爬，而门在脚底下，读起来像"掉到门上"。
      40 次里挑不到合适的就退回中间偏右（一关最多一次，不影响观感）。 */
-  const hallDrop = layers[nF - 2].holes.map(h => [h.x - 48, h.x + h.w + 48]);
+  /* **1 层关没有"上一层"。** STAGES 第 1-3 关是单层（只教推球），
+     原来这里直接读 `layers[nF-2]` → `layers[-1]` → undefined.holes，
+     genLevel 当场抛错。报错长得像"某个数组没定义"，看不出是"这一关太小"，
+     所以补一个空壳而不是给 nF 加下限 —— 单层关是**有意**存在的。 */
+  const hallPrev = nF >= 2 ? layers[nF - 2] : { holes: [], tier: 0 };
+  const hallDrop = hallPrev.holes.map(h => [h.x - 48, h.x + h.w + 48]);
   let doorCol = 12;
   for (let t = 0; t < 40; t++) {
     const c = 3 + Math.floor(R() * 15);          // 3 ~ 17 列
@@ -1173,7 +1208,7 @@ function genLevel(seed, stage) {
     open: false, openT: 0,
   };
   const hallTaken = [];        // 门厅里已被占掉的 x，箱山要避开
-  const buryH = (layers[nF - 2].tier >= 0.55 ? 2 : 1);
+  const buryH = (hallPrev.tier >= 0.55 ? 2 : 1);
   for (let j = 0; j < buryH; j++) B(doorX, lastY - 48 * (j + 1), 'wood');
   hallTaken.push(doorX);
   hallTaken.push(doorX - 48);   // 门前留一格空地，不然打不开的门等于墙
@@ -1182,7 +1217,7 @@ function genLevel(seed, stage) {
      （2026-10-28），涨体积只认吞敌人。留 5 口的原因是**弹药经济**：
      门厅的怪会挡枪，先拆几口清出射界；顺带也是"箱子能堆"的最后一次演示。 */
   {
-    const hallZones = layers[nF - 2].holes.map(h => [h.x - 24, h.x + h.w + 24]);
+    const hallZones = hallPrev.holes.map(h => [h.x - 24, h.x + h.w + 24]);
     const all = [];
     for (let x = 48; x + 48 <= doorX - 96; x += 48) all.push(x);
     const free = all.filter(x => !hitsRange(x, 48, hallZones));
@@ -2367,14 +2402,23 @@ function genLevel(seed, stage) {
     const nearDoor = x => dX >= 0 && x + BW > dX - 8 && x < dX + 44;
 
     /* 站在 x 要清掉几口箱子；-1 = 根本站不了。
-       **铁箱和金箱不许清。** 铁箱是路的一部分（得推着走），清掉等于改解法；
-       金箱是本关的寻宝目标，清掉会让 `lootTotal` 对不上，门永远不开。 */
+       **铁箱 / 冰墙 / 金箱不许清。** 铁箱和冰墙是路的一部分（得推着走），
+       清掉等于改解法；金箱是本关的寻宝目标，清掉会让 `lootTotal` 对不上，
+       门永远不开。
+
+       **石箱允许清**（2026-10-30，层数改到 6 层之后才暴露）：门厅层的箱子
+       预算是按层数分的，6 层关的门厅比 5 层关更满，而门一旦开在左边缘
+       （`nearDoor` 会把左边一整段封掉），右边剩下的位置就可能全是石箱 ——
+       48 个种子里有 1 个（seed 683129967）因此**整关没有 BOSS**。
+       症状极难查："没有 BOSS"和"BOSS 坏了"在画面上完全一样，门照样能开。
+       石箱和木箱一样是"推球砸开"的材料，清掉 1~2 口不改变这一关的解法；
+       铁箱清掉就会（它本来就是让你推着走的那条路）。 */
     const costAt = x => {
       let cost = 0;
       for (const b of boxes) {
         if (!onFloor(b)) continue;
         if (b.x + b.w <= x - 6 || b.x >= x + BW + 6) continue;
-        if (b.mat !== 'wood' || b.loot) return -1;
+        if (b.loot || b.mat === 'iron' || b.mat === 'ice') return -1;
         cost++;
       }
       return cost;
@@ -2949,8 +2993,18 @@ const GOAL_STRONG_BALLS = 3;
 function goalOf(stage) {
   const n = Math.floor(stage == null ? 0 : stage);
   if (!(n > 0)) return 'door';
-  if (n <= 6) return 'door';      // 教学段：推球 / 下洞 / 井梯，只教推门
-  return GOAL_LIST[Math.floor((n - 1) / 6) % GOAL_LIST.length];
+  if (n <= 4) return 'door';      // 第一段（1 层 ×3 + 第 4 关 2 层）只教推门
+  /* **周期 4，不是 6。**（2026-10-30 晚）
+     原来也是 6 —— **和骨架的 6 完全同步**：每次换目标，骨架正好回到轮首。
+     两个变化叠在同一关发生，玩家读到的就是"到点了，什么都变了"，
+     而不是"这里换了个问题"；而且 48 也除不尽 6×3 的 18，
+     最后 6 关全落在 collect（18/18/12，尾巴是平的）。
+
+     4 与骨架的 6 互质到 lcm=12，48 ÷ 4 = 12 段、每段 3 种目标轮一次：
+     **door 16 / collect 16 / limit 16，一个不差**。目标每 4 关换一次，
+     骨架每 6 关换一轮，两件事错开之后，"第 5 关"和"第 9 关"读起来
+     是两关，而不是同一关换个壳。 */
+  return GOAL_LIST[Math.floor((n - 1) / 4) % GOAL_LIST.length];
 }
 
 /* **三星（CR-032 迁移第一步）。** 口径从 grove 的 `STAR_JUDGE` 搬过来 ——
@@ -5957,9 +6011,16 @@ function onKey(e, down) {
   /* Esc = 回出征页。只在从出征页进来时生效（直接开这个文件测试时不跳走 —
      跳到 grove.html 会打断出图和断言）。 */
   if (down && k === 'Escape' && FROM_GROVE) leaveToGrove();
-  /* D = 进深潜。主线是"出门 48 次"，深潜是"一命往下"，
-     两者共用同一套生成器和关卡，所以这个入口不需要额外内容。 */
-  if (down && (k === 'd' || k === 'D') && S.phase !== 'dead') startDive();
+  /* G = 进深潜。主线是"出门 48 次"，深潜是"一命往下"，
+     两者共用同一套生成器和关卡，所以这个入口不需要额外内容。
+
+     **原来是 D，这是 2026-10-30 用户报的"按左右直接不断切场景"。**
+     D 同时是"向右走"（`K['d']`，6196 行）—— 玩家一按右，人往前走一帧，
+     下一秒 `startDive()` 把整关重置：镜头跳回去、箱子重排、人回到出生点。
+     表现就是"按右一直换场景"，而且**主线进度会被静默丢掉**（startDive
+     会重写 S.dive / S.stage）。两个动作共用一个键，没有任何提示能解释它。
+     G 在整套按键里是空的（b/c/f/j/k/m/r/1/2/3 都占了），"go deep"也能记。 */
+  if (down && (k === 'g' || k === 'G') && S.phase !== 'dead') startDive();
   /* F 显示帧率。**这一条是给"用户说卡"这类反馈用的** ——
      "一卡一卡"和"40 帧"和"15 帧"是三件不同的事，没有数字就只能猜。
      开关状态放在 S.perf 上、不进 reset，换关不会把它关掉。 */
@@ -12331,7 +12392,7 @@ function drawClear(g) {
      以前只有 R（换一张随机图），因为那时候没有关号，
      "下一关"和"换一关"在玩家眼里是同一件事。 */
   if (clampedStage >= STAGE_MAX) {
-    g.fillText('主线到这里 · 按 D 下深潜', W / 2, cy + ch - 24);
+    g.fillText('主线到这里 · 按 G 下深潜', W / 2, cy + ch - 24);
   } else if (clampedStage > 0) {
     g.fillText('Enter 进第 ' + (clampedStage + 1) + ' 关   ·   R 重打本关', W / 2, cy + ch - 24);
   } else {

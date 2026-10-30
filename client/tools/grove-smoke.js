@@ -2402,16 +2402,10 @@ console.log("\n=== 27. 出征页进门语义 / 全通存档语义（挑一屏 20
      最后一条是这一版最容易破的 —— 中心放大会往左右各外扩 w*0.1，
      2 张卡时左缘只剩 19px。 */
   {
-    /* **临时拼回三张卡来验公式。** 主流程现在只有一扇门（见 GATES_LEGACY
-       的注释：两个玩法并排读起来是"两个游戏"），但
-       `w = floor((840-(n-1)*20)/n)` 这条排版公式必须对 2/3/4 张都成立 ——
-       那是"以后想把玩法加回来"唯一的保证。测完立刻还原，别让后面几段
-       读到假卡。假卡只带排版要用的字段：这几段只量矩形和命中，
-       不绘制、也不进 enterGate，所以不需要真立绘。 */
-    const realGates = P.GATES.slice();
-    P.GATES.push(
-      { id: "trail", name: "苔原古道", art: "gate-trail", open: true },
-      { id: "nest", name: "深巢无尽", art: "gate-nest", open: true });
+    /* **直接量真门。** 这里以前要"临时拼回三张假卡"来验排版公式，
+       因为主流程只摆一扇门；现在 GATES 本来就是三张（推球 + 古道 + 深巢），
+       假卡反而会把门数撑到 5。公式 `w = floor((840-(n-1)*20)/n)` 仍然按
+       门数自动算，所以这条断言的意义没变：**加玩法不用改这段**。 */
     const cells3 = [];
     for (let i = 0; i < P.GATE.slots; i++) cells3.push(P.gateRect(i));
 
@@ -2449,29 +2443,30 @@ console.log("\n=== 27. 出征页进门语义 / 全通存档语义（挑一屏 20
        否则放大后盖住的邻居会点不到。 */
     eq(P.gateHit(cells3[1].x + 4, cells3[1].y + cells3[1].h / 2), 1,
        "★ 命中用常态矩形（放大不抢邻居的点击）");
-
-    /* 还原成真实门数。**放在这一块的最后**，就是为了让后面几段
-       （命中自己 / 点门进关）读到的是主流程那一扇门，而不是假卡。 */
-    P.GATES.length = 0;
-    for (const g of realGates) P.GATES.push(g);
   }
 
-  /* ②b 主流程只有一扇门（2026-10-30 用户：「现在2个玩法 都在 是不是很奇怪呢
-     我需要一个有深度 有趣的」）＋ 单卡带来的三个后果。 */
-  eq(P.GATES.length, 1, "★ 出征页只有一扇门（两个玩法并排已收掉）");
-  eq(P.GATES[0].id, "snow", "★ 剩下那扇是推球");
-  eq(P.GATES_LEGACY.length, 2, "★ 古道/深巢的定义还留着（不摆出来 ≠ 删掉）");
-  eq(P.GATE.scale, 1, "★ 单卡不放大（840 × 1.2 = 1008 会出画布，实测越界 24px）");
+  /* ②b 主流程三扇门（2026-10-30 晚第二次打回：
+     「还有和深巢呢」「最初的那2个玩法完全丢弃吗」）。
+
+     中间有过一版"只留一扇门"，理由是"三扇门并排像两个游戏"。理由不错，
+     结论错了：**藏起来 ≠ 收得住**。玩家看不到深巢只会以为内容没了。
+     现在三门并列，推球第一（主线），后面是两套存量玩法。
+     代价：h=150 < detailMinH(170)，卡上第三行不画 —— 这是公式设计好的降级。 */
+  eq(P.GATES.length, 3, "★ 出征页三扇门（推球 + 古道 + 深巢）");
+  eq(P.GATES[0].id, "snow", "★ 第一扇是推球（主线放最前）");
+  eq(P.GATES.map(g => g.id).join(","), "snow,trail,nest", "门的顺序：推球/古道/深巢");
+  eq(P.GATE.scale, 1.2, "★ 三卡时悬停放大 1.2（单卡才关掉）");
   {
-    const c0 = P.gateRect(0);
-    /* 单卡 = 840×420：宽度是 `960 - 60*2`，高度被 `min(420, ...)` 封顶。
-       它撑满左右边距这件事是"一扇门不该看着像三扇门里剩下的那张"，
-       所以不能只验"在画布内"。 */
-    ok(c0.w === 840 && c0.h === 420, "★ 单卡撑满边距（840×420）", c0.w + "×" + c0.h);
-    const z0 = P.gateZoomRect(0);
-    ok(z0.x >= 0 && z0.y >= 0 && z0.x + z0.w <= 960 && z0.y + z0.h <= 600,
-       "★ 单卡的「放大」矩形仍在画布内（命中区不越界）",
-       z0.x + ".." + (z0.x + z0.w));
+    /* 三门 = 266×150：`floor((840-2*20)/3)`，16:9 反推。同一水平线、三等分。 */
+    const c0 = P.gateRect(0), c1 = P.gateRect(1), c2 = P.gateRect(2);
+    ok(c0.w === 266 && c0.h === 150, "★ 三卡 266×150（公式按门数自动算）", c0.w + "×" + c0.h);
+    ok(c0.y === c1.y && c1.y === c2.y, "三张卡同一水平线", c0.y + "/" + c1.y + "/" + c2.y);
+    const z0 = P.gateZoomRect(0), z2 = P.gateZoomRect(2);
+    ok(z0.x >= 0 && z0.y >= 0 && z2.x + z2.w <= 960 && z2.y + z2.h <= 600,
+       "★ 两头那两张放大后仍不出画布（命中区不越界）",
+       z0.x + " .. " + (z2.x + z2.w));
+    eq(P.GATE.detailMinH > c0.h, true,
+       "★ 三卡高度装不下第三行（detailMinH 该生效，别再往前塞字）");
   }
 
   /* ②c 出征页的星数（2026-10-30）。出征页是出门前**唯一**能读到"我打到哪了"
@@ -2505,29 +2500,30 @@ console.log("\n=== 27. 出征页进门语义 / 全通存档语义（挑一屏 20
   }
   ok(hitBad === 0, "每个小卡中心点命中自己（绘制与判定同源）", "错 " + hitBad);
 
-  /* ④ 起**临时把古道/深巢接回门表**：下面几条验的是"点哪扇门走哪条线"
-     和进度 clamp，都是古道的行为。主流程只摆一扇门（②b 已钉），
-     但那些行为不能坏 —— "不摆出来"和"坏掉了"在画面上长得一模一样。 */
-  P.GATES.unshift(...P.GATES_LEGACY);
+  /* ④ 下面几条验的是"点哪扇门走哪条线"和进度 clamp，都是古道的行为。
+     **门表里本来就有古道**（GATES = 推球 + 古道 + 深巢），以前那句
+     `unshift(...GATES_LEGACY)` 会把门数撑到 5、并触发"id 不重复"红。 */
 
   /* ④ 点开着的门 → 直接进**当前进度那一屏**（挑一屏已删，没有中间选择页）。 */
   S.progress = 3;
   P.openGates();
   eq(S.phase, "portals", "openGates 进出征页");
-  P.enterGate(0);
+  /* **索引 1 是古道。** 门表顺序是 [推球, 古道, 深巢] —— 推球占了 0，
+     这三条验的是古道的行为，所以按 id 取，不写死数字（下次调整顺序也活）。 */
+  P.enterGate(P.GATES.findIndex(g => g.id === "trail"));
   eq(S.phase, "play", "点苔原古道直接开打（不经过挑一屏）");
   eq(S.stage, 3, "进的是当前进度那一屏（progress = 3 → stage 3）");
 
   /* ⑤ "只进不退"还在：progress 高的存档进门还是打当前那一屏。 */
   S.progress = 12;
   P.openGates();
-  P.enterGate(0);
+  P.enterGate(P.GATES.findIndex(g => g.id === "trail"));
   eq(S.stage, 12, "progress = 12 → 进第 13 屏");
 
   /* ⑥ 全通时 clamp 回最后一屏，不越界（progress 上界是闭区间 N）。 */
   S.progress = N;
   P.openGates();
-  P.enterGate(0);
+  P.enterGate(P.GATES.findIndex(g => g.id === "trail"));
   eq(S.stage, N - 1, "全通时进最后一屏（不越界）", "stage=" + S.stage);
 
   /* ⑦ 全通后 `goHome(true)` 不许把进度清零 —— 这是那句
@@ -4443,19 +4439,17 @@ console.log("\n=== 40. 出征页交互：点门直达当前进度 / 没开的门
      window.addEventListener 是 noop，键盘处理也没导出成函数。 */
   const sb40 = boot(), P = sb40.GROVE;
   const src40 = fs.readFileSync(HTML, "utf8");
-  /* **临时把古道/深巢接回门表。** 2026-10-30 出征页收成一扇门
-     （见 GATES_LEGACY 的注释），但这一节测的是"门这个机制"本身：
-     点哪扇进哪条线、深巢动不动主线进度、墙宽跟着线路切换。
-     那些行为在 grove 里仍然成立，而且必须继续成立。
-     主流程"只有一扇门"由 §27 的 ②b 单独钉，这里放开到三扇。
-     沙箱是一次性的，不用还原。 */
-  P.GATES.unshift(...P.GATES_LEGACY);
+  /* 这一节测"门这个机制"本身：点哪扇进哪条线、深巢动不动主线进度、
+     墙宽跟着线路切换。门表里已经是三扇真门（推球/古道/深巢），不用拼。 */
 
   /* ---- A. 点开着的门直接进当前进度那一屏 ---- */
   P.S.progress = 5;
   P.openGates();
   eq(P.S.phase, "portals", "openGates 进出征页");
-  const g0 = P.gateRect(0);
+  /* **按 id 取古道那张卡。** 门表顺序是 [推球, 古道, 深巢]，
+     写死 `gateRect(0)` 点到的是推球 —— 沙箱里没有 setSnowlabEntry，
+     点了什么都不会发生，而症状只是"phase 还是 portals"，看不出点错了门。 */
+  const g0 = P.gateRect(P.GATES.findIndex(g => g.id === "trail"));
   P.gateTap(g0.x + g0.w / 2, g0.y + g0.h / 2);
   eq(P.S.phase, "play", "★ 点苔原古道直接开打（没有挑一屏中间层）");
   eq(P.S.stage, 5, "★ 进的是当前进度那一屏（progress = 5 → stage 5）");
@@ -4467,7 +4461,9 @@ console.log("\n=== 40. 出征页交互：点门直达当前进度 / 没开的门
   P.openGates();
   P.S.progress = 5;
   P.S.gateTip = { txt: "", life: 0 };
-  const g1 = P.gateRect(1);
+  /* **按 id 取深巢那张卡**，不写死索引 —— 门表顺序是 [推球, 古道, 深巢]，
+     深巢在第 3 位；以前是第 2 位（推球排最后），写死 1 会点到古道上。 */
+  const g1 = P.gateRect(P.GATES.findIndex(g => g.id === "nest"));
   P.gateTap(g1.x + g1.w / 2, g1.y + g1.h / 2);
   eq(P.S.phase, "play", "★ 点深巢门直接开打（门已开放）");
   ok(!!P.S.nest && P.S.nest.depth >= 1, "★ 进的是深巢（S.nest 立起来）", JSON.stringify(P.S.nest));
@@ -4606,9 +4602,8 @@ console.log("\n=== 41. 出征页：门表契约 / 点开着的门进玩法 / 没
   const sb41 = boot(), P = sb41.GROVE;
   const src41 = fs.readFileSync(HTML, "utf8");
   const CW = 960, CH = 600;
-  /* 临时接回古道/深巢：这一节验的是门的**字段契约、命中边界和概念图调用**，
-     三扇门才是它的测试面。主流程那一扇门在 §27 ②b 单独钉。 */
-  P.GATES.unshift(...P.GATES_LEGACY);
+  /* 这一节验门的**字段契约、命中边界和概念图调用** ——
+     三扇真门正是它要的测试面。 */
   const G41 = P.GATES;
 
   /* ---- A. 门表 ---- */
@@ -4661,7 +4656,7 @@ console.log("\n=== 41. 出征页：门表契约 / 点开着的门进玩法 / 没
     P.S.stage = 0;
     P.openGates();
     eq(P.S.phase, "portals", "openGates 进的是出征页");
-    P.enterGate(0);
+    P.enterGate(P.GATES.findIndex(g => g.id === "trail"));
     eq(P.S.phase, "play", "★ 点开着的门 → 直接开打当前进度那一屏（没有中间选择页）");
     eq(P.S.stage, 5, "★ 进的就是当前进度（progress = 5 → stage 5）");
 

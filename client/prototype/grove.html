@@ -18170,22 +18170,21 @@ const GATE = {
   },
   get y() { return Math.round(this.top + (this.bottom - this.top - this.h) / 2); },
 };
-/* **出征页只留一扇门。**（2026-10-30 用户：「现在2个玩法 都在 是不是很奇怪呢
-   我需要一个有深度 有趣的」）
+/* **出征页摆三扇门。**（2026-10-30 晚，用户第二次打回：
+   「还有和深巢呢」「最初的那2个玩法完全丢弃吗 为什么你设计不考虑之前有没有用」）
 
-   三扇门并排读起来是"我们有两个游戏"：玩家要么不知道该选哪个，要么以为
-   古道和推球是同一款游戏的两章 —— 可它们的物理、美术、进度全都不通，
-   打一半换过去等于从头开始。这不是"内容多"，是把团队资源摊成两半。
+   中间做过一版"只留雪原推球一扇门"，理由是"三扇门并排读起来像两个游戏"。
+   那个理由本身没错，但它推出的结论是错的：**藏起来 ≠ 收得住**。
+   玩家看不到深巢，第一反应不是"主流程清爽了"，是"我之前玩的那个没了"；
+   而 grove 那 27 屏手工关 + 7 种目标 + 81 颗星是这个项目里唯一验证过的
+   内容量，藏进 GATES_LEGACY 等于让它在下一次规划里被当成不存在 ——
+   这正是用户上一轮骂的那件事，只是从"丢弃"换成了"隐身"。
 
-   解法不是把 grove 删掉（那两套玩法本身是好的，删了就真丢了），
-   而是**不让它出现在主流程里**：
-     · 门只留「雪原推球」；
-     · 另外两套的完整定义原样搬进 GATES_LEGACY，一行代码没动；
-     · 原型直接双击 grove.html（FROM_HOME 为 false）仍然 beginRun 打古道，
-       `?from=home&stage=K` 也照旧能指定第 K 屏；
-     · 想把三扇门接回来：把下面 `const GATES = [` 改成
-       `const GATES = [...GATES_LEGACY, ...GATES_MAIN];` —— 不需要改别的。
-   断言里有一条盯着"出征页只有一扇门"，免得哪天顺手加回来。 */
+   所以回到三扇门，并且**明确各是什么**（副行直接写清楚，不靠玩家猜）：
+     雪原推球（主线，放第一）· 苔原古道（27 屏）· 深巢无尽（越往下越深）。
+   版式不用改：`GATE.w` 是 `(840-(n-1)*20)/n` 的 getter，3 张自动变 266×150。
+   代价是 h=150 < `detailMinH`(170)，第三行（星靶条件 / 深巢规则）不画 ——
+   卡窄了就该少一行字，这是公式本来就设计好的降级，不是缺陷。 */
 const GATES_LEGACY = [
   {
     id: "trail",
@@ -18208,7 +18207,7 @@ const GATES_LEGACY = [
   },
 ];
 
-/* 主流程唯一的一扇门。 */
+/* 主流程三扇门：推球放第一（它是主线），后面接两套存量玩法。 */
 const GATES = [
   {
     /* 2026-10-30 第三扇门。**推球玩法（snowlab）此前没有任何入口** ——
@@ -18225,6 +18224,7 @@ const GATES = [
     art: "gate-snow",
     open: true,
   },
+  ...GATES_LEGACY,
 ];
 
 /** snowlab 的进度存档（和它那边同 key、同结构 —— 两个文件都在浏览器里跑，
@@ -18772,6 +18772,77 @@ function drawTrailArt(g, x, y, w, h) {
 /** 深巢的概念图：**简笔版**。只留三个符号：井口 → 逐层变暗 → 向下箭头。
  *  「越往下越深」用三层渐暗的横线表达（这一条比画多少细节都值钱，
  *  第一版精细图里它也是唯一被保下来的特征）。 */
+/* **雪原推球的概念图。**（2026-10-30 晚）
+   三段线条 + 一个球一个洞，和古道/深巢同一套画法 —— 为什么不是"挂张立绘
+   就完事"：原型 html 里没有 `gate-snow.png`（那张图是 Cocos 侧
+   `ART_MANIFEST` 加载的），不画的话**出征页第一张卡是一块空的深绿色**，
+   玩家（和截图）看到的就是"这扇门坏了"。Cocos 里 `ART['gate-snow']`
+   一到就会盖掉这张，两者是 fallback 关系，不是二选一。 */
+function drawSnowArt(g, x, y, w, h) {
+  const bg = g.createLinearGradient(x, y, x, y + h);
+  bg.addColorStop(0, "#2A3F58");
+  bg.addColorStop(0.55, "#1B2A3C");
+  bg.addColorStop(1, "#0D151F");
+  g.fillStyle = bg;
+  g.fillRect(x, y, w, h);
+
+  /* 三层雪坡，越往下越亮（雪反光，光从上面来） */
+  const slope = (iy, col, shift) => {
+    g.fillStyle = col;
+    g.beginPath();
+    g.moveTo(x - 10 + shift, y + iy + 26);
+    g.lineTo(x + w * 0.46 + shift, y + iy);
+    g.lineTo(x + w + 10, y + iy + 30);
+    g.lineTo(x + w + 10, y + h);
+    g.lineTo(x - 10, y + h);
+    g.closePath();
+    g.fill();
+  };
+  /* **雪坡压在 0.42 以下。** 第一版从 0.34 起，雪占了大半张卡，
+     上半部的夜空被压成一条缝，而这张图要读的第一件事是"有雪" ——
+     全白反而看不出是雪原，只像一块白板。 */
+  slope(h * 0.42, "rgba(198,222,240,.26)", 0);
+  slope(h * 0.56, "rgba(222,238,250,.48)", 0);
+  slope(h * 0.70, "rgba(240,249,255,.82)", 0);
+
+  /* 洞：地面上一道黑，右边露一点边 —— "往下掉"的那个口 */
+  const hx = x + w * 0.70, hy = y + h * 0.52;
+  g.fillStyle = "rgba(6,10,16,.92)";
+  g.beginPath(); g.ellipse(hx, hy, w * 0.11, 8, 0, 0, 6.283); g.fill();
+  g.strokeStyle = "rgba(200,226,246,.55)";
+  g.lineWidth = 1.6;
+  g.beginPath(); g.ellipse(hx, hy, w * 0.11, 8, 0, 0, 6.283); g.stroke();
+
+  /* 球：白圆 + 左上高光（和游戏里的球同一个光源方向） */
+  const br = Math.max(9, Math.min(w, h) * 0.11);
+  /* 球必须在**文字带的上面**：底栏压暗带从 h*0.52 起，球放 0.63 时
+     整个人被"雪原推球"四个字盖住，卡上就只剩一个洞。 */
+  const bx = x + w * 0.38, by = y + h * 0.44;
+  const ball = g.createRadialGradient(bx - br * 0.35, by - br * 0.35, br * 0.2, bx, by, br);
+  ball.addColorStop(0, "#FFFFFF");
+  ball.addColorStop(1, "#C9DBEA");
+  g.fillStyle = ball;
+  g.beginPath(); g.arc(bx, by, br, 0, 6.283); g.fill();
+  g.strokeStyle = "rgba(120,150,175,.55)";
+  g.lineWidth = 1.2;
+  g.beginPath(); g.arc(bx, by, br, 0, 6.283); g.stroke();
+  /* 球在雪上压出的一道浅痕，指向洞口 —— 读得出"这个球是要往右推的" */
+  g.strokeStyle = "rgba(160,190,215,.50)";
+  g.lineWidth = 2;
+  g.beginPath();
+  g.moveTo(bx + br + 4, by + br * 0.6);
+  g.lineTo(hx - w * 0.13, hy - br * 0.4);
+  g.stroke();
+
+  /* 飘雪 */
+  for (let i = 0; i < 14; i++) {
+    const sx = x + ((i * 97 + 31) % Math.max(1, Math.round(w)));
+    const sy = y + ((i * 53 + 17) % Math.max(1, Math.round(h * 0.62)));
+    g.fillStyle = "rgba(255,255,255," + (0.18 + (i % 3) * 0.14).toFixed(2) + ")";
+    g.beginPath(); g.arc(sx, sy, i % 3 === 0 ? 2.2 : 1.4, 0, 6.283); g.fill();
+  }
+}
+
 function drawNestArt(g, x, y, w, h) {
   const bg = g.createLinearGradient(x, y, x, y + h);
   bg.addColorStop(0, "#241E2E");
@@ -18833,6 +18904,7 @@ function drawGateArt(g, p, x, y, w, h) {
   if (img) drawArtCover(g, img, x, y, w, h);
   else if (p.id === "trail") drawTrailArt(g, x, y, w, h);
   else if (p.id === "nest") drawNestArt(g, x, y, w, h);
+  else if (p.id === "snow") drawSnowArt(g, x, y, w, h);
   else { g.fillStyle = "#1A2E2A"; g.fillRect(x, y, w, h); }
   /* 没开放的玩法只**在图上**盖一层薄纱，不整张卡压暗 ——
      整卡压暗后立绘变成一团黑，这张画就白出了；而文字压暗会让

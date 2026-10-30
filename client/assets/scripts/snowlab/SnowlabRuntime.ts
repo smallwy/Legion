@@ -2560,6 +2560,10 @@ const S = {
   clearT: 0,
   p: null,
   foes: [], shots: [], balls: [], frags: [], texts: [], shards: [],
+  /* **踩实的球。** 球作为"弹药"只有砸门一个出口，作为"建材"它就能造台阶、
+     堵洞、垫高 —— 两个出口抢同一份资源，这才是取舍。
+     它是**实体**（进 `solids()`），不是球：不滚、不合、不减寿命、不能推。 */
+  pins: [],
   /* **冲击环。** 球砸碎箱子那一下要有"力从这里发出去"的形状 ——
      只靠碎片和震屏，读起来是"东西碎了"，不是"被撞碎了"。
      一圈迅速扩散、迅速消失的白环，是最便宜也最准的表达。 */
@@ -2851,6 +2855,10 @@ function reset(seed, stage) {
   }
   S.nests = (L.nests || []).map(n => ({ ...n, born: 0, t: 0 }));
   S.shots = []; S.balls = []; S.frags = []; S.texts = []; S.shards = []; S.rings = [];
+  /* 踩实的球属于**这一关的地形**，换关必须一起清。忘记清的症状是
+     "上一关的冰墩留在了下一关的半空中"—— 而它照样能站人，所以
+     玩家会以为是关卡设计。 */
+  S.pins = [];
   S.ebullets = [];
   S.ammo = NUM.ammoStart;
   S.belly = NUM.bellyStart;
@@ -3063,6 +3071,11 @@ function aabb(a, b) {
 function solids() {
   const out = S.plats.slice();
   for (const b of S.boxes) if (!b.dead) out.push(b);
+  /* 踩实的球是实心的。**放最后、且不带任何 `kind` 专属字段** ——
+     `stepBody` / `surfY` 里所有 `s.kind === 'xxx'` 的分支因此全部不匹配，
+     它就走"普通方块"那条路：能站、能挡、能被撞。加进这个函数的收益是
+     一次性的：地形查询、镜头吸附、碎片落地、敌人贴地全都自动认它。 */
+  for (const p of S.pins) out.push(p);
   return out;
 }
 
@@ -3775,6 +3788,97 @@ function fuseBalls(a, c) {
   kickShake(2.6, 'fuse');
   hitStop(0.05);
   return b;
+}
+
+/* ---------------------------------------------------------------- 踩实（C）
+   到这里为止，一颗球只有**一个去处**：拿去砸门 / 砸箱子 / 砸 BOSS。
+   也就是说"球"在玩家手里是弹药，每一颗的用法都注定了 —— 攒大、推过去。
+   48 关里这个决定重复了几百次，所以再多的机制也只是换皮。
+
+   **踩实把球变成地形。** 它长在场上、能站、能挡、能垫高、能堵洞，但从此
+   不能推也不能砸。于是同一颗球有了两个都不能反悔的出口：
+     · 当弹药：砸开这一层要砸的东西；
+     · 当建材：把这一层变成"能上去"的形状。
+   两个出口抢同一份资源（球只来自怪，怪是有限的），这才是取舍 —— 不是
+   多一个按钮，而是"这个决定等下会疼"。
+
+   三条限制，每条都去掉过一个更省事的写法：
+     ① **必须贴地。** 不贴地就能在空中造平台，等于给玩家一副梯子，
+        生成器辛苦维持的"每层 24 的夹层约束"当场作废。
+     ② **不可逆。** 能敲碎取回的话它就不是取舍了，是免费开关。
+     ③ **整颗消耗。** 不保留体积 —— 保留的话玩家会先压实再合体，
+        "踩实"变成"攒球的中间步骤"，跟设计意图正好相反。 */
+/* **墩要够高才有用。** 第一版按"体积守恒"压成 r*1.15（小球只有 25px），
+   出图之后几乎看不见 —— 和雪地同色、比箱子还矮，"这里能站"完全读不出来。
+   现在按 r*1.55：压下去的材料从四周挤出，变成一根窄而实的冰柱。
+   小球 34px、特大球 71px，玩家跳 123，都上得去。 */
+const PIN = { reachX: 78, reachY: 86, hK: 1.55, wK: 0.925 };
+
+/** 玩家身边最近的那颗球（只看横向距离，纵向放宽 —— 球常在人脚边）。 */
+function pinCandidate() {
+  const p = S.p;
+  if (!p) return null;
+  const px = p.x + p.w / 2, py = p.y + p.h * 0.6;
+  let best = null, bestD = 1e9;
+  for (const b of S.balls) {
+    if (b.dead) continue;
+    if (Math.abs(b.x - px) > PIN.reachX + b.r) continue;
+    if (Math.abs(b.y - py) > PIN.reachY + b.r) continue;
+    const d = Math.abs(b.x - px);
+    if (d < bestD) { bestD = d; best = b; }
+  }
+  return best;
+}
+
+/** 贴地才让踩实。判据用 `groundAt` 查球心左右两点 —— 单查球心的话，
+    球卡在箱子边缘时"脚下有面无面"会随一像素抖动，玩家看到的是
+    "有时候能踩有时候不能"，而那种不确定性比禁止更难受。 */
+function canPin(b) {
+  if (!b) return false;
+  const bottom = b.y + b.r;
+  const gl = groundAt(b.x - b.r * 0.5, bottom + 2);
+  const gr = groundAt(b.x + b.r * 0.5, bottom + 2);
+  return Math.abs(gl - bottom) <= 9 && Math.abs(gr - bottom) <= 9;
+}
+
+function pinBall(b) {
+  const r = b.r;
+  const h = r * PIN.hK, w = r * 2 * PIN.wK;
+  const bottom = b.y + r;
+  S.pins.push({
+    x: b.x - w / 2, y: bottom - h, w, h,
+    /* 存下档位和残球标记，只为了画得像"那颗球压扁了" ——
+       画成一模一样的灰方块的话，玩家读不出"这是我刚才踩的那颗"。 */
+    r, tier: ballTier(b.absorbed), weak: !!b.weak,
+    sd: ((b.x * 7 + b.y * 13) | 0) & 0xffff,
+  });
+  b.dead = true;
+  const i = S.balls.indexOf(b);
+  if (i >= 0) S.balls.splice(i, 1);
+  addText(b.x, bottom - h - 16, '踩实了 · 不能再推', '#CFE9FF', 16, 1.1);
+  for (let k = 0; k < 10; k++) {
+    addFrag(b.x + ((k % 5) - 2) * (r * 0.3), bottom - 3, 5, THEME.cap[0], 150);
+  }
+  kickShake(4.4, 'pin');
+  hitStop(0.03);
+}
+
+/** C = 把身边那颗球踩实。**只在 play 阶段**：结算画面上按 C 会白白
+    改掉已经算完的关卡状态，而玩家看不出发生了什么。 */
+function tryPin() {
+  const b = pinCandidate();
+  if (!b) {
+    once('pinnone', S.p.x + S.p.w / 2, S.p.y - 24, '身边没有球', '#9FB4C4');
+    return false;
+  }
+  if (!canPin(b)) {
+    /* 提示必须说**为什么**。"不行"玩家会以为按键坏了；
+       "要贴地"他才知道自己该把球推下来。 */
+    once('pinair', b.x, b.y - b.r - 14, '球要贴地才能踩实', '#FFC08A');
+    return false;
+  }
+  pinBall(b);
+  return true;
 }
 
 /* ---------------------------------------------------------------- BOSS
@@ -5086,6 +5190,9 @@ function onKey(e, down) {
      开关状态放在 S.perf 上、不进 reset，换关不会把它关掉。 */
   if (down && (k === 'f' || k === 'F')) S.perf.on = !S.perf.on;
   if (down && (k === 'j' || k === 'J' || k === 'k' || k === 'K')) shoot();
+  /* C = 踩实身边的球。**不能用 K** —— K 已经被绑成吐弹（和 J 同义），
+     再绑一个动作会让"按 K"同时吐弹又踩实，而玩家只会觉得"这个键坏了"。 */
+  if (down && (k === 'c' || k === 'C') && S.phase === 'play') tryPin();
   if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].indexOf(k) >= 0) e.preventDefault();
 }
 
@@ -7120,6 +7227,9 @@ function draw() {
   // 箱子
   /* **最大的单笔省。** 一关 84 口箱，屏幕里只看得见二十来口，
      而每一口要画板缝 + 对角撑 + 护铁 + 钉眼，是本文件最贵的绘制函数。 */
+  /* 踩实的球。**画在箱子之前** —— 它可以被箱子压着（箱子落在墩上），
+     反过来才是错的。 */
+  for (const k of S.pins) if (vis(k.y - 20, k.y + k.h + 20)) drawPin(g, k);
   for (const b of S.boxes) if (!b.dead && vis(b.y, b.y + b.h)) drawBox(g, b);
 
   /* 落地件在箱子之后补画（见上面那段的说明）。玩家还在这之后，不会挡人。 */
@@ -9970,6 +10080,90 @@ function drawShot(g, s) {
   g.restore();
 }
 
+/* ---------------------------------------------------------------- 踩实的球
+   画法只有一条主张：**要像"那颗球被压扁了"，不像"地上多了个方块"。**
+   玩家刚把它按下去，如果变成一块陌生的灰砖，他就不知道那是自己干的、
+   也记不住"这里以后能站"。所以沿用球的配色（`ballSkin`），只是形状扁了、
+   底下压出一圈雪。
+
+   还有一件事只能靠画：**"能不能站"必须看得见。** 顶面给一块明确的
+   高光椭圆 —— 和在雪坡、箱顶用的是同一套"亮面 = 可站立"的语言。 */
+function drawPin(g, k) {
+  const cx = k.x + k.w / 2, bot = k.y + k.h, hw = k.w / 2;
+  /* **底部不能用雪地的颜色。** 第一版渐变最后一档取 `THEME.cap[2]`，
+     于是墩的下半截和地面连成一片 —— 图上读作"一块贴在地上的浅色区域"，
+     完全不像立着的东西。现在从顶到底一路变深，最暗那档压到冰蓝，
+     靠"比地暗"把自己从地板上分出来。 */
+  const skin = k.weak
+    ? { a: '#E8E4D8', b: '#B4BAB8', c: '#7E8786' }
+    : { a: '#F4FCFF', b: '#BFE2F5', c: '#7FB4D2' };
+  g.save();
+
+  /* 影子比墩宽一圈：压下去的东西会把周围的雪挤开，
+     没有这一圈它读作"摆在雪地上的道具"，而不是"嵌进去的"。 */
+  g.globalAlpha = 0.18; g.fillStyle = '#1A2A32';
+  g.beginPath(); g.ellipse(cx, bot + 1, hw * 1.12, 6, 0, 0, Math.PI * 2); g.fill();
+  g.globalAlpha = 1;
+
+  /* 柱体：上沿是一个被压平的圆弧，两侧近乎竖直，底边齐平。
+     **底边必须齐平** —— 圆底会读成"球陷进地里"，那正是要避免的。 */
+  const shoulder = k.y + k.h * 0.30;
+  g.beginPath();
+  g.moveTo(k.x + 1.5, bot);
+  g.lineTo(k.x + 1.5, shoulder);
+  g.quadraticCurveTo(cx, k.y - k.h * 0.07, k.x + k.w - 1.5, shoulder);
+  g.lineTo(k.x + k.w - 1.5, bot);
+  g.closePath();
+  const grd = g.createLinearGradient(k.x, k.y, k.x + k.w * 0.85, bot);
+  grd.addColorStop(0, skin.a);
+  grd.addColorStop(0.42, skin.b);
+  grd.addColorStop(1, skin.c);
+  g.fillStyle = grd; g.fill();
+
+  /* 右侧暗面：一条竖向的深色带。**没有它就是一块平色板**，
+     有了它才读得出"这是个圆柱，光在左上"。裁剪在柱体内部画，
+     超出轮廓的部分会被 stroke 盖回去。 */
+  g.save();
+  g.clip();
+  g.fillStyle = 'rgba(36,74,104,.16)';
+  g.beginPath();
+  g.moveTo(k.x + k.w * 0.62, k.y);
+  g.lineTo(k.x + k.w, k.y);
+  g.lineTo(k.x + k.w, bot);
+  g.lineTo(k.x + k.w * 0.70, bot);
+  g.closePath(); g.fill();
+  g.restore();
+
+  g.strokeStyle = COL.ink; g.lineWidth = 3.2; g.stroke();
+
+  /* 顶面 = 可站立面。**这是全图唯一告诉玩家"能踩"的东西**，
+     所以给足面积、偏左上、边缘压一点冷色让它有厚度。 */
+  g.fillStyle = 'rgba(255,255,255,.80)';
+  g.beginPath();
+  g.ellipse(cx - hw * 0.14, k.y + k.h * 0.19, hw * 0.56, k.h * 0.13, -0.05, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = 'rgba(126,176,206,.55)'; g.lineWidth = 1.4;
+  g.beginPath();
+  g.ellipse(cx - hw * 0.14, k.y + k.h * 0.19, hw * 0.56, k.h * 0.13, -0.05, 0, Math.PI * 2);
+  g.stroke();
+
+  /* 两道竖裂纹。**弧度随机但由 `sd` 定死** —— 用 `Math.random()` 的话
+     每一帧裂纹都在抖，看起来像墩在蠕动。 */
+  g.strokeStyle = k.weak ? 'rgba(60,70,70,.45)' : 'rgba(44,86,120,.38)';
+  g.lineWidth = 1.8; g.lineCap = 'round';
+  for (let i = 0; i < 2; i++) {
+    const bx = k.x + k.w * (0.30 + i * 0.30);
+    const j = ((k.sd >> (i * 3)) & 7) - 3.5;
+    g.beginPath();
+    g.moveTo(bx, k.y + k.h * 0.26);
+    g.lineTo(bx + j * 1.4, k.y + k.h * 0.58);
+    g.lineTo(bx - j * 0.7, bot - 3);
+    g.stroke();
+  }
+  g.lineCap = 'butt';
+  g.restore();
+}
+
 function drawBall(g, b) {
   const tier = ballTier(b.absorbed);
   const skin = ballSkin(tier);
@@ -10099,8 +10293,14 @@ function drawBallHint(g) {
   if (!best) return;
   const b = best;
   const dir = b.x > p.x + p.w / 2 ? 1 : -1;
-  const txt = '走过去顶它';
-  const tw = 96, th = 23;
+  /* **第二行只在"这颗真的能踩"时出现。** 无条件写"按 C 踩实"的话，
+     玩家会对着悬空的球一直按 C、永远没反应 —— 提示说了做不到的事，
+     比不提示更伤（他会以为键坏了）。判据直接用 `canPin`，和实际
+     允许的条件是同一份代码，不会说完就变。 */
+  const canPinIt = canPin(b);
+  const l1 = '走过去顶它';
+  const l2 = 'C 踩实 · 变成台阶';
+  const tw = canPinIt ? 132 : 96, th = canPinIt ? 40 : 23;
   const bx = clamp(b.x - tw / 2, 6, W - tw - 6);
   const by = b.y - b.r - th - 8;
   const a = 0.72 + 0.28 * Math.sin(S.t * 5);
@@ -10115,10 +10315,15 @@ function drawBallHint(g) {
   g.fillStyle = '#EAF6FF';
   g.font = '700 13px "PingFang SC","Microsoft YaHei",sans-serif';
   g.textAlign = 'center';
-  g.fillText(txt, bx + tw / 2 - 9, by + 16);
+  g.fillText(l1, bx + tw / 2 - (canPinIt ? 0 : 9), by + 16);
+  if (canPinIt) {
+    g.font = '600 11px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillStyle = '#9FCFEA';
+    g.fillText(l2, bx + tw / 2, by + 32);
+  }
   /* 推的方向 */
   g.strokeStyle = '#9BE86E'; g.lineWidth = 2.4; g.lineCap = 'round';
-  const ax = bx + tw - 16 + dir * 3;
+  const ax = bx + tw - 14 + dir * 3;
   g.beginPath();
   g.moveTo(ax - dir * 5, by + 8); g.lineTo(ax + dir * 4, by + 11.5);
   g.lineTo(ax - dir * 5, by + 15);
@@ -11023,6 +11228,9 @@ const API = {
      "动量传没传过去""该不该合体"。出图只能看到结果，看不到
      "两颗慢球贴住 0.2 秒时还没合、0.3 秒才合"这条边界。 */
   stepBalls, stepBallPairs, fuseBalls,
+  /* 踩实（C）。断言要验"贴地才让踩 / 踩完能站人 / 球真的从弹药里没了"，
+     这三件事全在函数内部，只能导出来测。 */
+  tryPin, pinCandidate, canPin, pinBall,
   /* 井梯攀爬。**导出是为了量"爬上去有没有瞬移"** ——
      这条路径历史上是 `p.x = cw.x; p.y = cw.y` 一帧到位，
      光看代码能看出"没有过渡"，看不出多大的跳变。 */

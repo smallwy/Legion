@@ -3510,6 +3510,107 @@ console.log("\n=== 五十. BOSS：第 48 关的三层壳 ===");
 }
 
 /* =========================================================================
+   五十一. 踩实：球的两个出口
+   -------------------------------------------------------------------------
+   **这一节守的是"球不只是弹药"。** 在这之前一颗球只有一条路（砸门/砸箱子/
+   砸 BOSS），玩家每一关做的是同一件事。踩实给它开了第二个、且不可反悔的
+   出口（变成地形），两个出口抢同一份资源 —— 这才是取舍。
+
+   四条只在这里能验：
+     ① 踩实之后它**真的不是球了**（不在 `S.balls`，不参与合体/推/寿命）；
+     ② 它**真的是地形**（玩家站得上去，落点正好是墩顶）；
+     ③ **空中不让踩**（否则等于给玩家一副梯子，夹层约束当场作废）；
+     ④ **换关要清**（不清的话上一关的墩留在下一关半空中，而它照样能站人，
+        玩家会以为是关卡设计）。
+   ========================================================================= */
+console.log("\n=== 五十一. 踩实：球的两个出口 ===");
+{
+  L.startStage(1);
+  const S = L.S;
+  const floor = S.plats.filter(p => p.w > 200).sort((a, b) => b.y - a.y)[0];
+  /* 找一块正上方没有箱子的空地。**别拿箱子堆当试验台** —— 第一次手工测
+     就是随手挑了 x=480，那里正好是一排箱子的顶，墩生成在箱堆里，玩家站
+     上去被箱子顶下来，看着像"踩实会把人弹飞"。 */
+  let freeX = null;
+  for (let x = 60; x < 900; x += 12) {
+    const hit = S.boxes.some(b => !b.dead && b.x < x + 32 && b.x + b.w > x - 32 &&
+      b.y > floor.y - 140 && b.y < floor.y);
+    if (!hit) { freeX = x; break; }
+  }
+  const ballAt = (x, r, dy) => {
+    const b = {
+      x, y: floor.y - r - (dy || 0), vx: 0, vy: 0, r, absorbed: 1,
+      life: 16, weak: false, onGround: true, chain: 0, hitCd: 0, dead: false,
+    };
+    S.balls.push(b);
+    return b;
+  };
+
+  ck("找到一块空地支球", freeX != null, "freeX=" + freeX);
+
+  const b1 = ballAt(freeX, 30, 0);
+  S.p.x = b1.x - 50; S.p.y = b1.y - S.p.h / 2; S.p.vy = 0;
+  ck("身边的球会被选中", L.pinCandidate() === b1);
+  ck("贴地的球允许踩实", L.canPin(b1) === true);
+
+  const n0 = S.balls.length, p0 = S.pins.length;
+  const okPin = L.tryPin();
+  ck("★ 踩实成功", okPin === true, String(okPin));
+  ck("★ 踩实后它不再是球（从 S.balls 里移走）",
+     S.balls.length === n0 - 1 && S.balls.indexOf(b1) < 0,
+     n0 + " → " + S.balls.length);
+  ck("★ 踩实后场上多了个实体", S.pins.length === p0 + 1, p0 + " → " + S.pins.length);
+
+  const k = S.pins[S.pins.length - 1];
+  ck("墩坐在球原来的底面上（不是浮空、也没陷进去）",
+     Math.abs((k.y + k.h) - (b1.y + b1.r)) < 0.6,
+     (k.y + k.h).toFixed(2) + " vs " + (b1.y + b1.r).toFixed(2));
+  ck("墩比原来的球矮（压扁了，不是换了个方块）", k.h < b1.r * 2, k.h.toFixed(1));
+
+  /* ---- 它是地形 ---- */
+  ck("★ 墩进了 `solids()`（groundAt 在它上方返回墩顶）",
+     Math.abs(L.groundAt(k.x + k.w / 2, k.y + 4) - k.y) < 0.6,
+     String(L.groundAt(k.x + k.w / 2, k.y + 4)));
+
+  S.p.x = k.x + k.w / 2 - S.p.w / 2;
+  S.p.y = k.y - S.p.h; S.p.vy = 0;
+  for (let i = 0; i < 10; i++) L.step(1 / 60);
+  ck("★ 玩家能站在上面（落点就是墩顶）",
+     S.p.onGround && Math.abs((S.p.y + S.p.h) - k.y) < 0.6,
+     (S.p.y + S.p.h).toFixed(2) + " vs " + k.y.toFixed(2));
+
+  /* ---- 已经变成地形了，就不该再被当球处理 ---- */
+  const before = S.pins.length;
+  for (let i = 0; i < 240; i++) L.stepBalls(1 / 60);
+  ck("★ 墩不会像球一样散掉（跑 4 秒还在）", S.pins.length === before,
+     before + " → " + S.pins.length);
+  ck("墩不参与合体（它不是球，碰不出第二颗）",
+     L.S.balls.every(x => x !== k), "pins=" + S.pins.length);
+
+  /* ---- 空中不让踩 ---- */
+  const air = ballAt(freeX + 300, 30, 120);
+  S.p.x = air.x - 50; S.p.y = air.y - S.p.h / 2;
+  ck("★ 悬空的球不让踩实（否则等于送一副梯子）", L.canPin(air) === false);
+  ck("踩空时不消耗球", L.tryPin() === false && S.balls.indexOf(air) >= 0);
+
+  /* ---- 墩的个头跟球的档位走 ---- */
+  const small = ballAt(freeX + 42, 22, 0);
+  L.pinBall(small);
+  const kS = S.pins[S.pins.length - 1];
+  const big = ballAt(freeX + 130, 46, 0);
+  L.pinBall(big);
+  const kB = S.pins[S.pins.length - 1];
+  ck("大球踩出来的墩更高（能垫得更高，不是同一块砖）", kB.h > kS.h + 8,
+     kS.h.toFixed(1) + " vs " + kB.h.toFixed(1));
+
+  /* ---- 换关必须清 ---- */
+  L.startStage(2);
+  ck("★ 换关清空踩实的球（留在下一关会被人当成关卡设计）",
+     L.S.pins.length === 0, String(L.S.pins.length));
+  L.startStage(1);
+}
+
+/* =========================================================================
    汇总
    ========================================================================= */
 console.log("\n" + "=".repeat(56));

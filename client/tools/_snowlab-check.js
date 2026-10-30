@@ -2557,10 +2557,21 @@ group("四十二、深潜（无尽模式）");
      是两行现在本来就画在同一块板上。 */
   const HR = L.HUD_RECTS;
   const ov = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-  ck("HUD 矩形表有 2 块（试验台 / 进度芯片）", Object.keys(HR).length === 2,
-     Object.keys(HR).join(","));
-  ck("「进度芯片」不和「试验台」面板重叠", !ov(HR.progChip, HR.meter),
-     JSON.stringify(HR.progChip) + " vs " + JSON.stringify(HR.meter));
+  ck("HUD 矩形表有 4 块（试验台 / 进度芯片 / 雪晶 / 深潜词条）",
+     Object.keys(HR).length === 4, Object.keys(HR).join(","));
+  /* **两两比，不写死哪两块比。** 写死成"progChip vs meter"的话，
+     新加一块（雪晶 / 词条）就完全没有被这条管住 —— 而它们正好都堆在
+     右侧同一列，是最容易撞的一组。 */
+  {
+    const ks = Object.keys(HR);
+    const bad = [];
+    for (let i = 0; i < ks.length; i++) {
+      for (let j = i + 1; j < ks.length; j++) {
+        if (ov(HR[ks[i]], HR[ks[j]])) bad.push(ks[i] + "×" + ks[j]);
+      }
+    }
+    ck("HUD 的 4 块矩形两两不相交", bad.length === 0, bad.join(" "));
+  }
   ck("「进度芯片」在屏幕内（不越右边界、不压顶栏 16..66）",
      HR.progChip.x + HR.progChip.w <= 960 && HR.progChip.x >= 16 && HR.progChip.y > 66,
      HR.progChip.y + "");
@@ -3350,17 +3361,26 @@ console.log("\n=== 四十九. 场景主题 ===");
      症状是"熔炉还是矢量、霜原变成了熔炉的图"，而两件事在单场景截图里
      都看不出来（各自"有一张图"）。 */
   {
+    const THEME_IDS = ["snow", "ember", "spore", "dune"];
     const fake = { width: 960, height: 340, __tag: "forge" };
+
+    /* **这条必须在挂任何图之前。** 它验的是"还没加载时的初值"，
+       放到 `setBackdrop(fake,'ember')` 后面就变成在验"刚挂上去的那张图"
+       —— 第一次写就栽在这儿：ember 已经不是 null 了，红的是断言不是代码。 */
+    /* 未加载成功时取到的必须是 null —— `bgOf` 返回 undefined 的话，
+       `if (bg)` 判断成立、`drawImage(undefined)` 直接抛，整帧不画。
+       **四个场景一起验。** 原来这里写的是「spore/dune 没画图所以是 null」，
+       2026-10-30 给这两个场景补了立绘之后，那条断言就变成在守一个
+       已经不成立的事实了 —— 它还绿着，只是因为它验的是"jsdom 解不了图"。
+       这种"注释在说谎、断言靠巧合"的绿最危险。 */
+    ck("四个场景在未加载时取到的都是 null（不是 undefined）",
+       THEME_IDS.every(id => L.bgFor(id) === null),
+       THEME_IDS.map(id => id + "=" + String(L.bgFor(id))).join(" "));
+
     L.setBackdrop(fake, "ember");
     ck("★ 按场景挂图不会串（挂 ember 不会改 snow）",
        L.bgFor("ember") === fake && L.bgFor("snow") === null,
        "ember=" + (L.bgFor("ember") ? "有" : "无") + " snow=" + (L.bgFor("snow") ? "有" : "无"));
-
-    /* 没画图的场景必须是 null —— `bgOf` 返回 undefined 的话，
-       `if (bg)` 判断成立、`drawImage(undefined)` 直接抛，整帧不画。 */
-    ck("没画图的场景取到的是 null（不是 undefined）",
-       L.bgFor("spore") === null && L.bgFor("dune") === null,
-       String(L.bgFor("spore")));
 
     L.applyTheme("ember");
     ck("切到熔炉时确实用上了熔炉那张", L.bgFor("ember") === fake);
@@ -3375,6 +3395,31 @@ console.log("\n=== 四十九. 场景主题 ===");
        L.bgFor("snow") === null && L.bgFor("ember") === fake,
        "snow=" + String(L.bgFor("snow")) + " ember=" + (L.bgFor("ember") ? "有" : "无"));
     L.setBackdrop({ snow: null, ember: null, spore: null, dune: null });
+  }
+
+  /* ---- 每个场景都得有立绘块，且块里真的有图 ----
+     `BG_IMGS` 里加了 key、却忘了跑 `_snowlab-embed-bg.js`，症状是：
+     代码注册了、`initBackdrop` 也遍历到了、`getElementById` 返回 null、
+     `continue` 一走 —— 游戏里退回程序化天空。不报错、不警告。
+     块 id 写错（`art-bg` vs `art-bg-snow`）也是同一个外观。
+     **所以这条直接从 html 源码里数块，不信任何运行时状态** ——
+     jsdom 解不了图，运行时那一侧永远是 null，验不出这个。 */
+  {
+    const elId = id => (id === "snow" ? "art-bg" : "art-bg-" + id);
+    const missing = [], weak = [];
+    for (const id of ["snow", "ember", "spore", "dune"]) {
+      const re = new RegExp('<script id="' + elId(id) +
+                            '" type="text/plain">([\\s\\S]*?)<\\/script>');
+      const mm = html.match(re);
+      if (!mm) { missing.push(id); continue; }
+      /* 真图至少几十 KB base64；空块 / 占位串必须算失败，
+         否则"内嵌了个空气"会被当成"内嵌好了"。 */
+      if (!/^data:image\/jpeg;base64,[A-Za-z0-9+/=]{2000,}$/.test(mm[1].trim())) weak.push(id);
+    }
+    ck("★ 四个场景的立绘块都在 html 里（加了场景别忘跑内嵌脚本）",
+       missing.length === 0, "缺：" + (missing.join(",") || "无"));
+    ck("每块立绘都是真的 jpeg data uri（不是空块占位）",
+       weak.length === 0, "可疑：" + (weak.join(",") || "无"));
   }
 
   L.startStage(1);
@@ -3667,6 +3712,218 @@ console.log("\n=== 五十二. 音效 ===");
   ck("吐弹 / 过关 / 深潜结束各有一个专门的音",
      !!lib.shoot && !!lib.clear && !!lib.dead,
      ["shoot", "clear", "dead"].filter(k => !lib[k]).join(","));
+}
+
+/* =========================================================================
+   五十三、雪晶 / 图鉴 / 裂壳 / 悬台 / 态度（CR-032 第 4、5 条 + 遗留第 1、2、7 条）
+   ---------------------------------------------------------------------------
+   **这一组守的是"新增的那层元系统有没有真的接上"**，不是"数字调得对不对"：
+
+     · 雪晶必须**有出口**（只进不出的货币是装饰）
+     · 图鉴的解锁必须是**进过才解锁**，不能一开始全亮、也不能永远不亮
+     · 裂壳必须只在四关出现，且**不进 `lootTotal`**（否则它就成了
+       第 49 个任务，而它的定位是"给愿意看的人留的东西"）
+     · 悬台必须**每关都在**（缺了会让第 43 关退化成一张普通图，
+       而"没有"和"坏了"在图上完全一样）
+     · 三种怪的 `role` 必须真的被 `stepFoes` 读到（只加字段不接线，
+       断言量不到、玩起来也量不到 —— 那就等于没加）
+   ========================================================================= */
+group("五十三、雪晶 / 图鉴 / 裂壳 / 悬台 / 态度");
+{
+  /* ---- 雪晶：进出都要能走通 ---- */
+  L.writeSnowProgress({ coins: 0 });
+  L.addSnowCoins(50);
+  ck("★ 雪晶能加（+50 → 50）", L.snowCoins() === 50, L.snowCoins() + "");
+  ck("★ 买不起时不扣钱、返回 false", L.spendSnowCoins(999) === false && L.snowCoins() === 50,
+     L.snowCoins() + "");
+  ck("★ 买得起时扣钱（50-30 → 20）", L.spendSnowCoins(30) === true && L.snowCoins() === 20,
+     L.snowCoins() + "");
+  ck("★ 出生补给表有三档、每档都有价格", L.BUY_LIST.length === 3 &&
+     L.BUY_LIST.every(b => b.cost > 0 && b.id && b.key), JSON.stringify(L.BUY_LIST.map(b => b.id)));
+
+  /* 补给真的会改状态（不是只扣钱）。**三条各验一次** ——
+     只验"扣了钱"的话，忘记生效会和"生效了"完全一样。 */
+  /* **必须先退出深潜**：`reset()` 不清 `S.dive`（它只负责造这一关），
+     而 `buySupply` 在深潜里是拒绝的 —— 上面几组留下的深潜状态会让
+     下面三条全变红，而红的原因看起来像"补给没生效"。 */
+  S.dive = null;
+  L.reset(4242, 7);
+  L.writeSnowProgress({ coins: 200 });
+  const ammo0 = S.ammo, hp0 = S.hp, balls0 = S.balls.length;
+  ck("★ 买弹药真的 +30", L.buySupply('ammo') === true && S.ammo === ammo0 + 30,
+     S.ammo + " vs " + ammo0);
+  ck("★ 买球真的多一颗球（落在脚边）",
+     L.buySupply('ball') === true && S.balls.length === balls0 + 1, S.balls.length + "");
+  S.hp = Math.max(0, hp0 - 1);
+  ck("★ 买血真的回一格", L.buySupply('hp') === true && S.hp === hp0, S.hp + " vs " + hp0);
+  ck("★ 同一关同一样买不了第二次（钱不再掉）",
+     (() => { const c0 = L.snowCoins(); L.buySupply('ammo'); return L.snowCoins() === c0; })(),
+     L.snowCoins() + "");
+  /* 深潜里不能买：那一局的张力就是"资源越走越少" */
+  L.startDive(77);
+  const c1 = L.snowCoins();
+  L.buySupply('hp');
+  ck("★ 深潜里买不了补给（钱没动）", L.snowCoins() === c1, L.snowCoins() + " vs " + c1);
+  L.S.dive = null; L.S.phase = 'play';
+
+  /* ---- 图鉴：进过才解锁 ---- */
+  L.writeSnowProgress({ codex: {} });
+  L.reset(555, 1);                       // 第 1 关 = 霜原
+  ck("★ 进过霜原之后，图鉴里霜原是解锁的",
+     !!L.codexSeen('biome').snow, JSON.stringify(L.codexSeen('biome')));
+  const seenAfter = L.codexSeen('biome');
+  ck("没去过的场景仍然是锁的（只有进过的那一个亮）",
+     !seenAfter.ember && !seenAfter.spore && !seenAfter.dune, JSON.stringify(seenAfter));
+  L.reset(555, 13);                      // 第 13 关 = 熔炉
+  ck("★ 换到熔炉之后两套都记着（不是覆盖）",
+     !!L.codexSeen('biome').snow && !!L.codexSeen('biome').ember,
+     JSON.stringify(L.codexSeen('biome')));
+  ck("★ 见过的怪也记进去了", Object.keys(L.codexSeen('breed')).length > 0,
+     JSON.stringify(L.codexSeen('breed')));
+
+  /* ---- 裂壳：只在四关、不进 lootTotal ---- */
+  const relicStages = L.RELIC_STAGES;
+  ck("裂壳分布在四关（12/24/36/44）", relicStages.join(",") === "12,24,36,44", relicStages.join(","));
+  let huskOK = true, huskBad = "";
+  for (const st of relicStages) {
+    const lv = L.genLevel(L.stageSeed(st), st);
+    if (!lv.husk) { huskOK = false; huskBad = "stage " + st + " 没有裂壳"; }
+    /* **它不能被算进寻宝目标。** 算进去的话，这四关会从"走过去"
+       变成"必须先找到一块壳"，而壳的位置是随机生成的 —— 那是拿运气卡人。 */
+    if (lv.boxes.some(b => b.mat === 'husk' && b.loot)) { huskOK = false; huskBad = "裂壳带了 loot"; }
+  }
+  ck("★ 四个裂壳关都有裂壳，且裂壳都不算金箱", huskOK, huskBad);
+  {
+    const lv = L.genLevel(L.stageSeed(20), 20);
+    ck("非裂壳关没有裂壳（不能每关都掉）", !lv.husk, JSON.stringify(lv.husk));
+  }
+
+  /* ---- 悬台：第 43 关每关都在，且在 140 高 ---- */
+  {
+    let ok = 0, total = 0, hOK = true;
+    for (let i = 0; i < 12; i++) {
+      const lv = L.genLevel((L.stageSeed(43) + i * 7919) >>> 0, 43);
+      total++;
+      if (lv.perch) ok++;
+      if (lv.perch && Math.abs((lv.floors[lv.nFloors - 1] - lv.perch.y) - 140) > 1) hOK = false;
+    }
+    ck("★ 第 43 关的悬台 12 个种子全都在场（" + ok + "/" + total + "）", ok === total, ok + "/" + total);
+    ck("★ 悬台高度是 140（单跳 123 够不着、二段跳 272 够）", hOK, "");
+    const lv = L.genLevel(L.stageSeed(43), 43);
+    ck("★ 金箱在悬台上（不是还留在别处）", lv.boxes.filter(b => b.loot).length === 1 &&
+       Math.abs(lv.boxes.filter(b => b.loot)[0].x + 24 - (lv.perch.x + lv.perch.w / 2)) < 2,
+       JSON.stringify(lv.boxes.filter(b => b.loot)));
+    /* **悬台正下方必须是空的。** 底下一摞箱子的话，玩家踩着箱堆就上去了，
+       这一关和别的关没有区别 —— 而那种"看起来正常"的退化最难发现。 */
+    const fy = lv.floors[lv.nFloors - 1];
+    const under = lv.boxes.filter(b => !b.loot && b.x < lv.perch.x + lv.perch.w + 8 &&
+      b.x + b.w > lv.perch.x - 8 && b.y + b.h > lv.perch.y + 34 && b.y + b.h <= fy + 4);
+    ck("★ 悬台正下方没有箱子可踩（不然一张台阶就把它废了）", under.length === 0,
+       under.length + " 口");
+    ck("★ 第 43 关的目标是寻宝（悬台是金箱的家）", L.goalOf(43) === 'collect', L.goalOf(43));
+  }
+  /* 悬台必须真的能站人：把玩家放到台面上，跑 30 帧不许掉下去。 */
+  {
+    L.reset(L.stageSeed(43), 43);
+    const lv = L.S.level;
+    const pb = lv.perch;
+    if (pb) {
+      L.placePlayer(pb.x + pb.w / 2 - S.p.w / 2, pb.y - S.p.h - 2);
+      for (let i = 0; i < 30; i++) L.step(1 / 60);
+      ck("★ 玩家站在悬台上站得住（跑 30 帧还在台面高度）",
+         Math.abs((S.p.y + S.p.h) - pb.y) < 3, ((S.p.y + S.p.h) - pb.y).toFixed(1));
+    } else { ck("★ 玩家站在悬台上站得住（跑 30 帧还在台面高度）", false, "没有悬台"); }
+    L.phase = 'play';
+  }
+
+  /* ---- 三种怪的"态度" ---- */
+  const roles = ['moss', 'fang', 'grub'].map(b => L.NUM.breed[b].role);
+  ck("★ 三种怪有各自的 role（守 / 追 / 拉扯）",
+     roles[0] === 'guard' && roles[1] === 'hunt' && roles[2] === 'kite', roles.join(","));
+  ck("★ moss 的冲撞参数齐全（射程/速度/前摇/冷却）",
+     (() => { const c = L.NUM.breed.moss.charge; return c && c.range > 0 && c.spd > L.NUM.breed.moss.speed && c.wind > 0 && c.cd > 0; })(),
+     JSON.stringify(L.NUM.breed.moss.charge));
+  ck("★ grub 的拉扯距离小于它的射程（否则它一边退一边打不到人）",
+     L.NUM.breed.grub.keep < L.NUM.breed.grub.range,
+     L.NUM.breed.grub.keep + " vs " + L.NUM.breed.grub.range);
+  /* **行为不是只加字段**：把玩家塞到 moss 的圈里，它必须真的冲一段。 */
+  {
+    /* **挑一只不在墙边的 moss**（贴着右墙的话，"玩家站它右边"这件事
+       根本排不出来，玩家会被墙推回来站到它身上）。 */
+    let tested = false, lunged = false, why = "没有 moss";
+    for (const seed of [2020, 2021, 2022, 2023]) {
+      L.reset(seed, 9);
+      const f = S.foes.find(x => x.breed === 'moss' && x.x > 80 && x.x < 780);
+      if (!f) continue;
+      tested = true;
+      L.placePlayer(f.x + 100, f.y + f.h - S.p.h);
+      let sawWind = false, sawCharge = false;
+      for (let i = 0; i < 300; i++) {
+        L.step(1 / 60);
+        if (f.windT > 0) sawWind = true;
+        if (f.chargeT > 0 && Math.abs(f.vx) > L.NUM.breed.moss.speed * 2) sawCharge = true;
+        if (sawCharge) break;
+      }
+      /* 三件事都要成立：鼓身（有前摇）、冲（真的加速）、速度明显超过走速 */
+      lunged = sawWind && sawCharge;
+      why = "wind=" + sawWind + " charge=" + sawCharge;
+      break;
+    }
+    ck("★ 苔泥团真的会鼓身 + 冲（不是只有字段）" + (tested ? "" : "（没找到样本）"),
+       tested && lunged, why);
+  }
+  /* grub 的拉扯：玩家贴上去，它应该朝"背离玩家"的方向移动。
+     **判据是"速度方向和玩家方向相反"，不是写死 vx<0** —— 玩家站它左边
+     还是右边取决于站位，写死方向的话断言改一次站位就假红。 */
+  {
+    let tested = false, kited = false, why = "没有 grub";
+    for (const seed of [2021, 2022, 777, 4242]) {
+      L.reset(seed, 9);
+      const f = S.foes.find(x => x.breed === 'grub' && x.x > 80 && x.x < 780);
+      if (!f) continue;
+      tested = true;
+      L.placePlayer(f.x + 60, f.y + f.h - S.p.h);
+      let saw = false;
+      for (let i = 0; i < 240; i++) {
+        L.step(1 / 60);
+        const dxp = (S.p.x + S.p.w / 2) - (f.x + f.w / 2);
+        if (Math.abs(dxp) > 20 && Math.sign(f.vx) === -Math.sign(dxp) && Math.abs(f.vx) > 5) {
+          saw = true; break;
+        }
+      }
+      kited = saw;
+      why = "saw=" + saw;
+      break;
+    }
+    ck("★ 霜甲虫真的会往回退（拉扯不是只有文案）" + (tested ? "" : "（没找到样本）"),
+       tested && kited, why);
+  }
+
+  /* ---- 深潜词条 ---- */
+  ck("词条按深度解锁（1 层没有、5 层有重石）",
+     L.diveMods(1).length === 0 && L.diveMods(5).indexOf('heavy') >= 0,
+     JSON.stringify(L.diveMods(5)));
+  ck("词条是递增的（20 层四条全开）", L.diveMods(20).length === 4, JSON.stringify(L.diveMods(20)));
+  {
+    /* **词条必须真的改数**，不能只是显示一行字。 */
+    L.startDive(99);
+    const base = L.snowNeed();
+    S.dive.depth = 10;                       // 厚甲
+    const thick = L.snowNeed();
+    ck("★ 深潜 10 层「厚甲」真的让裹一只更费", thick > base, base + " → " + thick);
+    S.dive.depth = 1;
+    ck("★ 回到第 1 层就恢复（词条不写死进 NUM）", L.snowNeed() === base, L.snowNeed() + "");
+    /* 种子派生：同深度必须同一张图、不同深度必须不同图。
+       **两次都要从同一个深度起跳**（`diveNext` 自己 +1，所以起点写 5
+       两次才都是"第 6 层"）。第一版一次写 5 一次写 4，测的是两个深度，
+       红了还以为派生坏了。 */
+    S.dive.depth = 5; L.diveNext(); const s5a = L.SEED;
+    S.dive.depth = 5; L.diveNext(); const s5b = L.SEED;
+    ck("★ 同一 base 同一深度 → 同一张图", s5a === s5b, s5a + " vs " + s5b);
+    S.dive.depth = 8; L.diveNext(); const s5c = L.SEED;
+    ck("★ 不同深度 → 不同的图", s5c !== s5a, s5c + " vs " + s5a);
+    L.S.dive = null; L.S.phase = 'play';
+  }
 }
 
 /* =========================================================================

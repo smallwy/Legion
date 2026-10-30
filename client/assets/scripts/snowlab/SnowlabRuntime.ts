@@ -1,4 +1,4 @@
-/* @src-md5 7545f610a8afa63f1def8d0247abf2cb @src-lines 11496 */
+/* @src-md5 dcab99d9a567b0fababd1660d510cd09 @src-lines 12433 */
 // @ts-nocheck
 /* ⚠ 自动生成，勿手改 —— 源：client/prototype/snowlab.html
    重新生成：python client/tools/extract_snowlab_runtime.py
@@ -240,6 +240,12 @@ const NUM = {
     stone: { hp: Infinity, minPow: 560,  keepSpeed: 0.46, minTier: 0, name: '石箱' },
     iron:  { hp: Infinity, minPow: 1150, keepSpeed: 0.30, minTier: 0, name: '铁箱' },
     ice:   { hp: Infinity, minPow: 1550, keepSpeed: 0.36, minTier: 1, name: '冰墙' },
+    /* **裂壳**（CR-032 遗留第 5 条）：终局怪撞碎时掉下来的壳片，嵌在墙里。
+       `hp: Infinity` = 子弹完全无效 —— 这是刻意的：它必须被**球**砸开，
+       否则玩家二十发子弹就能把它抠出来，"要推球"这件事在整个游戏里
+       就只剩关门那一次。`minPow: 700` 比一次轻推（620）高，
+       推着走撞上去砸不开，得助跑一下。 */
+    husk:  { hp: Infinity, minPow: 700,  keepSpeed: 0.62, minTier: 0, name: '裂壳' },
   },
 
   /* 掉弹。**这一列是「用球才回本」的唯一实现**：
@@ -303,11 +309,42 @@ const NUM = {
        grub 多足霜甲虫 · crawl · 多足 → 贴地爬，**不跳**；20px 以内的坎直接蹭上去
 
      `jump: 0` 就是"这条腿不会跳"，物理层见到它就不起跳（不再有
-     "多足甲虫原地弹跳"这种和自己体态打架的动作）。 */
+     "多足甲虫原地弹跳"这种和自己体态打架的动作）。
+
+     ---- 2026-10-30：三只只有数值不同、行为一样（CR-032 遗留第 7 条）----
+     它们的 `speed / jump / range / cd` 全不一样，但**玩法上是同一只**：
+     都是"在走廊里来回走，看见你就原地扔一发"。玩家打了十关之后，
+     唯一记得的差别是"这只跑得快"。
+
+     区别必须是**玩家怎么对付它**，不是它跑多快。所以按体态再推一层，
+     给每只一个**态度**（`role`）—— 也是从"它长什么样"推出来的：
+
+       moss 苔泥团 · 无腿的一坨泥 · **守**（guard）
+         它没有腿去追人。你踏进它的地盘，它把身体鼓起来**冲一下**，
+         然后把力气用完，瘫在那儿喘两秒。→ 对付它：别进它的圈，或者
+         等它冲完的空档。它是"站位问题"，不是"手速问题"。
+
+       fang 尖牙兽 · 四条腿 · **追**（hunt）
+         从头到尾跟着你跑，跑到够得着就甩牙。它不守任何东西。
+         → 对付它：打带跑，或者把它引进箱堆里卡住。
+
+       grub 霜甲虫 · 十几条腿 · **拉扯**（kite）
+         你一靠近它就退，一边退一边扔冰锥；退到台边就不退了，改成
+         贴边硬顶。射程是三者最远的（270 → 它的打法就是"保持距离"）。
+         → 对付它：把它逼到台角，或者从上面砸。
+
+     这三条都不新开系统：`chargeT` 是一次限时冲刺，`kite` 只是把
+     `want` 从"巡逻"换成"背离玩家"，伤害仍然走已有的贴脸 `/ 投掷物`。 */
   breed: {
-    moss: { speed: 84,  jump: 0,   gait: 'slide', cdA: 1.9, cdB: 2.9, range: 300, bullet: 'mud'   },
-    fang: { speed: 148, jump: 545, gait: 'run',   cdA: 1.5, cdB: 2.3, range: 350, bullet: 'tooth' },
-    grub: { speed: 100, jump: 0,   gait: 'crawl', cdA: 2.3, cdB: 3.3, range: 270, bullet: 'shard' },
+    /* moss 的冲撞：`range` 是触发半径，`spd` 是冲刺速度（比走速 84 快 4 倍），
+       `wind` 是鼓身的预警时间 —— **必须有**，132px 的圈里毫无预兆地
+       窜出 330px/s 的东西，玩家只会觉得"被莫名其妙撞了"。 */
+    moss: { speed: 84,  jump: 0,   gait: 'slide', cdA: 1.9, cdB: 2.9, range: 300, bullet: 'mud',
+            role: 'guard', charge: { range: 132, spd: 330, wind: 0.30, dur: 0.26, cd: 2.6 } },
+    fang: { speed: 148, jump: 545, gait: 'run',   cdA: 1.5, cdB: 2.3, range: 350, bullet: 'tooth',
+            role: 'hunt' },
+    grub: { speed: 100, jump: 0,   gait: 'crawl', cdA: 2.3, cdB: 3.3, range: 270, bullet: 'shard',
+            role: 'kite', keep: 168 },
   },
   /* 爬行类的"蹭坎"高度：多足贴地爬，20px 以内的矮坎不需要跳，
      身体一抬就过去了。再高就掉头 —— 甲虫翻不过一整个箱子，这是对的。 */
@@ -2292,9 +2329,112 @@ function genLevel(seed, stage) {
     if (bx != null) boss = { x: bx, y: floorY - BH, w: BW, h: BH };
   }
 
+  /* ================= ⑨'-0 第 43 关「悬台」 =================
+     **这是"踩实"唯一一个被真正用上的关。**
+     金箱不在箱堆里，而在一块悬空窄台（离地 140）上 —— 单跳 123 够不着，
+     所以要么用二段跳（能过，但落点只有 96 宽），要么在台下踩实一颗球、
+     从墩顶单跳上去（71 + 123 = 194，余量 54）。
+
+     ---- 为什么不是"必须"，而是"更稳" ----
+     本来想做成"跳不上去、非踩不可"。算了一遍，做不到：
+       · 层高 240、二段跳 272 —— **关卡里任何一点离某层地板都不到 240**，
+         所以二段跳永远够得着；
+       · 想超过 272 就得让台子高过 240，可那就高过上一层的地板了，
+         玩家站上一层地板顺手就能跳下来（只差 46）。
+     唯一剩下的路是压天花板（净空 214），可净空是**绝对的** ——
+     它同时压住"站在墩上"和"站在地上"，墩垫高 71 之后头顶照样撞板。
+     所以在这套跳跃数值下，**"必须踩实"在几何上不成立**。
+     这一关能给的，是"踩实把一次二段跳换成一次单跳"：动作更简单、
+     落点更宽、失败率更低。这是诚实的版本，不是假的强制。
+
+     落地判定：跳歪了就落回门厅地板，可以再试 —— 不惩罚、不死局。 */
+  let perch = null;
+  if (stage === PERCH_STAGE) {
+    const k = nF - 1;
+    const fy = floors[k];
+    /* 上一层洞的落点带要让开：平台架在那儿会被当成"落点被接住"，
+       `validateLevel` 第 2b 条会直接打红。 */
+    const dz = ((layers[k - 1] && layers[k - 1].holes) || []).map(h => [h.x - 30, h.x + h.w + 30]);
+    const freeZone = (x, w) => !dz.some(z => x < z[1] && x + w > z[0]);
+    let best = null;
+    for (let c = 1; c <= 17; c++) {
+      const x0 = c * 48;
+      if (!layers[k].segs.some(s => x0 >= s.x && x0 + PERCH_W <= s.x + s.w)) continue;
+      if (!freeZone(x0, PERCH_W)) continue;
+      if (door && x0 + PERCH_W > door.x - 40 && x0 < door.x + 68) continue;
+      /* **正下方必须是空的**（否则踩着箱堆就上去了，这一关和别的关没区别）。
+         门厅几乎每一列都摞着箱子，所以这里不能"要求空" —— 只能
+         **挑清得最少的那一列，然后自己清**。清的代价用口数计。 */
+      const under = boxes.filter(b => b.x < x0 + PERCH_W + 8 && b.x + b.w > x0 - 8 && b.y + b.h > fy - 200);
+      /* 铁箱 / 冰墙 / 金箱不许清：铁箱是路的一部分，冰墙和入口有关，
+         金箱会被这关的目标计数。占到它们就换一列。 */
+      if (under.some(b => b.mat === 'iron' || b.mat === 'ice' || b.loot || b.frost)) continue;
+      const d = Math.abs(x0 + PERCH_W / 2 - W / 2);
+      /* 先比"要清几口"，一样多再看离屏幕中间远近 —— 悬台是给人看的，
+         但为了它拆掉半层箱子就本末倒置了。 */
+      if (!best || under.length < best.n || (under.length === best.n && d < best.d)) {
+        best = { x0, d, n: under.length, under };
+      }
+    }
+    if (best) {
+      const x0 = best.x0;
+      const py = fy - PERCH_H;
+      for (const b of best.under) {
+        const i = boxes.indexOf(b);
+        if (i >= 0) boxes.splice(i, 1);
+      }
+      const plat = { x: x0, y: py, w: PERCH_W, h: 34 };
+      layers[k].terrain.push(plat);
+      plats.push(plat);
+      /* 金箱搬到台面上。**先把别处的 loot 摘掉** —— `lootTotal` 是按
+         带 loot 的箱子数算的，留两口的话"挖到一个就算通关"，
+         台子上那口就成了可选，这一关的意义当场消失。 */
+      for (const b of boxes) if (b.loot) b.loot = false;
+      const lb = { x: x0 + PERCH_W / 2 - 24, y: py - 48, w: 48, h: 48, mat: 'wood', loot: true };
+      boxes.push(lb);
+      perch = { x: x0, y: py, w: PERCH_W, h: 34, loot: { x: lb.x, y: lb.y }, cleared: best.n };
+    }
+  }
+
+  /* ================= ⑨ 裂壳：终局的铺垫 =================
+     只在第 12 / 24 / 36 / 44 关（四个场景各一块，见 RELIC_STAGES）。
+
+     **换材质，不新建对象。** 一口木箱就地变成裂壳 —— 位置、尺寸、
+     承重关系全部不变，于是"它会不会把路堵死""它会不会掉下来"
+     这些问题全都不用重算（生成器已经算过了）。
+
+     三条挑选规矩，每条挡掉一种"看起来像 bug"的情况：
+       ① **不放在门厅层**：`validateLevel` 要求门厅有 3 口喂球木箱，
+          换掉一口就可能把校验打红（而红的是生成器，不是我）；
+       ② **顶上不许压箱子**：壳片是嵌在墙上的；摞在箱堆中间的话，
+          玩家读作"这堵墙有一块是坏的"，而不是"这里能砸出东西"；
+       ③ **不拿金箱 / 霜箱 / 木桶**：那三样各有各的用途，抢了就变了。 */
+  let husk = null;
+  if (relicOf(stage) >= 0) {
+    const cand = [];
+    for (const b of boxes) {
+      if (b.loot || b.frost || b.mat !== 'wood' || b.barrel) continue;
+      /* 门厅层（最后一层）跳过 —— 判据用"底边在门厅地板附近"，
+         而不是"离哪层地板最近"：箱子可能摞在两格高，底边离地板 96，
+         按最近层算会算到上一层去（而它其实就在门厅里）。 */
+      if (b.y + b.h > floors[nF - 1] - 110) continue;
+      /* 顶上压着箱子就跳过 */
+      if (boxes.some(o => o !== b && Math.abs(o.y + o.h - b.y) < 4 &&
+          o.x < b.x + b.w && o.x + o.w > b.x)) continue;
+      cand.push({ b, d: Math.abs(b.x + b.w / 2 - 480) });
+    }
+    /* 取最靠中间的那口：壳片是"路上会撞见"的东西，不该藏在最边上。 */
+    if (cand.length) {
+      cand.sort((a, b2) => a.d - b2.d);
+      const pick = cand[0];
+      pick.b.mat = 'husk';
+      husk = { x: pick.b.x, y: pick.b.y, w: pick.b.w, h: pick.b.h };
+    }
+  }
+
   return {
     seed, nFloors: nF, stage: (stage == null ? null : stage), skel,
-    floors, layers, plats, boxes, deco, door, spawns, nests, boss,
+    floors, layers, plats, boxes, deco, door, spawns, nests, boss, husk, perch,
     start: { x: startX, y: GEN.topY - PLAYER_H },
     worldH: WORLD_H, groundY: GROUND_Y,
   };
@@ -2472,6 +2612,21 @@ function validateLevel(L, verbose) {
     if (!L.spawns.some(s => s.layer === k)) bad.push('第' + k + '层没有怪');
   }
 
+  /* 7b. **第 43 关的悬台必须在场。**
+     "没有悬台"和"悬台坏了"在图上看起来一模一样（都是一张普通关），
+     而这一关的全部意义就是那块台子 —— 所以缺了要让 `buildLevel`
+     换种子重掷，而不是悄悄退化成一张普通图。 */
+  if (L.stage === PERCH_STAGE) {
+    if (!L.perch) bad.push('第 43 关没有悬台');
+    else {
+      const pb = L.perch;
+      if (Math.abs((F[N - 1] - pb.y) - PERCH_H) > 1) bad.push('悬台高度不对');
+      if (!L.boxes.some(b => b.loot && Math.abs(b.x + b.w / 2 - (pb.x + pb.w / 2)) < 2)) {
+        bad.push('悬台上没有金箱');
+      }
+    }
+  }
+
   // 8. 怪不能生在斜坡/雪包里（脚的 y 停在坡底、坡面却高出一截 → 永远贴在坡体内）
   for (const sp of L.spawns) {
     const k = sp.layer;
@@ -2585,6 +2740,13 @@ const S = {
      那时 `GOAL_CN[S.goal]` 拿到 undefined 会画出「undefined」三个字。
      `ballUsed` 同理，省球关的额度条要拿它算。 */
   goal: 'door', ballUsed: 0, lootTotal: 0, loot: 0,
+  /* 本关已买的补给（id → 1）。`reset` 里清空，见 BUY_LIST。 */
+  bought: {},
+  /* 图鉴面板开着吗。**不进 reset** —— 它是玩家的查看动作，换关不该把它关掉
+     （尤其深潜里过门是连续的，每次都被关掉会很烦）。 */
+  codexOpen: false,
+  /* 上一关结算拿到多少雪晶（结算卡上显示一行）。0 = 没算过 / 不算。 */
+  coinGain: 0,
   shake: 0, flash: 0, hitStop: 0,
   /* **上一次震屏点火的时间与连击数，按来源分开记。**
      球连着碾碎四口箱是"一个动作"，不是四次冲击 —— 每次都用满力点火，
@@ -2758,6 +2920,170 @@ function writeSnowStar(stage, bits) {
   writeSnowProgress({ stars: stars });
 }
 
+/* ---------------------------------------------------------------- 雪晶 / 图鉴
+   CR-032 第 4 步。**通关之后没有目标**，是这个游戏最实的一条短板：
+   48 关打完，存档里只有 `{stage, stars}`，玩家手上没有任何"还差什么"。
+
+   补齐的方式**不是加数值成长**（那会让关卡难度变成一张假表：老玩家靠
+   属性碾，新玩家卡死在同一关，同一份关卡要伺候两种人），而是三件不碰数值的事：
+
+     ① **雪晶**（coins）—— 只进不出的货币是装饰。所以它有一个**真出口**：
+        出门前买补给（见 BUY_LIST）。买来的东西只作用于**这一关**，不进
+        永久属性。它的作用是"我卡在第 31 关，我愿意花 30 雪晶换一条命"，
+        而不是"我刷够钱就能变强"。
+     ② **图鉴**（codex）—— 记录"我见过什么"。四套场景的介质规则、三种怪的
+        动法、终局的壳。它不给数值，给的是**玩家自己发现"这东西还有另一种"**。
+     ③ **裂壳**（relic）—— 前 47 关里散落的 BOSS 壳碎片。它既是图鉴的
+        解锁钥匙，也是"终局不是凭空冒出来的"那一条铺垫（见 RELIC_STAGES）。
+
+   **存档是浅合并**（`writeSnowProgress` 是 Object.assign），所以 coins 这类
+   标量可以直接写，codex 这类嵌套对象必须整块读-改-写回去 ——
+   和 stars 同一个坑：整体替换会冲掉别的场景的记录。 */
+function snowCoins() {
+  const v = readSnowProgress().coins;
+  return typeof v === 'number' && isFinite(v) ? v : 0;
+}
+function addSnowCoins(n) {
+  const v = Math.max(0, Math.round(snowCoins() + n));
+  writeSnowProgress({ coins: v });
+  return v;
+}
+/** 扣钱。**不够就返回 false，不扣成负数** —— 负数存档会让下一次"我明明有 30"
+ *  变成"怎么买不了"，而余额显示是截断的，玩家查不出来。 */
+function spendSnowCoins(n) {
+  const cur = snowCoins();
+  if (n > cur) return false;
+  writeSnowProgress({ coins: Math.round(cur - n) });
+  return true;
+}
+
+/** 图鉴：见过的场景 / 见过的怪。键是 id，值是 1（见过）。
+ *  **只记"见过"，不记次数** —— 次数没有信息量，而"哪几个还没见过"才是
+ *  玩家会去凑的东西。 */
+function codexSeen(kind) {
+  const c = readSnowProgress().codex;
+  const m = (c && typeof c === 'object' && c[kind] && typeof c[kind] === 'object') ? c[kind] : {};
+  return m;
+}
+function codexMark(kind, id) {
+  if (!id) return false;
+  const c = Object.assign({}, readSnowProgress().codex || {});
+  const m = Object.assign({}, (c[kind] && typeof c[kind] === 'object') ? c[kind] : {});
+  if (m[id]) return false;
+  m[id] = 1;
+  c[kind] = m;
+  writeSnowProgress({ codex: c });
+  return true;
+}
+/** 裂壳收集进度（0~4）。**和 codex 分开存**：它是"数了几个"，不是"见过没有"，
+ *  混进 codex 的话"集齐"这件事就得遍历一遍对象去数。 */
+function relicCount() {
+  const v = readSnowProgress().relic;
+  return typeof v === 'number' && isFinite(v) ? clamp(v, 0, 99) : 0;
+}
+function addRelic() { return addSnowProgressNum('relic', 1, 99); }
+/** 通用的"存档里某个计数器 +n"。夹在 [0, cap] 里，避免一份坏存档把 UI 撑爆。 */
+function addSnowProgressNum(key, n, cap) {
+  const cur = readSnowProgress()[key];
+  const v = clamp((typeof cur === 'number' && isFinite(cur) ? cur : 0) + n, 0, cap == null ? 1e9 : cap);
+  writeSnowProgress({ [key]: v });
+  return v;
+}
+
+/* ---- 裂壳：终局的铺垫（CR-032 遗留第 5 条）--------------------------------
+   **问题不是"BOSS 太少"，是"第 48 关凭空冒出个东西"。** 前 47 关没有任何
+   一处提到它，玩家推开门看见三层壳的巨物，第一反应是"这是另一个游戏的怪"，
+   而不是"我终于走到它面前了"。
+
+   补法**不是**加怪（再加一只怪只是让 BOSS 更突然）。是在四个场景各留一块
+   **它撞碎时掉下来的壳片**，嵌在墙里、砸开能抠出来：
+
+     第 12 关（霜原末）  壳片边缘还是湿的 —— 它从这儿开始往上撞
+     第 24 关（熔炉末）  壳片烧黑了 —— 它穿过了火
+     第 36 关（菌窟末）  壳片长满苔 —— 它在这儿躺了很久
+     第 44 关（沙塚前）  壳片是新裂的 —— 它就在下面
+
+   四片凑齐，图鉴里那一条「终局」才从"？"变成一段话。**它不影响任何
+   通关条件**（不是金箱、不进 `lootTotal`），所以拿不拿得到都能过关 ——
+   这是"给愿意看的人留的东西"，不是第 49 个任务。 */
+const RELIC_STAGES = [12, 24, 36, 44];
+const RELIC_TOTAL = RELIC_STAGES.length;
+const RELIC_SAY = [
+  '这块壳片边缘还是湿的。它不是从这儿掉下去的 —— 是往上撞的时候蹭掉的。',
+  '壳片被烧黑了，裂缝里嵌着炉灰。它穿过火，没停。',
+  '壳片上长满了苔。它在这里躺了很久，久到菌把它的伤口当成了地。',
+  '这是新裂的。断口还是白的 —— 它就在下面。',
+];
+function relicOf(stage) {
+  const i = RELIC_STAGES.indexOf(Math.floor(stage == null ? 0 : stage));
+  return i < 0 ? -1 : i;
+}
+
+/* ---- 第 43 关「悬台」----------------------------------------------------
+   **踩实（C）在 48 关里没有一处非用不可**，而"能力存在但没被使用"
+   等于没做。取舍是"45 关都别管它，把第 43 关做成它的一关"（CR-032
+   遗留第 1 条）。
+
+   数字是算出来的，不是拍的：
+     · 单跳 720 → 123；二段跳 790 → 再 148，合计 272
+     · 台面放到 **140**：单跳差 17px（差得看得见，不是"差一点"),
+       二段跳够（余 132）
+     · 踩实一颗球 → 墩高 r×1.55，小球 34、大球 71。**从墩顶单跳**：
+       71 + 123 = 194 > 140，余量 54 —— 一次单跳就上去了
+   `PERCH_W` 96 是两格：再窄一点落点要靠运气，再宽就一点也不难。 */
+const PERCH_STAGE = 43;
+const PERCH_H = 140;
+const PERCH_W = 96;
+
+/* ---- 出门补给（雪晶的唯一出口）------------------------------------------
+   **为什么是"每关一次性购买"而不是"买永久升级"**：永久升级会让 48 关的难度
+   变成一张假表（见上面 ①）。一次性补给不改变关卡的"能力上限"，只改变
+   "这一次失误的代价" —— 玩家用它买的是**再来一次**，不是变强。
+
+   三条都必须是"已经存在的东西"，不新开系统：加血、加球、加弹。
+   **不加"加星"** —— 星是评价，能买就不是评价了。 */
+const BUY_LIST = [
+  { id: 'hp',   key: '1', cn: '+1 血',   cost: 30, say: '补一口血' },
+  { id: 'ball', key: '2', cn: '+1 颗球', cost: 45, say: '门口多一颗球' },
+  { id: 'ammo', key: '3', cn: '+30 弹',  cost: 20, say: '弹药 +30' },
+];
+function buySupply(id) {
+  const it = BUY_LIST.find(x => x.id === id);
+  if (!it) return false;
+  if (S.phase !== 'play' || S.dive) {
+    /* 深潜不给买：那一局的全部张力就是"资源带着走、越走越少"，
+       能补的话深度纪录变成"谁雪晶多"，和模式立意正好相反。 */
+    once('buynodive', S.p.x + S.p.w / 2, S.p.y - 26, S.dive ? '深潜里买不了' : '结算之后买不了', '#FFC08A');
+    return false;
+  }
+  if (S.bought && S.bought[id]) {
+    once('buydone', S.p.x + S.p.w / 2, S.p.y - 26, '这关已经买过了', '#9FB4C4');
+    return false;
+  }
+  if (!spendSnowCoins(it.cost)) {
+    once('buyno', S.p.x + S.p.w / 2, S.p.y - 26, '雪晶不够（要 ' + it.cost + '）', '#FFC08A');
+    return false;
+  }
+  S.bought = S.bought || {};
+  S.bought[id] = 1;
+  if (id === 'hp') S.hp = Math.min(NUM.hpStart, S.hp + 1);
+  if (id === 'ammo') S.ammo += 30;
+  if (id === 'ball') {
+    /* 球直接落在脚边。**用 `spawnBallAt`，不调 `makeBallFrom`** ——
+       后者要一只怪、还会掉饱食度、还要算"省球关第几颗"，
+       买来的球不该吃这些规则（它是"买"的，不是"裹"的）。 */
+    const p = S.p;
+    S.balls.push({
+      x: p.x + p.w / 2, y: p.y + p.h - 26, vx: 0, vy: 0,
+      r: ballR(1), absorbed: 1, life: NUM.ball.life, weak: false,
+      onGround: false, chain: 0, hitCd: 0, dead: false,
+    });
+  }
+  addText(S.p.x + S.p.w / 2, S.p.y - 34, '买到 · ' + it.cn, '#9BE86E', 18, 1.2);
+  sfx('pick');
+  return true;
+}
+
 /* 从出征页进来的入参。**和 grove.html 的 URLP 同款防御写法** ——
    无头沙箱里既没有 location 也可能没有 URLSearchParams，
    降级成"没有参数"，那样 from=grove 恒为 false，行为和改造前一模一样。 */
@@ -2800,6 +3126,11 @@ function stageSeed(n) {
  *  散着调 `reset(stageSeed(k), k)` 一定会漏掉存档那一步。 */
 function startStage(n) {
   const k = clamp(Math.max(1, n | 0), 1, STAGE_MAX);
+  /* **回主线必须把深潜状态清掉。** `reset()` 不看 `S.dive`（它只负责
+     造这一关），所以从深潜里退回第 N 关时 `S.dive` 会留着 ——
+     后果是"主线里过门不进下一关、而是进深潜下一层"，而且 HUD 一直报深度。
+     这个坑在 `_snowlab-check` 里露过一次头（补给被当成"深潜里买不了"）。 */
+  S.dive = null;
   reset(stageSeed(k), k);
   writeSnowProgress({ stage: k });
   /* 飘字带上骨架名。**进关那一瞬间是唯一"玩家会读这一行"的时刻** ——
@@ -2808,6 +3139,11 @@ function startStage(n) {
   const sk = S.level && S.level.skel;
   const cn = (sk && SKELETONS[sk]) ? (' · ' + SKELETONS[sk].cn) : '';
   addText(W / 2, 200, '第 ' + k + ' 关' + cn, '#EAF8FF', 26, 1.2);
+  /* 第 43 关单独给一句提示。**不教"按 C 能踩实"这条通用操作**（那在开局
+     提示里），教的是"这一关要用它" —— 后者才是这一关成立的原因。 */
+  if (k === PERCH_STAGE) {
+    addText(W / 2, 240, '金箱在悬台上 · 球可以踩实（C）当台阶', '#FFE08A', 17, 3.2);
+  }
 }
 
 function reset(seed, stage) {
@@ -2841,6 +3177,14 @@ function reset(seed, stage) {
     ? { ...L.boss, shell: NUM.boss.shell, hitT: 0, spitT: NUM.boss.spitCd, dead: false, flash: 0 }
     : null;
   S.foes = L.spawns.map(sp => makeFoe(sp.x, sp.y, sp.kind));
+  /* ---- 图鉴：见过的东西自动记 ----
+     **记在 reset 里，不记在"打开图鉴"的时候。** 玩家可能一次都不开图鉴，
+     而"我见过菌窟了"这件事不该取决于他有没有按 B。四条 breed 里
+     只有这三只会真的出现在 `spawns` 里，所以遍历敌人就够，不用查表。 */
+  codexMark('biome', THEME.id);
+  for (const f of S.foes) codexMark('breed', f.breed);
+  /* 这一关有没有抠出裂壳。见 breakBox 里的 husk 分支。 */
+  S.relicFound = 0;
   /* **壳里的杂兵往旁边挪一格，不是删掉。** 站在 BOSS 脚下的怪在画面上
      读作"BOSS 身上长了个东西"（它会盖住基座），可它本身是正常的怪。
      挪开而不是删：删了会让"每层至少一只怪"那条判据失效，而且这会
@@ -2873,6 +3217,9 @@ function reset(seed, stage) {
      症状是"寻宝关的门永远不开"，而改之前完全看不出来。
      深潜（S.stage < 0）拿到的是 'door'，见 goalOf 的注释。 */
   S.goal = goalOf(S.stage);
+  /* 这一关买过的补给（每个 id 一次）。**按关清空** —— 它买的是"这一局"，
+     带进下一关就变成永久属性了（见 BUY_LIST 的注释）。 */
+  S.bought = {};
   /* 省球关已造球数。**按关重置**，不跟着 S.belly 走 —— 饱食度会因为
      吃碎片回满，用饱食反推"造了几颗"会在吃一口碎片之后清零。 */
   S.ballUsed = 0;
@@ -2973,6 +3320,17 @@ function makeFoe(x, y, kind, breed) {
     stuckT: 0, stuckXMin: x, stuckXMax: x,
     jumpBan: 0,              // 判定"跳不过去"之后的禁跳时间
     banX: -9999,             // 禁跳的**地点**：得走开 24px 才允许再试
+    /* ---- 态度（见 NUM.breed 的 role）----
+       `chargeT`  > 0 = 正在冲（一次限时冲刺，速度由 breed.charge.spd 给）
+       `windT`    > 0 = 鼓身预警中（还没动，但玩家该看见了）
+       `lungeCd`  = 下一次能冲的冷却
+       三个都为 0 就是"没在冲"，走的还是老路 —— 所以 guard 以外的品种
+       永远不碰这三个字段。 */
+    /* 开局就可以冲，但不要一落地就冲。**初值 1.2~2.6 太长**：
+       玩家刚走进它的圈时通常已经过去十几秒，这里给的只是"刚出生那一小会儿
+       别偷袭"——0.5~1.4 够用。 */
+    chargeT: 0, windT: 0, lungeCd: 0.5 + FR() * 0.9, chargeDir: 1,
+    kiting: false,
   };
 }
 
@@ -2989,7 +3347,7 @@ function bellyTier() {
    0 发就能裹住 = 一按吐弹直接变球。 */
 function snowNeed() {
   const base = NUM.snowShots[bellyTier()];
-  return Math.max(1, Math.round(base * THEME.medium.needK));
+  return Math.max(1, Math.round(base * THEME.medium.needK * (diveHas('thick') ? 1.3 : 1)));
 }
 const TIER_CN = { full: '满饱', half: '半饱', hungry: '全饿' };
 
@@ -3528,7 +3886,7 @@ function makeBallFrom(f) {
   S.balls.push({
     x: f.x + f.w / 2, y: f.y + f.h / 2,
     vx: 0, vy: 0, r: ballR(n), absorbed: n,
-    life: NUM.ball.life * (weak ? 0.45 : 1),
+    life: NUM.ball.life * (weak ? 0.45 : 1) * (diveHas('cold') ? 0.70 : 1),
     weak: weak,
     onGround: false, chain: 0, hitCd: 0, dead: false,
   });
@@ -3585,7 +3943,9 @@ function pushBlocked(b, dir, pow) {
 function pushBalls(dt) {
   const p = S.p;
   const runUp = clamp((p.runD || 0) / NUM.push.runFull, 0, 1);
-  const pow = NUM.push.base * (1 + NUM.push.runGain * runUp);
+  /* 深潜词条「重石」：推球力度 ×0.85。**乘在这里，不改 NUM** ——
+     `NUM` 是全模式共用的，改它会在深潜结束之后继续生效（同一份表）。 */
+  const pow = NUM.push.base * (1 + NUM.push.runGain * runUp) * (diveHas('heavy') ? 0.85 : 1);
 
   for (const b of S.balls) {
     if (b.dead) continue;
@@ -4288,6 +4648,18 @@ const SFX_LIB = {
   shoot:    { f: [620, 320], d: 0.07, w: 'square',   v: 0.16 },
   clear:    { f: [523, 784], d: 0.34, w: 'triangle', v: 0.44 },
   dead:     { f: [420,  80], d: 0.55, w: 'sawtooth', v: 0.50 },
+  /* 拣到东西（雪晶 / 裂壳 / 买补给）。**上扬、短、亮** —— 全场所有声音里
+     只有它和 door / clear 是往上走的，所以"好的事"这个语义是独立的一档。 */
+  pick:     { f: [700, 980], d: 0.10, w: 'sine',     v: 0.34 },
+  /* 裂壳裂开：低频起、高频收，带噪 —— 石头壳剥落，不是木头箱子碎裂。 */
+  husk:     { f: [160, 620], d: 0.30, w: 'triangle', v: 0.60, n: 0.35 },
+  /* 裂壳那一击的震屏（`kickShake(7,'relic')`）。**和 husk 分开两条**：
+     一条是"东西碎了"，一条是"画面被撞了一下"。共用一条会变成
+     音量一样、方向感丢失 —— 而这一下是全局里最"重"的一次。 */
+  relic:    { f: [210,  72], d: 0.26, w: 'square',   v: 0.46, n: 0.50 },
+  /* 深潜词条生效。**上扬 + 短**，和 clear 的语义拉开：
+     它不是"完成了"，是"规则变了"。 */
+  diveMod:  { f: [420, 300], d: 0.22, w: 'sawtooth', v: 0.34 },
 };
 
 /* `on` 在**定义时**就从存档取，不能等到第一次发声音。
@@ -4438,6 +4810,34 @@ function breakBox(box, how, pow, dirX, dirY) {
   }
 
   if (how === 'ball') S.stat.boxByBall++; else S.stat.boxByShot++;
+
+  /* ---- 裂壳（BOSS 的铺垫，见 RELIC_STAGES）----
+     **它不进 `lootTotal`。** 拿不拿到都能过关，所以它是"给愿意看的人
+     留的东西"，不是第 49 个任务 —— 一旦把它算成寻宝目标，第 12 / 24 /
+     36 / 44 关就会从"走过去"变成"必须先找到一块壳"，而壳的位置还是
+     随机生成的，那是在拿运气卡人。 */
+  if (box.mat === 'husk') {
+    const idx = Math.max(0, Math.min(RELIC_SAY.length - 1, relicOf(S.stage)));
+    addRelic();
+    addSnowCoins(40);
+    S.relicFound = (S.relicFound || 0) + 1;
+    /* 壳是**石头包着的白**：外层深灰、里面是冷白的三圈环。
+       和木箱（暖黄板条）在碎片阶段就要分开 —— 玩家砸开的那一刻
+       得先认出"这不是普通箱子"，再读到那行字。 */
+    addFrag(cx, cy, 12, '#8E8B84', 300, 'chunk', bias);
+    addFrag(cx, cy, 9, '#E9E7DE', 260, 'slab', bias);
+    addFrag(cx, cy, 6, '#C6C2B4', 210, 'chunk', bias);
+    if (byBall) addFrag(cx, cy, 5, '#FFE9A8', 300, 'chunk', bias);
+    /* 壳片本身不会掉进背包 —— 它是"看见了就算收下"，所以飘字用
+       RELIC_SAY 那一句短的，长句子留在图鉴里慢慢读。 */
+    addText(cx, box.y - 12, '裂壳 ' + Math.min(RELIC_TOTAL, relicCount()) + ' / ' + RELIC_TOTAL,
+      '#E9E7DE', 17, 2.2);
+    addText(cx, box.y - 34, '雪晶 +40', '#FFD75E', 14, 1.6);
+    S.flash = Math.max(S.flash, 0.2);
+    sfx('husk');
+    kickShake(7, 'relic');
+    return;
+  }
 
   /* ---- 金箱 ----
      **必掉一片雪之碎片。** 概率掉的话"探索"就成了抽奖：玩家爬上箱山、
@@ -4695,7 +5095,44 @@ function stepFoes(dt) {
        **垂直判据不能省。** 少了它，它会隔着两层楼朝天花板扔东西。 */
     const inSight = S.phase === 'play' && f.onGround && solidFoot &&
                     Math.abs(dxp) < pcfg.range && Math.abs(dyp) < 78;
-    const aiming = inSight && f.fireCd <= 0;
+
+    /* ---- 态度：守（moss 的冲撞）------------------------------------------
+       见 `NUM.breed` 的 role 注释。三段，缺一段就变成"莫名其妙被撞"：
+         ① **进圈**  |dxp| < charge.range（132）而且高度差不多
+         ② **鼓身**  wind 0.30 秒，原地不动、身子压下去（drawFoe 画它）
+         ③ **冲**    dur 0.26 秒，速度 charge.spd（330，是走速的 4 倍）
+       冲完进 cd（2.6 秒），这段时间它既不冲也走得慢 —— **那是它的破绽**，
+       玩家该学会"等它一下"。
+
+       **不许冲着悬崖去。** 冲刺期间 `want` 被锁成 chargeDir、`vx` 被强制，
+       而崖边/走廊那两道闸是按 `want` 改向的 —— 强制速度会赢，结果它一头
+       扎下去。所以触发前先量一次"冲完那一刻脚下有没有地"。 */
+    f.windT = Math.max(0, (f.windT || 0) - dt);
+    f.chargeT = Math.max(0, (f.chargeT || 0) - dt);
+    f.lungeCd = Math.max(0, (f.lungeCd || 0) - dt);
+    const CC = pcfg.charge;
+    if (CC && S.phase === 'play' && f.onGround && solidFoot) {
+      if (f.chargeT <= 0 && f.windT <= 0 && f.lungeCd <= 0 &&
+          Math.abs(dxp) < CC.range && Math.abs(dyp) < 70) {
+        const dirC = dxp > 0 ? 1 : -1;
+        const landX = (f.x + f.w / 2) + dirC * (CC.spd * CC.dur + 26);
+        const feetC = f.y + f.h;
+        if (groundAt(landX, feetC + 2) - feetC <= 56) {
+          f.windT = CC.wind;
+          f.chargeDir = dirC;
+        } else {
+          /* 冲过去就是悬崖：**别冲，但也别每帧重算**（那会让它每帧
+             触发一次又被自己挡掉，白烧 CPU 还抖）。给一个短冷却。 */
+          f.lungeCd = 0.5;
+        }
+      }
+      if (f.windT > 0) {
+        f.windT -= dt;
+        if (f.windT <= 0) { f.chargeT = CC.dur; f.lungeCd = CC.cd; }
+      }
+    }
+    const charging = f.chargeT > 0;
+    const aiming = !charging && inSight && f.fireCd <= 0;
 
     if (aiming) {
       f.aim += dt;
@@ -4785,7 +5222,11 @@ function stepFoes(dt) {
     /* 钉住：**runner 被地形卡住时不来回走，站住等**（理由见走廊边界那一段）。 */
     let pinned = false;
     let want = f.face || 1;
-    if (standing) {
+    if (charging) {
+      /* 冲撞期间朝向被锁死。**不能走巡逻那套 want** —— 冲刺只有 0.26 秒，
+         巡逻计时器随时会把方向翻过来，画面上就是"冲了一半掉头"。 */
+      want = f.chargeDir;
+    } else if (standing) {
       want = f.face || 1;
     } else if (f.kind === 'runner') {
       /* **贴身死区。** runner 的朝向每帧由"玩家在哪边"重算：一旦走到玩家
@@ -4797,7 +5238,26 @@ function stepFoes(dt) {
       const dx = (p.x + p.w / 2) - (f.x + f.w / 2);
       if (Math.abs(dx) < 30) { want = f.face || 1; pinned = true; }
       else want = dx > 0 ? 1 : -1;
+    } else if (pcfg.role === 'kite' && Math.abs(dyp) < 90 &&
+               Math.abs(dxp) < pcfg.keep * (f.kiting ? 1.45 : 1)) {
+      /* ---- 拉扯（grub）------------------------------------------------
+         「你一靠近它就退」。**退的方向是"背离玩家"，不是"回头跑"** ——
+         两者在近距离看起来一样，但背离玩家时它会一直朝着你（`f.face`
+         仍由射击逻辑改），读起来是"边退边盯着你"，那才叫拉扯；
+         回头跑就变成逃兵。
+
+         退的距离只有 168（`keep`），而射程是 270 —— **中间那 100px 是它的
+         工作区**：太远打不着、太近就退。玩家的解法因此是"把它逼到台边"，
+         而台边那道闸（下面 `groundAt` 判崖）会替玩家干这件事。
+
+         **进 / 出用两个阈值（回滞），这条不能省。** 单阈值会在 168
+         这条线上来回切：退到 170 就"不拉扯了"→ 巡逻往回走 → 一回到
+         167 又开始退。探针量到 2 秒换向 4 次（阈值 3），全是它。
+         现在进 168、出 244 —— 中间那 76px 谁也别想让它改主意。 */
+      f.kiting = true;
+      want = dxp > 0 ? -1 : 1;
     } else {
+      if (pcfg.role === 'kite') f.kiting = false;
       f.patrolT -= dt;
       if (f.patrolT <= 0) {
         f.patrolT = 1.4 + FR() * 1.2;
@@ -4838,8 +5298,14 @@ function stepFoes(dt) {
       const ahead = want > 0 ? f.x + f.w + 6 : f.x - 6;
       if (groundAt(ahead, fy + 2) - fy > 56) {
         /* crawler 在崖边回头是巡逻；runner 回头就是"朝玩家冲 → 撞崖 →
-           回头 → 再冲"的来回，1 秒三次。它该在台边等人，不是原地抽。 */
+           回头 → 再冲"的来回，1 秒三次。它该在台边等人，不是原地抽。
+
+           **拉扯（kite）也一样，而且更糟**：它想背离玩家、到了崖边又被
+           翻回来、下一帧又想背离 —— 两帧一个来回。探针量到 crawler
+           2 秒换向 4 次就是这么来的。所以到这里改成"站住、脸朝玩家"，
+           这也正是图鉴里写的那句"退到台边才硬顶"。 */
         if (f.kind === 'runner') pinned = true;
+        else if (pcfg.role === 'kite') { pinned = true; want = f.face || 1; }
         else want = -want;
       }
     }
@@ -4853,10 +5319,12 @@ function stepFoes(dt) {
        所以 runner 在这里改成钉住 + 停步，朝向保持指向玩家那一侧。 */
     if (want < 0 && f.x <= f.roamL + 0.5) {
       if (f.kind === 'runner') { pinned = true; want = 1; }
+      else if (pcfg.role === 'kite') { pinned = true; want = f.face || 1; }
       else want = f.turnLock > 0 ? f.face : 1;
     }
     if (want > 0 && f.x >= f.roamR - 0.5) {
       if (f.kind === 'runner') { pinned = true; want = -1; }
+      else if (pcfg.role === 'kite') { pinned = true; want = f.face || 1; }
       else want = f.turnLock > 0 ? f.face : -1;
     }
     if (want !== f.face) {
@@ -4868,7 +5336,12 @@ function stepFoes(dt) {
        一趟，来回的频率和"抽搐"没有区别。按走廊长度衰减到 0.35 倍，
        看起来才像"在台边小心地踱步"，而不是原地抖。 */
     const paceK = clamp((f.roamR - f.roamL) / 260, 0.35, 1);
-    f.vx = (standing || !canWalk || pinned) ? 0 : want * f.speed * paceK;
+    /* **冲刺走自己的速度，不吃走廊宽度衰减** ——
+       `paceK` 是"窄台面上小心踱步"的表达，套在冲撞上会让 132px 的圈里
+       只冲出十几像素，玩家完全看不出它冲了。冲撞本来就是"在窄地方也
+       不管不顾地撞过来"，衰减反而和它的语义相反。 */
+    f.vx = charging ? f.chargeDir * CC.spd
+      : ((standing || !canWalk || pinned) ? 0 : want * f.speed * paceK);
 
     /* stepBody 里已经把「水平位移 + 水平碰撞 + 重力 + 垂直落地」全做完了。
        **这里不能再补位移或重力** —— 叠上去会让速度翻倍、一帧穿过地面
@@ -5013,6 +5486,46 @@ function separateFoes() {
    同一份数据，两个宿主，两种发牌。 */
 /* `seed` 可传：断言和出图要能**复现同一局深潜**，否则"深度 5 到底长什么样"
    每次跑都不一样，图和数都对不上。不传就真随机（玩家按 D 的路径）。 */
+
+/* ---- 深潜词条（和 grove 深巢合并的那一段，CR-032 遗留第 2 条）------------
+   **原来有两套无尽模式**：grove 的「深巢」（27 屏手工关 + 自己的地形生成器 +
+   深度词条 + 三套地底配色）和 snowlab 的「深潜」（5 层随机 + 一命到底）。
+   两者种子同源（`base ^ depth*7919`），规则不同，代码两份。
+
+   **合并方向：以深潜为唯一实现，把深巢里真正提供"深度"的那一样搬过来 ——
+   深度词条。** 不搬地形生成器（snowlab 的生成器 + 六骨架已经能发牌，
+   再塞一套是"两份地形"而不是"一份更深的"），不搬手工关（grove 冻结不删）。
+
+   为什么"词条"是非搬不可的：深潜现在只有一条压力曲线（饱食一路消耗），
+   而它是**连续的**——玩家第 3 关就知道第 9 关会是什么样，只是更久。
+   词条是**离散的台阶**：第 5 关起推球变轻，第 10 关起裹一只多要一发。
+   每一级都改一条玩家已经学会的规则，于是"我会玩这个模式"这句话
+   每隔五关要重新确认一次。
+
+   四条都只改**乘数**，不改规则形状（和 THEME.medium 同一条纪律）：
+     重石 推球力度 ×0.85   —— 大球的动量门槛变紧，BOSS 那套"攒着打"更贵
+     厚甲 裹一只 needK ×1.3 —— 弹药消耗加快，且它和饥肠叠加
+     急冻 球寿命 ×0.70      —— 推球的窗口变短，"先推还是先等"更有分量
+     饥肠 过门时饱食 −15    —— 唯一一条"过关反而变弱"的，逼玩家在关内吃回来 */
+const DIVE_MODS = [
+  { at: 5,  id: 'heavy',  cn: '重石', say: '推球力度 −15%' },
+  { at: 10, id: 'thick',  cn: '厚甲', say: '裹一只多要三成' },
+  { at: 15, id: 'cold',   cn: '急冻', say: '球的寿命 −30%' },
+  { at: 20, id: 'hunger', cn: '饥肠', say: '过门掉 15 饱食' },
+];
+/** 当前深度已经生效的词条 id 列表。**按深度算，不存进 S.dive** ——
+ *  存一份数组就要在 reset / diveNext / 断言三处同步，而它是深度的纯函数。 */
+function diveMods(depth) {
+  const d = depth == null ? (S.dive ? S.dive.depth : 0) : depth;
+  const out = [];
+  for (const m of DIVE_MODS) if (d >= m.at) out.push(m.id);
+  return out;
+}
+function diveHas(id) {
+  if (!S.dive) return false;
+  return diveMods(S.dive.depth).indexOf(id) >= 0;
+}
+
 function startDive(seed) {
   const base = (seed == null ? (Math.random() * 1e9) : seed) >>> 0;
   S.dive = { depth: 1, score: 0, best: S.diveBest || 0, kills: 0, base };
@@ -5024,15 +5537,33 @@ function startDive(seed) {
 
 function diveNext() {
   const d = S.dive;
+  const prevMods = diveMods(d.depth);
   d.depth++;
   d.kills += S.killed;
   /* 资源原样带进下一关 —— 这是深潜和主线的核心差别。 */
   const keep = { hp: Math.min(NUM.hpStart, S.hp + 1), belly: S.belly, ammo: S.ammo };
-  /* 种子从 base 派生：**同一局深潜可复现**（同 base 同深度 → 同一张图）。 */
-  reset((d.base + d.depth * 7919) >>> 0, -d.depth);
+  /* **种子：`mix32(base ^ (depth*7919))`。**
+     旧版是 `base + depth*7919`（直接相加），问题不是"会重复"，
+     而是**相邻深度只差一个固定量** —— 生成器的第一层随机数几乎一样，
+     于是"深度 3 / 4 / 5"三关长得像同一个房间刷了三遍。
+     这和 `stageSeed` 过 `mix32` 是同一个理由（那边注释里有实测）。
+     `^` 而不是 `+` 是为了和 grove 深巢那套派生对齐 —— 两套同源模式
+     合并之后，同一个 base 在两边算出来的"第 d 层"应该是同一张图。 */
+  reset(mix32((d.base ^ ((d.depth * 7919) >>> 0)) >>> 0), -d.depth);
   S.hp = keep.hp; S.belly = keep.belly; S.ammo = keep.ammo;
+  /* 饥肠：过门掉饱食。**放在 reset 之后** —— reset 会把 belly 拨回 100。 */
+  if (diveHas('hunger')) S.belly = Math.max(0, S.belly - 15);
   S.flash = Math.max(S.flash, 0.24);
   addText(W / 2, 200, '深度 ' + d.depth, '#EAF8FF', 26, 1.2);
+  /* 新词条第一次生效的那一层，**必须单独报一句** ——
+     "推球变轻了"这件事如果不报，玩家只会觉得"我这一关推得不对劲"，
+     然后怀疑自己手感出了问题。报在前面加个「·」和颜色区分。 */
+  for (const m of DIVE_MODS) {
+    if (d.depth === m.at && prevMods.indexOf(m.id) < 0) {
+      addText(W / 2, 238, '词条 · ' + m.cn + ' —— ' + m.say, '#FF9E8E', 20, 2.6);
+      kickShake(5, 'diveMod');
+    }
+  }
 }
 
 function endDive() {
@@ -5256,11 +5787,22 @@ function stepDoor(dt) {
         /* 算星 → 存星 → 再推进关号。顺序不能反：`judgeStars` 读 S.stat，
            而存档不动 stat，但把算星放在推进之后会让"这一关"和"下一关"
            在存档里混成一笔，出问题很难查。 */
+        const hadStar = readSnowStar(S.stage);
         S.starGot = judgeStars();
         writeSnowStar(S.stage, starBits(S.starGot));
+        /* **雪晶按"这次打通拿了什么"结算，不按"打了多久"。**
+           基础 12 是"过了一关"的底薪，每颗星 +6，**首次通关 +20**
+           （`hadStar === 0` 就是"这一关以前一颗星都没拿到过"）。
+           为什么首通奖励要看星而不是看 `stage`：关号会被 R 重打，
+           按关号判"首通"在重打时判不出来；而"以前 0 颗星"是一个
+           只可能发生一次的状态，天然就是"第一次把这里打下来"。 */
+        const gain = 12 + S.starGot.length * 6 + (hadStar === 0 ? 20 : 0);
+        S.coinGain = gain;
+        addSnowCoins(gain);
         writeSnowProgress({ stage: Math.min(STAGE_MAX, S.stage + 1) });
       } else {
         S.starGot = judgeStars();
+        S.coinGain = 0;
       }
     }
   }
@@ -5301,6 +5843,15 @@ function onKey(e, down) {
   /* C = 踩实身边的球。**不能用 K** —— K 已经被绑成吐弹（和 J 同义），
      再绑一个动作会让"按 K"同时吐弹又踩实，而玩家只会觉得"这个键坏了"。 */
   if (down && (k === 'c' || k === 'C') && S.phase === 'play') tryPin();
+  /* B = 图鉴。**只读面板，不暂停** —— 它不是菜单，是"抬头看一眼自己见过什么"。
+     暂停会让它变成一种资源（遇险就开来看），而不暂停时玩家自己会挑安全的时机。 */
+  if (down && (k === 'b' || k === 'B')) S.codexOpen = !S.codexOpen;
+  /* 1 / 2 / 3 = 花雪晶买补给（每关各一次）。**用数字键不用字母** ——
+     字母键已经排到 b/c/d/f/j/k/m/r 了，再加会和"手放在 WASD 上"打架。 */
+  if (down && (k === '1' || k === '2' || k === '3')) {
+    const it = BUY_LIST.find(x => x.key === k);
+    if (it) buySupply(it.id);
+  }
   /* M = 静音。**默认开声音**，但一定要给关掉的路 —— 玩家常常是
      "在地铁上/在办公室"打开这个页面的，没有静音键就只能拔耳机。
      状态写进存档：关掉之后重开还是关的。 */
@@ -6935,7 +7486,7 @@ function drawRoomWall(g, k, cY, fY) {
    四个场景全被同一张图盖住，`THEME` 等于白写。所以改成按 `theme.id` 存：
    **给哪个场景画了图，哪个场景就用图；没画图的走程序化**，不是"没图就空白"。
    这也让"加一个场景"变成"往 `BG_IMGS` 里多塞一张"，不用碰任何绘制代码。 */
-const BG_IMGS = { snow: null, ember: null };
+const BG_IMGS = { snow: null, ember: null, spore: null, dune: null };
 /** 立绘块的 DOM id。**`snow` 用的还是历史那个 `art-bg`** ——
     `_inline-art.js`（角色贴图）和 `_snowlab-embed-bg.js` 都锚着它，
     改 id 会让角色贴图块插不进来，症状是"人物变成代码图形了"。
@@ -7505,6 +8056,8 @@ function draw() {
   }
   if (S.phase === 'clear') drawClear(g);
   if (S.phase === 'dead') drawDiveOver(g);
+  /* 图鉴盖在结算卡之上：结算时也会想翻一眼"我这关收齐了什么"。 */
+  if (S.codexOpen) drawCodex(g);
 }
 
 /* ---------------------------------------------------------------- 岩体
@@ -8780,6 +9333,98 @@ function drawBoxBody(g, b, dyn) {
     g.lineTo(b.x + 19, b.y + 15);
     g.lineTo(b.x + b.w - 7, b.y + 7);
     g.stroke();
+  } else if (b.mat === 'husk') {
+    /* ---- 裂壳 ----------------------------------------------------------
+       **它要在几十口箱子中间一眼被认出来，而且不能像金箱。**
+       金箱是暖黄 + 闪光 + 上浮（"来拿我"）；裂壳反过来：冷灰、不闪、
+       一动不动，正面嵌着一块**白得不属于这个世界的壳板**。
+
+       ============ 这口箱子重画了三次，三次的教训都记在这儿 ============
+       第一版：三圈同心**圆**弧（13.5 / 9.2 / 5）+ 圆心一点。
+               → 读作**靶心**。三个圆的圆心是同一个点，"靶"是它唯一的读法。
+       第二版：把同心圆换成"同一块尖角壳片往里收"，再加石唇遮挡。
+               → 读作**雪花 / 碎玻璃图标**。尖角多、又悬在正中，
+                 形状语言变成了"碎片"，而不是"箱子"。
+       第三版（当前）：**保住箱子的骨架**。旁边那口木箱靠"护角 + 边 + 面"
+               三样东西才读作一口箱子；前两版把这三样全扔了，只在中间
+               放一团白，于是无论怎么调那团白都只是个图标。
+               现在：冷灰的石箱体 + 四角护铁（沿用木箱的护角尺寸）+
+               正面一块**边缘被咬掉几口的圆角壳板** + 层理 + 一道裂纹。
+       用圆角矩形当壳板（第三版）而不是尖角多边形（第二版），是因为
+       "壳"在 Q 版里的形状词是"厚、圆、整"，不是"尖"。
+       颜色和轮廓三轮都没变：冷灰石 + 冷白壳 + 冷墨描边（#2E3540），
+       不闪不黄 —— 和金箱彻底分开这一条是第一版就对的，别动。 */
+    const X = b.x, Y = b.y, WW = b.w, HH = b.h;
+    const STONE = hit ? '#D9DDE2' : '#6A7078';   // 石箱体
+    const PLATE = hit ? '#FFFFFF' : '#E9E7DE';   // 壳板
+    const IRON  = hit ? '#727A85' : '#4C525A';   // 护铁
+
+    /* ① 箱体 */
+    g.fillStyle = STONE;
+    rr(g, X, Y, WW, HH, 5); g.fill();
+    /* **必须 clip**：下面的断口、层理、裂纹坐标都按 48 的格子写死，
+       不夹住的话会垂到相邻那口箱子上去 —— 相邻箱子同一帧画，
+       谁先谁后决定谁盖谁，症状是"有的裂壳多画一条线"。 */
+    g.save();
+    rr(g, X, Y, WW, HH, 5); g.clip();
+
+    /* ② 四角护铁 —— **"这是一口箱子"最关键的一笔**，尺寸照抄木箱的护角。
+       前两版没有它，所以不管中间画什么都读不成箱子。 */
+    for (const p of [[2, 2], [WW - 8, 2], [2, HH - 8], [WW - 8, HH - 8]]) {
+      g.fillStyle = IRON;
+      rr(g, X + p[0], Y + p[1], 6, 6, 2); g.fill();
+      g.fillStyle = 'rgba(255,255,255,.16)';      // 护铁的上沿高光（光源左上）
+      g.fillRect(X + p[0] + 1, Y + p[1] + 1, 4, 1.2);
+    }
+
+    /* ③ 壳板：一块圆角板嵌在正面。先整块画出来，再用石色"咬掉"几口 ——
+       比直接拼一个锯齿路径好控制，而且咬出来的缺口天然是破碎的样子。
+       **缺口必须是"多边形豁口"，不能是三角形。** 三角形在大面积上读作
+       箭头（左侧那口尤其像"→ 往这边走"），而豁口要有 4~5 个顶点、
+       边长还不等，才读作"被啃掉一块"。 */
+    const PX = X + 7, PY = Y + 7, PW = WW - 14, PH = HH - 14;
+    g.fillStyle = PLATE;
+    rr(g, PX, PY, PW, PH, 7); g.fill();
+
+    /* ④ 层理：**跟着壳板形状往里收**（不是同心圆，也不是尖角）。
+       两层，线细、对比低 —— 48px 上一笔重了整口箱子就成噪点。 */
+    g.strokeStyle = 'rgba(120,128,142,.52)'; g.lineWidth = 1.3;
+    rr(g, PX + 4, PY + 4, PW - 8, PH - 8, 5); g.stroke();
+    g.strokeStyle = 'rgba(120,128,142,.30)';
+    rr(g, PX + 8.5, PY + 8.5, PW - 17, PH - 17, 4); g.stroke();
+
+    /* ⑤ 壳板的受光：**贴着板沿走的一圈内描边**（光源左上），不是一道自由线。
+       自由线会横穿板面，看起来像"上面还画了一道笔"。 */
+    g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = 1.3;
+    g.beginPath();
+    g.moveTo(PX + 7, PY + 1.2);
+    g.lineTo(PX + PW - 7, PY + 1.2);
+    g.moveTo(PX + 1.2, PY + 7);
+    g.lineTo(PX + 1.2, PY + PH * 0.55);
+    g.stroke();
+
+    /* ⑥ 裂纹：**一条直的 + 一条短岔**，钝头直角拐（miter/butt）。
+       上一版是两段折线配圆头 —— 圆头 + 一个拐弯，在 48px 上读作「✓ 打勾」，
+       不是裂缝。裂缝的形状词是"细、直、带尖角"，所以这里去掉一个拐点，
+       把圆头换成平头。 */
+    g.strokeStyle = '#40474F'; g.lineWidth = 1.4;
+    g.lineJoin = 'miter'; g.lineCap = 'butt';
+    g.beginPath();
+    g.moveTo(X + 12.5, Y + 20.5); g.lineTo(X + 20, Y + 22.5);
+    g.moveTo(X + 16, Y + 21.8);   g.lineTo(X + 15.5, Y + 25.5);
+    g.stroke();
+
+    /* ⑦ 豁口：**最后画**，盖住层理和裂纹的端头 —— 破碎的东西边缘
+       一定是"断在最外面"，先画豁口再画线，线的端头会浮在石头上。 */
+    const bite = pts => {
+      g.beginPath();
+      pts.forEach((p, i) => (i ? g.lineTo(X + p[0], Y + p[1]) : g.moveTo(X + p[0], Y + p[1])));
+      g.closePath(); g.fillStyle = STONE; g.fill();
+    };
+    bite([[6, 14], [12, 17], [11, 20], [13, 22], [6, 24]]);    // 左侧豁口
+    bite([[19, 6], [23, 10], [20, 13], [16, 9]]);              // 上沿小豁口
+    bite([[42, 31], [37, 33], [39, 36], [42, 38]]);            // 右下被啃掉一角
+    g.restore();
   }
 
   /* ---- 体积：一层斜向的明暗 ----
@@ -8806,8 +9451,8 @@ function drawBoxBody(g, b, dyn) {
     g.restore();
   }
 
-  // 统一描边（冰用蓝墨，其余用暖褐）
-  g.strokeStyle = b.mat === 'ice' ? COL.iceInk : COL.ink;
+  // 统一描边（冰用蓝墨，裂壳用冷墨，其余用暖褐）
+  g.strokeStyle = b.mat === 'ice' ? COL.iceInk : (b.mat === 'husk' ? '#2E3540' : COL.ink);
   g.lineWidth = INK;
   g.lineJoin = 'round';
   rr(g, b.x + 1, b.y + 1, b.w - 2, b.h - 2, b.mat === 'iron' ? 4 : 6);
@@ -9960,6 +10605,48 @@ function drawFoe(g, f) {
   }
   g.restore();
 
+  /* ---- 冲撞的预警与残影（moss 专用，见 NUM.breed 的 role）----
+     **前摇必须画在身体外面。** 画在里面（眼睛变红之类）在 37px 上看不出来，
+     而且它朝左时会被镜像翻到背面。这里两笔都在世界坐标里：
+       windT  > 0 → 一圈往内收的橙环 + 头顶一个「!」
+       chargeT > 0 → 身后三条速度线
+     环会收拢：0.30 秒里从 1.6 倍收到 1.0 倍，读作"蓄力到底了"。 */
+  if (f.windT > 0) {
+    const CC0 = (NUM.breed[f.breed] || {}).charge;
+    const kk = CC0 ? clamp(1 - f.windT / CC0.wind, 0, 1) : 0.5;
+    const rr0 = (f.w + 10) * (1.6 - 0.6 * kk) * 0.5;
+    g.save();
+    g.globalAlpha = 0.35 + 0.45 * kk;
+    g.strokeStyle = '#FFB35C';
+    g.lineWidth = 2 + 2.2 * kk;
+    g.beginPath();
+    g.ellipse(cx, by - f.h * 0.45, rr0, rr0 * 0.82, 0, 0, Math.PI * 2);
+    g.stroke();
+    g.globalAlpha = 0.55 + 0.45 * kk;
+    g.fillStyle = '#FFD98A';
+    g.font = '800 15px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.textAlign = 'center';
+    g.fillText('!', cx, f.y - 30);
+    g.restore();
+  }
+  if (f.chargeT > 0) {
+    g.save();
+    g.globalAlpha = 0.42;
+    g.strokeStyle = '#FFE8C0';
+    g.lineWidth = 2.2;
+    g.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      const sy = by - 6 - i * 7;
+      const sx = cx - f.chargeDir * (f.w * 0.5 + 4);
+      g.beginPath();
+      g.moveTo(sx, sy);
+      g.lineTo(sx - f.chargeDir * (10 + i * 4), sy);
+      g.stroke();
+    }
+    g.lineCap = 'butt';
+    g.restore();
+  }
+
   /* 进度条画在镜像坐标系外面 —— 否则朝左时会倒着长。
      **位置在 f.y−26**：头比碰撞盒高出 9px、背刺再高 5px，
      留在原处这条永远压在脸上，等于没有。 */
@@ -10935,6 +11622,15 @@ const HUD_RECTS = {
      两个字就要 26px，加上"最佳 1234"这种五位数会贴边。164 宽之后
      左边距到 780，和试验台面板（704 起）仍然上下错开，不相交。 */
   progChip: { x: W - 180, y: 178, w: 164, h: 48 },   // 第 N 关 / 深度 + 骨架 / 最佳
+  /* 雪晶余额。**必须常驻** —— 货币是"我攒了多少、能花多少"，
+     只在图鉴面板里能看到的话，玩家在关卡里做题时根本不会想到它。
+     放在 progChip 正下方：右侧自上而下是「试验台 → 进度 → 雪晶」一列，
+     和顶部那条 52 高的主栏不挨着（178+48=226 → 232）。 */
+  coinChip: { x: W - 180, y: 232, w: 164, h: 30 },
+  /* 深潜词条（只在深潜里画）。**必须常驻** —— 词条改的是"你早就学会的
+     那条规则"，不常驻的话玩家会在第 12 关推球推不动时以为手滑了，
+     而不是"厚甲生效了"。放雪晶下面，右侧一列自上而下读得通。 */
+  modChip:  { x: W - 180, y: 270, w: 164, h: 26 },
 };
 function drawHud(g) {
   if (S.showHud === false) return;
@@ -10973,6 +11669,42 @@ function drawHud(g) {
       ? SKELETONS[S.level.skel].cn : '';
     const chipSub = S.dive ? ('最佳 ' + (S.dive.best || 0)) : skelCn;
     if (chipSub) g.fillText(chipSub, dr.x + dr.w - 12, dr.y + 42);
+  }
+
+  /* 雪晶。**深潜里也显示**（虽然深潜不能买）—— 它是"我这一趟攒到了什么"，
+     而深潜结束时的那点成就感全在数字上。 */
+  {
+    const cr = HUD_RECTS.coinChip;
+    g.textAlign = 'right';
+    g.font = '700 15px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillStyle = 'rgba(14,22,28,.62)';
+    rr(g, cr.x, cr.y, cr.w, cr.h, 9); g.fill();
+    g.fillStyle = '#FFD75E';
+    g.fillText('雪晶 ' + snowCoins(), cr.x + cr.w - 12, cr.y + 21);
+  }
+
+  /* 深潜词条。四条会一直堆到 20 层，所以用空格连排、字号压到 13 ——
+     比"每行一条"省 3 行，而玩家只需要认得出有几个字，不需要读全名。
+     **13 而不是 12.5**（出图量的）：12px 级的中文在 960×600 上横画会糊成一条；
+     上面进度芯片那段注释里已经为同一个原因把 12 抬到 13 了。
+     **底衬必须和别的芯片同一块深色，不能用淡粉色蒙一层**（2026-10-30 出图）：
+     原来这里是 `rgba(255,158,142,.16)` —— 在霜原的雪地上还行，
+     到了沙塲的亮黄背景上四个字直接消失（截图里是"有字但读不出来"）。
+     HUD 的一致性比"让词条显得特别"重要；"特别"靠那圈红描边和红字来说。 */
+  if (S.dive) {
+    const mods = diveMods(S.dive.depth);
+    if (mods.length) {
+      const mr = HUD_RECTS.modChip;
+      const names = DIVE_MODS.filter(m => mods.indexOf(m.id) >= 0).map(m => m.cn).join(' ');
+      g.textAlign = 'right';
+      g.fillStyle = 'rgba(14,22,28,.62)';
+      rr(g, mr.x, mr.y, mr.w, mr.h, 8); g.fill();
+      g.strokeStyle = 'rgba(255,158,142,.55)'; g.lineWidth = 1.5;
+      rr(g, mr.x, mr.y, mr.w, mr.h, 8); g.stroke();
+      g.font = '700 13px "PingFang SC","Microsoft YaHei",sans-serif';
+      g.fillStyle = '#FF9E8E';
+      g.fillText(names, mr.x + mr.w - 10, mr.y + 18);
+    }
   }
   const inClear = S.phase === 'clear';
 
@@ -11146,13 +11878,18 @@ function drawHud(g) {
   if (tipA > 0) {
     g.globalAlpha = tipA;
     g.fillStyle = 'rgba(14,22,28,.5)';
-    rr(g, 16, 76, 330, 30, 8); g.fill();
+    /* 30 → 48 高、两行。**第二行只放"这一次更新新加的东西"**（踩实 / 图鉴 /
+       补给）—— 第一行是"每一关都要用的手"，第二行是"还没形成肌肉记忆的动作"，
+       混成一行的话它会超过 430px，压到中间那条雪地上读不出来。 */
+    rr(g, 16, 76, 430, 48, 8); g.fill();
     g.fillStyle = '#C8DCE6';
     g.font = '600 13px "PingFang SC","Microsoft YaHei",sans-serif';
     /* 主线有关号之后 R 不再是"换一关"（换一关就是换一张随机图，
        那会让"第 7 关永远是同一张图"这条不成立），所以文案跟着改成"重打"。 */
     const tipR = (S.stage != null && S.stage > 0) ? 'R 重打' : 'R 换一关';
-    g.fillText('A/D 移动 · W 跳 · J 吐雪 · 走过去顶球 = 推 · ' + tipR, 30, 96);
+    g.fillText('A/D 移动 · W 跳 · J 吐雪 · 走过去顶球 = 推 · ' + tipR, 30, 94);
+    g.fillStyle = 'rgba(200,220,230,.82)';
+    g.fillText('C 踩实身边的球 · B 图鉴 · 1/2/3 花雪晶买补给', 30, 114);
     g.globalAlpha = 1;
   }
 
@@ -11171,6 +11908,189 @@ function drawHud(g) {
    深潜里玩家关心的只有两个数：走了多深、这一局多少分。
    主线那张表（裹一只平均 / 球碎箱 / 一发几碎）是给设计看量具的，
    放在深潜结束页上会稀释"我还能不能再深一层"这个念头。 */
+/* =========================================================================
+   图鉴（B）
+   =========================================================================
+   **它不是菜单，是一面墙。** 没有返回按钮、没有分页、没有"领取奖励"——
+   打开来看一眼，按 B 关掉。所以它不暂停游戏（见 onKey）。
+
+   四块内容，每块回答一个玩家真的会问的问题：
+     场景 —— "换了个地方，到底变了什么？"（答案是**介质**：几发裹一只、弹速）
+     怪   —— "这三种有什么不一样？"（答案是**态度**：守 / 追 / 拉扯）
+     裂壳 —— "这些都是什么？"（四块碎片 → 终局）
+     终局 —— 集齐才有正文，否则是四个问号
+
+   **没解锁的条目不是空的，是「？」+ 一句提示。** 空白格子只会让人以为
+   游戏没做完；给一句"还没到过这里"，玩家知道那是自己没走到。
+   ------------------------------------------------------------------------- */
+const BREED_LIST = ['moss', 'fang', 'grub'];
+const BREED_CN = { moss: '苔泥团', fang: '尖牙兽', grub: '霜甲虫' };
+/* 每只一句：**说的是"怎么对付它"，不是"它长什么样"** ——
+   外形在场上看得见，打法看不见。 */
+const BREED_SAY = {
+  moss: '守 · 你踏进它的圈，它鼓一下身就撞过来；撞完要喘两秒',
+  fang: '追 · 一路跟着你跑，跑到够得着就甩牙，不守任何东西',
+  grub: '拉扯 · 你一靠近它就退，边退边扔冰锥；退到台边才硬顶',
+};
+
+function drawCodex(g) {
+  g.save();
+  g.fillStyle = 'rgba(6,12,18,.82)';
+  g.fillRect(0, 0, W, H);
+  const PX = 120, PY = 58, PW = 720, PH = 484;
+  g.fillStyle = '#131F27';
+  rr(g, PX, PY, PW, PH, 16); g.fill();
+  g.strokeStyle = 'rgba(155,232,110,.26)'; g.lineWidth = 2;
+  rr(g, PX, PY, PW, PH, 16); g.stroke();
+
+  /* 标题 + 雪晶余额（右上）。**余额放在图鉴里，因为买补给就在这附近按** */
+  g.textAlign = 'left';
+  g.fillStyle = '#EAF8FF';
+  g.font = '800 28px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillText('图 鉴', PX + 30, PY + 44);
+  g.textAlign = 'right';
+  g.fillStyle = '#FFD75E';
+  g.font = '800 18px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillText('雪晶 ' + snowCoins(), PX + PW - 30, PY + 42);
+
+  const seenBiome = codexSeen('biome');
+  const seenBreed = codexSeen('breed');
+  const relics = relicCount();
+
+  /* ---- 场景：2 列 × 2 行 ----
+     每张卡两行：`霜原 · 雪` / `裹 6 发 · 弹速 ×1.00`。
+     **裹几发是玩家最需要的那一个数** —— 换场景之后"这只怪要打几发"
+     整个变了，而他只能靠猜。 */
+  let yy = PY + 74;
+  g.textAlign = 'left';
+  g.fillStyle = 'rgba(200,220,230,.55)';
+  g.font = '700 13px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillText('场景 · 介质决定了裹几发、弹多快', PX + 30, yy);
+  yy += 10;
+  const CW = 330, CH = 50;
+  for (let i = 0; i < THEMES.length; i++) {
+    const t = THEMES[i];
+    const cx = PX + 30 + (i % 2) * (CW + 16);
+    const cy = yy + Math.floor(i / 2) * (CH + 8);
+    const has = !!seenBiome[t.id];
+    g.fillStyle = has ? 'rgba(255,255,255,.05)' : 'rgba(255,255,255,.02)';
+    rr(g, cx, cy, CW, CH, 10); g.fill();
+    g.textAlign = 'left';
+    if (!has) {
+      g.fillStyle = 'rgba(200,220,230,.34)';
+      g.font = '700 16px "PingFang SC","Microsoft YaHei",sans-serif';
+      g.fillText('？ ？ ？', cx + 16, cy + 24);
+      g.font = '600 12px "PingFang SC","Microsoft YaHei",sans-serif';
+      g.fillText('还没到过这里（第 ' + (i * 12 + 1) + ' 关起）', cx + 16, cy + 44);
+    } else {
+      g.fillStyle = '#EAF8FF';
+      g.font = '700 16px "PingFang SC","Microsoft YaHei",sans-serif';
+      g.fillText(t.cn + ' · ' + t.medium.cn, cx + 16, cy + 24);
+      const need = Math.max(1, Math.round(NUM.snowShots.full * t.medium.needK));
+      g.fillStyle = t.medium.mote;
+      g.font = '600 12.5px "PingFang SC","Microsoft YaHei",sans-serif';
+      g.fillText('满饱裹一只 ' + need + ' 发 · 弹速 ×' + t.medium.speedK.toFixed(2)
+        + ' · 第 ' + (t.to - 11) + '~' + t.to + ' 关', cx + 16, cy + 44);
+    }
+  }
+  yy += (CH + 8) * 2 + 14;
+
+  /* ---- 怪：三行 ----
+     `苔泥团 · 守` 然后一句话。**名字和态度同一行**，因为玩家在场上
+     认出来的是"那只蹲着的"，而决定他怎么打的是"守"这个字。 */
+  g.fillStyle = 'rgba(200,220,230,.55)';
+  g.font = '700 13px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillText('敌人 · 三种体态，三套打法', PX + 30, yy);
+  yy += 8;
+  for (const id of BREED_LIST) {
+    const has = !!seenBreed[id];
+    const b = NUM.breed[id];
+    g.fillStyle = has ? 'rgba(255,255,255,.04)' : 'rgba(255,255,255,.015)';
+    rr(g, PX + 30, yy, PW - 60, 32, 8); g.fill();
+    g.textAlign = 'left';
+    g.fillStyle = has ? '#EAF8FF' : 'rgba(200,220,230,.30)';
+    g.font = '700 15px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillText(has ? (BREED_CN[id] + ' · ' + (b.role === 'guard' ? '守' : b.role === 'hunt' ? '追' : '拉扯'))
+      : '？ ？ ？', PX + 46, yy + 22);
+    g.fillStyle = has ? 'rgba(214,230,239,.86)' : 'rgba(200,220,230,.22)';
+    g.font = '600 12.5px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillText(has ? BREED_SAY[id] : '还没见过', PX + 190, yy + 22);
+    yy += 36;
+  }
+  yy += 10;
+
+  /* ---- 裂壳（左） + 终局（右）----
+     两件事放在同一行，因为它们本来就是一件事的两半：
+     左边是"我找到了几块"，右边是"找到之后知道什么"。
+     原来上下排，484 高的面板根本装不下（页脚会压在最后一张卡上）。 */
+  g.fillStyle = 'rgba(200,220,230,.55)';
+  g.font = '700 13px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.textAlign = 'left';
+  g.fillText('裂壳 · 终局怪撞碎时掉下来的，四块', PX + 30, yy);
+  yy += 10;
+  for (let i = 0; i < RELIC_TOTAL; i++) {
+    const on = i < relics;
+    const bx2 = PX + 30 + i * 46;
+    /* 一格小裂壳：**和箱子本体同一套画法**（石箱体 + 浅色壳板 + 一层层理），
+       缩到 38×30 只留得住这三笔。
+       这里原来画的是一道**圆弧** —— 那是箱子第一版（同心圆靶心）的缩写。
+       箱子改成壳板之后，图鉴里的小图标就成了"和它长得不一样的东西"，
+       而给玩家的暗示是"你找到的是这个东西" —— 图标必须跟着本体走。 */
+    g.fillStyle = on ? '#6A7078' : 'rgba(255,255,255,.07)';
+    rr(g, bx2, yy, 38, 30, 6); g.fill();
+    /* 空格子的描边不能太淡：`rgba(255,255,255,.10)` 在深色面板上约等于看不见，
+       于是"四格还剩三格"这件事只能靠右边那个 "1 / 4" 的数字说 ——
+       而这一排格子的作用本来就是"让你看见还空着几格"。 */
+    g.strokeStyle = on ? '#2E3540' : 'rgba(214,230,239,.26)';
+    g.lineWidth = 1.6;
+    rr(g, bx2, yy, 38, 30, 6); g.stroke();
+    if (on) {
+      g.fillStyle = '#E9E7DE';
+      rr(g, bx2 + 6, yy + 6, 26, 18, 4); g.fill();
+      g.strokeStyle = 'rgba(120,128,142,.6)'; g.lineWidth = 1.2;
+      rr(g, bx2 + 9.5, yy + 9.5, 19, 11, 3); g.stroke();
+    }
+  }
+  g.fillStyle = relics > 0 ? '#E9E7DE' : 'rgba(200,220,230,.4)';
+  g.font = '700 14px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillText(relics + ' / ' + RELIC_TOTAL, PX + 30 + RELIC_TOTAL * 46 + 8, yy + 21);
+
+  /* 终局：右侧。集齐之前是问号，集齐之后是这段 ——
+     **它是这个游戏里唯一一段"有结局"的文字**，所以写得像一句人话。 */
+  const tx = PX + 30 + RELIC_TOTAL * 46 + 92;
+  g.fillStyle = 'rgba(200,220,230,.55)';
+  g.font = '700 13px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillText('终局', tx, yy - 10);
+  if (relics >= RELIC_TOTAL) {
+    g.fillStyle = '#FFE08A';
+    g.font = '700 14px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillText('三层壳 · 第 48 关', tx, yy + 10);
+    g.fillStyle = 'rgba(214,230,239,.86)';
+    g.font = '600 12px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillText('够重的球才砸得开它的壳', tx, yy + 28);
+  } else {
+    g.fillStyle = 'rgba(200,220,230,.34)';
+    g.font = '700 14px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillText('？ ？ ？', tx, yy + 10);
+    g.fillStyle = 'rgba(200,220,230,.34)';
+    g.font = '600 12px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillText('集齐四块才看得见', tx, yy + 28);
+  }
+  g.fillStyle = 'rgba(200,220,230,.5)';
+  g.font = '600 12.5px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillText(relics >= RELIC_TOTAL ? '四块都在了。第 48 关，它在等你。'
+    : '分别在第 12 / 24 / 36 / 44 关，被球砸开才会裂', PX + 30, yy + 54);
+
+  /* 页脚：关掉 + 买补给的键位。**补给的键位写在这里**，因为
+     "我有多少雪晶"和"能拿它买什么"是同一个念头的两半。 */
+  g.textAlign = 'center';
+  g.fillStyle = 'rgba(200,220,230,.5)';
+  g.font = '600 13px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillText('B 关闭　·　1 +1血 30　2 +1球 45　3 +30弹 20　·　每关各一次',
+    W / 2, PY + PH - 18);
+  g.restore();
+}
+
 function drawDiveOver(g) {
   g.fillStyle = 'rgba(10,18,24,.78)';
   g.fillRect(0, 0, W, H);
@@ -11265,6 +12185,14 @@ function drawClear(g) {
   }
 
   g.textAlign = 'center';
+  /* 雪晶结算。**放在这里而不是塞进上面那张表** —— 表里的六行是"这一关
+     怎么打的"，雪晶是"这关给了我什么"，两件事不在一个层次上。
+     首次通关的 +20 是最大的一笔，所以这一行值得单独占一条。 */
+  if (S.coinGain > 0) {
+    g.fillStyle = '#FFD75E';
+    g.font = '700 16px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillText('雪晶 +' + S.coinGain + '　（现在 ' + snowCoins() + '）', W / 2, cy + ch - 50);
+  }
   g.fillStyle = '#7FA3B5';
   g.font = '600 15px "PingFang SC","Microsoft YaHei",sans-serif';
   /* **两个动作两个键**：Enter = 往前走，R = 这一关再来一次。
@@ -11335,6 +12263,13 @@ const API = {
      导出是为了断言能验"关号派生种子可复现 / 不同关不同图 / 通关推进 /
      48 关封顶"，这四条里只有第一条在图上看得见。 */
   startStage, stageSeed, readSnowProgress, writeSnowProgress, STAGE_MAX,
+  /* 雪晶 / 图鉴 / 裂壳 / 悬台（CR-032 第 4、5 条 + 踩实专属关）。
+     这批全是"状态在存档里、规则是纯函数"的东西，**只能靠断言验** ——
+     出图看得到面板长什么样，看不出"集齐四块裂壳才解锁终局"这条判据
+     有没有写反。 */
+  snowCoins, addSnowCoins, spendSnowCoins, BUY_LIST, buySupply,
+  codexSeen, codexMark, relicCount, addRelic, RELIC_STAGES, RELIC_TOTAL, relicOf,
+  DIVE_MODS, diveMods, diveHas, PERCH_STAGE, PERCH_H, PERCH_W,
   HUD_RECTS, SKELETONS,
   genLevel, validateLevel, buildLevel, surfY, unreachableCols, ballPits, ballStuckCols,
   bellyTier, snowNeed, ballTier, ballR, ballPow,

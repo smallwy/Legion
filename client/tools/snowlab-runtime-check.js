@@ -99,9 +99,14 @@ const _need = ['bg', 'pet-cat', 'foe-moss', 'foe-fang', 'foe-grub'];
 ok('内嵌贴图搬到了 SnowlabArt（原有 5 张一张不少）',
   _need.every(k => typeof _art[k] === 'string' && _art[k].length > 100),
   _need.filter(k => !_art[k]).join(',') || '');
-ok('背景图按场景各有一块（bg / bg-ember）',
-  typeof _art['bg'] === 'string' && typeof _art['bg-ember'] === 'string',
-  Object.keys(_art).filter(k => k.startsWith('bg')).join(','));
+/* **四个场景都要有。** 原来只写死验 `bg` 和 `bg-ember` 两块 —— 2026-10-30
+   给菌窟/沙塚补了立绘之后，那两条照样绿，而 spore/dune 的块没被抽进
+   `SnowlabArt` 也没人知道（游戏里静默回退程序化天空）。
+   断言要验"每个场景"，不是"我上次加的那几个"。 */
+const BG_KEYS = ['bg', 'bg-ember', 'bg-spore', 'bg-dune'];
+ok('背景图按场景各有一块（' + BG_KEYS.join(' / ') + '）',
+  BG_KEYS.every(k => typeof _art[k] === 'string' && _art[k].length > 2000),
+  BG_KEYS.filter(k => !_art[k]).join(',') || '');
 
 /* ---------- ③ 逐帧对坐标 ---------- */
 const DT = 1 / 60;

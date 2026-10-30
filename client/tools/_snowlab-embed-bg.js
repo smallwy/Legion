@@ -24,6 +24,8 @@ const DIR = path.join(ROOT, 'assets', 'snowlab');
 const FILES = [
   ['bg-surface.jpg', 'snow'],
   ['bg-forge.jpg', 'ember'],
+  ['bg-spore.jpg', 'spore'],
+  ['bg-dune.jpg', 'dune'],
 ];
 
 const bgElId = id => (id === 'snow' ? 'art-bg' : 'art-bg-' + id);

@@ -3776,6 +3776,86 @@ console.log("\n=== 五十·补. BOSS 档位（每 8 关一只） ===");
 }
 
 /* =========================================================================
+   五十·三. 窄洞：让「小球」第一次有用途
+   -------------------------------------------------------------------------
+   2026-10-31 用户：「结合现在三个玩法 不合适 你帮我调整啊 而且要满足深度」
+
+   深度的定义是「同一个机制产生多种解法，且每个选择都有代价」。
+   推球原来只有一条路：**球越大越好**，永远没有理由保持小球 ——
+   所以 48 关反复在做同一个决定，读起来当然一样。
+
+   窄洞给小球一个用途：球直径 > 洞宽就掉不进去。
+   球半径 22（裸）→ 46（裹满），所以 72 的洞挡的不是"大"，是
+   **absorbed ≥ 6（直径 77.6）**。于是"在哪一层把球裹大"变成真的选择：
+   上层裹大就送不下去，下层裹大又未必够碎片。
+
+   为什么这些断言是"行为"而不是"存在"：
+     · "第 6 关有窄洞"测不出机制坏没坏 —— 洞标记还在、物理不生效，
+       关卡照样能通，玩家只是发现"球怎么掉不下去"。
+     · 真正要钉的是**球的落地结果**：裸球必须掉下去，满球必须卡住。
+       这两条一起才说明阈值接到了正确的位置，少一条都可能是恒真。
+   ========================================================================= */
+{
+  const NAR = 72;
+  const narrowList = [];
+  for (let n = 1; n <= 48; n++) {
+    const g = L.genLevel(L.stageSeed(n), n);
+    const hs = (g.layers || []).reduce((a, l) => a.concat(l.holes || []), []);
+    const nar = hs.filter(h => h.narrow).length;
+    if (nar) narrowList.push({ n, nar, all: hs.length, ws: hs.map(h => h.w) });
+  }
+  ck("★ 窄洞关存在且数量固定（8 关：6/12/18/24/30/36/42/48）",
+     narrowList.length === 8, narrowList.map(o => o.n).join(","));
+  /* **整关所有口都窄。** 只窄一个口的话玩家会绕到旁边那个口去，
+     机制变成一次性惊吓而不是这一关的题。 */
+  const partial = narrowList.filter(o => o.nar !== o.all);
+  ck("★ 窄洞关里**每一个**口都是窄的（没有能绕过去的宽口）",
+     partial.length === 0, partial.map(o => "第" + o.n + "关 " + o.nar + "/" + o.all).join(" "));
+  const wrongW = narrowList.filter(o => o.ws.some(w => w !== NAR));
+  ck("窄洞宽度都是 " + NAR, wrongW.length === 0, wrongW.map(o => o.n + ":" + o.ws.join("/")).join(" "));
+  /* 反向：不是窄洞关的，一个窄洞都不该有（否则排班表就乱了） */
+  let stray = [];
+  for (let n = 1; n <= 48; n++) {
+    if (n % 6 === 0) continue;
+    const g = L.genLevel(L.stageSeed(n), n);
+    const hs = (g.layers || []).reduce((a, l) => a.concat(l.holes || []), []);
+    if (hs.some(h => h.narrow)) stray.push(n);
+  }
+  ck("非窄洞关没有窄洞（排班表干净）", stray.length === 0, stray.join(","));
+
+  /* ---- 行为：球的落地结果 ---- */
+  const drop = (abs) => {
+    L.startStage(6);
+    const S = L.S;
+    const ly = S.level.layers[0];
+    const h = ly.holes.filter(x => x.narrow)[0];
+    const r = Math.min(L.NUM.ball.maxR, L.NUM.ball.baseR + abs * L.NUM.ball.perAbsorb);
+    const b = L.spawnBall(h.x + h.w / 2, ly.floorY - 160, 0, 0);
+    b.absorbed = abs; b.r = r;
+    for (let i = 0; i < 120; i++) { if (b.dead) break; L.stepBalls(1 / 60); }
+    return { fell: b.y + b.r > ly.floorY + 40, y: b.y, floor: ly.floorY, r };
+  };
+  const bare = drop(0);
+  ck("★ 裸球（直径 44 < 72）能掉进窄洞",
+     bare.fell, "y=" + bare.y.toFixed(0) + " 地面=" + bare.floor);
+  const fat = drop(L.NUM.ball.maxAbsorb);
+  ck("★ 裹满的球（直径 92 > 72）卡在窄洞上，掉不下去",
+     !fat.fell && Math.abs((fat.y + fat.r) - fat.floor) < 6,
+     "y+r=" + (fat.y + fat.r).toFixed(0) + " 地面=" + fat.floor);
+
+  /* **阈值要落在「杀 3 只怪」这个量级上。**
+     一粒怪 +2（absorbFoe），所以 absorbed 6 = 3 只怪。
+     如果洞宽定成 120，需要 absorbed > 13（7 只怪）—— 一关的怪本来
+     就 3~9 只，玩家几乎不可能让球胖到那个程度，机制等于没开。
+     这条断言把"阈值太高"变成会红的。 */
+  const needAbs = Math.ceil((NAR / 2 - L.NUM.ball.baseR) / L.NUM.ball.perAbsorb);
+  const needFoe = Math.ceil(needAbs / L.NUM.ball.absorbFoe);
+  ck("★ 卡住阈值只要 " + needFoe + " 只怪（一关 3~9 只，够得到）",
+     needFoe <= 3, "absorbed " + needAbs + " / 每只 +" + L.NUM.ball.absorbFoe);
+  L.startStage(6);
+}
+
+/* =========================================================================
    五十·二. 按键不能撞：D 是向右走，不是"下深潜"
    -------------------------------------------------------------------------
    2026-10-30 用户报：「进战斗按左右 直接不断切场景」。

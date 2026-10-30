@@ -755,7 +755,16 @@ function genLevel(seed, stage) {
 
   /* 骨架：主线按 stage 发牌（相邻关必不同），深潜 / 没给 stage 时按种子随机。
      **深潜必须随机** —— 可预测的骨架就没有"下一关长什么样"的期待了。 */
-  const SKW = 144;                                    // 骨架统一洞宽，见下方注释
+  const SKW = 144
+/* **窄洞宽 = 72**（2026-10-31）。
+   球半径 22（裸）→ 46（裹满），直径 44 → 92。72 这道线的意思是：
+   **裹到 absorbed ≥ 6（r=38.8，直径 77.6）就掉不进去了**，
+   裸球和小球照常通过。
+   为什么不是 64：玩家宽 45，64 的洞只留 19px 余量，跳下去要对得很准，
+   那是"操作难度"而不是"机制"—— 玩家会觉得是手感问题，不是选择问题。
+   为什么不是 88：88 只挡 r > 44 的球（absorbed ≥ 8），那已经接近裹满，
+   一关里几乎不会出现在洞口，机制等于没开。 */
+const NARROW_W = 72;;                                    // 骨架统一洞宽，见下方注释
   const skel = (stage != null && stage > 0) ? pickSkeleton(stage)
     : SKEL_ORDER[mix32(seed ^ 0x9E3779B9) % SKEL_ORDER.length];
   const plan = SKELETONS[skel].plan(nF, ri, SKW);
@@ -817,7 +826,18 @@ function genLevel(seed, stage) {
            实测只剩 144→128 的 11%（CR-031 §2b），玩家读不出来；而宽度一变，
            anchor 到实际 x 的距离就跟着变，骨架会被宽度搅乱。窄洞留给
            "窄洞"这个机制关单独开。 */
-        const w = SKW;
+        /* **窄洞关：整关所有的口都收窄。**
+           **不能只窄第一个口。** 一关两层、每层 1~2 个口，如果只窄一个，
+           玩家会发现"旁边那个口能下去"，然后永远走那个 —— 机制变成
+           一次性的惊吓，不是这一关的题。要让它成为题，就必须
+           **没有绕过去的路**。
+
+           暂时按关号排（每 6 关一个），因为"这一关该考什么"的 lesson
+           体系还没落地 —— 先让机制本身跑起来、能被断言钉住，再谈排班。
+           生成器不知道自己在出题，是这游戏读起来一样的根因
+           （`lesson/teach/mustUse` 在生成器里出现 0 次）。 */
+        const narrowHere = (stage > 0 && stage % 6 === 0);
+        const w = narrowHere ? NARROW_W : SKW;
         /* 候选列按「离骨架锚点由近及远」排序 —— **这是骨架唯一的实现方式**。
            原来是 26 次随机重试，洞开在哪完全由骰子决定，骨架无处挂载。
            排序键是 (距离, 随机数)：距离相同的候选随机决胜负，
@@ -873,7 +893,7 @@ function genLevel(seed, stage) {
           if (tier >= 0.4 && r < 0.10 + tier * 0.30) cover = 'ice';
           else if (r < 0.34 + tier * 0.26) cover = 'frost';
         }
-          holes.push({ x, w, cover, floorY: floors[k] });
+          holes.push({ x, w, cover, narrow: w < SKW, floorY: floors[k] });
           break;
         }
       }

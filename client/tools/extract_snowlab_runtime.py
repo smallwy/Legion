@@ -166,25 +166,22 @@ let ctx: any = null;
 ''')
 
     # ② 背景：从 DOM 的 #art-bg 改成 INLINE_ART，并改成可被 Cocos 调用的函数
-    body = must(body, '''(function initBackdrop() {
-  if (typeof document === "undefined" || typeof Image === "undefined") return;
-  const el = document.getElementById("art-bg");
-  if (!el) return;
-  const src = (el.textContent || "").trim();
-  if (!src) return;
-  const im = new Image();
-  im.onload = () => { BG_IMG = im; };
-  im.onerror = () => { BG_IMG = null; };
-  im.src = src;
-})();''', '''function snowlabInitBackdrop() {
+    # **锚点只用首尾两行 + 正则，别写整段字面量。**
+    # 2026-10-30 栽过一次：`BG_IMG` 改成按场景存的 `BG_IMGS.snow` 之后，
+    # 这条字面量锚点命中 0 次，脚本直接退出 —— 而生成物留在上一版，
+    # 下游 runtime-check 一片绿（它读的是没更新的 .ts）。
+    pat_bg = re.compile(r'\(function initBackdrop\(\) \{.*?\n\}\)\(\);', re.S)
+    assert len(pat_bg.findall(body)) == 1, len(pat_bg.findall(body))
+    body = pat_bg.sub(lambda _m: '''function snowlabInitBackdrop() {
   if (typeof Image === "undefined") return;
   const src = (INLINE_ART["bg"] || "").trim();
   if (!src) return;
   const im = new Image();
-  im.onload = () => { BG_IMG = im; };
-  im.onerror = () => { BG_IMG = null; };
+  /* 按场景存（`BG_IMGS`），不是一张全局图 —— 见原型里的长注释。 */
+  im.onload = () => { BG_IMGS.snow = im; };
+  im.onerror = () => { BG_IMGS.snow = null; };
   im.src = src;
-}''')
+}''', body)
 
     # ③ 角色贴图：同上
     body = must(body, '''(function initArt() {

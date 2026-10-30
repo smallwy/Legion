@@ -2715,6 +2715,9 @@ function reset(seed, stage) {
   /* `stage` 不传 = 保持上一关的（换种子重跑同一关时要保住进度）；
      显式传 null = 回到"层数掷骰子"的旧行为（断言/出图用）。 */
   if (stage !== undefined) S.stage = stage;
+  /* **换关 = 换地方。** 放在这里而不是渲染时算：`THEME` 要在本关第一帧
+     就已经是对的（`drawSky` / 文案 / 弹速都读它），而且帧内不该再查表。 */
+  applyTheme(themeOf(S.stage));
   const L = buildLevel(LEVEL_SEED, S.stage == null ? null : S.stage);
   /* **FR 必须在造怪之前重置。** 它原来在函数末尾才赋值，
      而 `S.foes = L.spawns.map(makeFoe)` 在中间就调用了 makeFoe ——
@@ -2858,7 +2861,15 @@ function bellyTier() {
   if (S.belly >= NUM.bellyHalf) return 'half';
   return 'hungry';
 }
-function snowNeed() { return NUM.snowShots[bellyTier()]; }
+/* 裹住一只怪要几发。**场景系数乘在这里，不乘在 `NUM.snowShots` 上** ——
+   那张表是"饱食度三档"的底数，被场景改写的话，换一次场景就把基准值永久改了，
+   再换回来还是错的（同一份 `NUM` 被所有关卡共用）。
+   取整要 `>= 1`：needK 小于 1 时 4×0.8=3.2 → 3，但 1×0.8 会变 0，
+   0 发就能裹住 = 一按吐弹直接变球。 */
+function snowNeed() {
+  const base = NUM.snowShots[bellyTier()];
+  return Math.max(1, Math.round(base * THEME.medium.needK));
+}
 const TIER_CN = { full: '满饱', half: '半饱', hungry: '全饿' };
 
 /* ---------------------------------------------------------------- 球档位 */
@@ -3255,7 +3266,7 @@ function shoot() {
   const p = S.p;
   if (p.shotCd > 0 || S.phase !== 'play') return;
   if (S.ammo <= 0) {
-    once('noammo', p.x, p.y - 40, '没雪了 · 去砸箱子', '#FF9E8E');
+    once('noammo', p.x, p.y - 40, THEME.words.noammo, '#FF9E8E');
     return;
   }
   S.ammo--;
@@ -3267,14 +3278,19 @@ function shoot() {
   S.shots.push({
     x: p.x + p.w / 2 + p.face * 16,
     y: p.y + p.h * 0.42,
-    vx: p.face * cfg.speed,
+    /* **只乘速度，不乘 `life`。** 乘了 life 射程 = 速度×寿命 会乘两次，
+       熔炉的射程直接变成 1.39 倍 —— 那不是"火种飞得快"，是"火种能打
+       到屏幕外面"，两侧高台的取舍全部作废。 */
+    vx: p.face * cfg.speed * THEME.medium.speedK,
     /* **横向丢出去，但要掉下来。** vy0 轻微上扬让弹道先平后坠 ——
        没有这一下，子弹读起来是"射出去的激光"；有了它才是"扔出去的东西"。
        重力 520 是角色重力（2100）的四分之一：子弹比人轻，但不该飘。 */
     vy: cfg.vy0, grav: cfg.grav, kind: cfg.kind,
     t: 0, life: cfg.life, r: cfg.r, dead: false,
   });
-  for (let i = 0; i < 3; i++) addFrag(p.x + p.w / 2 + p.face * 14, p.y + p.h * 0.42, 1, '#EAF6FF', 120);
+  /* 碎粒跟着介质换色：雪的碎粒是白的，火种是橙的。**别漏这一处** ——
+     弹药名改了、飞出去的粒子还是白的，一眼就看出是半成品。 */
+  for (let i = 0; i < 3; i++) addFrag(p.x + p.w / 2 + p.face * 14, p.y + p.h * 0.42, 1, THEME.medium.mote, 120);
 }
 
 function stepShots(dt) {
@@ -3389,7 +3405,7 @@ function makeBallFrom(f) {
     weak: weak,
     onGround: false, chain: 0, hitCd: 0, dead: false,
   });
-  addText(f.x + f.w / 2, f.y - 18, weak ? '残球（雪不够了）' : '裹成球了',
+  addText(f.x + f.w / 2, f.y - 18, weak ? THEME.words.weak : THEME.words.wrapped,
     weak ? '#FFD08A' : '#9BE86E', 18, 1.1);
   kickShake(3.5, 'wrap');
   hitStop(0.04);
@@ -4027,7 +4043,7 @@ function breakBox(box, how, pow, dirX, dirY) {
   if (box.loot) {
     S.loot = (S.loot || 0) + 1;
     S.flash = Math.max(S.flash, 0.22);
-    addText(cx, box.y - 10, '宝物 +1', '#FFD45E', 15, 1.2);
+    addText(cx, box.y - 10, THEME.words.shard + ' +1', '#FFD45E', 15, 1.2);
     addFrag(cx, cy, 10, '#FFD45E', 240);
     S.shards.push({ x: cx, y: cy, vy: -260, t: 0 });
     /* **寻宝关的门在这里开，不在 killFoe 里。**
@@ -5447,6 +5463,473 @@ const COL = {
   door: '#7FD8A8', doorInk: '#2F7A5A', doorLock: '#E8564C',
 };
 
+/* =========================================================================
+   场景主题
+   =========================================================================
+   用户 2026-10-30：「感觉用雪原推球把场景定义死了，应该可以很多场景都可以」。
+
+   **这句话点的是真问题，但不是"美术太单一"。** 雪在 snowlab 里其实干着
+   三件不同的事，只有第一件是"场景"：
+     ① 一块背景板（天空 / 雪脊 / 松林 / 落雪）；
+     ② 一套**名词**（雪弹 / 雪之碎片 / 没雪了）；
+     ③ 一组**数值**（裹住一只怪要几发、弹速多快）。
+   三件事一起焊死在 40 多个字面量里，所以"换个场景"看起来只能换皮。
+   而**只换皮是最贵的做法**：玩家打完第 12 关，动作、节奏、取舍全都没变，
+   换色只会让他觉得"在刷同一张图，只是重新上了漆"。
+
+   这里三件事一起抽成 `THEME`，换场景 = 换这五样，玩法动词（吐 → 裹 →
+   推 → 砸）一个字不动：
+     · `sky` / `far` / `mid` / `near` / `rim` —— 三道脊的配色
+     · `deco(g)` —— 中景上站着什么（松林 / 烟囱 / 蘑菇 / 方尖碑）
+     · `mote(g)` —— 天上落下来（或飘上去）什么
+     · `words`  —— 面向玩家的名词
+     · `medium` —— **介质参数**：`speedK` 弹速、`needK` 裹一只怪的发数
+
+   **为什么 4 个场景 × 12 关**：48 关正好被 4 整除，而 `STAGES` 是 7 段
+   难度。两者刻意错开（4 和 7 互质），所以"换地方"和"变难"从来不同时发生 ——
+   同屏两件事一起变，玩家分不清哪个是他该注意的。每 6 关一换太密
+   （还没记住这个地方就走了），只换一次又回到"一张图打到底"；12 关刚好
+   够学会一套打法，也刚好在他腻之前到下一个地方。
+
+   **介质参数只改手感，不改规则。** 火种 4 发就能裹住人、孢子要 8 发；
+   火种飞得快、孢子飘得慢。**没有任何一条规则是某个场景独有的** ——
+   一旦某场景有专属规则，另外三个就从"另一个地方"变成"没做完的地方"。
+   这条约束是有代价的：它挡住了"熔炉里球会烧穿木箱"这类好点子。
+   真要做，得先让四个场景各有一条对称的专属规则，而不是给一个场景加戏。 */
+
+/* 三道脊的轮廓。**形状是共用的，只有颜色属于场景** ——
+   每个场景一套新轮廓会让地形读起来像另一个游戏，而"同一个世界、不同的
+   地方"恰恰要求轮廓一致。snow 的第一道多叠了一层高频（`/17`），那是雪。 */
+const RIDGE_F = [
+  x => 246 - Math.sin(x / 236) * 30 - Math.sin(x / 84) * 12 - Math.sin(x / 37) * 6 - Math.sin(x / 17) * 2.2,
+  x => 300 - Math.sin(x / 153) * 26 - Math.sin(x / 61) * 9 - Math.sin(x / 29) * 3.4,
+  x => 338 - Math.sin(x / 99) * 16 - Math.sin(x / 44) * 5,
+];
+
+const THEMES = [
+  /* ---------------------------------------------------------------- 霜原 */
+  {
+    id: 'snow', cn: '霜原', to: 12,
+    sky: ['#5E9BC4', '#9CCDE4', '#D3E9F4', '#EFE3D2'],
+    far: '#AECDE0', mid: '#C9E0EC', near: '#E9F4FA', pine: '#54727C',
+    rim: ['rgba(255,255,255,.46)', 'rgba(255,255,255,.74)', '#FFFFFF'],
+    /* 地表顶面四档（亮 → 暗）。**坡、板、土堆、碎石全从这里取色** ——
+       只改板不改坡的话，雪原的坡是暗红、板是白的，像两套素材拼的。 */
+    cap: ['#FFFFFF', '#EDF7FE', '#C9DFEE', '#A9C6DC'],
+    shade: 'rgba(150,188,214,.28)',                 // 背光面/雪影
+    haze: 'rgba(236,247,253,.50)',
+    cloud: { lit: '#FCFEFF', shade: 'rgba(116,148,174,.55)', n: 5 },
+    /* 落雪。**位置只由下标和 S.t 决定，不能每帧随机** ——
+       随机的话雪粒会原地闪，比不下雪更难看。 */
+    mote(g) {
+      for (let i = 0; i < 52; i++) {
+        const bx = -20 + ((i * 149) % 1000);
+        const spd = 16 + (i % 7) * 7;
+        const by = -30 + ((i * 61 + S.t * spd) % 380);
+        const r = 1.1 + (i % 4) * 0.65;
+        g.globalAlpha = 0.32 + (i % 5) * 0.11;
+        g.fillStyle = '#FFFFFF';
+        g.beginPath();
+        g.arc(bx + Math.sin(S.t * 0.8 + i * 1.7) * 9, by, r, 0, Math.PI * 2);
+        g.fill();
+      }
+      g.globalAlpha = 1;
+    },
+    deco(g) {
+      /* 松林：**成排**的三角松，压在中景雪脊上。
+         必须画在近景雪坡**之前** —— 后画就会被雪坡压住，先画才有
+         "一片林子站在雪丘后面"的纵深。三条硬规矩：
+         ① 树尖高低必须抖开（等高 = 一排栅栏）；
+         ② 每棵只把**上半截**刷白，整棵全白就成了三角旗；
+         ③ 树要够大（46~80）。之前 32~64 太小，雪坡一挡只剩几个尖，
+            看起来像插了一排三角尺，不像林子。 */
+      for (let i = 0; i < 11; i++) {
+        const px = -20 + i * 92 + ((i * 47) % 34);
+        const base = RIDGE_F[1](px) + 14;
+        const hh = 46 + ((i * 53) % 34);
+        const ww = hh * 0.42;
+        g.fillStyle = '#54727C';
+        g.beginPath();
+        g.moveTo(px, base - hh);
+        g.lineTo(px + ww, base - hh * 0.1); g.lineTo(px + ww * 0.56, base - hh * 0.1);
+        g.lineTo(px + ww * 1.02, base); g.lineTo(px - ww * 1.02, base);
+        g.lineTo(px - ww * 0.56, base - hh * 0.1);
+        g.lineTo(px - ww, base - hh * 0.1);
+        g.closePath(); g.fill();
+        g.fillStyle = 'rgba(232,244,250,.72)';
+        g.beginPath();
+        g.moveTo(px, base - hh);
+        g.lineTo(px + ww * 0.62, base - hh * 0.36);
+        g.lineTo(px - ww * 0.62, base - hh * 0.36);
+        g.closePath(); g.fill();
+      }
+
+      /* 远处那间木棚 + 一缕炊烟。**这一笔是"有人住"的信号**，
+         也是地表唯一和地下那堆暖木箱属于同一个世界的东西：
+         工坊的门开在雪原上，玩家从这间棚子的位置往下挖。
+         没有它，地表只是一片好看的雪景，跟关卡没有任何关系。 */
+      {
+        const hx = 246, hy = RIDGE_F[1](246) + 16;
+        g.fillStyle = '#8A6A4E';
+        g.fillRect(hx - 34, hy - 40, 68, 42);
+        g.fillStyle = '#6E5240';
+        g.beginPath();                       // 屋顶：两条斜边 + 一层积雪
+        g.moveTo(hx - 44, hy - 38); g.lineTo(hx, hy - 66); g.lineTo(hx + 44, hy - 38);
+        g.closePath(); g.fill();
+        g.fillStyle = '#EAF4FB';
+        g.beginPath();
+        g.moveTo(hx - 44, hy - 38); g.lineTo(hx, hy - 66); g.lineTo(hx + 44, hy - 38);
+        g.lineTo(hx + 34, hy - 38); g.lineTo(hx, hy - 58); g.lineTo(hx - 34, hy - 38);
+        g.closePath(); g.fill();
+        g.fillStyle = '#FFD98A';             // 窗：唯一一点暖光，呼应地下吊灯
+        g.fillRect(hx - 20, hy - 30, 15, 13);
+        g.fillRect(hx + 6, hy - 30, 15, 13);
+        g.fillStyle = '#5E5248';
+        g.fillRect(hx + 26, hy - 60, 9, 22);  // 烟囱
+        for (let i = 0; i < 4; i++) {         // 炊烟：越往上越大越淡
+          const sy = hy - 66 - i * 13;
+          const sr = 5 + i * 2.6;
+          g.fillStyle = 'rgba(252,254,255,' + (0.5 - i * 0.1).toFixed(2) + ')';
+          g.beginPath();
+          g.ellipse(hx + 30 + Math.sin(S.t * 0.5 + i) * 3 + i * 2, sy, sr, sr * 0.86, 0, 0, Math.PI * 2);
+          g.fill();
+        }
+      }
+    },
+    /* **边角两棵大树** 单独拆出来 —— 四套场景共用"框景"这条构图规矩，
+       但每套用自己的植物。所以这块放在场景里，不放在公共的 drawSky。 */
+    frame(g) {
+      for (const tx of [34, 96, 918, 858]) {
+        const base = RIDGE_F[2](tx) + 10;
+        const hh = 74 + ((tx * 7) % 22);
+        const ww = hh * 0.40;
+        g.fillStyle = '#54727C';
+        g.fillRect(tx - 4, base - hh * 0.9, 8, hh * 0.9);
+        for (let t = 0; t < 3; t++) {
+          const ty = base - hh + t * hh * 0.26;
+          const tw = ww * (0.66 + t * 0.24);
+          g.beginPath();
+          g.moveTo(tx, ty); g.lineTo(tx + tw, ty + hh * 0.42);
+          g.lineTo(tx - tw, ty + hh * 0.42);
+          g.closePath(); g.fill();
+          g.fillStyle = 'rgba(232,244,250,.66)';
+          g.beginPath();
+          g.moveTo(tx, ty); g.lineTo(tx + tw * 0.5, ty + hh * 0.2);
+          g.lineTo(tx - tw * 0.5, ty + hh * 0.2);
+          g.closePath(); g.fill();
+          g.fillStyle = '#54727C';
+        }
+      }
+    },
+    words: {
+      /* `shard` 是 HUD 上那两格宽的名字，**必须 2 字** —— 4 字会压到
+         右边 638 的数字（上一版"宝物 0/3"撞车就是宽度算错）。 */
+      ammo: '雪弹', shard: '雪片',
+      noammo: '没雪了 · 去砸箱子',
+      weak: '残球（雪不够了）',
+      wrapped: '裹成球了',
+    },
+    medium: { speedK: 1, needK: 1, cn: '雪', mote: '#EAF6FF' },
+  },
+
+  /* ---------------------------------------------------------------- 熔炉 */
+  {
+    id: 'ember', cn: '熔炉', to: 24,
+    /* **外面不再冷。** 霜原整套色守的是"外面冷、里面暖"，熔炉反过来：
+       天是烧红的，地是冷掉的渣。同一对关系，方向翻转 —— 玩家一睁眼
+       就知道换地方了，但读色规则没变，不用重学。 */
+    sky: ['#3A2530', '#6E3442', '#B8543C', '#F0A05C'],
+    far: '#7A3E42', mid: '#9C4E3E', near: '#4A2E32', pine: '#33202A',
+    rim: ['rgba(255,170,110,.42)', 'rgba(255,190,120,.62)', '#FFC97A'],
+    cap: ['#E8A484', '#B0604A', '#7A3E36', '#4E262A'],   // 冷掉的渣，底下还透红
+    shade: 'rgba(40,18,20,.34)',
+    haze: 'rgba(240,150,90,.34)',
+    cloud: { lit: '#6B4148', shade: 'rgba(48,30,38,.62)', n: 4 },
+    /* 火星**往上飘**。方向反过来这件事很便宜，但比换颜色有用得多：
+       玩家余光里看到东西在往上升，会立刻觉得"这儿不对劲"。 */
+    mote(g) {
+      for (let i = 0; i < 44; i++) {
+        const bx = -20 + ((i * 163) % 1000);
+        const spd = 20 + (i % 6) * 12;
+        const by = 400 - ((i * 71 + S.t * spd) % 430);
+        const r = 0.9 + (i % 4) * 0.7;
+        g.globalAlpha = 0.26 + 0.5 * Math.abs(Math.sin(S.t * 2.1 + i * 1.4));
+        g.fillStyle = i % 3 ? '#FFB24A' : '#FF6A3A';
+        g.beginPath();
+        g.arc(bx + Math.sin(S.t * 1.1 + i * 2.1) * 12, by, r, 0, Math.PI * 2);
+        g.fill();
+      }
+      g.globalAlpha = 1;
+    },
+    deco(g) {
+      /* 两座烟囱 + 黑烟。和霜原那间木棚是同一个角色（"有人在这儿干活"），
+         但一家是棚子，一家是厂 —— 换的是这地方在干什么，不是一个贴图。 */
+      for (const [cx, hh] of [[214, 78], [308, 54]]) {
+        const by = RIDGE_F[0](cx) + 12;
+        g.fillStyle = '#4E2A32';
+        g.fillRect(cx - 13, by - hh, 26, hh + 14);
+        g.fillStyle = '#6E3A3C';
+        g.fillRect(cx - 13, by - hh, 9, hh + 14);
+        g.fillStyle = '#2E1A22';
+        g.fillRect(cx - 17, by - hh - 7, 34, 8);
+        for (let i = 0; i < 4; i++) {
+          const sy = by - hh - 13 - i * 15;
+          const sr = 6 + i * 3.2;
+          g.fillStyle = 'rgba(40,24,30,' + (0.44 - i * 0.095).toFixed(2) + ')';
+          g.beginPath();
+          g.ellipse(cx + Math.sin(S.t * 0.4 + i * 1.3) * 5 + i * 3, sy, sr, sr * 0.8, 0, 0, Math.PI * 2);
+          g.fill();
+        }
+      }
+      /* 中景熔岩尖峰：**锯齿轮廓**。雪脊是圆滑的，尖峰是扎人的 ——
+         轮廓本身就是"这是另一个地方"最省的一笔，不用加任何细节。 */
+      for (let i = 0; i < 9; i++) {
+        const px = -30 + i * 112 + ((i * 61) % 40);
+        const base = RIDGE_F[1](px) + 18;
+        const hh = 32 + ((i * 37) % 30);
+        g.fillStyle = '#3E2429';
+        g.beginPath();
+        g.moveTo(px - hh * 0.44, base); g.lineTo(px, base - hh); g.lineTo(px + hh * 0.48, base);
+        g.closePath(); g.fill();
+        /* 迎光面一条暗红 —— 尖峰没有这条就是三块黑三角，读不出体积 */
+        g.fillStyle = '#7A3A2E';
+        g.beginPath();
+        g.moveTo(px, base - hh); g.lineTo(px + hh * 0.18, base - hh * 0.52);
+        g.lineTo(px - hh * 0.06, base - hh * 0.48);
+        g.closePath(); g.fill();
+      }
+    },
+    frame(g) {
+      /* 边角是**熔岩柱**：直上直下的暗红方柱，顶上一点亮。
+         还在干"把画面两边锁住"的活，只是换了材质。 */
+      for (const tx of [30, 92, 922, 862]) {
+        const base = RIDGE_F[2](tx) + 12;
+        const hh = 66 + ((tx * 7) % 26);
+        const ww = 15 + (tx % 7);
+        g.fillStyle = '#3A2228';
+        g.fillRect(tx - ww, base - hh, ww * 2, hh + 12);
+        g.fillStyle = '#5E2E30';
+        g.fillRect(tx - ww, base - hh, ww * 0.7, hh + 12);
+        g.fillStyle = '#FF9A4A';
+        g.fillRect(tx - ww * 0.5, base - hh - 4, ww, 6);
+      }
+    },
+    words: {
+      ammo: '火种', shard: '火核',
+      noammo: '火种熄了 · 去砸箱子',
+      weak: '残球（火不够了）',
+      wrapped: '烧成球了',
+    },
+    /* 烫：4 发就裹住（needK .8 → 5/3/8），飞得也快。**代价必须在别的
+       地方付** —— 熔炉怪更密（见 `themeOf` 的密度补偿），否则这一段
+       会明显比前后容易。 */
+    medium: { speedK: 1.18, needK: 0.8, cn: '火', mote: '#FFC46A' },
+  },
+
+  /* ---------------------------------------------------------------- 菌窟 */
+  {
+    id: 'spore', cn: '菌窟', to: 36,
+    /* **这里没有天空。** 顶是石头，光是漏下来的。所以 sky 直接是岩壁色，
+       最深那一档反而最暗 —— 和霜原"越靠地越亮"正好相反。 */
+    sky: ['#1E2A33', '#27373F', '#33494C', '#4C6660'],
+    far: '#3A5460', mid: '#456A62', near: '#5E8270', pine: '#33484A',
+    rim: ['rgba(150,230,200,.34)', 'rgba(170,240,200,.5)', '#BFF0D0'],
+    cap: ['#CBEFD8', '#93C6A4', '#5E8E76', '#3A6350'],   // 苔：湿、暗、有生命
+    shade: 'rgba(20,44,36,.32)',
+    haze: 'rgba(120,190,170,.26)',
+    cloud: { lit: '#4E6A66', shade: 'rgba(24,36,40,.55)', n: 0 },
+    /* 孢子：**慢、亮、左右晃**。落雪是往下砸的，孢子是悬着的 ——
+       这一条把"地下的空气"和"外面的天气"分开了。 */
+    mote(g) {
+      for (let i = 0; i < 46; i++) {
+        const bx = -20 + ((i * 137) % 1000);
+        const spd = 6 + (i % 5) * 5;
+        const by = 400 - ((i * 83 + S.t * spd) % 430);
+        const r = 1.0 + (i % 4) * 0.8;
+        g.globalAlpha = 0.22 + 0.4 * Math.abs(Math.sin(S.t * 0.9 + i * 2.3));
+        g.fillStyle = i % 3 ? '#9FE0B4' : '#9C8AD8';
+        g.beginPath();
+        g.arc(bx + Math.sin(S.t * 0.55 + i * 1.9) * 20, by, r, 0, Math.PI * 2);
+        g.fill();
+      }
+      g.globalAlpha = 1;
+    },
+    deco(g) {
+      /* **钟乳石从画面顶上垂下来。** 洞窟和露天最省事的区分就是"有没有顶"，
+         垂一排石笋比把天空调暗有效得多 —— 调暗只是晚了几个小时。 */
+      for (let i = 0; i < 14; i++) {
+        const px = -20 + i * 74 + ((i * 41) % 30);
+        const hh = 20 + ((i * 53) % 48);
+        const ww = 8 + ((i * 17) % 8);
+        g.fillStyle = '#22333A';
+        g.beginPath();
+        g.moveTo(px - ww, -44); g.lineTo(px + ww, -44); g.lineTo(px + 2, hh);
+        g.closePath(); g.fill();
+        g.fillStyle = '#37555C';
+        g.beginPath();
+        g.moveTo(px - ww * 0.62, -44); g.lineTo(px - ww * 0.1, -44); g.lineTo(px + 1, hh * 0.84);
+        g.closePath(); g.fill();
+      }
+      /* 大蘑菇丛。伞盖一半紫一半青，**柄必须是浅色** —— 深柄会糊进中景脊，
+         整丛就只剩两顶浮在半空的伞。 */
+      for (let i = 0; i < 7; i++) {
+        const px = 34 + i * 136 + ((i * 57) % 34);
+        const base = RIDGE_F[1](px) + 18;
+        const hh = 28 + ((i * 43) % 26);
+        const ww = hh * 0.66;
+        g.fillStyle = '#C8DCCB';
+        g.fillRect(px - ww * 0.15, base - hh, ww * 0.3, hh);
+        g.fillStyle = i % 2 ? '#6C5E9E' : '#3E8A78';
+        g.beginPath();
+        g.ellipse(px, base - hh, ww, ww * 0.64, 0, Math.PI, 0);
+        g.fill();
+        g.fillStyle = i % 2 ? '#A890D0' : '#7FCFB4';
+        g.beginPath();
+        g.ellipse(px - ww * 0.22, base - hh + 1, ww * 0.3, ww * 0.2, 0, Math.PI, 0);
+        g.fill();
+        /* 伞下的光点：菌窟唯一的自发光，也是"这里不是雪地"的信号 */
+        g.fillStyle = 'rgba(200,255,222,.55)';
+        g.beginPath(); g.arc(px + ww * 0.42, base - hh + 8, 2.2, 0, Math.PI * 2); g.fill();
+        g.beginPath(); g.arc(px - ww * 0.46, base - hh + 11, 1.7, 0, Math.PI * 2); g.fill();
+      }
+    },
+    frame(g) {
+      /* 边角换成**巨型蘑菇**：一根粗柄顶一顶大伞。同样在锁画面，
+         但轮廓是圆的、不对称的 —— 和霜原那四棵三角树一眼能分开。 */
+      for (const tx of [40, 100, 912, 854]) {
+        const base = RIDGE_F[2](tx) + 12;
+        const hh = 58 + ((tx * 7) % 26);
+        const ww = hh * 0.52;
+        g.fillStyle = '#AFC8B6';
+        g.fillRect(tx - ww * 0.22, base - hh, ww * 0.44, hh + 12);
+        g.fillStyle = '#33544E';
+        g.beginPath();
+        g.ellipse(tx, base - hh, ww, ww * 0.7, 0, Math.PI, 0);
+        g.fill();
+        g.fillStyle = '#5E8E7C';
+        g.beginPath();
+        g.ellipse(tx - ww * 0.24, base - hh + 1, ww * 0.34, ww * 0.26, 0, Math.PI, 0);
+        g.fill();
+      }
+    },
+    words: {
+      ammo: '孢子弹', shard: '胞衣',
+      noammo: '孢子空了 · 去砸箱子',
+      weak: '残球（孢子不够）',
+      wrapped: '裹成茧了',
+    },
+    /* 黏：要 8 发才裹住（needK 1.3 → 8/5/13），弹速也慢 —— 但**慢不是弱**，
+       它换来的是弹道更平（`vy0` 乘子），能打到火种打不到的高台。 */
+    medium: { speedK: 0.86, needK: 1.3, cn: '孢子', mote: '#B8F0D0' },
+  },
+
+  /* ---------------------------------------------------------------- 沙塚 */
+  {
+    id: 'dune', cn: '沙塚', to: 48,
+    /* 沙塚是四个里唯一**亮到发白**的。放在最后，是因为它要顶着"打完了"
+       这一口气 —— 通关那一下，画面该是暖的、亮的，不是阴森的。 */
+    sky: ['#C08048', '#DFAE6E', '#F2D8A2', '#FAEBC8'],
+    far: '#CFA86E', mid: '#C0965A', near: '#E4C084', pine: '#8A6A42',
+    rim: ['rgba(255,246,214,.5)', 'rgba(255,242,200,.66)', '#FFF3D2'],
+    cap: ['#FFF8E2', '#F2DAAE', '#D2AE78', '#AC8A58'],   // 沙：比雪暖、比雪脏
+    shade: 'rgba(120,88,44,.24)',
+    haze: 'rgba(250,232,190,.5)',
+    cloud: { lit: '#FDF2D8', shade: 'rgba(190,150,100,.5)', n: 3 },
+    /* 沙粒**横着走**：不是落，是被风吹。三套落物三种方向（下 / 上 / 横），
+       换场景最便宜的一笔就是它。 */
+    mote(g) {
+      for (let i = 0; i < 58; i++) {
+        const spd = 40 + (i % 7) * 26;
+        const bx = 1000 - ((i * 173 + S.t * spd) % 1040);
+        const by = 40 + ((i * 89) % 300) + Math.sin(S.t * 0.7 + i) * 6;
+        const r = 0.8 + (i % 3) * 0.55;
+        g.globalAlpha = 0.18 + (i % 4) * 0.09;
+        g.fillStyle = '#FFF0CC';
+        g.beginPath();
+        g.ellipse(bx, by, r * 2.2, r * 0.8, 0.2, 0, Math.PI * 2);
+        g.fill();
+      }
+      g.globalAlpha = 1;
+    },
+    deco(g) {
+      /* 方尖碑群。**碑顶必须是斜的** —— 平顶读成"电线杆"，
+         斜顶才有"这东西立了几千年"的味道。 */
+      for (const [px, hh, ww] of [[152, 92, 21], [272, 64, 16], [356, 76, 18]]) {
+        const base = RIDGE_F[1](px) + 20;
+        g.fillStyle = '#A8825A';
+        g.beginPath();
+        g.moveTo(px - ww, base); g.lineTo(px - ww * 0.8, base - hh);
+        g.lineTo(px + ww * 0.62, base - hh - ww * 0.5); g.lineTo(px + ww, base);
+        g.closePath(); g.fill();
+        g.fillStyle = '#D0AC76';
+        g.beginPath();
+        g.moveTo(px - ww, base); g.lineTo(px - ww * 0.8, base - hh);
+        g.lineTo(px - ww * 0.18, base - hh - ww * 0.14); g.lineTo(px - ww * 0.34, base);
+        g.closePath(); g.fill();
+      }
+      /* 半埋的断墙：**只露出墙头**，底下全在沙里。这一笔说的是
+         "这里以前有座城"，比画一座完整的城省一百倍，也更像被埋了。 */
+      for (const [px, ww, hh] of [[60, 46, 22], [430, 38, 16]]) {
+        const base = RIDGE_F[1](px) + 26;
+        g.fillStyle = '#B89468';
+        g.fillRect(px - ww / 2, base - hh, ww, hh + 10);
+        g.fillStyle = '#DCC08E';
+        g.fillRect(px - ww / 2, base - hh, ww, 4);
+      }
+    },
+    frame(g) {
+      /* 边角是**枯树**：一根主干 + 三根歪叉，没有一片叶子。
+         和霜原的三角树共用"直立的框景物"，但它是弯的 —— 弯的这一下
+         就是"死了很久"。 */
+      for (const tx of [36, 98, 916, 856]) {
+        const base = RIDGE_F[2](tx) + 10;
+        const hh = 70 + ((tx * 7) % 24);
+        g.strokeStyle = '#8A6A42';
+        g.lineWidth = 9;
+        g.lineCap = 'round';
+        g.beginPath();
+        g.moveTo(tx, base);
+        g.quadraticCurveTo(tx + 6, base - hh * 0.55, tx - 4, base - hh);
+        g.stroke();
+        for (let t = 0; t < 3; t++) {
+          g.beginPath();
+          g.moveTo(tx + (t - 1) * 2, base - hh * (0.55 + t * 0.12));
+          g.lineTo(tx + (t % 2 ? -1 : 1) * (20 + t * 6), base - hh * (0.78 + t * 0.1));
+          g.stroke();
+        }
+      }
+      g.lineWidth = 1;
+    },
+    words: {
+      ammo: '沙梭', shard: '金砂',
+      noammo: '沙子空了 · 去砸箱子',
+      weak: '残球（沙不够了）',
+      wrapped: '裹成沙球',
+    },
+    /* 沙梭略快、略费（needK 1.1 → 7/4/11）：沙塚是最后一程，
+       **每样都比开头贵一点**，但贵在数量不在规则 —— 玩家不用重学。 */
+    medium: { speedK: 1.05, needK: 1.1, cn: '沙', mote: '#FFF0CC' },
+  },
+];
+
+/* 关号 → 场景。**深潜按深度轮换，主线按 12 关一段。**
+   深潜轮换用的是"每 6 层换一次"而不是按 stage，因为深潜的 stage 是负数、
+   一直往下减 —— 它本来就没有"第几关"这个概念，只有"多深"。 */
+function themeOf(stage) {
+  if (stage != null && stage < 0) {
+    const d = Math.floor(Math.abs(stage) / 6);
+    return THEMES[d % THEMES.length];
+  }
+  const n = (stage == null) ? 1 : Math.max(1, stage | 0);
+  for (const t of THEMES) if (n <= t.to) return t;
+  return THEMES[THEMES.length - 1];
+}
+/* 当前场景。**用单个可变引用而不是到处查表**：绘制函数一帧调用几百次，
+   每个都走一遍 themeOf 是白花钱；而且"这一关是什么场景"本来就只有一个答案，
+   存在这里能让断言直接读 `THEME.id` 核对。 */
+let THEME = THEMES[0];
+function applyTheme(t) { THEME = t || THEMES[0]; return THEME; }
+
 /* ---------------------------------------------------------------- 角色尺度
    **这一组数字决定"画面里的东西有多大"，是 2026-10-28 那一轮的落点。**
 
@@ -5940,11 +6423,21 @@ function drawRoomWall(g, k, cY, fY) {
 /* ---- 背景立绘 ----
    地表天空现在是一张 960×340 的厚涂条，base64 内嵌在 `#art-bg` 里。
    **必须有程序化回退**：断言和出图工具跑在 jsdom 里，没有 <img> 解码，
-   `BG_IMG` 永远是 null —— 少了回退，那些工具会画出一片空白天空，
+   背景图永远是 null —— 少了回退，那些工具会画出一片空白天空，
    然后把"工具环境不支持"误判成"背景坏了"。
    为什么内嵌不外链：preview 的静态服务只给这一个文件，兄弟图片 404
-   之后静默回退，看起来像"改了没生效"，这类静默失败最难查。 */
-let BG_IMG = null;
+   之后静默回退，看起来像"改了没生效"，这类静默失败最难查。
+
+   **2026-10-30 起背景图按场景存，不再是一张全局图。**
+   用户：「用雪原推球把场景定义死了，应该可以很多场景都可以」。
+   一张全局 `BG_IMG` 是最硬的死结 —— 它一旦设上，`drawSky` 整段 return，
+   四个场景全被同一张图盖住，`THEME` 等于白写。所以改成按 `theme.id` 存：
+   **给哪个场景画了图，哪个场景就用图；没画图的走程序化**，不是"没图就空白"。
+   这也让"加一个场景"变成"往 `BG_IMGS` 里多塞一张"，不用碰任何绘制代码。 */
+const BG_IMGS = { snow: null };
+/** 当前场景有没有立绘。**别把 `BG_IMG` 直接当"有没有图"用** ——
+    有图的是 snow，而玩家打到第 13 关时看的是 ember。 */
+function bgOf(t) { return (t && BG_IMGS[t.id]) || null; }
 (function initBackdrop() {
   if (typeof document === "undefined" || typeof Image === "undefined") return;
   const el = document.getElementById("art-bg");
@@ -5952,8 +6445,8 @@ let BG_IMG = null;
   const src = (el.textContent || "").trim();
   if (!src) return;
   const im = new Image();
-  im.onload = () => { BG_IMG = im; };
-  im.onerror = () => { BG_IMG = null; };
+  im.onload = () => { BG_IMGS.snow = im; };
+  im.onerror = () => { BG_IMGS.snow = null; };
   im.src = src;
 })();
 
@@ -5995,34 +6488,45 @@ const ART_KEYS = ['pet-cat', 'foe-moss', 'foe-fang', 'foe-grub'];
   }
 })();
 
-/* ================= 地表：寒地雪原 =================
-   这一层负责回答"这是哪儿"。规矩就一条 —— **外面冷、里面暖**：
-   天空和雪原全是青蓝，木箱和墙全是暖黄。有了这条关系，
-   "往地下走越来越暖"才成立，而不是四套颜色随便挑的。
-   底边必须卡在 380（地表板底）：多画一像素，浅井里就会露出天空。 */
+/* ================= 地表：远景层 =================
+   这一层负责回答"这是哪儿"，**答案来自 `THEME`，不写在这里**。
+
+   留在本函数里的只有"四套场景都必须遵守的构图规矩"：
+     ① 底边卡在 380（地表板底）：多画一像素，浅井里就会露出天空；
+     ② 由远到近三道脊，颜色逐层变亮 —— 远脊不亮就退不进去；
+     ③ **雪的白靠脊上那条亮边读出来**，不靠填色。只填浅色的话，
+        三道脊在缩略图里会糊成一片。这条对四套场景都成立，所以它在这儿，
+        不在场景里；
+     ④ 中景道具（`deco`）画在近脊**之前**、边角框景物（`frame`）画在之后 ——
+        顺序反了，道具会被近脊压住，或者框景物挡在路中间。
+   什么植物、什么粒子、什么颜色，全在 `THEME.deco / .frame / .mote` 里。 */
 function drawSky(g) {
   /* 有立绘就整段交给立绘 —— 程序化那套是"没有美术资源时也不至于难看"的
-     兜底，不是备用方案。两张一起画只会互相打架（雪粒盖在画好的雪上）。 */
-  if (BG_IMG) { g.drawImage(BG_IMG, 0, 0, W, 340); return; }
+     兜底，不是备用方案。两张一起画只会互相打架（雪粒盖在画好的雪上）。
+     **按场景查，不是按"有没有图"查**：雪原有图、熔炉没图，这两件事互不影响。 */
+  const bg = bgOf(THEME);
+  if (bg) { g.drawImage(bg, 0, 0, W, 340); return; }
 
   const sky = g.createLinearGradient(0, -80, 0, 380);
-  sky.addColorStop(0, COL.sky[0]);
-  sky.addColorStop(0.42, COL.sky[1]);
-  sky.addColorStop(0.8, COL.sky[2]);
-  sky.addColorStop(1, COL.sky[3]);
+  sky.addColorStop(0, THEME.sky[0]);
+  sky.addColorStop(0.42, THEME.sky[1]);
+  sky.addColorStop(0.8, THEME.sky[2]);
+  sky.addColorStop(1, THEME.sky[3]);
   g.fillStyle = sky;
   g.fillRect(-40, -80, W + 80, 460);
 
   /* 云：**扁云**。底边压平、顶上两三个扁圆、底沿一条冷灰蓝。
-     纯白圆叠出来读作"棉花糖"；加了底沿的冷色，云才有厚度和光向。 */
-  for (let i = 0; i < 5; i++) {
+     纯白圆叠出来读作"棉花糖"；加了底沿的冷色，云才有厚度和光向。
+     **云色也归场景**：熔炉的云是烟（暗红），霜原的云是雪（白）。
+     `n === 0` 表示这个场景没有天空（菌窟），云整段跳过。 */
+  for (let i = 0; i < (THEME.cloud.n || 0); i++) {
     const cx = ((i * 247 + 60) % 1080) - 60;
     const cy = 40 + ((i * 73) % 96);
     const r = 16 + ((i * 13) % 9);
     const puffs = [[-r * 1.0, r * 0.2, r * 0.95], [r * 0.95, r * 0.24, r * 1.0],
                    [0, -r * 0.3, r * 1.25], [r * 0.3, r * 0.3, r * 1.1]];
     for (const pass of [0, 1]) {
-      g.fillStyle = pass ? '#FCFEFF' : 'rgba(116,148,174,.55)';
+      g.fillStyle = pass ? THEME.cloud.lit : THEME.cloud.shade;
       const dy = pass ? 0 : 6;
       g.beginPath();
       for (const pf of puffs) {
@@ -6033,23 +6537,22 @@ function drawSky(g) {
     }
   }
 
-  /* 地平线薄雾：**把远山和天空"接"起来**。没有这层，山是一块贴在
-     天空上的剪影；有了它，远处才有空气，画面才不是"两层平面"。 */
   /* 地平线薄雾：**把最远那道脊"化"进天空里**。没有这层，远山是一块
      贴在天空上的剪影；有了它，远处才有空气。注意它只压在远脊之上、
-     中脊之下 —— 压全部就变成一层灰罩子，画面立刻脏。 */
+     中脊之下 —— 压全部就变成一层灰罩子，画面立刻脏。
+     雾色跟天空最后一档同源（`THEME.haze`），换场景时不用另调。 */
   const haze = g.createLinearGradient(0, 238, 0, 330);
-  haze.addColorStop(0, 'rgba(236,247,253,.50)');
-  haze.addColorStop(1, 'rgba(236,247,253,0)');
+  haze.addColorStop(0, THEME.haze);
+  haze.addColorStop(1, 'rgba(0,0,0,0)');
   g.fillStyle = haze;
   g.fillRect(-40, 238, W + 80, 94);
 
-  /* 三道雪脊，由远到近、由冷到亮。**雪的白靠脊上那条亮边读出来**，
-     不靠填色 —— 只填浅蓝的话，三道脊会在缩略图里糊成一片。 */
+  /* 三道脊，由远到近、由冷到亮。**轮廓取自 `RIDGE_F`（四套共用），
+     只有颜色和亮边属于场景** —— 每套新轮廓会让地形读作另一个游戏。 */
   const RIDGE = [
-    { c: COL.snowFar,  f: x => 246 - Math.sin(x / 236) * 30 - Math.sin(x / 84) * 12 - Math.sin(x / 37) * 6 - Math.sin(x / 17) * 2.2, rim: 'rgba(255,255,255,.46)', lw: 3 },
-    { c: COL.snowMid,  f: x => 300 - Math.sin(x / 153) * 26 - Math.sin(x / 61) * 9 - Math.sin(x / 29) * 3.4, rim: 'rgba(255,255,255,.74)', lw: 3 },
-    { c: COL.snowNear, f: x => 338 - Math.sin(x / 99) * 16 - Math.sin(x / 44) * 5,   rim: '#FFFFFF', lw: 4 },
+    { c: THEME.far,  f: RIDGE_F[0], rim: THEME.rim[0], lw: 3 },
+    { c: THEME.mid,  f: RIDGE_F[1], rim: THEME.rim[1], lw: 3 },
+    { c: THEME.near, f: RIDGE_F[2], rim: THEME.rim[2], lw: 4 },
   ];
   const ridgePath = (R, dy) => {
     g.beginPath();
@@ -6067,108 +6570,22 @@ function drawSky(g) {
   paintRidge(RIDGE[0]);
   paintRidge(RIDGE[1]);
 
-  /* 松林：**成排**的三角松，压在中景雪脊上。
-     必须画在近景雪坡**之前** —— 后画就会被雪坡压住，先画才有
-     "一片林子站在雪丘后面"的纵深。三条硬规矩：
-     ① 树尖高低必须抖开（等高 = 一排栅栏）；
-     ② 每棵只把**上半截**刷白，整棵全白就成了三角旗；
-     ③ 树要够大（46~80）。之前 32~64 太小，雪坡一挡只剩几个尖，
-        看起来像插了一排三角尺，不像林子。 */
-  for (let i = 0; i < 11; i++) {
-    const px = -20 + i * 92 + ((i * 47) % 34);
-    const base = RIDGE[1].f(px) + 14;
-    const hh = 46 + ((i * 53) % 34);
-    const ww = hh * 0.42;
-    g.fillStyle = COL.pine;
-    g.beginPath();
-    g.moveTo(px, base - hh);
-    g.lineTo(px + ww, base - hh * 0.1); g.lineTo(px + ww * 0.56, base - hh * 0.1);
-    g.lineTo(px + ww * 1.02, base); g.lineTo(px - ww * 1.02, base);
-    g.lineTo(px - ww * 0.56, base - hh * 0.1);
-    g.lineTo(px - ww, base - hh * 0.1);
-    g.closePath(); g.fill();
-    g.fillStyle = 'rgba(232,244,250,.72)';
-    g.beginPath();
-    g.moveTo(px, base - hh);
-    g.lineTo(px + ww * 0.62, base - hh * 0.36);
-    g.lineTo(px - ww * 0.62, base - hh * 0.36);
-    g.closePath(); g.fill();
-  }
-
-  /* 远处那间木棚 + 一缕炊烟。**这一笔是"有人住"的信号**，
-     也是地表唯一和地下那堆暖木箱属于同一个世界的东西：
-     工坊的门开在雪原上，玩家从这间棚子的位置往下挖。
-     没有它，地表只是一片好看的雪景，跟关卡没有任何关系。 */
-  {
-    const hx = 246, hy = RIDGE[1].f(246) + 16;
-    g.fillStyle = '#8A6A4E';
-    g.fillRect(hx - 34, hy - 40, 68, 42);
-    g.fillStyle = '#6E5240';
-    g.beginPath();                       // 屋顶：两条斜边 + 一层积雪
-    g.moveTo(hx - 44, hy - 38); g.lineTo(hx, hy - 66); g.lineTo(hx + 44, hy - 38);
-    g.closePath(); g.fill();
-    g.fillStyle = '#EAF4FB';
-    g.beginPath();
-    g.moveTo(hx - 44, hy - 38); g.lineTo(hx, hy - 66); g.lineTo(hx + 44, hy - 38);
-    g.lineTo(hx + 34, hy - 38); g.lineTo(hx, hy - 58); g.lineTo(hx - 34, hy - 38);
-    g.closePath(); g.fill();
-    g.fillStyle = '#FFD98A';             // 窗：唯一一点暖光，呼应地下吊灯
-    g.fillRect(hx - 20, hy - 30, 15, 13);
-    g.fillRect(hx + 6, hy - 30, 15, 13);
-    g.fillStyle = '#5E5248';
-    g.fillRect(hx + 26, hy - 60, 9, 22);  // 烟囱
-    for (let i = 0; i < 4; i++) {         // 炊烟：越往上越大越淡
-      const sy = hy - 66 - i * 13;
-      const sr = 5 + i * 2.6;
-      g.fillStyle = 'rgba(252,254,255,' + (0.5 - i * 0.1).toFixed(2) + ')';
-      g.beginPath();
-      g.ellipse(hx + 30 + Math.sin(S.t * 0.5 + i) * 3 + i * 2, sy, sr, sr * 0.86, 0, 0, Math.PI * 2);
-      g.fill();
-    }
-  }
+  /* 中景道具（松林 / 烟囱 / 蘑菇 / 方尖碑）。**必须在近脊之前画** ——
+     后画就被近脊压住，"站在丘后面"的纵深就没了。 */
+  THEME.deco(g);
 
   paintRidge(RIDGE[2]);
 
-  /* **边角两棵大树。** 树站在近脊上、画在近脊之后，才完整；
-     但站在近脊上的树会挡住玩家跳跃的那 100px，所以只准放在
-     左右两侧 —— 那里是边界箱墙，玩家到不了。
-     这两棵树干的是"框景"：把画面两边锁住，视线自然收进中间。 */
-  for (const tx of [34, 96, 918, 858]) {
-    const base = RIDGE[2].f(tx) + 10;
-    const hh = 74 + ((tx * 7) % 22);
-    const ww = hh * 0.40;
-    g.fillStyle = COL.pine;
-    g.fillRect(tx - 4, base - hh * 0.9, 8, hh * 0.9);
-    for (let t = 0; t < 3; t++) {
-      const ty = base - hh + t * hh * 0.26;
-      const tw = ww * (0.66 + t * 0.24);
-      g.beginPath();
-      g.moveTo(tx, ty); g.lineTo(tx + tw, ty + hh * 0.42);
-      g.lineTo(tx - tw, ty + hh * 0.42);
-      g.closePath(); g.fill();
-      g.fillStyle = 'rgba(232,244,250,.66)';
-      g.beginPath();
-      g.moveTo(tx, ty); g.lineTo(tx + tw * 0.5, ty + hh * 0.2);
-      g.lineTo(tx - tw * 0.5, ty + hh * 0.2);
-      g.closePath(); g.fill();
-      g.fillStyle = COL.pine;
-    }
-  }
+  /* 边角框景物（树 / 熔岩柱 / 巨菇 / 枯树）。**在近脊之后画** ——
+     它们本来就站在最近的坡上，压住坡沿才对；而且只准放在左右两侧
+     （那里是边界箱墙，玩家到不了），否则会挡住跳跃的那 100px。
+     四套场景共用这条构图规矩，所以调用留在这儿，画什么由 `THEME.frame` 决定。 */
+  THEME.frame(g);
 
-  /* 落雪。**位置只由下标和 S.t 决定，不能每帧随机** ——
-     随机的话雪粒会原地闪，比不下雪更难看。 */
-  for (let i = 0; i < 52; i++) {
-    const bx = -20 + ((i * 149) % 1000);
-    const spd = 16 + (i % 7) * 7;
-    const by = -30 + ((i * 61 + S.t * spd) % 380);
-    const r = 1.1 + (i % 4) * 0.65;
-    g.globalAlpha = 0.32 + (i % 5) * 0.11;
-    g.fillStyle = '#FFFFFF';
-    g.beginPath();
-    g.arc(bx + Math.sin(S.t * 0.8 + i * 1.7) * 9, by, r, 0, Math.PI * 2);
-    g.fill();
-  }
-  g.globalAlpha = 1;
+  /* 天上飘的东西（落雪 / 上升火星 / 悬浮孢子 / 横扫沙粒）。
+     **位置只由下标和 S.t 决定，不能每帧随机** —— 随机的话粒子会原地闪，
+     比不飘更难看。四套场景都守这条。 */
+  THEME.mote(g);
 }
 
 /* ================= 静态层预渲染 =================
@@ -6700,9 +7117,12 @@ function snowCap(g, x, y, w, thick, seed, grass, stone, mat) {
      绿草配雪原是这一版最早也最明显的穿帮，一看就是两套素材拼的。 */
   const sg = g.createLinearGradient(0, y, 0, y + thick);
   if (grass) {
-    sg.addColorStop(0, '#F6FCFF');
-    sg.addColorStop(0.55, '#E2F2FB');
-    sg.addColorStop(1, '#C3DDEC');
+    /* **地表顶面也归场景。** 霜原是雪、熔炉是冷掉的渣、菌窟是苔、
+       沙塚是沙 —— 这一笔不改，熔炉关的地表会白得像刚下过雪，
+       整关的氛围就废了（而这只是三行渐变）。 */
+    sg.addColorStop(0, THEME.cap[1]);
+    sg.addColorStop(0.55, THEME.cap[2]);
+    sg.addColorStop(1, THEME.cap[3]);
   } else {
     /* 顶面 = 这一层的材质。悬空台子也跟着层走（它和地板是同一种石头），
        不再单独给一套"灰顶面" —— 同一间屋里地板是砖、台子是灰石，反而更乱。 */
@@ -6804,13 +7224,13 @@ function drawRamp(g, pl) {
        上一版是土体 + 一条 10px 的白边，在雪原上一眼就是"褐色三角 + 白边"，
        像贴上去的。整块换成雪之后，它才是"被风吹堆起来的一道雪梁"。 */
     const sg = g.createLinearGradient(0, Math.min(topL, topR), 0, base);
-    sg.addColorStop(0, '#FFFFFF');
-    sg.addColorStop(0.5, '#EDF7FE');
-    sg.addColorStop(1, '#C9DFEE');
+    sg.addColorStop(0, THEME.cap[0]);
+    sg.addColorStop(0.5, THEME.cap[1]);
+    sg.addColorStop(1, THEME.cap[2]);
     g.fillStyle = sg;
     g.fillRect(Math.min(x0, x1) - 2, Math.min(topL, topR) - 2, pl.w + 4, base - Math.min(topL, topR) + 6);
     /* 背光面：靠坡脚压一条冷影，雪堆才有厚度 */
-    g.fillStyle = 'rgba(150,188,214,.28)';
+    g.fillStyle = THEME.shade;
     g.beginPath();
     g.moveTo(x0, base + 3);
     for (let px = x0; px <= x1; px += 12) g.lineTo(px, edgeAt(px) + 16 + Math.sin(px * 0.05) * 5);
@@ -6966,7 +7386,7 @@ function drawRamp(g, pl) {
     const px = x0 + pl.w * t;
     const py = edgeAt(px);
     const r = 5.4 + ((s + i * 11) % 3) * 1.1;
-    g.fillStyle = snowy ? '#F4FBFF' : (i % 2 ? '#C6BCAA' : '#B0A492');
+    g.fillStyle = snowy ? THEME.cap[0] : (i % 2 ? '#C6BCAA' : '#B0A492');
     g.beginPath();
     g.moveTo(px - r * 1.5, py + r * 1.0);
     g.quadraticCurveTo(px - r * 1.45, py - r * 0.95, px - r * 0.2, py - r * 0.9);
@@ -6974,7 +7394,7 @@ function drawRamp(g, pl) {
     g.quadraticCurveTo(px + r * 0.7, py + r * 1.2, px - r * 1.5, py + r * 1.0);
     g.closePath(); g.fill();
     g.strokeStyle = COL.ink; g.lineWidth = 2.4; g.lineJoin = 'round'; g.stroke();
-    g.fillStyle = snowy ? 'rgba(160,198,222,.30)' : 'rgba(255,252,244,.34)';
+    g.fillStyle = snowy ? 'rgba(255,255,255,.42)' : 'rgba(255,252,244,.34)';
     g.beginPath(); g.ellipse(px - r * 0.3, py - r * 0.4, r * 0.6, r * 0.28, 0, 0, Math.PI * 2); g.fill();
   }
 
@@ -6987,7 +7407,7 @@ function drawRamp(g, pl) {
      摊出去那 26px 只有 5~7px 高，人从上面走过去不会有"浮空"的感觉。 */
   const lowX = pl.rise > 0 ? x0 : x1;
   const dir = pl.rise > 0 ? 1 : -1;
-  g.fillStyle = snowy ? '#E4F2FA' : '#B78F64';
+  g.fillStyle = snowy ? THEME.cap[1] : '#B78F64';
   for (let i = 0; i < 3; i++) {
     const rw = 26 - i * 7, rh = 7 - i * 1.6;
     g.beginPath(); g.ellipse(lowX + dir * (i * 9 - 3), base - 1, rw, rh, 0, Math.PI, 0); g.fill();
@@ -6997,7 +7417,7 @@ function drawRamp(g, pl) {
   for (let i = 0; i < 3; i++) {
     const px = lowX + dir * (10 + i * 14) + (i % 2 ? 3 : -2);
     const r = 3.6 + (i % 2) * 1.4;
-    g.fillStyle = snowy ? (i % 2 ? '#F2FAFF' : '#D8EAF6') : (i % 2 ? '#C6A585' : '#A8815C');
+    g.fillStyle = snowy ? (i % 2 ? THEME.cap[0] : THEME.cap[2]) : (i % 2 ? '#C6A585' : '#A8815C');
     g.beginPath(); g.arc(px, base - 2 - r * 0.4, r, 0, Math.PI * 2); g.fill();
     g.strokeStyle = 'rgba(74,58,44,.45)'; g.lineWidth = 1.5; g.stroke();
   }
@@ -7012,7 +7432,7 @@ function drawRamp(g, pl) {
       /* 地表的顶点扣一顶**雪帽**，不是压石头。
          雪原上出现一块石头本来就没道理；而人字顶点又太尖（像个三角屋顶）。
          雪帽是"风把雪堆到梁顶上"的样子，顶面正好压在顶点那条线上。 */
-      g.fillStyle = '#FFFFFF';
+      g.fillStyle = THEME.cap[0];
       g.beginPath();
       g.moveTo(cx - 30, cy + 15);
       g.quadraticCurveTo(cx - 28, cy + 4, cx - 12, cy + 1.2);
@@ -7289,11 +7709,11 @@ function drawPlat(g, pl) {
     for (let i = 0; i < 9; i++) {
       const sx = pl.x + 26 + ((i * 137 + seed * 7) % Math.max(40, pl.w - 52));
       const sr = 16 + ((i * 29) % 13);
-      g.fillStyle = '#F2FAFF';
+      g.fillStyle = THEME.cap[1];
       g.beginPath();
       g.ellipse(sx, pl.y + 6, sr, sr * 0.42, 0, Math.PI, 0);
       g.closePath(); g.fill();
-      g.fillStyle = 'rgba(255,255,255,.85)';
+      g.fillStyle = THEME.cap[0];
       g.beginPath();
       g.ellipse(sx - sr * 0.18, pl.y + 5, sr * 0.62, sr * 0.2, 0, Math.PI, 0);
       g.closePath(); g.fill();
@@ -8973,16 +9393,42 @@ function drawEBullet(g, b) {
 
 /* 四档球的配色。**档位必须一眼能读出来** ——
    冰墙只认特大球，玩家得能判断"我还差几只"，光靠半径差 1.5 倍不够。 */
-/* **雪球的描边必须够深。** 球体是"白 → 浅蓝"的径向渐变，而地表是
-   暖白/奶黄的浅色 —— 用小球的浅蓝 edge（#BFE0F0）时，最小那颗
-   在草地上等于隐身，四档对照图里只能看见三颗。要么球有深边，
-   要么玩家永远数不清自己攒了几档。 */
-const BALL_SKIN = [
-  { a: '#FFFFFF', b: '#E2F2FB', edge: '#7FB4CC' },   // 小
-  { a: '#FFFFFF', b: '#CBE8F8', edge: '#5FA0C4' },   // 中
-  { a: '#F7FDFF', b: '#AFDCF3', edge: '#4787B0' },   // 大
-  { a: '#EEFAFF', b: '#8FC8E8', edge: '#356F9C' },   // 特大
-];
+/* **球的描边必须够深。** 球体是"亮 → 中间色"的径向渐变，而地表是浅色的 ——
+   用浅 edge 时最小那颗在背景里等于隐身，四档对照图里只能看见三颗。
+   要么球有深边，要么玩家永远数不清自己攒了几档。
+
+   **每个场景一套，四档的明暗顺序必须完全一致**（越攒越大 = 越深）。
+   顺序一变，"看颜色数档位"这件事就只在某几个场景成立，玩家得重学。 */
+const BALL_SKIN_BY = {
+  snow: [
+    { a: '#FFFFFF', b: '#E2F2FB', edge: '#7FB4CC' },   // 小
+    { a: '#FFFFFF', b: '#CBE8F8', edge: '#5FA0C4' },   // 中
+    { a: '#F7FDFF', b: '#AFDCF3', edge: '#4787B0' },   // 大
+    { a: '#EEFAFF', b: '#8FC8E8', edge: '#356F9C' },   // 特大
+  ],
+  ember: [
+    { a: '#FFF0C8', b: '#F2A24E', edge: '#8A4620' },
+    { a: '#FFE8AE', b: '#E8803A', edge: '#7A3418' },
+    { a: '#FFD98C', b: '#D2602A', edge: '#6A2412' },
+    { a: '#FFC870', b: '#B84418', edge: '#521608' },
+  ],
+  spore: [
+    { a: '#F0FFF8', b: '#B8E8CE', edge: '#3E7A5E' },
+    { a: '#E2FBEE', b: '#94DCB4', edge: '#336A50' },
+    { a: '#D2F5E2', b: '#6EC698', edge: '#2A5A44' },
+    { a: '#BCEEDA', b: '#4CA87E', edge: '#204836' },
+  ],
+  dune: [
+    { a: '#FFF9E6', b: '#EDD49A', edge: '#9A7434' },
+    { a: '#FFF2CE', b: '#E0BC7C', edge: '#8A6428' },
+    { a: '#FCE9B8', b: '#CE9E5A', edge: '#78541E' },
+    { a: '#F5DC9E', b: '#B8863C', edge: '#664418' },
+  ],
+};
+function ballSkin(i) {
+  const list = BALL_SKIN_BY[THEME.id] || BALL_SKIN_BY.snow;
+  return list[clamp(i, 0, list.length - 1)];
+}
 
 /* ============================================================================
    我方投掷物：六只六种样子
@@ -9101,7 +9547,7 @@ function drawShot(g, s) {
 
 function drawBall(g, b) {
   const tier = ballTier(b.absorbed);
-  const skin = BALL_SKIN[tier];
+  const skin = ballSkin(tier);
   /* 残球（省球关额度用完之后裹出来的）。
      **必须一眼能分辨** —— 玩家要拿它做决策（这颗推不推），
      看不出来的话"省球"就变成了"球莫名其妙散得快"。
@@ -9864,7 +10310,7 @@ function drawHud(g) {
   } else {
     g.font = '700 15px "PingFang SC","Microsoft YaHei",sans-serif';
     g.fillStyle = '#C8DCE6';
-    g.fillText('宝物', 600, 47);
+    g.fillText(THEME.words.shard, 600, 47);
     g.fillStyle = S.loot > 0 ? '#FFD45E' : '#8FA8B8';
     g.font = '800 22px "PingFang SC","Microsoft YaHei",sans-serif';
     g.fillText(S.loot + ' / ' + S.lootTotal, 638, 48);
@@ -10206,7 +10652,27 @@ const API = {
   /** 打 N 发雪弹到指定敌人（跳过物理飞行，直接命中） */
   hitFoeN: (f, n) => { for (let i = 0; i < n; i++) coatFoe(f, 1); },
   /** 出图工具用：把已解码的立绘塞进来（jsdom 没有 <img> 解码） */
-  setBackdrop: (img) => { BG_IMG = img || null; },
+  /* **两种调用都认**：传一张 Image = 给霜原换图（现存二十多个出图工具全是
+     这么调的，一条都不改）；传 `{ snow: img, ember: img }` = 按场景挂图。
+     传 null 清掉**当前场景**那张 —— 老工具清的是霜原，行为不变。 */
+  setBackdrop: (arg) => {
+    if (!arg) { BG_IMGS[THEME.id] = null; return; }
+    if (typeof arg === 'object' && !('width' in arg) && !('naturalWidth' in arg)) {
+      for (const k of Object.keys(arg)) BG_IMGS[k] = arg[k] || null;
+      return;
+    }
+    BG_IMGS.snow = arg || null;
+  },
+  themes: () => THEMES.map(t => t.id),
+  themeOf,
+  /* **背景图必须能按场景单独查**：断言要验"给熔炉挂图不影响霜原"，
+     而 BG_IMGS 是模块内的，外部读不到 —— 只验"不抛"等于没验。 */
+  bgFor: (id) => BG_IMGS[id] || null,
+  /* 出图 / 断言要能直接指定场景（不经过 startStage 造一关）。
+     **必须放在这个字面量里**，不能塞进下面 defineProperties —— 那里只收
+     `{get:...}` 这种描述符，直接写函数名会被当成描述符对象静默丢掉，
+     `L.applyTheme` 就是 undefined。 */
+  applyTheme: (id) => applyTheme(typeof id === 'string' ? THEMES.find(t => t.id === id) : id),
   /** 出图工具用：注入宠物贴图。键名沿用 `GroveBattle.ts` 的 ART_MANIFEST
       （`pet-cat` / `pet-dog` …），两份清单用同一套名字，换角色时不会对不上。 */
   setArt: (map) => { for (const k in map) ART[k] = map[k]; },
@@ -10239,6 +10705,10 @@ Object.defineProperties(API, {
   /* HUD 芯片矩形表（度量与断言共用）。深潜的「深度」芯片曾经整块
      压在「试验台」面板下面，只有出图才看得出来 —— 现在断言直接量。 */
   HUD_RECTS: { get: () => HUD_RECTS },
+  /* 当前场景。**必须是 getter**：写成字面量会焊死"导出那一刻是霜原"，
+     断言在第 13 关读到 snow 就会误判"换场景没生效"。 */
+  THEME: { get: () => THEME },
+  THEMES: { get: () => THEMES },
 });
 
 if (typeof window !== 'undefined') window.SNOWLAB = API;

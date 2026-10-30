@@ -3187,6 +3187,138 @@ console.log("\n=== 四十八. 球与球：撞 / 合 ===");
 }
 
 /* =========================================================================
+   四十九. 场景主题：四个地方，一套动词
+   -------------------------------------------------------------------------
+   用户：「感觉用雪原推球把场景定义死了，应该可以很多场景都可以」。
+
+   这一组不验"画得好不好看"（那是出图的事），只验**结构上真的分开了**：
+   48 关每关都有场景、四个都挂上了、每套五件齐、天空色不撞、
+   介质参数真的接进了 `snowNeed` / `shoot`。
+
+   最要紧的是最后那一组 —— **霜原的色值必须和改之前一模一样**。
+   抽主题时最容易犯的错是"顺手统一一下"，把原来调好的 20 多项色值
+   一起改了；图上看不出差别，但那是四轮手调的结果。
+   ========================================================================= */
+console.log("\n=== 四十九. 场景主题 ===");
+{
+  const TH = L.THEMES;
+  ck("场景表有 4 个场景", TH.length === 4, TH.map(t => t.id).join(" / "));
+
+  /* ---- 每关都有场景，四段按 12 关切 ---- */
+  const wantOf = n => (n <= 12 ? "snow" : n <= 24 ? "ember" : n <= 36 ? "spore" : "dune");
+  const miss = [];
+  for (let n = 1; n <= L.STAGE_MAX; n++) {
+    const got = L.themeOf(n).id;
+    if (got !== wantOf(n)) miss.push(n + ":" + got);
+  }
+  ck("★ 1–" + L.STAGE_MAX + " 关每关都有场景，按 12 关一段切",
+     miss.length === 0, miss.slice(0, 6).join(","));
+
+  /* **四个都得用上。** 定义了四个、只挂两个，是这个改动最容易出现的半成品 ——
+     和"全都做完了"在代码里长得一模一样。 */
+  const used = new Set();
+  for (let n = 1; n <= L.STAGE_MAX; n++) used.add(L.themeOf(n).id);
+  ck("★ 四个场景在 48 关里全都出现过", used.size === 4, [...used].join("/"));
+
+  /* 深潜没有"第几关"，按深度轮换 —— 一路霜原就白做了。 */
+  const dive = new Set([-1, -7, -13, -19, -25].map(d => L.themeOf(d).id));
+  ck("深潜按深度换场景（不是一路霜原）", dive.size >= 3, [...dive].join("/"));
+  ck("深潜第 1 层仍是霜原（起点不变）", L.themeOf(-1).id === "snow", L.themeOf(-1).id);
+  ck("没给 stage 时兜底到霜原", L.themeOf(null).id === "snow", L.themeOf(null).id);
+
+  /* ---- 每套五件齐 ---- */
+  const NEED = ["sky", "cap", "rim", "words", "medium", "deco", "frame", "mote", "shade"];
+  for (const t of TH) {
+    const lack = NEED.filter(k => !t[k]);
+    ck("「" + t.cn + "」定义完整（缺一件就成了半成品）", lack.length === 0, lack.join(","));
+    const w = t.words, wl = ["ammo", "shard", "noammo", "weak", "wrapped"].filter(k => !w[k]);
+    ck("「" + t.cn + "」的名词齐", wl.length === 0, wl.join(","));
+    /* HUD 那一格只有两字宽，4 字会压到右边的数字 —— 上一版撞过一次车。 */
+    ck("「" + t.cn + "」HUD 碎片名不超过 2 字", [...w.shard].length <= 2, w.shard);
+  }
+
+  /* ---- 天空色不能撞 ---- */
+  const sigs = TH.map(t => t.sky.join("|"));
+  ck("★ 四个场景的天空色互不相同", new Set(sigs).size === 4,
+     sigs.length + " 套 / " + new Set(sigs).size + " 种");
+
+  /* ---- 介质参数真接进了玩法 ---- */
+  const byId = id => TH.find(t => t.id === id);
+  const needOf = id => { L.applyTheme(byId(id)); return L.snowNeed(); };
+  const nSnow = needOf("snow"), nEmber = needOf("ember"), nSpore = needOf("spore");
+  ck("★ 火种比雪弹省发（needK 真接进 snowNeed）", nEmber < nSnow, nSnow + " → " + nEmber);
+  ck("★ 孢子比雪弹费发", nSpore > nSnow, nSnow + " → " + nSpore);
+  ck("发数下限是 1（needK 小也不能 0 发裹人）",
+     (() => { L.applyTheme(byId("snow")); const t = L.S.belly; L.S.belly = 0; const v = L.snowNeed(); L.S.belly = t; return v >= 1; })(),
+     String(needOf("snow")));
+
+  const vxOf = id => {
+    L.applyTheme(byId(id));
+    const S = L.S;
+    S.phase = "play"; S.ammo = 99; S.p.shotCd = 0; S.shots.length = 0;
+    L.shoot();
+    const v = S.shots.length ? Math.abs(S.shots[0].vx) : 0;
+    S.shots.length = 0; S.p.lockT = 0;
+    return v;
+  };
+  const vSnow = vxOf("snow"), vEmber = vxOf("ember"), vSpore = vxOf("spore");
+  ck("★ 火种飞得比雪弹快（speedK 真接进 shoot）", vEmber > vSnow * 1.1,
+     vSnow.toFixed(0) + " → " + vEmber.toFixed(0));
+  ck("★ 孢子飞得比雪弹慢", vSpore < vSnow * 0.95,
+     vSnow.toFixed(0) + " → " + vSpore.toFixed(0));
+  /* 射程靠 speed × life，只乘 speed 才是"飞得快"，乘 life 会变成"打得远"。 */
+  L.applyTheme(byId("ember"));
+  L.S.phase = "play"; L.S.ammo = 99; L.S.p.shotCd = 0; L.S.shots.length = 0;
+  L.shoot();
+  const sh = L.S.shots[0];
+  ck("★ 场景系数只乘速度、不乘寿命（否则是「打得远」，不是「飞得快」）",
+     Math.abs(sh.life - (L.NUM.shot.pets[L.S.heroId] || L.NUM.shot.pets.cat).life) < 1e-9,
+     "life=" + sh.life);
+  L.S.shots.length = 0; L.S.p.lockT = 0;
+
+  /* ---- 换关真的切场景 ---- */
+  const themeAt = n => { L.startStage(n); return L.THEME.id; };
+  ck("★ 第 1 / 13 / 25 / 37 关分别是四个场景",
+     themeAt(1) === "snow" && themeAt(13) === "ember" &&
+     themeAt(25) === "spore" && themeAt(37) === "dune",
+     [1, 13, 25, 37].map(n => { L.startStage(n); return L.THEME.id; }).join("/"));
+
+  /* **`themeOf` 算得对 ≠ 换关时真的调了它。** 这两件事分开验：
+     只测 themeOf 的话，`reset` 里漏掉 `applyTheme` 也全绿，
+     而玩家看到的是"第 30 关还是霜原"。 */
+  L.reset(L.stageSeed(1), -13);
+  ck("★ 深潜第 13 层真的把场景接上了（reset 里调了 applyTheme）",
+     L.THEME.id === L.themeOf(-13).id, "S.stage=" + L.S.stage + " → " + L.THEME.id);
+  L.startStage(1);
+
+  /* ---- 背景图按场景存 ---- */
+  L.setBackdrop({ snow: null, ember: null, spore: null, dune: null });
+  ck("四张背景图都清干净了", L.themes().every(id => !L.bgFor(id)),
+     L.themes().map(id => id + ":" + !!L.bgFor(id)).join(" "));
+  L.setBackdrop({ ember: { width: 1 } });
+  ck("★ 给熔炉挂图不影响霜原（一张全局图会把四套全盖住）",
+     !!L.bgFor("ember") && !L.bgFor("snow") && !L.bgFor("spore"),
+     "ember=" + !!L.bgFor("ember") + " snow=" + !!L.bgFor("snow"));
+  L.setBackdrop({ snow: null, ember: null, spore: null, dune: null });
+
+  /* ---- 回归：霜原的色值不许被"顺手统一" ---- */
+  const snow = byId("snow");
+  ck("★ 霜原天空还是原来那四档（换场景不能顺手改老场景）",
+     snow.sky.join(",") === "#5E9BC4,#9CCDE4,#D3E9F4,#EFE3D2", snow.sky.join(","));
+  ck("★ 霜原三道脊还是原来那三色",
+     [snow.far, snow.mid, snow.near].join(",") === "#AECDE0,#C9E0EC,#E9F4FA",
+     [snow.far, snow.mid, snow.near].join(","));
+  ck("★ 霜原地表顶面还是雪白（坡/板/碎石/雪包都从这里取色）",
+     snow.cap[0] === "#FFFFFF" && snow.cap[1] === "#EDF7FE" && snow.cap[3] === "#A9C6DC",
+     snow.cap.join(","));
+  ck("霜原的介质系数是 1（第一段不该被任何系数污染）",
+     snow.medium.speedK === 1 && snow.medium.needK === 1,
+     JSON.stringify(snow.medium));
+
+  L.startStage(1);
+}
+
+/* =========================================================================
    汇总
    ========================================================================= */
 console.log("\n" + "=".repeat(56));

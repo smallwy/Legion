@@ -75,12 +75,41 @@ let ctx: any = null;
 
 /* ---------------------------------------------------------------- 数值表
    全部可调。改这里，不碰逻辑。 */
+/* **BOSS 用一套自己的颜色，不跟场景走。**
+   第一版拿 `THEME.cap` 上色，沙塚段里它就成了一颗大沙球 —— 和箱子、
+   和地面一个色系，站在那儿看不出"这是个威胁"。四套场景各配一套又
+   等于四份要一起维护的调色板。所以给它一套**不属于任何场景**的冷灰石：
+   在雪原上偏暖、在沙塚上偏冷，哪儿都显眼。 */
+const BOSS_COL = {
+  lit: '#9AA0AE', mid: '#616777', dark: '#333845', ink: '#1C202A',
+  ring: 'rgba(20,24,34,.66)', ringLie: 'rgba(255,222,168,.55)',
+  dead: 'rgba(20,24,34,.14)',
+};
+
 const NUM = {
   /* 弹药。用户 2026-10-28 拍板：单关初始 100 发。
      这个数看着宽裕，其实是**刚好卡住**的：
      6 只怪 × 6 发（满饱）+ 16 口木箱 × 3 发 = 84 发，只剩 16。
      也就是说「全用子弹开路」这条路走不到头，必须靠球省。 */
   ammoStart: 100,
+
+  /* ---- BOSS（第 48 关）----
+     **三层壳，每层要一次"够重的撞击"。没有血条 —— 壳的层数就是血条，
+     而且它画在 BOSS 身上（三圈石环），玩家不用看 HUD 就知道还剩几层。
+
+     为什么是"撞击动量"而不是"打进 N 发"：这一关的动词必须还是**推球**。
+     加一个"对着 BOSS 按 J 喷 30 发"的血条战，前面 47 关练的东西一样用不上，
+     而那正是用户说的"加计数器不叫深度"。
+
+     breakPow 1700 是量出来的，不是拍的：满速推球 1209，球的动量系数是
+     `r / baseR`。小球（absorbed 0）系数 1.0 → 1209，打不动；
+     中球（裹 1 只）1.25 → 1516，还是打不动；
+     **大球（裹 2 只）1.51 → 1827，刚好过线**。
+     所以这一关的隐含教学是"攒着打，别见一只裹一只"。
+
+     bounce 0.55：撞碎了壳的球被弹回来，但还留着 55% 的速度 ——
+     玩家能立刻再推一次。**球不消失**：球是唯一通道，弄丢就是死局。 */
+  boss: { shell: 3, breakPow: 1700, bounce: 0.55, weak: 0.7, spit: 2, spitCd: 3.2 },
 
   /* 裹成球要几发。三档饱食度。
      ** 6 / 4 的倒挂是待验证的疑点 **：饱的时候反而更费，说不过去。
@@ -2192,9 +2221,79 @@ function genLevel(seed, stage) {
   HOLES = [];
   layers.forEach(l => l.holes.forEach(h => HOLES.push([h.x, h.x + h.w])));
 
+  /* ================= ⓪ 终局：BOSS 站哪儿 =================
+     只有第 48 关有。位置是**算出来的，不是摆出来的** —— 门厅层每关的
+     箱子分布都不一样，写死一个 x 会有一半的种子把 BOSS 塞进箱堆里，
+     而那种情况在图上看着像"BOSS 长在箱子里"，很难一眼归因。
+
+     三条约束，缺一条就出事：
+       ① **不压箱子**：它要站在空地上，否则玩家看不出"这是站在那儿的"；
+       ② **不挡门**：门在最右侧，BOSS 从中间往左找位置；
+       ③ **不堵死路**：高度 96 < 跳高 123，玩家能跳过去 —— 但真的要跳。
+          如果是 144 就变成"必须打掉才能过门"，那样打不过是死局，
+          而不是"打不过是再来一次"。 */
+  let boss = null;
+  if (stage === STAGE_MAX) {
+    const BW = 132, BH = 96;
+    const floorY = lastY;
+    const dX = door ? door.x : -1;
+
+    /* 这一层地上的箱子（上下层的不算） */
+    const onFloor = b => !(b.y + b.h <= floorY - BH || b.y >= floorY);
+    /* 门口 8px 起、往里 44px 不许占。**门可能开在左边**（种子决定），
+       所以这条要两边都看 —— 只判"别挡住右边那扇门"的话，一半种子会把
+       BOSS 扣在门上，玩家进不了门。 */
+    const nearDoor = x => dX >= 0 && x + BW > dX - 8 && x < dX + 44;
+
+    /* 站在 x 要清掉几口箱子；-1 = 根本站不了。
+       **铁箱和金箱不许清。** 铁箱是路的一部分（得推着走），清掉等于改解法；
+       金箱是本关的寻宝目标，清掉会让 `lootTotal` 对不上，门永远不开。 */
+    const costAt = x => {
+      let cost = 0;
+      for (const b of boxes) {
+        if (!onFloor(b)) continue;
+        if (b.x + b.w <= x - 6 || b.x >= x + BW + 6) continue;
+        if (b.mat !== 'wood' || b.loot) return -1;
+        cost++;
+      }
+      return cost;
+    };
+
+    /* **扫全宽、逐步长 2px。** 第一版从 620 往左退 16，两个错：
+       ① 箱子按 48 的网格排，16 的步长会整段跳过空档 —— 第 48 关仅有的
+          144 宽空档在 672..816，从 620 往左扫根本走不到；
+       ② "守在门口"这个位置该由门决定，不该由搜索起点决定。 */
+    let bx = null, best = null;
+    for (let x = 96; x + BW <= W - 16; x += 2) {
+      if (nearDoor(x)) continue;
+      const cost = costAt(x);
+      if (cost < 0) continue;
+      const d = dX >= 0
+        ? Math.abs(x + BW / 2 - (dX + 16))
+        : Math.abs(x + BW / 2 - W / 2);
+      /* 先挑不用清箱子的；都躲不掉时挑清得最少的；一样多再看离门远近。 */
+      if (!best || cost < best.cost || (cost === best.cost && d < best.d)) {
+        best = { x, cost, d };
+        bx = x;
+      }
+    }
+    /* 真躲不掉才清，而且是**对着选中的位置清**（不是房间正中）——
+       BOSS 是 132 宽、空档只有 0/48/96/144 四档，一整层不一定有 144。
+       实测 200 个种子 164 个塞不下，"腾地方"是常态而不是意外。 */
+    if (best && best.cost > 0) {
+      for (let i = boxes.length - 1; i >= 0; i--) {
+        const b = boxes[i];
+        if (!onFloor(b)) continue;
+        if (b.x + b.w <= bx - 6 || b.x >= bx + BW + 6) continue;
+        boxes.splice(i, 1);
+      }
+    }
+    if (bx != null) boss = { x: bx, y: floorY - BH, w: BW, h: BH };
+  }
+
   return {
     seed, nFloors: nF, stage: (stage == null ? null : stage), skel,
-    floors, layers, plats, boxes, deco, door, spawns, nests,
+    floors, layers, plats, boxes, deco, door, spawns, nests, boss,
     start: { x: startX, y: GEN.topY - PLAYER_H },
     worldH: WORLD_H, groundY: GROUND_Y,
   };
@@ -2471,6 +2570,9 @@ const S = {
   /* 黑洞（吐怪巢）。见 stepNests —— 每关 1~2 个，会慢慢走，有配额。 */
   nests: [],
   boxes: [], plats: [], deco: [], door: null,
+  /* 第 48 关的终局怪。**它不是 foe** —— foe 会被雪裹成球，
+     那这关就变成"打三只普通怪"了。它只认球撞。 */
+  boss: null,
   ammo: 0, belly: 0, hp: 0, invuln: 0,
   killed: 0, killedTarget: 0,
   /* 本关目标（破门 / 寻宝 / 省球）。初值必须是 'door' —— 不是"随便填个值"：
@@ -2730,7 +2832,23 @@ function reset(seed, stage) {
   S.deco = L.deco || [];
   S.boxes = L.boxes.map(b => ({ ...b }));
   S.door = { ...L.door };
+  S.boss = L.boss
+    ? { ...L.boss, shell: NUM.boss.shell, hitT: 0, spitT: NUM.boss.spitCd, dead: false, flash: 0 }
+    : null;
   S.foes = L.spawns.map(sp => makeFoe(sp.x, sp.y, sp.kind));
+  /* **壳里的杂兵往旁边挪一格，不是删掉。** 站在 BOSS 脚下的怪在画面上
+     读作"BOSS 身上长了个东西"（它会盖住基座），可它本身是正常的怪。
+     挪开而不是删：删了会让"每层至少一只怪"那条判据失效，而且这会
+     变成"打 BOSS 时少一只"，难度和刷怪曲线都跟着变。 */
+  if (S.boss) {
+    const B = S.boss;
+    for (const f of S.foes) {
+      if (f.x + f.w <= B.x - 10 || f.x >= B.x + B.w + 10) continue;
+      if (f.y + f.h <= B.y - 40 || f.y >= B.y + B.h) continue;
+      f.x = B.x - f.w - 20;
+      if (f.x < 12) f.x = Math.min(948 - f.w - 12, B.x + B.w + 20);
+    }
+  }
   S.nests = (L.nests || []).map(n => ({ ...n, born: 0, t: 0 }));
   S.shots = []; S.balls = []; S.frags = []; S.texts = []; S.shards = []; S.rings = [];
   S.ebullets = [];
@@ -3659,6 +3777,86 @@ function fuseBalls(a, c) {
   return b;
 }
 
+/* ---------------------------------------------------------------- BOSS
+   第 48 关的终局。三层壳，每层吃一次**够重的撞击**。
+
+   **它不还手、不移动、不吐怪。** 一开始想给它"破一层吐两只"，
+   想清楚之后删了：吐怪 = 补给，而这一关缺的从来不是怪，是**大球**。
+   压力应该来自"球只有 16 秒寿命、撞完会被弹开、弹开的地方可能是洞"，
+   而不是"又要打怪了"—— 后者前面 47 关已经打过两百次。
+
+   判据用**圆形距离**，不用 AABB：BOSS 是三圈壳，画出来是圆的，
+   用方形盒会让"擦着角飞过去"也算撞上，玩家读作"判定太松"。
+   代价是要自己做位置解算（把球推到壳外），但那也只有三行。 */
+/* BOSS 的**只是状态**（被打之后的闪光衰减、破壳停顿）。撞击本身在
+   `bossTakeHit` 里 —— 那里是被球触发的，这里是被时间触发的，别混。 */
+function stepBoss(dt) {
+  const B = S.boss;
+  if (!B) return;
+  B.flash = Math.max(0, (B.flash || 0) - dt * 3.4);
+  B.hitT += dt;
+}
+
+function bossTakeHit(b) {
+  const B = S.boss;
+  if (!B || B.dead || b.dead) return;
+  const cx = B.x + B.w / 2;
+  /* 特效用的视觉中心（碎屑、冲击环都从这儿散）。**和判定无关** ——
+     判定走 AABB 的穿透轴，见下。 */
+  const cy = B.y + B.h * 0.52;
+  /* ---- 判定：AABB + **最小穿透轴**，不是圆心距 ----
+     第一版用圆形（reach = 半径 + 球半径），两个问题：
+       ① 球从下方进来（BOSS 站在地上，球贴着地滚过来）会被推到
+          `cy + reach`，那已经在地板下面了 —— 球直接掉出世界；
+       ② 圆形判定比它画出来的样子大一圈，玩家读作"还没碰到就弹了"。
+     按最小穿透轴推出去，球从侧面来就水平弹、从上面来就顶在上表面，
+     和它画出来的方块剪影一致。 */
+  const ox = Math.min(b.x + b.r - B.x, B.x + B.w - (b.x - b.r));
+  const oy = Math.min(b.y + b.r - B.y, B.y + B.h - (b.y - b.r));
+  if (ox <= 0 || oy <= 0) return;
+  const outX = (b.x < cx) ? -1 : 1;
+  if (ox < oy) {
+    b.x = outX < 0 ? B.x - b.r : B.x + B.w + b.r;
+  } else {
+    const outY = (b.y < B.y + B.h / 2) ? -1 : 1;
+    b.y = outY < 0 ? B.y - b.r : B.y + B.h + b.r;
+    /* 从这里出去的球本来就在下落，别再给一次向上弹 ——
+       BOSS 顶上会变成"球在头顶原地跳"的永动机。 */
+  }
+
+  if (b.hitCd > 0) return;
+  const pow = Math.max(Math.abs(b.vx), b.vy) * (b.r / NUM.ball.baseR);
+
+  if (pow >= NUM.boss.breakPow) {
+    B.shell--;
+    B.flash = 1;
+    B.hitT = 0;
+    kickShake(9, 'boss');
+    hitStop(0.085);
+    S.flash = Math.max(S.flash, 0.2);
+    for (let i = 0; i < 16; i++) addFrag(cx + ((i % 8) - 3.5) * 7, cy - 10, 1, THEME.cap[2], 320);
+    S.rings.push({ x: cx, y: cy, r: 6, r0: 6, r1: B.w * 0.9, t: 0, life: 0.34, color: '#FFD8A8' });
+    addText(cx, B.y - 30,
+      B.shell > 0 ? ('壳裂了 · 还剩 ' + B.shell + ' 层') : '壳碎了',
+      B.shell > 0 ? '#FFD08A' : '#9BE86E', 22, 1.8);
+    /* **球不消失，只被弹开。** 球是这一关唯一的通道：
+       弄丢一颗就少一颗，而"球掉进洞里"在这套地形里太容易发生了。
+       弹开 55% 速度，玩家能立刻追上去再推一次。 */
+    b.vx = -outX * Math.min(Math.abs(b.vx) * NUM.boss.bounce, 780);
+    b.vy = -320;
+    b.hitCd = 0.3;
+    if (B.shell <= 0) B.dead = true;
+  } else {
+    b.vx = -outX * Math.min(Math.abs(b.vx) * NUM.boss.weak, 520);
+    b.vy = -180;
+    b.hitCd = 0.3;
+    kickShake(3, 'bossweak');
+    /* 提示要给**怎么才算够**，不能只说"太小" ——
+       玩家手里那颗球看着不小，他没法自己算出 1700 这个数。 */
+    once('bossweak', cx, B.y - 26, '壳太厚 · 裹大一点再撞', '#FF9E8E');
+  }
+}
+
 function stepBalls(dt) {
   for (const b of S.balls) {
     if (b.dead) continue;
@@ -3819,6 +4017,11 @@ function stepBalls(dt) {
         killFoe(f, b);
       }
     }
+
+    /* BOSS 放在**所有其它碰撞之后**：球先被箱子和墙解算到合法位置，
+       再拿这个位置去和壳比距离 —— 顺序反过来的话，球可能被"推出 BOSS"
+       推到箱子里面，下一帧又被箱子推回来，两边打架。 */
+    bossTakeHit(b);
   }
   S.balls = S.balls.filter(b => !b.dead);
 }
@@ -4779,6 +4982,12 @@ function doorBlocked() {
  * 而漏掉的那处不会报错，只会出现"某些关的门永远不开"。
  */
 function goalMet() {
+  /* **BOSS 没解决，门就是锁着的，不管这关是什么目标。**
+     放在最前面而不是塞进某一个分支：它是"准入条件"，
+     和"破门 / 寻宝 / 省球"三选一是**正交**的两件事。
+     塞进 collect 分支的话，哪天第 48 关的目标改成 door，
+     这条判据会静默失效 —— 而症状是"打完了 BOSS 门也不开"，极难查。 */
+  if (S.boss && S.boss.shell > 0) return false;
   if (S.goal === 'collect') {
     /* 金箱每关必有且**只有一个**（生成器 2163 行那段有兜底："没有金箱就
        把最上面那口变成金箱"）。所以 `loot >= lootTotal` 就是"挖到那一个"。
@@ -5388,6 +5597,7 @@ function step(dt) {
   stepBoxFall(dt);
   stepShards(dt);
   stepDoor(dt);
+  stepBoss(dt);
 
   updateCamera(dt);
 
@@ -6837,6 +7047,12 @@ function draw() {
 
   /* 黑洞画在箱子**之后**：它是个"贴在地面上的洞"，被箱子挡住就不像洞了。 */
   for (const n of S.nests) if (vis(n.y - 260, n.y + 60)) drawNest(g, n);
+
+  /* BOSS（只有第 48 关有）。**画在门之前** —— 它站在地面上，
+     门是墙里的东西，前后关系不能反。
+     视野裁剪留在**调用处**：`vis` 是 draw() 里的局部函数，画函数自己
+     够不着（第一版写在 drawBoss 里，一跑就 ReferenceError）。 */
+  if (S.boss && vis(S.boss.y - 40, S.boss.y + S.boss.h + 20)) drawBoss(g);
 
   // 门
   drawDoor(g, S.door);
@@ -8681,6 +8897,144 @@ function drawDecoBody(g, d) {
     /* 侧面一小片苔 */
     g.fillStyle = '#7FA05E';
     g.beginPath(); g.ellipse(x - 6, y - hh * 0.42, 3.2, 5.2, 0.2, 0, Math.PI * 2); g.fill();
+  }
+  g.restore();
+}
+
+/* ---------------------------------------------------------------- BOSS
+   画法只有一条主张：**壳的层数要能从剪影上读出来，不能靠数身上的纹路。**
+   所以每破一层，整个身体的半径就缩一圈 —— 玩家在远处一眼看到"它变小了"，
+   不用凑近数弧线。三圈弧只是补一句"还剩几层"，给个准确的数。
+
+   不用血条的理由（和整个游戏一致）：血条会把战斗变成"还有多少百分比"，
+   而这里要给的是"还有三道关要过"。3 是很小的数，玩家能直接数。 */
+function drawBoss(g) {
+  const B = S.boss;
+  if (!B) return;
+  const cx = B.x + B.w / 2;
+  const baseY = B.y + B.h;
+  const k = B.dead ? 0 : B.shell / NUM.boss.shell;
+  const R0 = B.w * 0.40;
+  const R = R0 * (0.62 + 0.38 * k);
+  const cy = baseY - 8 - R;
+
+  g.save();
+  /* 影子 */
+  g.fillStyle = 'rgba(40,26,18,.30)';
+  g.beginPath(); g.ellipse(cx, baseY - 3, R0 * 0.92, 7, 0, 0, Math.PI * 2); g.fill();
+
+  /* 基座：**没有它就是一颗悬着的球**。压在圆底下 8px，读作"杵在地上"。 */
+  g.fillStyle = BOSS_COL.dark;
+  g.beginPath();
+  g.moveTo(cx - R0 * 0.72, baseY);
+  g.lineTo(cx - R0 * 0.5, baseY - 12);
+  g.lineTo(cx + R0 * 0.5, baseY - 12);
+  g.lineTo(cx + R0 * 0.72, baseY);
+  g.closePath(); g.fill();
+  g.strokeStyle = COL.ink; g.lineWidth = 3; g.stroke();
+
+  if (B.dead) {
+    /* 破了：只剩一堆碎石 + 一点没灭的核心光。**不要留个空壳** ——
+       空壳会让玩家以为还要再打一次。 */
+    for (const [dx, r] of [[-26, 9], [-10, 12], [8, 10], [24, 8], [2, 6]]) {
+      g.fillStyle = BOSS_COL.mid;
+      g.beginPath(); g.arc(cx + dx, baseY - 6 - r * 0.4, r, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = COL.ink; g.lineWidth = 2.4; g.stroke();
+    }
+    g.globalCompositeOperation = 'lighter';
+    const gd = g.createRadialGradient(cx, baseY - 10, 2, cx, baseY - 10, 34);
+    gd.addColorStop(0, 'rgba(255,220,140,.75)');
+    gd.addColorStop(1, 'rgba(255,140,60,0)');
+    g.fillStyle = gd;
+    g.beginPath(); g.arc(cx, baseY - 10, 34, 0, Math.PI * 2); g.fill();
+    g.globalCompositeOperation = 'source-over';
+    g.restore();
+    return;
+  }
+
+  /* 核心光：**壳越少越亮**。只剩最后一层时它已经漏出来了 ——
+     那是"下一步就要打穿了"的唯一提前量。 */
+  if (k < 1) {
+    g.globalCompositeOperation = 'lighter';
+    const gd = g.createRadialGradient(cx, cy - R * 0.1, 2, cx, cy - R * 0.1, R * 1.45);
+    gd.addColorStop(0, 'rgba(255,206,110,' + (0.34 + (1 - k) * 0.5).toFixed(2) + ')');
+    gd.addColorStop(1, 'rgba(255,120,50,0)');
+    g.fillStyle = gd;
+    g.beginPath(); g.arc(cx, cy - R * 0.1, R * 1.45, 0, Math.PI * 2); g.fill();
+    g.globalCompositeOperation = 'source-over';
+  }
+
+  /* 壳本体。**光源统一左上**，所以高光在左上角、暗面压右下。 */
+  const sg = g.createLinearGradient(cx - R, cy - R, cx + R * 0.8, cy + R);
+  sg.addColorStop(0, BOSS_COL.lit);
+  sg.addColorStop(0.45, BOSS_COL.mid);
+  sg.addColorStop(1, BOSS_COL.dark);
+  g.fillStyle = sg;
+  g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = COL.ink; g.lineWidth = 4; g.stroke();
+
+  /* 三圈同心环 = 还剩几层。
+     **必须是"整圈缺一个口"，不能是"下半圈"。** 第一版画的是
+     -0.30π → 0.98π（一条横贯底部的长弧），配两只亮眼睛，整张脸读作
+     一个笑脸 —— 玩家第一反应是"这只怪在笑"，而不是"它还有三层壳"。
+     现在每圈都是 324° 的整圆，只在**右上**留 36° 的缺口（三圈口子对齐，
+     读作"这里能撬开"）。
+     每圈画两遍：深色 4px 压出壳缝，再压 1.6px 暖色当缝里透的光。
+     单画深色在暗处糊掉，单画暖色像装饰纹，两道叠起来缩略图里才数得清。 */
+  for (let i = 0; i < NUM.boss.shell; i++) {
+    const rr = R * (0.98 - i * 0.2);
+    const alive = i < B.shell;
+    g.setLineDash(alive ? [] : [4, 6]);
+    g.strokeStyle = alive ? BOSS_COL.ring : BOSS_COL.dead;
+    g.lineWidth = alive ? 4 : 1.4;
+    g.beginPath(); g.arc(cx, cy, rr, -Math.PI * 0.15, Math.PI * 1.65); g.stroke();
+    if (alive) {
+      g.strokeStyle = BOSS_COL.ringLie;
+      g.lineWidth = 1.6;
+      g.beginPath(); g.arc(cx, cy, rr - 2.2, -Math.PI * 0.15, Math.PI * 1.65); g.stroke();
+    }
+  }
+  g.setLineDash([]);
+
+  /* 裂纹：**破了几层就有几道**。圈数说"还剩多少"，裂纹说"已经被打过"，
+     两个方向的信息都要有 —— 只看圈的话，第一层壳刚破时和"本来就只有
+     两层"长得一模一样。 */
+  const cracks = NUM.boss.shell - B.shell;
+  for (let c = 0; c < cracks; c++) {
+    const a0 = -Math.PI * 0.62 + c * 1.9;
+    g.strokeStyle = 'rgba(14,16,22,.55)';
+    g.lineWidth = 2.6;
+    g.beginPath();
+    for (let t = 0; t <= 3; t++) {
+      const aa = a0 + t * 0.10;
+      const rr = R * (0.24 + t * 0.22);
+      const px = cx + Math.cos(aa) * rr, py = cy + Math.sin(aa) * rr;
+      if (t === 0) g.moveTo(px, py); else g.lineTo(px, py);
+    }
+    g.stroke();
+  }
+
+  /* 被打那一下的白闪。**只闪 0.3 秒**，闪久了像"它一直在发光"。 */
+  if (B.flash > 0) {
+    g.globalAlpha = B.flash * 0.55;
+    g.fillStyle = '#FFFFFF';
+    g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.fill();
+    g.globalAlpha = 1;
+  }
+
+  /* 眼睛：**两道竖缝，不是两颗圆点。** 圆点 + 弧线 = 笑脸；
+     竖缝才有"盯着你"的意思。眼窝压深一点，中间一道暖光。 */
+  for (const sx of [-1, 1]) {
+    const ex = cx + sx * R * 0.27, ey = cy - R * 0.22;
+    g.fillStyle = 'rgba(12,15,22,.72)';
+    g.beginPath(); g.ellipse(ex, ey, R * 0.10, R * 0.20, 0, 0, Math.PI * 2); g.fill();
+    g.globalCompositeOperation = 'lighter';
+    const eg = g.createRadialGradient(ex, ey, 1, ex, ey, R * 0.22);
+    eg.addColorStop(0, 'rgba(255,238,190,.95)');
+    eg.addColorStop(1, 'rgba(255,150,60,0)');
+    g.fillStyle = eg;
+    g.beginPath(); g.ellipse(ex, ey, R * 0.13, R * 0.24, 0, 0, Math.PI * 2); g.fill();
+    g.globalCompositeOperation = 'source-over';
   }
   g.restore();
 }

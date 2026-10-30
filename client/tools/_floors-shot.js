@@ -21,6 +21,9 @@ if (!fs.existsSync(OUT)) fs.mkdirSync(OUT, { recursive: true });
 
 const W = 960, H = 600;
 const SEED = Number(process.env.SEED || 3);
+/* STAGE=n 走主线第 n 关（种子由 stageSeed 派生）。**不传就还是老行为** ——
+   这个工具被其它轮次引用过，改默认值等于悄悄换了别人的图。 */
+const STAGE = process.env.STAGE ? Number(process.env.STAGE) : null;
 const PFX = process.env.PREFIX || "f7-floors";
 const PROTO = process.env.PROTO ? path.resolve(process.env.PROTO)
   : path.join(ROOT, "prototype", "snowlab.html");
@@ -122,7 +125,7 @@ let L0 = null;
   if (process.env.BEFORE) { await compare(); return; }
   const inst = await boot(PROTO);
   const { L } = inst;
-  L.reset(SEED);
+  if (STAGE) L.reset(L.stageSeed(STAGE), STAGE); else L.reset(SEED);
   const nF = L.FLOORS.length;
   console.log("种子 " + SEED + "：" + nF + " 层 → " + (nF - 1) + " 间房，世界高 " + L.WORLD_H);
 

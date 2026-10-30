@@ -3319,6 +3319,135 @@ console.log("\n=== 四十九. 场景主题 ===");
 }
 
 /* =========================================================================
+   五十. BOSS：第 48 关的三层壳
+   -------------------------------------------------------------------------
+   **这一组守的是"终局是不是真的终局"。** 三层壳最怕的三种坏法，全都
+   在界面上看不出来：
+     ① 每关都有 BOSS（复制粘贴时忘了判 stage）；
+     ② BOSS 压在箱子里 / 堵住门（看上去像"它站在那儿"，玩起来是死局）；
+     ③ 破壳判据没接进门（打完了门不开，或者没打门就开）。
+
+   还有一条只在这里能验：**球撞完必须还在**。球是这一关唯一的通道，
+   撞一次就没一颗的话，第 48 关在玩家第二次撞击时就变成死局 ——
+   而画面上完全正常。
+   ========================================================================= */
+console.log("\n=== 五十. BOSS：第 48 关的三层壳 ===");
+{
+  const hasBoss = [];
+  for (let n = 1; n <= L.STAGE_MAX; n++) { L.startStage(n); if (L.S.boss) hasBoss.push(n); }
+  ck("★ 只有第 48 关有 BOSS（不是每关都有）",
+     hasBoss.length === 1 && hasBoss[0] === L.STAGE_MAX, hasBoss.join(","));
+  L.startStage(1);
+  ck("前 47 关没有 BOSS", !L.S.boss, String(!!L.S.boss));
+  L.startDive(20261030);
+  ck("深潜没有 BOSS（它是无尽模式，不该有终点怪）", !L.S.boss, String(!!L.S.boss));
+
+  L.startStage(L.STAGE_MAX);
+  const S = L.S, B = S.boss;
+  const floorY = L.FLOORS[L.FLOORS.length - 1];
+  ck("BOSS 站在门厅层地面上（悬空的怪打不到也读不懂）",
+     Math.abs((B.y + B.h) - floorY) < 1.5, (B.y + B.h) + " vs " + floorY);
+  ck("★ BOSS 不压在箱子里", (() => {
+    for (const b of S.boxes) {
+      if (b.dead) continue;
+      if (b.x + b.w <= B.x + 1 || b.x >= B.x + B.w - 1) continue;
+      if (b.y + b.h <= B.y + 1 || b.y >= B.y + B.h - 1) continue;
+      return false;
+    }
+    return true;
+  })(), "boxes=" + S.boxes.length);
+  ck("★ BOSS 不挡住门",
+     B.x + B.w <= S.door.x + 1 || B.x >= S.door.x + S.door.w - 1,
+     "boss " + B.x + ".." + (B.x + B.w) + " / door " + S.door.x);
+  /* **跳过它，而不是撞开它。** 高度必须 > 一格箱（不然白称 BOSS），
+     又必须 < 跳高 123（不然打不过是死局：门在它后面，过不去）。 */
+  ck("BOSS 高度在「比箱子高、但跳得过去」之间", B.h >= 48 && B.h < 123, String(B.h));
+  ck("BOSS 初始三层壳", B.shell === L.NUM.boss.shell && B.shell === 3, String(B.shell));
+
+  /* ---- 门锁 ----
+     **先把寻宝目标满足掉**，这样门开不开就只剩 BOSS 一个变量。 */
+  S.loot = S.lootTotal;
+  S.killed = S.killedTarget;
+  ck("★ BOSS 活着时门锁着（寻宝/击杀都满足了也不开）", L.goalMet() === false,
+     "loot " + S.loot + "/" + S.lootTotal + " shell " + B.shell);
+
+  /* ---- 撞 ---- */
+  const cx = B.x + B.w / 2, cy = B.y + B.h * 0.6;
+  const ram = absorb => {
+    const b = L.spawnBall(cx - B.w * 0.5 - 70, cy, 1209, absorb);
+    for (let i = 0; i < 42; i++) { if (b.dead) break; L.stepBalls(1 / 60); }
+    return b;
+  };
+
+  const small = ram(0);                       // 小球：裹 0 只，pow = 1209
+  ck("★ 小球撞不动壳（判据是动量，不是「撞了就行」）", B.shell === 3, "shell " + B.shell);
+  ck("★ 撞完球还在（撞一次少一颗 = 第二次就死局）", !small.dead, "dead=" + small.dead);
+  ck("撞不动时球被弹回、且不比入射快", Math.abs(small.vx) <= 1209 + 1,
+     Math.abs(small.vx).toFixed(0));
+
+  const big = ram(6);                         // 大球：裹 3 只，pow ≈ 2133
+  ck("★ 大球撞掉一层壳", B.shell === 2, "shell " + B.shell);
+  ck("破壳后球也还在", !big.dead, "dead=" + big.dead);
+  ck("破壳后门仍然锁着（还有两层）", L.goalMet() === false, "shell " + B.shell);
+
+  ram(6); ram(6);
+  ck("★ 三层撞完壳就碎了", B.shell === 0 && B.dead === true,
+     "shell " + B.shell + " dead=" + B.dead);
+  ck("★ 壳碎之后门才开（判据真的接进了 goalMet）", L.goalMet() === true, "shell " + B.shell);
+
+  /* 球撞完不该留在壳里 —— 位置解算把球推到壳外，否则下一帧还会再触发一次。 */
+  const inB = L.S.balls.some(b => {
+    if (b.dead) return false;
+    const dx = b.x - cx, dy = b.y - cy;
+    return dx * dx + dy * dy < Math.pow(B.w * 0.5, 2);
+  });
+  ck("球没被留在壳体内", !inB, inB ? "有球在壳里" : "");
+
+  /* ---- 摆放的鲁棒性 ----
+     **这一条是拿 48 个种子撞出来的，不是读代码想出来的。**
+     第一版从 x=620 往左退 16 找空位，第 48 关仅有的 144 宽空档在
+     672..816 —— 从 620 往左扫永远走不到，`boss` 直接是 null，
+     而"没有 BOSS"和"BOSS 坏了"在界面上长得一样（门照样能开）。 */
+  {
+    let miss = 0, ovl = 0, dblk = 0;
+    for (let i = 0; i < 48; i++) {
+      const seed = Math.imul(i + 1, 2654435761) >>> 0;
+      const g = L.genLevel(seed, L.STAGE_MAX);
+      if (!g.boss) { miss++; continue; }
+      const B = g.boss;
+      for (const b of g.boxes) {
+        if (b.dead) continue;
+        if (b.x + b.w <= B.x + 1 || b.x >= B.x + B.w - 1) continue;
+        if (b.y + b.h <= B.y + 1 || b.y >= B.y + B.h - 1) continue;
+        ovl++; break;
+      }
+      if (!(B.x + B.w <= g.door.x + 1 || B.x >= g.door.x + g.door.w - 1)) dblk++;
+    }
+    ck("★ 48 个种子都能摆下 BOSS，且不压箱、不挡门",
+       miss === 0 && ovl === 0 && dblk === 0,
+       "缺 " + miss + " / 压箱 " + ovl + " / 挡门 " + dblk);
+  }
+
+  /* 壳里的杂兵会被挪到左边，而不是删掉 —— 删了这层的怪就少一只。 */
+  {
+    L.startStage(L.STAGE_MAX);
+    const B2 = L.S.boss;
+    const inBoss = L.S.foes.filter(f =>
+      !(f.x + f.w <= B2.x - 10 || f.x >= B2.x + B2.w + 10) &&
+      !(f.y + f.h <= B2.y - 40 || f.y >= B2.y + B2.h));
+    ck("★ 壳里不站杂兵（站在脚下会被读成 BOSS 的一部分）",
+       inBoss.length === 0, "壳里有 " + inBoss.length + " 只");
+    /* 挪动不能把怪推出房间 —— `f.x < 12` 那条兜底一旦写错方向，
+       怪会站到墙外面去，画面上就是"这层没怪"，而数值上它还在。 */
+    const outside = L.S.foes.filter(f => f.x < 0 || f.x + f.w > L.W);
+    ck("挪开的杂兵还在房间内（没被推出墙外）", outside.length === 0,
+       "越界 " + outside.length + " 只");
+  }
+
+  L.startStage(1);
+}
+
+/* =========================================================================
    汇总
    ========================================================================= */
 console.log("\n" + "=".repeat(56));

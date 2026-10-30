@@ -50,12 +50,26 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await page.screenshot({ path: path.join(OUT, "_t-entry-in.png") });
   console.log("  ✓ _t-entry-in.png");
 
-  /* ② 通关 → 结算卡（标题应是「第 24 关」，底部提示「Enter 进第 25 关」） */
+  /* ② 通关 → 结算卡（标题应是「第 24 关」，底部提示「Enter 进第 25 关」）
+     **必须走 `judgeStars` 再设 clear。** 上一版直接 `S.phase='clear'`，
+     结果结算卡上三颗星全空 —— 图看起来像"星判定坏了"，其实只是出图工具
+     绕过了 `stepDoor` 里算星那一步。出图工具不能自己造状态：
+     图上要验的东西，必须走游戏真实走的那条路。 */
   await page.evaluate(() => {
     const L = window.SNOWLAB, S = L.S;
+    /* 字段名是 `S.killed` 不是 `S.kills` —— 写成 `S.kills` 不会报错，
+       只是悄悄多挂一个没用的属性，而 `clearout` 读的是 `S.killed`，
+       于是存档里只有 2 颗星（bigchain 一颗），图上看不出少了哪颗。
+       `hits` 也要清零：出图时等了 120ms，这段时间怪可能已经打过人。 */
+    S.killed = S.killedTarget;
+    S.stat.hits = 0;
+    S.stat.ballChainMax = 5;
+    S.starGot = L.judgeStars();
     S.phase = "clear";
     S.clearT = 0;
-    S.kills = S.killedTarget;
+    /* 真实通关会在 stepDoor 里写存档，这里补一步同样的事 ——
+       不然第 ③ 步验"Enter 之后存档跟到 25"会少一半依据。 */
+    L.writeSnowStar(S.stage, L.starBits(S.starGot));
     L.draw();
   });
   await sleep(120);

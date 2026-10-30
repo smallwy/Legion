@@ -2823,6 +2823,115 @@ group("四十四、敌方不会原地反复往上跳");
 }
 
 /* =========================================================================
+   四十六、三星（CR-032 迁移第 1 步）
+   ---------------------------------------------------------------------------
+   用户 2026-10-30：「最初的那 2 个玩法完全丢弃吗 为什么你设计不考虑之前
+   有没有用」→ 盘点后发现 grove 27 屏每屏 3 颗星、共 81 颗，而 snowlab
+   48 关通关只有「进门了」。这一组守三件事：
+
+   1) 三条判定的**口径**本身（阈值改了必须红）。只测"能拿到星"是没用的 ——
+      bigchain 从 4 口改成 2 口，照样有星，测试全绿。
+   2) **不许白送**：0 只怪的关卡，`killed >= killedTarget` 天然成立，
+      不挡的话教学关白给一颗。
+   3) 存档**只增不减**：重打一关只拿 1 颗，不能把之前拿的 3 颗冲掉。
+      这条最容易错 —— `writeSnowProgress` 是 `Object.assign` 浅合并，
+      星用数组存就会整体替换。
+   ========================================================================= */
+group("四十六、三星（判定口径 / 不许白送 / 存档只增不减）");
+
+{
+  ck("星级是 3 条", L.STAR_LIST.length === 3, String(L.STAR_LIST.length));
+  ck("三个星 id 互不重复",
+     new Set(L.STAR_LIST).size === 3, L.STAR_LIST.join(","));
+  ck("每颗星都有中文名", L.STAR_LIST.every(id => !!L.STAR_CN[id]),
+     L.STAR_LIST.map(id => L.STAR_CN[id] || "?").join("/"));
+
+  /* ---- ① 判定口径：逐条按阈值两侧各测一次 ---- */
+  L.startStage(9);
+  const st = L.S.stat;
+
+  /* nohit：0 次受伤给，1 次不给 */
+  st.hits = 0;
+  ck("nohit 口径：受伤 0 次 → 给星", L.STAR_JUDGE.nohit(), "");
+  st.hits = 1;
+  ck("nohit 口径：受伤 1 次 → 不给", !L.STAR_JUDGE.nohit(), "hits=1");
+  st.hits = 0;
+
+  /* bigchain：阈值是「≥4 口」 */
+  st.ballChainMax = 3;
+  ck("bigchain 口径：连碎 3 口 → 不给", !L.STAR_JUDGE.bigchain(), "3");
+  st.ballChainMax = 4;
+  ck("bigchain 口径：连碎 4 口 → 给星", L.STAR_JUDGE.bigchain(), "4");
+
+  /* clearout：满怪给、差一只不给、0 只怪不给 */
+  L.S.killedTarget = 6; L.S.killed = 6;
+  ck("clearout 口径：清光 6/6 → 给星", L.STAR_JUDGE.clearout(), "");
+  L.S.killed = 5;
+  ck("clearout 口径：5/6 → 不给", !L.STAR_JUDGE.clearout(), "5/6");
+  L.S.killedTarget = 0; L.S.killed = 0;
+  ck("★ clearout 不许白送：0 只怪的关卡 → 不给星",
+     !L.STAR_JUDGE.clearout(), "killedTarget=0（0>=0 天然成立，靠这道闸挡）");
+
+  /* ---- ② 位掩码：id → bit 的映射不许乱 ---- */
+  ck("starBits([]) = 0", L.starBits([]) === 0, String(L.starBits([])));
+  ck("starBits 三颗全给 = 0b111（7）",
+     L.starBits(L.STAR_LIST) === 7, String(L.starBits(L.STAR_LIST)));
+  ck("starBits 只给 nohit = 1", L.starBits(["nohit"]) === 1, String(L.starBits(["nohit"])));
+  ck("starBits 只给 clearout = 4", L.starBits(["clearout"]) === 4,
+     String(L.starBits(["clearout"])));
+  ck("starBits 忽略不认识的 id（不许抛）",
+     L.starBits(["nope"]) === 0, String(L.starBits(["nope"])));
+
+  /* ---- ③ 存档只增不减 ---- */
+  L.writeSnowStar(9, 0);
+  L.writeSnowStar(9, 5);                       // nohit + clearout
+  ck("写 5 读回 5", L.readSnowStar(9) === 5, String(L.readSnowStar(9)));
+  L.writeSnowStar(9, 1);                       // 重打只拿到 nohit
+  ck("★ 只增不减：再写 1，读回仍是 5（重打不许冲掉旧成绩）",
+     L.readSnowStar(9) === 5, String(L.readSnowStar(9)));
+  L.writeSnowStar(11, 2);
+  ck("写另一关不影响这一关（位是按键存的）",
+     L.readSnowStar(9) === 5 && L.readSnowStar(11) === 2,
+     "9=" + L.readSnowStar(9) + " 11=" + L.readSnowStar(11));
+
+  /* ---- ④ 真通关一次，星要真写进存档 ---- */
+  L.startStage(10);
+  const s10 = L.S;
+  s10.stat.hits = 0; s10.stat.ballChainMax = 5;
+  s10.killed = s10.killedTarget;
+  const d = s10.door;
+  ck("第 10 关有门（下面要靠它通关）", !!d, d ? "" : "door=null");
+  if (d) {
+    /* **先把压在门上的箱子清掉。** `stepDoor` 的门槛是
+       `d.open && phase==='play' && !blocked` —— 箱子只要和门矩形有一点
+       重叠，blocked 就是 true，整段直接跳过，而"存档没写星"的报错
+       长得像"星判定坏了"。第 10 关的门是埋在箱堆里的（这本来就是
+       设计：砸开最后一口箱才露出门）。 */
+    for (const b of s10.boxes) {
+      if (b.dead) continue;
+      if (b.x + b.w <= d.x + 1 || b.x >= d.x + d.w - 1) continue;
+      if (b.y + b.h <= d.y + 1 || b.y >= d.y + d.h - 1) continue;
+      b.dead = true;
+    }
+    d.open = true; d.openT = 1; d.wasBlocked = false;
+    s10.phase = "play";
+    s10.p.x = d.x + d.w / 2 - s10.p.w / 2;
+    s10.p.y = d.y + d.h - s10.p.h;
+    L.stepDoor(1 / 60);
+    ck("通关后 phase = clear", s10.phase === "clear", s10.phase);
+    ck("★ 通关把三星写进存档（读回 7）", L.readSnowStar(10) === 7,
+       String(L.readSnowStar(10)));
+    ck("结算卡拿到星清单 = 3 条", (s10.starGot || []).length === 3,
+       JSON.stringify(s10.starGot));
+  }
+
+  /* 换关卡要把这关的星清单清掉，否则结算卡会显示上一关的成绩 */
+  L.startStage(12);
+  ck("换关后 starGot 清空（结算卡不会串关）",
+     (L.S.starGot || []).length === 0, JSON.stringify(L.S.starGot));
+}
+
+/* =========================================================================
    汇总
    ========================================================================= */
 console.log("\n" + "=".repeat(56));

@@ -2502,6 +2502,10 @@ const S = {
     ballChain: 0, ballChainMax: 0,    // 一颗球最多连碎几个
     kills: 0, killByBall: 0,
     hardHint: 0,
+    /* 本关受伤次数。三星里「一毛不拔」的唯一判据 ——
+       用 hp 反推是不行的：hp 会被"缓一缓"补满（见 hurtPlayer），
+       挨了三次打和一次没挨，结束时的 hp 可能一模一样。 */
+    hits: 0,
   },
   _taught: {},              // 首次提示只弹一次
 };
@@ -2526,6 +2530,65 @@ function newLevel(seed) {
    （深潜正好相反：那边一命往下，图必须换，所以走 seed + depth 的混合。） */
 const SNOW_SAVE_KEY = 'pawpack.snow';
 const STAGE_MAX = 48;
+
+/* **三星（CR-032 迁移第一步）。** 口径从 grove 的 `STAR_JUDGE` 搬过来 ——
+   那边 27 屏每屏 3 颗、共 81 颗，靠"防守 / 效率 / 彻底"三个互不重叠的维度
+   给同一张图三种打法。snowlab 的 48 关原来通关只有「进门了」，
+   零反馈、零重打理由；三星是这个成本最低的补丁（**不动任何玩法代码**）。
+
+   为什么不用「限时」这颗星：grove 的 `par.time` 是**每屏手调**的（60→100），
+   而 snowlab 是生成器关卡，一关时长从 20 秒到 3 分钟不等（3 层 30 口箱子
+   vs 5 层 104 口），拍一个统一秒数要么全白送、要么全卡死。
+   等跑出真实通关时长分布再补，不猜。 */
+const STAR_LIST = ['nohit', 'bigchain', 'clearout'];
+const STAR_CN = {
+  nohit: '一毛不拔',
+  bigchain: '大打卷',
+  clearout: '一只不留',
+};
+const STAR_HINT = {
+  nohit: '一次都没挨打',
+  bigchain: '一颗球连碎 4 口',
+  clearout: '本关的怪全部清掉',
+};
+const STAR_JUDGE = {
+  nohit: () => S.stat.hits === 0,
+  bigchain: () => S.stat.ballChainMax >= 4,
+  /* `killedTarget > 0` 是防御：有些关（教学关）怪是 0，
+     不挡的话"0 只全清掉"会白送一颗。 */
+  clearout: () => S.killedTarget > 0 && S.killed >= S.killedTarget,
+};
+/** 本关拿到的星（id 数组）。 */
+function judgeStars() {
+  const out = [];
+  for (const id of STAR_LIST) if (STAR_JUDGE[id]()) out.push(id);
+  return out;
+}
+/** id 数组 → 位掩码（bit i = STAR_LIST[i]）。
+ *  **存位不存数组**：`writeSnowProgress` 是 `Object.assign` 浅合并，
+ *  数组每次都整体替换，重打一关会把别的关的星冲掉。 */
+function starBits(ids) {
+  let b = 0;
+  for (const id of ids) {
+    const i = STAR_LIST.indexOf(id);
+    if (i >= 0) b |= (1 << i);
+  }
+  return b;
+}
+/** 某一关已经拿到过的位掩码。0 = 没拿过。 */
+function readSnowStar(stage) {
+  const s = (readSnowProgress().stars || {})[String(stage)];
+  return typeof s === 'number' ? s : 0;
+}
+function writeSnowStar(stage, bits) {
+  const o = readSnowProgress();
+  const stars = Object.assign({}, o.stars || {});
+  const k = String(stage);
+  /* **只增不减。** 重打一次只拿 1 颗不能把之前的 3 颗冲掉 ——
+     星数是"我做到过"，不是"我这一次做到"。 */
+  stars[k] = Math.max(stars[k] || 0, bits);
+  writeSnowProgress({ stars: stars });
+}
 
 /* 从出征页进来的入参。**和 grove.html 的 URLP 同款防御写法** ——
    无头沙箱里既没有 location 也可能没有 URLSearchParams，
@@ -2624,8 +2687,9 @@ function reset(seed, stage) {
     coats: 0, shotsPerCoat: [],
     boxByShot: 0, boxByBall: 0,
     ballChain: 0, ballChainMax: 0,
-    kills: 0, killByBall: 0, hardHint: 0,
+    kills: 0, killByBall: 0, hardHint: 0, hits: 0,
   };
+  S.starGot = [];
   S.cam = { y: 0, k: 0 };
   S.p = {
     x: L.start.x, y: L.start.y, vx: 0, vy: 0,
@@ -4327,6 +4391,7 @@ function endDive() {
 
 function hurtPlayer() {
   S.hp--;
+  S.stat.hits += 1;
   S.invuln = NUM.hpInvuln;
   /* **受伤的震屏不能是最强的。** 12px 是全场最大的一档，可受伤本身
      已经是负反馈（掉血 + 红光 + 无敌闪烁），再叠一个最重的晕眩加成，
@@ -4500,7 +4565,14 @@ function stepDoor(dt) {
          第 48 关通关后停在 48：再往前没有内容，写 49 会让出征页显示
          「第 49 关」，点进去被 clamp 回 48 —— 一个玩家看得见的假数字。 */
       if (S.stage != null && S.stage > 0) {
+        /* 算星 → 存星 → 再推进关号。顺序不能反：`judgeStars` 读 S.stat，
+           而存档不动 stat，但把算星放在推进之后会让"这一关"和"下一关"
+           在存档里混成一笔，出问题很难查。 */
+        S.starGot = judgeStars();
+        writeSnowStar(S.stage, starBits(S.starGot));
         writeSnowProgress({ stage: Math.min(STAGE_MAX, S.stage + 1) });
+      } else {
+        S.starGot = judgeStars();
       }
     }
   }
@@ -9622,11 +9694,18 @@ function drawClear(g) {
   const clampedStage = (S.stage != null && S.stage > 0) ? clamp(S.stage, 1, STAGE_MAX) : 0;
   g.fillText(clampedStage ? ('第 ' + clampedStage + ' 关') : '进 门 了', W / 2, cy + 68);
 
-  g.fillStyle = 'rgba(155,232,110,.7)';
-  g.font = '600 14px "PingFang SC","Microsoft YaHei",sans-serif';
-  /* 「屏」是古道那一套的说法，这里是"关" —— 两套轴混用会让玩家
-     以为推球也有 27 屏。（grove 用了六年的"屏"，snowlab 从 CR-031 起是"关"。） */
-  g.fillText('这一关的量具数据', W / 2, cy + 96);
+  /* **三颗星。** 这一行原来是「这一关的量具数据」—— 一个标签，
+     玩家看完不知道该干什么。同样一行高度，从"说明"换成"成绩"：
+     达成了是实心金星，没达成是空心灰星，三个槽位一眼看得出还差几颗。
+     星名（一毛不拔 / 大打卷 / 一只不留）不进卡片：460 宽的卡里塞
+     三行中文会把量具表挤掉，而星位本身已经说明"有三件事可做"。 */
+  const gotStars = S.starGot || [];
+  g.font = '700 24px "PingFang SC","Microsoft YaHei",sans-serif';
+  for (let i = 0; i < STAR_LIST.length; i++) {
+    const on = gotStars.indexOf(STAR_LIST[i]) >= 0;
+    g.fillStyle = on ? '#FFD75E' : 'rgba(255,255,255,.13)';
+    g.fillText(on ? '★' : '☆', W / 2 - 46 + i * 46, cy + 100);
+  }
 
   const st = S.stat;
   const avg = st.shotsPerCoat.length
@@ -9709,6 +9788,10 @@ const API = {
   /* 深潜三件套。导出是为了断言能走完整的"过门 → 下一关 → 死"链路，
      而不是只验 genLevel(-n) 的形状。 */
   startDive, diveNext, endDive,
+  /* 三星（CR-032 第 1 步）。断言要知道"判定口径是哪三条"，
+     不能只测"能拿到星" —— 那样改判定阈值也不会红。 */
+  judgeStars, starBits, STAR_LIST, STAR_CN, STAR_HINT, STAR_JUDGE,
+  readSnowStar, writeSnowStar,
   /* 主线关号链路（出征页 → 第 N 关 → 通关 → 第 N+1 关）。
      导出是为了断言能验"关号派生种子可复现 / 不同关不同图 / 通关推进 /
      48 关封顶"，这四条里只有第一条在图上看得见。 */

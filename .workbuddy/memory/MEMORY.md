@@ -25,16 +25,16 @@
 ## 验收工具
 | 目标 | 命令 |
 |---|---|
-| snowlab 结构+玩法 | `_snowlab-check.js`（368 项） |
+| snowlab 结构+玩法 | `_snowlab-check.js`（425 项） |
 | 运行时等价 | `snowlab-runtime-check.js`（14 项 / 900 帧 0 偏差）、`grove-runtime-check.js`（39 项） |
-| 玩法冒烟 | `grove-smoke.js`（1488 项） |
+| 玩法冒烟 | `grove-smoke.js`（1501 项） |
 | **跨模块导出** | `import-export-check.js`（39 文件 / 0.2 秒，**提交前必跑**） |
 | **组件挂载 + 换手** | `_battle-mount-smoke.js`（cc 桩 + 真画布，验「点出发不黑屏」「点第三扇门能换到推球」） |
 | 出征页门接线 | `_entry-wire.js`（11 项） |
 | 难度离散 / 形状 | `_diff-audit.js [N]`、`_shape-probe.js [N]` |
 | 行为 | `_jitter-probe.js`、`_foe-bounce.js`、`_ball-chaos.js` |
 | 性能 | `_ab-perf.js`（同进程 A/B，**只看比值**） |
-| 出图 | `_floors-shot.js`（锁镜 + `BEFORE=`）、`_goal-shot.js`（三种目标 + 残球特写）、`_pairs-shot.js`（撞/合四格序列）、`_entry-shot.js`（真浏览器验入口）；**真立绘要 `ART=1`** |
+| 出图 | `_boss-shot.js`（终局四态+3 倍特写）、`_rooms-shot.js`（四场景地下同层对照） | `_floors-shot.js`（锁镜 + `BEFORE=`）、`_goal-shot.js`（三种目标 + 残球特写）、`_pairs-shot.js`（撞/合四格序列）、`_entry-shot.js`（真浏览器验入口）；**真立绘要 `ART=1`** |
 | CJS 产物 | `build-rt.js`（**清完再编**；别直接 tsc，只增不删） |
 | 存量对照 | `_legacy-audit.js`（只读，两套关卡参数表） |
 
@@ -44,6 +44,22 @@ TS 语法检查要用 **Cocos 自带 typescript**（隔离 workspace 里没装�
 **但 `transpileModule` 只查语法、不解析模块** —— 所以还需要 import-export-check。
 
 性能尖峰先做**最小复现**（剥到只剩画布）—— 唯一能钉死「环境还是我们」。
+
+## 场景主题 / BOSS（2026-10-30 第 3-4 批）
+- 场景 = 5 样东西：`sky/脊色/deco/frame/mote` + `words` + `medium`（弹速/发数）。
+  **只换背景图是最吃亏的**：动作节奏全不变，玩家只觉得在刷同一张图。
+- **地下必须一起换。** 地表换色只覆盖开场两秒，90% 时间在四层房间里。
+  `ROOM_RAMP` 每场景四档、混 68%；`let ROOM` 是"当前场景的表"，6 处引用不用改。
+  → **换表不换位图等于没换**：墙预渲染进 `STATIC`，`applyTheme` 必须置空。
+- BOSS 判据是**动量**不是"打中 N 发"；**球不消失只被弹开**（球是唯一通道，
+  撞一次少一颗 = 第二次就死局）；它不还手不吐怪（压力来自球有寿命、会被弹开）。
+- **摆位要扫全宽**：箱子按 48 网格排，132 宽的怪只进得了 144 的档，
+  从某个 x 往一个方向退 16 会整段跳过唯一空档 → `boss=null`，
+  而"没 BOSS"和"BOSS 坏了"外观完全一样。
+- 圆判定 vs 方判定：圆形会把贴地滚来的球推到地板下面，且比画出来的大一圈；
+  用 AABB + 最小穿透轴。
+- 出图抠特写：**世界坐标要减 `S.cam.y`**；多格图要**画完当场抠**（否则四格
+  全是最后一帧）。
 
 ## 常返工的坑
 - 震屏唯一出口 `kickShake(px, key)`，峰值 8px；散落 `S.shake = Math.max` 会**重复点火**。`hitStop()` 同语义，小值调用是死代码。

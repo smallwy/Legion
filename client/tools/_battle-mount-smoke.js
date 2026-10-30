@@ -129,10 +129,34 @@ class Color { constructor(r, g, b, a) { this.r = r; this.g = g; this.b = b; this
 class SceneAsset { constructor() { this.scene = {}; } }
 class ImageAsset { constructor(o) { Object.assign(this, o || {}); } }
 
-/* 美术图**故意全部失败**：黑屏不该依赖图到没到 —— 没图时运行时应当
-   回退代码图形。真实环境里图是异步的，第一帧一定是没图的。 */
+/* 美术图**默认全部失败**：黑屏不该依赖图到没到 —— 没图时运行时应当
+   回退代码图形。真实环境里图是异步的，第一帧一定是没图的。
+
+   ART=1（环境变量）改成**真读磁盘**。为什么需要这个开关：出征页收成一扇门之后
+   卡片是 840×420、名字 34px，这些数字必须落在真立绘（夜空、雪地、草地）
+   上才看得出对不对 —— 回退的代码图形没有那些亮暗，文字对比度是假的。
+   **只影响出图，不影响断言**："画布不是纯色"两种模式下都成立。 */
+/* 这个桩是**单独的文件**（tools/_gb-build/node_modules/cc/index.js），
+   它自己看不见 _battle-mount-smoke.js 里的 path 和 __dirname。
+   相对层级：cc -> node_modules -> _gb-build -> tools -> client，上四级。 */
+const ART_DIR = require("path").join(__dirname, "..", "..", "..", "..", "assets", "resources");
 const resources = {
-  load(p, t, cb) { setImmediate(() => cb(new Error('smoke: 不加载美术图 ' + p), null)); },
+  load(p, t, cb) {
+    if (process.env.ART !== "1") {
+      setImmediate(() => cb(new Error("smoke: 不加载美术图 " + p), null));
+      return;
+    }
+    setImmediate(() => {
+      /* **loadImage 返回的是 Promise，不是 Image。** 直接取 .width 得到
+         undefined —— 于是 GroveBattle._toDrawable 判"取不到可绘制数据"，
+         返回 null，一张图都注不进 ART，画面回到代码图形，
+         而"加载成功"这条日志一条不少。第一版就是这么栽的。
+         另外注入用的字段必须是 data（_toDrawable 读的就是它），不是 image。 */
+      require("@napi-rs/canvas").loadImage(ART_DIR + "/" + p + ".png")
+        .then((img) => cb(null, new ImageAsset({ data: img, width: img.width, height: img.height })))
+        .catch((e) => cb(e, null));
+    });
+  },
 };
 
 const director = {
@@ -261,6 +285,12 @@ const ck = (name, ok, extra) => {
   ck("画布是 960x600", !!cv && cv.width === W && cv.height === H,
      cv ? cv.width + "x" + cv.height : "无");
 
+  /* **先让事件循环转一圈再跑帧。** 美术图是异步的（resources.load 内部
+     setImmediate），同步跑完 30 帧时一张图都还没进来 —— 出出来的是代码
+     图形回退版，而"画布不是纯色"这条在回退版下照样绿。
+     于是出图看着像"立绘没画出来"，断言却说一切正常。 */
+  await new Promise((r) => setTimeout(r, 150));
+
   console.log("\n=== ② 跑 30 帧 update ===");
   let runErr = null;
   try {
@@ -286,6 +316,7 @@ const ck = (name, ok, extra) => {
     dominant = Math.max(...seen.values());
     blank = colors < 8 || dominant / (W * H) > 0.96;
   }
+  console.log("    已注入的美术图：" + JSON.stringify(GROVE.ART ? Object.keys(GROVE.ART) : "ART 没导出"));
   console.log("\n=== ③ 画布内容 ===");
   console.log("    颜色种类（4bit 量化）= " + colors +
               "   最大单色占比 = " + (100 * dominant / (W * H)).toFixed(1) + "%");
@@ -312,7 +343,13 @@ const ck = (name, ok, extra) => {
 
   let switchErr = null;
   try {
-    GROVE.enterGate(2);                       // GATES[2] = 雪原推球
+    /* **按 id 找，不按槽号。** 原来写的是 `enterGate(2)` —— 出征页有三扇门
+     时推球正好在 2。2026-10-30 收成一扇门之后 GATES[2] 是 undefined，
+     这一句变成静默空操作，三次断言一起翻红，而报错信息说"没切过去"，
+     看起来像换手坏了。按 id 找就不会被"门摆了几扇"这件事带跑。 */
+  const snowSlot = GROVE.GATES.findIndex((g) => g.id === "snow");
+  ck("出征页上还找得到推球那扇门", snowSlot >= 0, "slot=" + snowSlot);
+  GROVE.enterGate(snowSlot);
   } catch (e) {
     switchErr = e;
   }

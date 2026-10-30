@@ -220,6 +220,11 @@ for (let i = 0; i < G.GROVE.LEVELS.length; i++) {
     ok(G.GROVE.S.phase === 'portals',
        '★ fromHome=true 落到的第一屏是出征页（不是直接开打）',
        'phase=' + G.GROVE.S.phase);
+    /* **临时把古道接回门表再点。** 2026-10-30 出征页收成一扇门，第一格
+       现在是推球（跳页，无头环境里没有 location 所以不会进 play）——
+       这条验的是"点开着的门直接进关、不经过挑一屏中间层"，
+       古道只是不摆出来了，行为必须仍然成立。 */
+    G.GROVE.GATES.unshift(...G.GROVE.GATES_LEGACY);
     try {
         G.GROVE.enterGate(0);
         for (let f = 0; f < 30; f++) { G.groveTick(1 / 60); G.groveRender(); }
@@ -227,7 +232,7 @@ for (let i = 0; i < G.GROVE.LEVELS.length; i++) {
         err = e;
     }
     ok(!err && G.GROVE.S.phase === 'play',
-       '★ 出征页点第一道门 → 直接开打当前进度那一屏（挑一屏 2026-10-26 删除）',
+       '★ 出征页点第一道门（临时接回古道）→ 直接开打当前进度那一屏',
        'phase=' + G.GROVE.S.phase);
 }
 

@@ -18081,8 +18081,14 @@ const GATE = {
   /* 悬停放大 1.2：**中心不变**，左右各外扩 w*0.1。
      n=2 时左卡中心 265、放大后半宽 246 → 左缘 19，仍在屏内；n≥3 卡更窄，
      更安全。命中判定用**常态矩形**：常态区是放大区的子集且同心，
-     鼠标放上去不会"放大→掉出→复原→再放大"地抖。 */
-  scale: 1.2,
+     鼠标放上去不会"放大→掉出→复原→再放大"地抖。
+
+     **单卡时不放大**（2026-10-30 出征页收成一扇门之后才可能发生）：
+     840 × 1.2 = 1008 > 960，中心放大必然左右各掉 24px 出画布 ——
+     实测断言"悬停放大后仍在画布内"就是在这里翻红的。
+     而且放大的语义是"回答我指着哪一张"，只有一张时这个问题不存在，
+     放大只剩抖动。单卡的悬停反馈改成描边（见 drawGateCard）。 */
+  get scale() { return this.slots > 1 ? 1.2 : 1; },
   /* 卡内第三行（星靶条件 / 深巢规则）只在卡够高时画：它要 22px，加上
      名字 20 + 进度 18 + 上下留白 14 = 74，而底部渐变只有 h*0.48 ——
      h < 150 时装不下，硬画就是把字压在亮图上。 */
@@ -18106,7 +18112,23 @@ const GATE = {
   },
   get y() { return Math.round(this.top + (this.bottom - this.top - this.h) / 2); },
 };
-const GATES = [
+/* **出征页只留一扇门。**（2026-10-30 用户：「现在2个玩法 都在 是不是很奇怪呢
+   我需要一个有深度 有趣的」）
+
+   三扇门并排读起来是"我们有两个游戏"：玩家要么不知道该选哪个，要么以为
+   古道和推球是同一款游戏的两章 —— 可它们的物理、美术、进度全都不通，
+   打一半换过去等于从头开始。这不是"内容多"，是把团队资源摊成两半。
+
+   解法不是把 grove 删掉（那两套玩法本身是好的，删了就真丢了），
+   而是**不让它出现在主流程里**：
+     · 门只留「雪原推球」；
+     · 另外两套的完整定义原样搬进 GATES_LEGACY，一行代码没动；
+     · 原型直接双击 grove.html（FROM_HOME 为 false）仍然 beginRun 打古道，
+       `?from=home&stage=K` 也照旧能指定第 K 屏；
+     · 想把三扇门接回来：把下面 `const GATES = [` 改成
+       `const GATES = [...GATES_LEGACY, ...GATES_MAIN];` —— 不需要改别的。
+   断言里有一条盯着"出征页只有一扇门"，免得哪天顺手加回来。 */
+const GATES_LEGACY = [
   {
     id: "trail",
     name: "苔原古道",
@@ -18126,6 +18148,10 @@ const GATES = [
        GATE.slots 是 getter，两扇门都开时网格还是两行。 */
     open: true,
   },
+];
+
+/* 主流程唯一的一扇门。 */
+const GATES = [
   {
     /* 2026-10-30 第三扇门。**推球玩法（snowlab）此前没有任何入口** ——
        它是独立的一个 html，game.html / index.html / HomeRuntime 对它的引用
@@ -18152,6 +18178,31 @@ function readSnowSave() {
     const o = JSON.parse(raw || "{}");
     return o && typeof o === "object" ? o : {};
   } catch (e) { return {}; }
+}
+
+/** 推球一共多少颗星可拿 = 48 关 × 3 颗。
+ *  **硬编码，因为 grove.html 读不到 snowlab 的 STAGE_MAX** —— 两边是两个
+ *  独立文件，唯一能共享的只有 localStorage。改推球关数时，这里的 144
+ *  和 snowlab.html 的 `STAGE_MAX` 必须一起改（`_entry-wire.js` 有一条
+ *  断言拿两边的数字对账，漏改会被它抓住）。 */
+const SNOW_STARS_MAX = 144;
+
+/** 存档里所有关的星合起来几颗。
+ *  `stars` 是 `{ "13": 7 }` 这样的**位掩码表**（7 = 111b = 三颗），
+ *  所以按二进制里 1 的个数累加，**不是数 key 的个数** —— 数 key 的话
+ *  "打了一关三颗"和"打了三关各一颗"会长得一模一样。
+ *  非数字一律跳过：这份数据来自 localStorage，玩家改存档 / 老版本留 null
+ *  都见过，一个 NaN 进来这条循环就永远不结束。 */
+function snowStarCount(o) {
+  const m = (o && o.stars) || {};
+  let n = 0;
+  for (const k in m) {
+    let v = m[k];
+    if (typeof v !== "number" || !isFinite(v)) continue;
+    v = v >>> 0;
+    while (v) { n += (v & 1); v >>>= 1; }
+  }
+  return n;
 }
 
 /* **推球玩法的跳转口，做成可替换的。**
@@ -18753,8 +18804,15 @@ function gateSubLine(p) {
     /* 报的是**下一次从哪开始**，不是"打完了第几关" ——
        通关那一刻存档就推到 N+1 了，所以这里直接读就是"接着打 N+1"。
        没有 `/48`：和另外两扇门同一条规矩，不暴露总数。 */
-    const st = readSnowSave().stage;
-    return (st > 0) ? "第 " + st + " 关" : "还没出发";
+    const o = readSnowSave();
+    const st = o.stage;
+    /* 星数：出征页是出门前**唯一**能看到"我打到哪了"的地方。
+       只报关号的话，"这一关值不值得重打一遍"没有任何依据 ——
+       而星本来就是为这件事存在的。0 星时不写，写"星 0/144"会让
+       第一次进来的人以为欠了 144 颗。 */
+    const got = snowStarCount(o);
+    const where = (st > 0) ? "第 " + st + " 关" : "还没出发";
+    return got > 0 ? where + "   ·   星 " + got + "/" + SNOW_STARS_MAX : where;
   }
   if (!(S.progress > 0)) return "还没出发";
   const cur = clamp(S.progress, 0, LEVELS.length - 1);
@@ -18786,16 +18844,32 @@ function gateDetailLine(p) {
 function drawGateCard(g, p, r, focused, withDetail, FONT) {
   drawGateArt(g, p, r.x, r.y, r.w, r.h);
 
+  /* 单卡没有"放大"这个反馈了（放大必出画布，见 GATE.scale），
+     悬停改成描一圈亮边 —— 否则鼠标移上去整页毫无反应，
+     读起来像"这张卡点不动"。多卡时仍然靠放大，不描边：
+     两套反馈同时出现会让"放大"这件事看着像没生效。 */
+  if (focused && !(GATE.scale > 1)) {
+    g.strokeStyle = "rgba(240,214,140,.9)";
+    g.lineWidth = 2.5;
+    rr(g, r.x + 1.5, r.y + 1.5, r.w - 3, r.h - 3, 14);
+    g.stroke();
+  }
+
   /* 字号跟卡宽分两档：195 宽的卡用 20px 名字（4 字 80px，内宽 155 其实放得下），
      但配 13.5 的副行会挤成一片；降到 16/11.5 之后三行的呼吸才一致。 */
   const small = r.w < 240;
   /* 第三档：120 高的卡（4 个以上玩法）文字块必须再压一档，否则
      15+14+11 的行高会把立绘挤到不足 40px。 */
   const tiny = r.h < 135;
-  const nameSize = tiny ? 15 : (small ? 16 : 20);
-  const subSize = tiny ? 11 : (small ? 11.5 : 13.5);
-  const detSize = 11.5;
-  const padX = small ? 14 : 20;
+  /* 第四档：**单卡 840×420**（出征页收成一扇门之后才出现）。
+     20px 的名字摆在 840 宽的底栏上，会被读成"一张大图底下压了行小字"——
+     卡面积涨了四倍，字号不跟着涨，气质还是原来那张小卡。
+     这一档只在 r.w >= 560 时命中，三张卡（266 宽）不会走到。 */
+  const huge = r.w >= 560;
+  const nameSize = huge ? 34 : (tiny ? 15 : (small ? 16 : 20));
+  const subSize = huge ? 17 : (tiny ? 11 : (small ? 11.5 : 13.5));
+  const detSize = huge ? 14 : 11.5;
+  const padX = huge ? 34 : (small ? 14 : 20);
 
   /* 文字块**从底往上排**，再按排出来的实际高度反推压暗带到哪儿为止。
      之前的写法是"先画固定 96 高的渐变，再把字放在 h-58 / h-34 / h-14"——
@@ -19139,10 +19213,15 @@ function drawGates(g) {
     g.globalAlpha = 1;
   }
 
+  /* 提示语**跟门数走**。一扇门之后"点一张进去""方向键挑"都成了空话 ——
+     没有第二张可挑，写了只会让人去找那张不存在的卡。 */
+  const hint = GATE.slots > 1
+    ? "鼠标放上去看这张卡   ·   点一张进去   ·   方向键挑   ·   Enter 进"
+    : "点这张卡出发   ·   Enter 进";
   g.textAlign = "center";
   g.fillStyle = "rgba(200,222,200,.46)";
   g.font = "11.5px " + FONT;
-  g.fillText("鼠标放上去看这张卡   ·   点一张进去   ·   方向键挑   ·   Enter 进", W / 2, H - 42);
+  g.fillText(hint, W / 2, H - 42);
 }
 
 /* ============================================================================
@@ -21437,6 +21516,9 @@ export const GROVE: any = {
      snowlab.html 这个文件，GroveBattle 要拿它换成"切到推球组件"，
      否则真机点第三扇门是白页 404（原型侧一切正常，打包后才炸）。 */
   setSnowlabEntry, readSnowSave,
+  /* 出征页收成一扇门之后（2026-10-30）新增的三个：冒烟要能问
+     "另外两套还在不在""星数怎么数""144 对不对"，问不出来就只能靠肉眼。 */
+  GATES_LEGACY, snowStarCount, SNOW_STARS_MAX,
   /* GATE 是网格/预览的布局常量：冒烟要用它验"槽位 = 玩法数（无空槽）"和
      "预览区不与网格重叠"，写死数字的断言迟早和界面漂移。 */
   GATE,

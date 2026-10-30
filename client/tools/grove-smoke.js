@@ -2402,11 +2402,24 @@ console.log("\n=== 27. 出征页进门语义 / 全通存档语义（挑一屏 20
      最后一条是这一版最容易破的 —— 中心放大会往左右各外扩 w*0.1，
      2 张卡时左缘只剩 19px。 */
   {
+    /* **临时拼回三张卡来验公式。** 主流程现在只有一扇门（见 GATES_LEGACY
+       的注释：两个玩法并排读起来是"两个游戏"），但
+       `w = floor((840-(n-1)*20)/n)` 这条排版公式必须对 2/3/4 张都成立 ——
+       那是"以后想把玩法加回来"唯一的保证。测完立刻还原，别让后面几段
+       读到假卡。假卡只带排版要用的字段：这几段只量矩形和命中，
+       不绘制、也不进 enterGate，所以不需要真立绘。 */
+    const realGates = P.GATES.slice();
+    P.GATES.push(
+      { id: "trail", name: "苔原古道", art: "gate-trail", open: true },
+      { id: "nest", name: "深巢无尽", art: "gate-nest", open: true });
+    const cells3 = [];
+    for (let i = 0; i < P.GATE.slots; i++) cells3.push(P.gateRect(i));
+
     let sameY = 0;
-    for (const a of cells) if (a.y !== cells[0].y) sameY++;
+    for (const a of cells3) if (a.y !== cells3[0].y) sameY++;
     ok(sameY === 0, "★ 所有玩法卡在同一水平线上（横排）", "不同 y 的 " + sameY);
-    eq(cells[0].x, P.GATE.marginX, "★ 首卡贴左边距");
-    const last = cells[cells.length - 1];
+    eq(cells3[0].x, P.GATE.marginX, "★ 首卡贴左边距");
+    const last = cells3[cells3.length - 1];
     /* **容差 2px，不是恰好等于边距。** 卡宽是 `floor((840-(n-1)*20)/n)`：
        3 张时 800/3 = 266.67 → 266，余下 2px 必然落在右缘。
        这是 GATE.w 的注释里写明的取舍（用 round 会算出 267，右缘反而
@@ -2418,7 +2431,7 @@ console.log("\n=== 27. 出征页进门语义 / 全通存档语义（挑一屏 20
        gapR + " vs " + P.GATE.marginX);
 
     let zout = 0;
-    for (let i = 0; i < cells.length; i++) {
+    for (let i = 0; i < cells3.length; i++) {
       const z = P.gateZoomRect(i);
       if (z.x < 0 || z.y < 0 || z.x + z.w > 960 || z.y + z.h > 600) zout++;
     }
@@ -2426,16 +2439,62 @@ console.log("\n=== 27. 出征页进门语义 / 全通存档语义（挑一屏 20
 
     /* 中心必须不变：改了中心，鼠标会在放大那一瞬间掉出卡外 → 复原 → 再放大，
        闪成一片。这条断言守的就是"不抖"。 */
-    for (let i = 0; i < cells.length; i++) {
-      const c = cells[i], z = P.gateZoomRect(i);
+    for (let i = 0; i < cells3.length; i++) {
+      const c = cells3[i], z = P.gateZoomRect(i);
       eq(Math.round(z.x + z.w / 2), Math.round(c.x + c.w / 2), `槽 ${i} 放大中心不变`);
       ok(z.w > c.w, `槽 ${i} 放大真的变大`, c.w + " → " + z.w);
     }
 
     /* 放大后的矩形要和**命中矩形**区分开：命中永远用常态矩形，
        否则放大后盖住的邻居会点不到。 */
-    eq(P.gateHit(cells[1].x + 4, cells[1].y + cells[1].h / 2), 1,
+    eq(P.gateHit(cells3[1].x + 4, cells3[1].y + cells3[1].h / 2), 1,
        "★ 命中用常态矩形（放大不抢邻居的点击）");
+
+    /* 还原成真实门数。**放在这一块的最后**，就是为了让后面几段
+       （命中自己 / 点门进关）读到的是主流程那一扇门，而不是假卡。 */
+    P.GATES.length = 0;
+    for (const g of realGates) P.GATES.push(g);
+  }
+
+  /* ②b 主流程只有一扇门（2026-10-30 用户：「现在2个玩法 都在 是不是很奇怪呢
+     我需要一个有深度 有趣的」）＋ 单卡带来的三个后果。 */
+  eq(P.GATES.length, 1, "★ 出征页只有一扇门（两个玩法并排已收掉）");
+  eq(P.GATES[0].id, "snow", "★ 剩下那扇是推球");
+  eq(P.GATES_LEGACY.length, 2, "★ 古道/深巢的定义还留着（不摆出来 ≠ 删掉）");
+  eq(P.GATE.scale, 1, "★ 单卡不放大（840 × 1.2 = 1008 会出画布，实测越界 24px）");
+  {
+    const c0 = P.gateRect(0);
+    /* 单卡 = 840×420：宽度是 `960 - 60*2`，高度被 `min(420, ...)` 封顶。
+       它撑满左右边距这件事是"一扇门不该看着像三扇门里剩下的那张"，
+       所以不能只验"在画布内"。 */
+    ok(c0.w === 840 && c0.h === 420, "★ 单卡撑满边距（840×420）", c0.w + "×" + c0.h);
+    const z0 = P.gateZoomRect(0);
+    ok(z0.x >= 0 && z0.y >= 0 && z0.x + z0.w <= 960 && z0.y + z0.h <= 600,
+       "★ 单卡的「放大」矩形仍在画布内（命中区不越界）",
+       z0.x + ".." + (z0.x + z0.w));
+  }
+
+  /* ②c 出征页的星数（2026-10-30）。出征页是出门前**唯一**能读到"我打到哪了"
+     的地方，数错等于告诉玩家"你只拿了 1 颗"而实际有 3 颗。
+     **按位掩码 popcount，不是数 key 的个数** —— 第三条专门咬这件事：
+     "一关满星 7" 和 "三关各一颗" 数 key 都是 3，只有 popcount 分得清 3 和 3。
+     真正的区分靠第二条（{1:7,2:7} = 6 而不是 2）。 */
+  eq(P.snowStarCount({ stars: { "13": 7 } }), 3, "★ 一关满星 = 3 颗（不是数 key）");
+  eq(P.snowStarCount({ stars: { "1": 1, "2": 1, "3": 1 } }), 3, "三关各一颗 = 3 颗");
+  eq(P.snowStarCount({ stars: { "1": 7, "2": 7 } }), 6, "★ 两关满星 = 6 颗（数 key 会得 2）");
+  eq(P.snowStarCount({}), 0, "空存档 = 0 颗");
+  eq(P.snowStarCount({ stars: { "1": "x", "2": null, "3": 7 } }), 3,
+     "★ 脏数据跳过不挂死（NaN 进 while 循环永远不结束）");
+  {
+    /* 144 是硬编码的：grove.html 读不到 snowlab 的 STAGE_MAX，两个独立文件
+       唯一能共享的只有 localStorage。漏改一处的后果不是报错，是
+       "打完 48 关星数永远差一截"—— 所以把两个文件对起来。 */
+    const snowSrc = fs.readFileSync(
+      path.join(__dirname, "..", "prototype", "snowlab.html"), "utf8");
+    const m = snowSrc.match(/const STAGE_MAX\s*=\s*(\d+)/);
+    ok(!!m, "snowlab 里找得到 STAGE_MAX");
+    eq(P.SNOW_STARS_MAX, parseInt(m[1], 10) * 3,
+       "★ 星上限 = snowlab 关数 × 3（两边一起改）");
   }
 
   /* ③ 命中测试和格子几何是同一份 —— 抓小卡中心必须命中自己。 */
@@ -2445,6 +2504,11 @@ console.log("\n=== 27. 出征页进门语义 / 全通存档语义（挑一屏 20
     if (P.gateHit(c.x + c.w / 2, c.y + c.h / 2) !== i) hitBad++;
   }
   ok(hitBad === 0, "每个小卡中心点命中自己（绘制与判定同源）", "错 " + hitBad);
+
+  /* ④ 起**临时把古道/深巢接回门表**：下面几条验的是"点哪扇门走哪条线"
+     和进度 clamp，都是古道的行为。主流程只摆一扇门（②b 已钉），
+     但那些行为不能坏 —— "不摆出来"和"坏掉了"在画面上长得一模一样。 */
+  P.GATES.unshift(...P.GATES_LEGACY);
 
   /* ④ 点开着的门 → 直接进**当前进度那一屏**（挑一屏已删，没有中间选择页）。 */
   S.progress = 3;
@@ -4379,6 +4443,13 @@ console.log("\n=== 40. 出征页交互：点门直达当前进度 / 没开的门
      window.addEventListener 是 noop，键盘处理也没导出成函数。 */
   const sb40 = boot(), P = sb40.GROVE;
   const src40 = fs.readFileSync(HTML, "utf8");
+  /* **临时把古道/深巢接回门表。** 2026-10-30 出征页收成一扇门
+     （见 GATES_LEGACY 的注释），但这一节测的是"门这个机制"本身：
+     点哪扇进哪条线、深巢动不动主线进度、墙宽跟着线路切换。
+     那些行为在 grove 里仍然成立，而且必须继续成立。
+     主流程"只有一扇门"由 §27 的 ②b 单独钉，这里放开到三扇。
+     沙箱是一次性的，不用还原。 */
+  P.GATES.unshift(...P.GATES_LEGACY);
 
   /* ---- A. 点开着的门直接进当前进度那一屏 ---- */
   P.S.progress = 5;
@@ -4520,7 +4591,7 @@ console.log("\n=== 40. 出征页交互：点门直达当前进度 / 没开的门
   ok(/get slots\(\) \{ return GATES\.length; \}/.test(src40),
      "槽位 = 玩法数（空槽已删；加玩法只往 GATES 里加，网格自动多排一行）");
 }
-console.log("\n=== 41. 出征页：两扇门 / 点开着的门进玩法 / 没开的门不静默吞 ===");
+console.log("\n=== 41. 出征页：门表契约 / 点开着的门进玩法 / 没开的门不静默吞（临时接回 legacy）===");
 {
   /* 用户原话：「出门之后 应该有一个出征界面 融合这些玩法的 每个玩法一个小的概念图」
 
@@ -4535,10 +4606,14 @@ console.log("\n=== 41. 出征页：两扇门 / 点开着的门进玩法 / 没开
   const sb41 = boot(), P = sb41.GROVE;
   const src41 = fs.readFileSync(HTML, "utf8");
   const CW = 960, CH = 600;
+  /* 临时接回古道/深巢：这一节验的是门的**字段契约、命中边界和概念图调用**，
+     三扇门才是它的测试面。主流程那一扇门在 §27 ②b 单独钉。 */
+  P.GATES.unshift(...P.GATES_LEGACY);
   const G41 = P.GATES;
 
   /* ---- A. 门表 ---- */
-  ok(Array.isArray(G41) && G41.length >= 2, "至少两扇门（一扇门就等于没有选择）",
+  ok(Array.isArray(G41) && G41.length >= 2,
+     "至少两扇门（这一节临时接回了 legacy，主流程只摆一扇）",
      G41 ? String(G41.length) : "无");
   {
     const ids = G41.map((g) => g.id);

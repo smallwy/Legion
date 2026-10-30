@@ -41,7 +41,10 @@ sb.location = loc;
 
 const SNOW = GROVE.GATES.findIndex(g => g.id === 'snow');
 ok(SNOW >= 0, '出征页里有第三扇门（id = snow）');
-ok(SNOW === 2, '第三扇门在最后一个槽位（索引 2）', '实际 ' + SNOW);
+/* **不钉槽号。** 原来是 `SNOW === 2`（三扇门时推球正好第三）。2026-10-30
+   出征页收成一扇门，槽号变成 0 —— 这条断言保护的是"推球那扇门存在且开着"，
+   不是"它在第几个格子"，钉槽号只会让每次调整门数都要改一遍。 */
+ok(SNOW >= 0, '推球那扇门还在门表里（不看槽号）', '实际 ' + SNOW);
 ok(GROVE.GATES[SNOW].open === true, '第三扇门是开着的（没开门的话这条链根本走不到）');
 
 console.log('\n① 默认实现：点门 = 真跳页');
@@ -76,6 +79,10 @@ const S = GROVE.S;
 /* 古道：切 phase 进战斗，**绝不能**碰 snowEntry */
 let hits2 = 0;
 GROVE.setSnowlabEntry(() => { hits2++; });
+/* 古道的槽号也不再是 0（现在 0 是推球）。临时接回 legacy 再点 ——
+   这条验的是"另外两扇门不会串到推球出口"，门不在主流程上摆了，
+   但那个出口变量是全局的，串了照样白页。 */
+GROVE.GATES.unshift(GROVE.GATES_LEGACY[0]);
 GROVE.enterGate(0);
 ok(hits2 === 0, '点「苔原古道」不触发推球出口', '实际 ' + hits2);
 ok(S.phase !== 'portals', '点「苔原古道」离开出征页（phase 变了）', '实际 ' + S.phase);

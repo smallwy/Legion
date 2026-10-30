@@ -18,23 +18,28 @@ import { EDITOR } from 'cc/env';
 import { GameBootstrap } from './GameBootstrap';
 import { GroveBattle } from './grove/GroveBattle';
 import { SnowlabBattle } from './snowlab/SnowlabBattle';
+import { battleRegister } from './BattleSwitch';
 
 /**
- * 出发进战斗跑哪套玩法。
+ * 出发进战斗先挂哪套玩法。
  *
- *   'snowlab' —— **当前默认**（雪人兄弟式 + 可破坏地形 + 挖穿楼层 + 推球）。
- *                玩法在 SnowlabRuntime 里跑，挂载逻辑和 grove 同形。
- *   'grove'   —— 推球第一版。留作对照，不再迭代。
- *                场景里只建一台相机 + 一块离屏画布，玩法在 GroveRuntime 里跑。
+ *   'grove'   —— **当前默认**。挂 GroveBattle，但**一进来是出征页**，
+ *                不是直接开打：`groveBoot(..., fromHome = true)` → `openGates()`。
+ *                三扇门各自的分工见下面的 `battleRegister`。
+ *                为什么默认回落到它：出征页是"选玩法"的地方，主界面「出发」
+ *                只该负责"出门"，不该替玩家决定玩哪套。2026-10-30 之前
+ *                默认是 snowlab，于是苔原古道和深巢在 Cocos 里一次都进不去。
+ *   'snowlab' —— 直连推球，**跳过出征页**。只给调试用（`?mode=snowlab`）：
+ *                改关卡内容时不想每次点一遍门。
  *   'mow'     —— 割草自动战斗垂直切片（CR-015 甲方案）。留作对照，不再迭代。
  *
  * 两种切法，按场合选用：
  *   ① 改下面这一行的字面量（要长期换主线时用这个）；
- *   ② 预览/构建的地址后面加 `?mode=grove`（临时对比用这个，不用改代码、
+ *   ② 预览/构建的地址后面加 `?mode=snowlab`（临时对比用这个，不用改代码、
  *      不用等编辑器重编，刷新一下就是另一套）。
  * 三套代码都还在，谁也没被删掉。
  */
-const DEFAULT_MODE: 'grove' | 'snowlab' | 'mow' = 'snowlab';
+const DEFAULT_MODE: 'grove' | 'snowlab' | 'mow' = 'grove';
 
 /**
  * 从地址栏读 `?mode=`，认不出来就回落默认。
@@ -91,6 +96,17 @@ function tryBoot() {
 }
 
 if (!EDITOR) {
+    /* **出征页 → 各玩法的接线。**
+     *
+     * 注册而不是直接 import：GroveBattle 要切到 SnowlabBattle，SnowlabBattle
+     * 又切回 GroveBattle，互相 import 就是循环依赖（理由见 BattleSwitch 文件头）。
+     * 这里两边都认识，正好由它充当唯一的"谁都能挂"的地方。
+     *
+     * 放在 `if (!EDITOR)` 里面：编辑器为注册 ccclass 也会 import 全部脚本，
+     * 顶层注册会在编辑器进程里也生效 —— 和 tryBoot 那条守卫同一个理由。 */
+    battleRegister('grove', (node) => node.addComponent(GroveBattle));
+    battleRegister('snowlab', (node) => node.addComponent(SnowlabBattle));
+
     director.on(Director.EVENT_AFTER_SCENE_LAUNCH, tryBoot);
     director.on(Director.EVENT_BEFORE_UPDATE, () => {
         if (!bootedScene) tryBoot();

@@ -2467,6 +2467,11 @@ const S = {
   boxes: [], plats: [], deco: [], door: null,
   ammo: 0, belly: 0, hp: 0, invuln: 0,
   killed: 0, killedTarget: 0,
+  /* 本关目标（破门 / 寻宝 / 省球）。初值必须是 'door' —— 不是"随便填个值"：
+     reset 之前 HUD 就可能被画一帧（出图工具直接调 draw），
+     那时 `GOAL_CN[S.goal]` 拿到 undefined 会画出「undefined」三个字。
+     `ballUsed` 同理，省球关的额度条要拿它算。 */
+  goal: 'door', ballUsed: 0, lootTotal: 0, loot: 0,
   shake: 0, flash: 0, hitStop: 0,
   /* **上一次震屏点火的时间与连击数，按来源分开记。**
      球连着碾碎四口箱是"一个动作"，不是四次冲击 —— 每次都用满力点火，
@@ -2536,6 +2541,50 @@ function newLevel(seed) {
    （深潜正好相反：那边一命往下，图必须换，所以走 seed + depth 的混合。） */
 const SNOW_SAVE_KEY = 'pawpack.snow';
 const STAGE_MAX = 48;
+
+/* ---------------------------------------------------------------- 关卡目标
+   CR-032 第 2 步：「48 关现在通关只有『进门』一种」。三星解决了"重打理由"，
+   但没解决**关与关不同** —— 第 7 关就见过全部 6 种骨架，剩下 41 关是
+   同一批走法配更多箱子（`_shape-probe.js` 的洞 x 集合几乎逐关重复）。
+
+   加目标不是加内容量，是加**问题类型**。三种目标对应三个不同的解法方向：
+
+     破门 door    杀够 N 只 → 门开。基线，也是教学段唯一的一种。
+     寻宝 collect 挖出本关那口金箱 → 门开。**不要求击杀**，但要横穿全图砸箱。
+     省球 limit   杀够 N 只 → 门开，但本关只有 3 颗满球，之后裹出来的是残球。
+
+   分配规则**必须确定性**（同关号 → 同目标）：否则"我卡在第 13 关"没法复现，
+   也没法分享。用 `floor((n-1)/6) % 3` 而不是 `n % 3`，是为了让它和骨架
+   **正交**：骨架 = `(n-1) % 6`，每 6 关一轮；目标按轮次换。
+   于是第 7 关 = 熟悉的空间 + 新的问题，正好接上"第 7 关就见过全部骨架"那个坑。
+
+   **为什么不用 nohit 当第三种**（CR-032 原文写的是 collect / limit / nohit）：
+   nohit 已经是三星里的第一颗（"一毛不拔"）。目标和星不能同一个判据 ——
+   那等于把同一件事数两遍，玩家打通关就白拿两颗。
+   目标和星的分工：**目标是准入条件（门开不开），星是评价（打得好不好）**。 */
+const GOAL_LIST = ['door', 'collect', 'limit'];
+const GOAL_CN = { door: '破门', collect: '寻宝', limit: '省球' };
+const GOAL_SAY = {
+  door: '破门：清够怪，门就开',
+  collect: '寻宝：挖出藏起来的金箱，门就开',
+  limit: '省球：只有 3 颗满球，之后裹出来的是残球',
+};
+/** 省球关里"满球"的颗数。之后裹出来的球寿命 ×0.45 */
+const GOAL_STRONG_BALLS = 3;
+
+/**
+ * 关号 → 目标。**纯函数，不读 S** —— 断言要能直接问"第 N 关是什么目标"，
+ * 而 reset 之前 S.stage 还是上一关的值。
+ *
+ * `stage` 为 null（旧行为/出图工具）或负数（深潜）时一律回基线：
+ * 深潜是"一命到底"，它的张力来自资源一路消耗，再加目标会两头打架。
+ */
+function goalOf(stage) {
+  const n = Math.floor(stage == null ? 0 : stage);
+  if (!(n > 0)) return 'door';
+  if (n <= 6) return 'door';      // 教学段：推球 / 下洞 / 井梯，只教推门
+  return GOAL_LIST[Math.floor((n - 1) / 6) % GOAL_LIST.length];
+}
 
 /* **三星（CR-032 迁移第一步）。** 口径从 grove 的 `STAR_JUDGE` 搬过来 ——
    那边 27 屏每屏 3 颗、共 81 颗，靠"防守 / 效率 / 彻底"三个互不重叠的维度
@@ -2682,6 +2731,15 @@ function reset(seed, stage) {
   S.invuln = 0;
   S.killed = 0;
   S.killedTarget = NUM.killTarget;
+  /* **本关目标。** 必须在 `S.lootTotal` 之前定下来 —— `goalMet()` 在
+     collect 关要读 lootTotal，而它下面几行才赋值；顺序反了的话，
+     第一帧的 checkDoor 会拿 undefined 判 `loot >= undefined`（NaN 比较恒假），
+     症状是"寻宝关的门永远不开"，而改之前完全看不出来。
+     深潜（S.stage < 0）拿到的是 'door'，见 goalOf 的注释。 */
+  S.goal = goalOf(S.stage);
+  /* 省球关已造球数。**按关重置**，不跟着 S.belly 走 —— 饱食度会因为
+     吃碎片回满，用饱食反推"造了几颗"会在吃一口碎片之后清零。 */
+  S.ballUsed = 0;
   /* 金箱计数。总数来自关卡，玩家能看出"这关还有几个没找到" ——
      **这是"探索"唯一的量化反馈**，没有它玩家不知道自己漏了东西。 */
   S.loot = 0;
@@ -2708,6 +2766,17 @@ function reset(seed, stage) {
        0 = 没在下跳；> 0 时 stepBody 会跳过楼板的碰撞。 */
     dropT: 0, downHeld: false,
   };
+
+  /* **进关说一句这关要干嘛。**
+   *
+   * 玩家分清"这一关和上一关不一样"靠的是**目标句**，不是"箱子多了两口"——
+   * 后者要打完才发现。破门是基线，不必解释（教学段 6 关全是它）；
+   * 另外两种第一次出现时一定要说，否则玩家会把金箱当成普通装饰。
+   *
+   * 放在 reset 的**最末尾**：上面 `S.texts = []` 清过一遍，早调用等于没写。 */
+  if (S.goal !== 'door') {
+    addText(W / 2, 214, GOAL_SAY[S.goal], '#FFE08A', 22, 2.4);
+  }
 }
 
 /* ---------------------------------------------------------------- 敌人 */
@@ -3287,12 +3356,29 @@ function makeBallFrom(f) {
   f.dead = true;
   S.belly = Math.max(0, S.belly - NUM.bellyPerBall);
   const n = 1;
+
+  /* **省球关：前 3 颗是满球，之后裹出来的是残球。**
+   *
+   * 为什么不直接"第 4 颗造不出来"：那会**死局**。球是唯一的击杀通道，
+   * 禁造 = 球用光之后既打不动也过不了门，玩家只能重开。硬红线上写着
+   * "不许倒退"，那这种"卡死"比"变弱"更糟。
+   * 所以改成"越用越没用"：残球寿命 ×0.45，滚半屏就散。玩家自己会算
+   * "这颗现在推还是等两只凑一堆再推" —— 这就是"规划"，而不是被拦住。
+   *
+   * 计数按**造了几颗**，不按 `S.belly` 反推：吃一口碎片回 20 饱食，
+   * 用饱食度反推会在吃碎片之后把额度清零，玩家会发现"吃一口就有满球了"。 */
+  const weak = S.goal === 'limit' && (S.ballUsed || 0) >= GOAL_STRONG_BALLS;
+  S.ballUsed = (S.ballUsed || 0) + 1;
+
   S.balls.push({
     x: f.x + f.w / 2, y: f.y + f.h / 2,
     vx: 0, vy: 0, r: ballR(n), absorbed: n,
-    life: NUM.ball.life, onGround: false, chain: 0, hitCd: 0, dead: false,
+    life: NUM.ball.life * (weak ? 0.45 : 1),
+    weak: weak,
+    onGround: false, chain: 0, hitCd: 0, dead: false,
   });
-  addText(f.x + f.w / 2, f.y - 18, '裹成球了', '#9BE86E', 18, 1.1);
+  addText(f.x + f.w / 2, f.y - 18, weak ? '残球（雪不够了）' : '裹成球了',
+    weak ? '#FFD08A' : '#9BE86E', 18, 1.1);
   kickShake(3.5, 'wrap');
   hitStop(0.04);
 }
@@ -3801,6 +3887,10 @@ function breakBox(box, how, pow, dirX, dirY) {
     addText(cx, box.y - 10, '宝物 +1', '#FFD45E', 15, 1.2);
     addFrag(cx, cy, 10, '#FFD45E', 240);
     S.shards.push({ x: cx, y: cy, vy: -260, t: 0 });
+    /* **寻宝关的门在这里开，不在 killFoe 里。**
+       原来的唯一触发点是"杀怪"，而寻宝关可能一只怪都不打 ——
+       少了这一句，玩家把金箱挖出来了门却纹丝不动，看起来像 bug（它确实是）。 */
+    checkDoor();
     return;                       // 金箱不再走下面那段随机掉落
   }
 
@@ -4529,9 +4619,27 @@ function doorBlocked() {
   return false;
 }
 
+/**
+ * 本关"门可以开了"的判据。**唯一出口** —— 只有 checkDoor 读它。
+ *
+ * 两种目标各写一遍 `S.killed >= ...` 的话，加第三种目标时必然漏掉一处；
+ * 而漏掉的那处不会报错，只会出现"某些关的门永远不开"。
+ */
+function goalMet() {
+  if (S.goal === 'collect') {
+    /* 金箱每关必有且**只有一个**（生成器 2163 行那段有兜底："没有金箱就
+       把最上面那口变成金箱"）。所以 `loot >= lootTotal` 就是"挖到那一个"。
+       `lootTotal > 0` 是防御：万一哪天真出现 0 口，不能让 0 >= 0 白送门开。 */
+    return S.lootTotal > 0 && S.loot >= S.lootTotal;
+  }
+  /* 破门 / 省球：都是"杀够"。省球改的是资源（球额度），不是门开条件 ——
+     两件事不该塞进同一个判据里。 */
+  return S.killed >= S.killedTarget;
+}
+
 function checkDoor() {
   if (!S.door || S.door.open) return;
-  if (S.killed >= S.killedTarget) {
+  if (goalMet()) {
     S.door.open = true;
     S.door.openT = 0;
     S.flash = Math.max(S.flash, 0.16);
@@ -8843,33 +8951,72 @@ function drawShot(g, s) {
 function drawBall(g, b) {
   const tier = ballTier(b.absorbed);
   const skin = BALL_SKIN[tier];
+  /* 残球（省球关额度用完之后裹出来的）。
+     **必须一眼能分辨** —— 玩家要拿它做决策（这颗推不推），
+     看不出来的话"省球"就变成了"球莫名其妙散得快"。
+
+     **靠配色区分，不靠透明度。** 第一版是整颗压到 0.66 alpha，
+     出图缩到 66% 之后和满球几乎一样 —— 半透明的球读作"幽灵/特效"，
+     读不出"这颗质量不行"。改成换一套脏色（灰黄），再加上球心的暗斑，
+     "雪不够"就变成看得见的事实。
+     A 仍保留：只用来把阴影和光晕一起带淡，差一点才不会显得突兀。 */
+  const A = b.weak ? 0.88 : 1;
+  const skinUse = b.weak
+    ? { a: '#DED8CA', b: '#98A0A0', edge: '#767E7D' }
+    : skin;
   g.save();
   g.translate(b.x, b.y);
   // 影子
-  g.globalAlpha = 0.16; g.fillStyle = '#1A2A32';
+  g.globalAlpha = 0.16 * A; g.fillStyle = '#1A2A32';
   g.beginPath(); g.ellipse(0, b.r * 0.95, b.r * 0.9, b.r * 0.28, 0, 0, Math.PI * 2); g.fill();
-  g.globalAlpha = 1;
+  g.globalAlpha = A;
 
   // 特大球的光晕：远远就能看出这颗是"能破冰墙的"
   if (tier === 3) {
-    g.globalAlpha = 0.22 + 0.1 * Math.sin(S.t * 5);
+    g.globalAlpha = (0.22 + 0.1 * Math.sin(S.t * 5)) * A;
     g.fillStyle = '#9EE0FF';
     g.beginPath(); g.arc(0, 0, b.r + 10, 0, Math.PI * 2); g.fill();
-    g.globalAlpha = 1;
+    g.globalAlpha = A;
   }
 
   g.rotate(-b.x / b.r * 0.6);
   const grd = g.createRadialGradient(-b.r * 0.3, -b.r * 0.35, b.r * 0.2, 0, 0, b.r);
-  grd.addColorStop(0, skin.a);
-  grd.addColorStop(1, skin.b);
+  grd.addColorStop(0, skinUse.a);
+  grd.addColorStop(1, skinUse.b);
   g.fillStyle = grd;
   g.beginPath(); g.arc(0, 0, b.r, 0, Math.PI * 2); g.fill();
+
+  /* **残球的"裹不实"要画在球面上，不能只靠透明度和虚线。**
+     2026-10-30 出图实测：整颗压到 0.66 alpha + 外圈虚线，缩到 66% 之后
+     和满球几乎分不出来（雪地背景本来就亮，透明度差看不出）。
+     改成"中间那块没裹住、露出里面的底" + 三道裂纹 —— 读者看的是形状，
+     不是亮度。 */
+  if (b.weak) {
+    g.globalAlpha = 0.52 * A;
+    g.fillStyle = '#5C6E7A';
+    g.beginPath(); g.arc(0, 0, b.r * 0.44, 0, Math.PI * 2); g.fill();
+    g.globalAlpha = A;
+    g.strokeStyle = 'rgba(34,48,58,.8)';
+    g.lineWidth = 1.8;
+    for (let i = 0; i < 3; i++) {
+      const a0 = i * 2.1 + 0.5;
+      g.beginPath();
+      g.moveTo(Math.cos(a0) * b.r * 0.22, Math.sin(a0) * b.r * 0.22);
+      g.lineTo(Math.cos(a0) * b.r * 0.88, Math.sin(a0) * b.r * 0.88);
+      g.stroke();
+    }
+  }
 
   /* **这里原来写的是 `b.snowballEdge`（球对象上没有这个字段），
      赋值 undefined 在 canvas 里等于"不改"，于是球沿用了上一个 strokeStyle
      —— 也就是门的锁红，四颗球全戴了一圈红环，看起来像"快散了"。 */
-  g.strokeStyle = skin.edge; g.lineWidth = 2.6;
+  g.strokeStyle = skinUse.edge; g.lineWidth = 2.6;
+  /* 残球的外圈走虚线：形状本身在说"这层雪裹不实"。
+     比只调颜色可靠 —— 一颗小球的颜色差异在雪地背景上几乎看不见，
+     但"实线 vs 虚线"在缩略图上都分得开。 */
+  if (b.weak) { try { g.setLineDash([5, 4]); } catch (e) {} }
   g.beginPath(); g.arc(0, 0, b.r - 1.2, 0, Math.PI * 2); g.stroke();
+  if (b.weak) { try { g.setLineDash([]); } catch (e) {} }
 
   /* 雪团颗粒 + 一道高光弧。
      **不能用同心圆当档位标记** —— 一圈圈往里收的白线读出来是雷达波/音波，
@@ -9524,22 +9671,53 @@ function drawHud(g) {
     g.beginPath(); g.arc(hx + 52 + i * 17, 41, 6, 0, Math.PI * 2); g.fill();
   }
 
-  // 击杀进度
+  /* **这一格读的是"本关目标的进度"，不是"击杀数"。**
+     标签跟着**门开条件**换（破门 / 寻宝），数字的含义跟着换。
+     这是"这一关和上一关不一样"**唯一常驻的可见证据** ——
+     不换这一格的话，三种目标在画面上长得完全一样，玩家只能靠"门为什么不开"
+     去猜，那是最坏的告知方式。
+
+     **标签取的是门开条件，不是 `GOAL_CN[S.goal]`。** 省球关的门开条件和破门
+     一模一样（杀够），差别在资源 —— 标签写「省球」会让这一格变成
+     「省球 0 / 3」，而右边还有一个「满球 0 / 3」，两个 0/3 撞在一起，
+     读者分不清哪个是"还要打几只"、哪个是"还能造几颗"。（出图才发现）
+
+     位置沿用原来的 490 / 528：**不新增面板**。加一块新板就要重新算
+     HUD_RECTS 的不相交断言，而这里本来就有一块地方在显示同一类东西。 */
+  const collectGoal = S.goal === 'collect';
+  const goalTxt = collectGoal
+    ? ((S.loot || 0) + ' / ' + (S.lootTotal || 0))
+    : (S.killed + ' / ' + S.killedTarget);
   g.font = '700 15px "PingFang SC","Microsoft YaHei",sans-serif';
   g.fillStyle = '#C8DCE6';
-  g.fillText('击杀', 490, 47);
-  g.fillStyle = S.killed >= S.killedTarget ? '#9BE86E' : '#EAF4F8';
+  g.fillText(collectGoal ? '寻宝' : '破门', 490, 47);
+  g.fillStyle = goalMet() ? '#9BE86E' : '#EAF4F8';
   g.font = '800 22px "PingFang SC","Microsoft YaHei",sans-serif';
-  g.fillText(S.killed + ' / ' + S.killedTarget, 528, 48);
+  g.fillText(goalTxt, 528, 48);
 
   /* 宝物。**这是"探索"唯一的量化反馈** ——
-     只写"击杀"的话，玩家拆箱子的收益是看不见的，自然就不会去拆。 */
-  g.font = '700 15px "PingFang SC","Microsoft YaHei",sans-serif';
-  g.fillStyle = '#C8DCE6';
-  g.fillText('宝物', 600, 47);
-  g.fillStyle = S.loot > 0 ? '#FFD45E' : '#8FA8B8';
-  g.font = '800 22px "PingFang SC","Microsoft YaHei",sans-serif';
-  g.fillText(S.loot + ' / ' + S.lootTotal, 638, 48);
+     只写"击杀"的话，玩家拆箱子的收益是看不见的，自然就不会去拆。
+     **省球关这一格换成球额度**（同一个位置，不新增面板）：
+     那关的稀缺资源就是球，"还能造几颗满的"比"砸了几个金箱"重要得多。
+     宝物在那边仍然有反馈（砸开金箱会飘「宝物 +1」），只是不常驻。
+     原来试过两个都放（宝物在 638、满球在 700），出图一看 "0 / 3" 撞在一起
+     读成「宝物 0/3 满球#球」—— 22px 的数字加空格比预估宽 20px。 */
+  if (S.goal === 'limit') {
+    const left = Math.max(0, GOAL_STRONG_BALLS - (S.ballUsed || 0));
+    g.font = '700 15px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillStyle = '#C8DCE6';
+    g.fillText('满球', 600, 47);
+    g.fillStyle = left > 0 ? '#CFE8F5' : '#FF9E8E';
+    g.font = '800 22px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillText(left + ' / ' + GOAL_STRONG_BALLS, 638, 48);
+  } else {
+    g.font = '700 15px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillStyle = '#C8DCE6';
+    g.fillText('宝物', 600, 47);
+    g.fillStyle = S.loot > 0 ? '#FFD45E' : '#8FA8B8';
+    g.font = '800 22px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillText(S.loot + ' / ' + S.lootTotal, 638, 48);
+  }
 
   /* 当前层。**有纵深的关卡必须告诉玩家"我在第几层"** ——
      迷路不等于探索，玩家不知道自己在哪只会烦躁。
@@ -9813,6 +9991,13 @@ const API = {
      不能只测"能拿到星" —— 那样改判定阈值也不会红。 */
   judgeStars, starBits, STAR_LIST, STAR_CN, STAR_HINT, STAR_JUDGE,
   readSnowStar, writeSnowStar,
+  /* 关卡目标（CR-032 第 2 步：破门 / 寻宝 / 省球）。
+     **`goalOf` 必须导出**：它的分配规则是纯函数，"第 N 关是什么目标"
+     只能拿代码问 —— 出图只能看到某一关长什么样，看不出分配有没有周期、
+     有没有漏掉某一种、教学段是不是被误塞了目标。
+     `goalMet` 同理：门开判据是两条完全不同的分支，只测"门能开"验不出
+     "寻宝关的门是不是被击杀数顺带撞开的"。 */
+  goalOf, goalMet, GOAL_LIST, GOAL_CN, GOAL_SAY, GOAL_STRONG_BALLS,
   /* 主线关号链路（出征页 → 第 N 关 → 通关 → 第 N+1 关）。
      导出是为了断言能验"关号派生种子可复现 / 不同关不同图 / 通关推进 /
      48 关封顶"，这四条里只有第一条在图上看得见。 */

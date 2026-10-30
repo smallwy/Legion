@@ -46,8 +46,9 @@ import {
 } from 'cc';
 import {
     groveAttachCanvas, groveBoot, grovePointer, groveRender, groveSetArt,
-    groveSetExitHook, groveTick, GROVE,
+    groveSetExitHook, groveTick, GROVE, setSnowlabEntry,
 } from './GroveRuntime';
+import { battleSwitch, battleSetCurrent } from '../BattleSwitch';
 import { loadSave, saveSave, LEVEL_COUNT } from '../config/SaveData';
 import { heroIndexOf } from '../config/Roster';
 import { applyRunReward, payoutFromRun, judgeTripGoals, tripReward } from '../config/HomeBiz';
@@ -162,6 +163,8 @@ export class GroveBattle extends Component {
     private _cv: HTMLCanvasElement | null = null;
     /** 承载画布的 DOM 容器；收工/销毁时整块摘掉 */
     private _stage: HTMLDivElement | null = null;
+    /** 本组件自己建的那台清屏相机。换手到推球时必须拆掉，理由见 onDestroy */
+    private _camNode: Node | null = null;
     private _ready = false;
     /** 收工只入账一次。钩子和销毁都可能再进来 */
     private _paid = false;
@@ -219,6 +222,24 @@ export class GroveBattle extends Component {
          * `?from=home`，而真机上没有 URL，那个判断恒为 false ——
          * 出征页在原型里出现、在真机上不出现，同一个按钮两个结果。 */
         groveBoot(heroIndexOf(save.active), undefined, true);
+
+        /* **第三扇门（雪原推球）的出口。**
+         *
+         * 原型里这一扇门是 `location.href = "snowlab.html?from=grove"`，
+         * 而那行在 Cocos 里有两个问题：
+         *   ① 构建产物里**没有 snowlab.html** —— 它是个组件，不是页面；
+         *   ② `location.href = 一个不存在的路径` **不抛异常**，所以打包后
+         *      点这扇门的表现是白页，控制台一片安静。
+         * 原型里跑得好好的、打包才炸，这类问题只在真机上出现，测试全绿也没用。
+         *
+         * 换成切组件：`battleSwitch` 会先销毁本组件（摘 DOM 层 + 拆相机），
+         * 死透之后再把 SnowlabBattle 挂到同一个 BattleRoot 上。
+         */
+        setSnowlabEntry(() => { battleSwitch('snowlab'); });
+        /* 登记"当前活着的是我"——换手的起点靠这个，不靠外部去猜。
+           必须排在 setSnowlabEntry **之后**：登记会把 switching 复位，
+           反过来写的话"点门那一瞬间还处于换手中"会被这条登记提前放行。 */
+        battleSetCurrent('grove', this);
 
         this._bindCocosInput();
         this._ready = true;
@@ -319,6 +340,10 @@ export class GroveBattle extends Component {
      * 只清屏的相机。
      * 故意不建 Canvas/Sprite：Battle.scene 没有 RenderRoot2D，
      * 走 Cocos 2D 管线要额外补一堆东西，得不偿失（见文件头复盘）。
+     *
+     * 节点要留引用并在 onDestroy 里拆掉：换成推球时同一个 BattleRoot 上
+     * 会再挂一台 SnowlabClearCamera，两台同参数相机同时活着时，
+     * 后建的那台清屏会把先画的内容盖掉 —— 表现是"画面闪一下就定住"。
      */
     private _buildClearCamera(): void {
         const camNode = new Node('GroveClearCamera');
@@ -332,6 +357,7 @@ export class GroveBattle extends Component {
         // 深墨绿：和原型留边色一致，露出来时读作画框
         cam.clearColor = new Color(14, 24, 18, 255);
         camNode.setPosition(0, 0, 1000);
+        this._camNode = camNode;
     }
 
     /**
@@ -688,5 +714,18 @@ export class GroveBattle extends Component {
         groveSetExitHook(null);
         this._unmountStage();
         this._cv = null;
+
+        /* 相机必须跟着走。**不是洁癖**：换手到推球时本组件 destroy、
+         * SnowlabBattle 在同一个 BattleRoot 上再建一台清屏相机。
+         * 留着这台的话场上两台同参数相机都吃 SOLID_COLOR 清屏，
+         * 谁后画谁说话 —— 表现是"点第三扇门之后画面定住"。
+         * 以前不会切换，所以这一条一直没暴露。 */
+        if (this._camNode && this._camNode.isValid) this._camNode.destroy();
+        this._camNode = null;
+
+        /* 松手时把出口还原。下次谁再挂它会在 onLoad 里重新装一遍；
+           还原是为了不留一个指向"已经销毁的组件"的闭包 ——
+           那个闭包里调 battleSwitch 会去碰一个死组件。 */
+        setSnowlabEntry(null);
     }
 }

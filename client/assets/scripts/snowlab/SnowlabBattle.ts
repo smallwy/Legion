@@ -35,6 +35,7 @@
  */
 import { _decorator, Component, Node, Camera, Color, director, assetManager, SceneAsset } from 'cc';
 import { snowlabAttachCanvas, snowlabBoot, snowlabRender, snowlabTick } from './SnowlabRuntime';
+import { battleSwitch, battleSetCurrent } from '../BattleSwitch';
 
 const { ccclass } = _decorator;
 
@@ -52,6 +53,8 @@ export class SnowlabBattle extends Component {
     private _cv: HTMLCanvasElement | null = null;
     private _stage: HTMLDivElement | null = null;
     private _ready = false;
+    /** 本组件建的清屏相机。换手回出征页时必须拆掉，见 onDestroy */
+    private _camNode: Node | null = null;
     /** Esc 是这里的监听，不是运行时的 —— 运行时没有"退出"这个概念 */
     private _onEsc: ((e: KeyboardEvent) => void) | null = null;
 
@@ -81,6 +84,9 @@ export class SnowlabBattle extends Component {
         this._bindEsc();
         this._ready = true;
 
+        /* 登记"当前活着的是我"：出征页那边换手靠这个找到起点。 */
+        battleSetCurrent('snowlab', this);
+
         console.log(
             '[SnowlabBattle] 雪人关卡已接管战斗场景（DOM 叠加层）—— ' +
             'A/D 移动 · W 跳（空中再按二段跳）· S 穿楼板 · J 喷雪弹 · 顶球推 · R 换关 · Esc 回主界面',
@@ -99,6 +105,10 @@ export class SnowlabBattle extends Component {
     /**
      * 只清屏的相机。故意不建 Canvas/Sprite —— Battle.scene 没有 RenderRoot2D，
      * 真正的画面在 DOM 层（见文件头）。
+     *
+     * 节点留引用、onDestroy 拆掉：换手回出征页时 GroveBattle 会在同一个
+     * BattleRoot 上再建一台，两台都吃 SOLID_COLOR 清屏 —— 后画的盖先画的，
+     * 表现是"按 Esc 回去之后画面定住"。
      */
     private _buildClearCamera(): void {
         const camNode = new Node('SnowlabClearCamera');
@@ -112,6 +122,7 @@ export class SnowlabBattle extends Component {
         // 和原型留边色一致：露出来时读作画框，不是"没画完"
         cam.clearColor = new Color(11, 22, 33, 255);
         camNode.setPosition(0, 0, 1000);
+        this._camNode = camNode;
     }
 
     /**
@@ -149,9 +160,16 @@ export class SnowlabBattle extends Component {
     }
 
     /**
-     * Esc 回主界面。
+     * Esc 回**出征页**（不是回主界面）。
      *
-     * **不加这一条，Cocos 里就没有出口了。** 原型是双击打开的独立页，
+     * 2026-10-30：出征页接回来之后，玩家是从那三扇门里点进来的，
+     * 出关就该回到那三扇门前面。原来一律回主界面，等于"打一关就要
+     * 重新走一遍出门流程"——多一次点击，也丢掉了"再换一种玩法试试"这条路。
+     *
+     * 直连调试（`?mode=snowlab`，压根没有出征页）时 `battleSwitch` 返回 false，
+     * 退化成原来的回主界面。两条路都要留，不能只认一条。
+     *
+     * **不加 Esc 这整条，Cocos 里就没有出口了。** 原型是双击打开的独立页，
      * 关标签页就是退出；进了 Cocos，玩家卡在这块 DOM 层里，只能刷新页面
      * 或者杀掉进程 —— 那比"没做退出"更糟，因为它看起来像卡死。
      *
@@ -162,6 +180,8 @@ export class SnowlabBattle extends Component {
         const onEsc = (e: KeyboardEvent): void => {
             if (e.key !== 'Escape') return;
             e.preventDefault();
+            /* 切走之后 this 已经被 destroy，这一句之后不许再碰 this。 */
+            if (battleSwitch('grove')) return;
             this._backHome();
         };
         window.addEventListener('keydown', onEsc, true);
@@ -197,5 +217,7 @@ export class SnowlabBattle extends Component {
         }
         this._unmountStage();
         this._cv = null;
+        if (this._camNode && this._camNode.isValid) this._camNode.destroy();
+        this._camNode = null;
     }
 }

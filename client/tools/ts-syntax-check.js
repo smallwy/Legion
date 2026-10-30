@@ -27,12 +27,29 @@ try {
 }
 
 const ROOT = path.resolve(__dirname, '..');
-const TARGETS = [
-    path.join(ROOT, 'assets', 'scripts', 'grove', 'GroveBattle.ts'),
-    path.join(ROOT, 'assets', 'scripts', 'grove', 'GroveRuntime.ts'),
-    path.join(ROOT, 'assets', 'scripts', 'BattleBoot.ts'),
-    path.join(ROOT, 'assets', 'scripts', 'HomeRuntime.ts'),
-];
+const SCRIPTS = path.join(ROOT, 'assets', 'scripts');
+
+/**
+ * **自动扫全部 .ts，不再手写清单。**
+ *
+ * 原来这里写死了 4 个文件（GroveBattle / GroveRuntime / BattleBoot / HomeRuntime）。
+ * 代价是 `snowlab/SnowlabBattle.ts` 从建起来那天起**一次都没被检查过** ——
+ * 2026-10-30 加"换手回出征页"时才发现它不在名单里，那几行是裸改的。
+ * 手写清单的失败方式和抽取脚本锚点一模一样：新增文件不会自动进来，
+ * 而且不会报错，只是那个文件永远绿灯（因为它根本没跑）。
+ *
+ * 39 个文件全量转译约 2 秒，没有理由省。
+ */
+function walk(dir, out) {
+    for (const name of fs.readdirSync(dir)) {
+        const p = path.join(dir, name);
+        const st = fs.statSync(p);
+        if (st.isDirectory()) walk(p, out);
+        else if (name.endsWith('.ts')) out.push(p);
+    }
+    return out;
+}
+const TARGETS = walk(SCRIPTS, []).sort();
 
 const OPTS = {
     target: ts.ScriptTarget.ES2020,

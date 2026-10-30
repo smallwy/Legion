@@ -22,13 +22,18 @@
 ## 验收工具
 | 目标 | 命令 |
 |---|---|
-| snowlab 结构+玩法 | `_snowlab-check.js`（320 项） |
+| snowlab 结构+玩法 | `_snowlab-check.js`（354 项） |
 | 运行时等价 | `snowlab-runtime-check.js`（14 项 / 900 帧 0 偏差） |
+| 出征页三扇门接线 | `_entry-wire.js`（11 项） |
 | 难度离散 / 形状 | `_diff-audit.js [N]`、`_shape-probe.js [N]` |
 | 行为 | `_jitter-probe.js`、`_foe-bounce.js`、`_ball-chaos.js` |
 | 性能 | `_ab-perf.js`（同进程 A/B，**只看比值**） |
-| 出图 | `_floors-shot.js`（锁镜 + `BEFORE=`）、`_entry-shot.js`（真浏览器验入口） |
+| 出图 | `_floors-shot.js`（锁镜 + `BEFORE=`）、`_goal-shot.js`（三种目标 + 残球特写）、`_entry-shot.js`（真浏览器验入口） |
 | 存量对照 | `_legacy-audit.js`（只读，两套关卡参数表） |
+
+TS 语法检查要用 **Cocos 自带 typescript**（隔离 workspace 里没装）：
+`NODE_PATH="C:/ProgramData/cocos/editors/Creator/3.8.8/resources/app.asar.unpacked/node_modules"`。
+它现在自动扫全部 39 个 `.ts` —— 以前写死 4 个，`SnowlabBattle.ts` 从没被查过。
 
 性能尖峰先做**最小复现**（剥到只剩画布）—— 唯一能钉死「环境还是我们」。
 
@@ -43,10 +48,27 @@
 - 清残留节点用**后缀**；自启动脚本 `if (!EDITOR)` 守卫；12px 一空格只有 3px。
 - **未解决**：每层装饰太满导致噪声，出生点有时在人缝里。
 
-## 出征页 → 推球（`e1d4c93`）
+## 出征页 → 推球（`e1d4c93` / 0726 轮）
 - 第三扇门 `snow` 跳 `snowlab.html?from=grove`。**Cocos 里没这个 html**（是组件），必须走
-  `setSnowlabEntry(fn)`；写死 `location.href` 打包后白页 404。
+  `setSnowlabEntry(fn)`；写死 `location.href` 打包后白页 404。**传 null 必须能还原**，
+  否则留一个指向已销毁组件的闭包。
 - 关号 `stageSeed(n)=mix32(n*0x9E3779B1)`，存档 `{stage}` 记**下次从哪开始**；R 重打本关 / Enter 下一关，48 封顶。
+- **Cocos 的入口是出征页**：`BattleBoot.DEFAULT_MODE='grove'` → `GroveBattle` →
+  `groveBoot(…, fromHome=true)` → `openGates()`。主界面「出发」不再直接开打；
+  `?mode=snowlab` 只给调试直连。`snowlab` 按 Esc 回出征页，出征页按 Esc 回主界面。
+- 两套玩法换手走 `BattleSwitch.ts`（**中介，不许互相 import**）。
+  `Component.destroy()` 是延迟销毁 → 必须等 `isValid` 变 false 再挂新的，
+  否则两台 ClearCamera + 两块 DOM 层，症状是"画面定住"。
+
+## 关卡目标（`2026-10-30` 第 2 步）
+- 三种：`door` 破门 / `collect` 寻宝（挖出全部金箱，不看击杀）/ `limit` 省球（前 3 颗满球，之后残球）。
+- **目标和星不许共用判据**：`nohit` 是星，就不能再当目标 —— 否则一件事数两遍。
+  分工是「目标=准入条件，星=评价」。
+- 分配 `floor((n-1)/6)%3`，和骨架 `(n-1)%6` **正交**；第 7 关 = 旧骨架 + 新目标。
+- **省球不许硬禁**（球是唯一击杀通道，禁了就死局），改成残球寿命 ×0.45。
+  额度按"造了几颗"数，**不按 `S.belly` 反推**（吃碎片会把额度刷回来）。
+- **寻宝关的门开在 `breakBox`**，不是 `killFoe` —— 那只怪一只不打也能过。
+- 残球**靠脏色 + 裂纹区分，不靠透明度**（雪地背景亮，0.66 alpha 缩图后看不出来）。
 
 ## 玩法存量（CR-032，`fa55eb2`）
 - **规划前先盘点存量。** 这次漏了：48 关曲线做在 snowlab，而 `grove.html` 早有 27 屏手工关

@@ -2932,6 +2932,144 @@ group("四十六、三星（判定口径 / 不许白送 / 存档只增不减）"
 }
 
 /* =========================================================================
+   四十七、关卡目标（CR-032 第 2 步：破门 / 寻宝 / 省球）
+
+   这一组挡的是三个**出图全都看不出来**的错：
+     ① 分配规则漂了 —— 某个目标在 48 关里一次都不出现，或者教学段被塞了
+        个"寻宝"，第一关就把玩家绕晕；只拍一张第 13 关的图，什么也验不到。
+     ② 寻宝关的门其实是"杀够"开的（等于没做），或者反过来"金箱挖出来了
+        门纹丝不动"—— 两种都只在玩到那一关才暴露。
+     ③ 省球关的额度靠饱食度反推 —— 吃一口碎片额度就回满，
+        玩家会发现"吃口雪就能刷满球"，整条构筑就废了。
+   ========================================================================= */
+group("四十七、关卡目标（破门 / 寻宝 / 省球）");
+
+/* ---- ① 分配规则：确定性 + 三种都出现 + 教学段只有破门 ---- */
+{
+  const cnt = {};
+  const firstAt = {};
+  for (let n = 1; n <= L.STAGE_MAX; n++) {
+    const g0 = L.goalOf(n);
+    cnt[g0] = (cnt[g0] || 0) + 1;
+    if (firstAt[g0] == null) firstAt[g0] = n;
+  }
+  ck("三种目标在 48 关里都出现过（没有写了没用的）",
+     L.GOAL_LIST.every(g0 => cnt[g0] > 0),
+     JSON.stringify(cnt));
+  ck("每种目标至少 12 关（不是象征性放两关）",
+     L.GOAL_LIST.every(g0 => cnt[g0] >= 12), JSON.stringify(cnt));
+  ck("★ 教学段 1~6 全是破门（第一关不解释目标）",
+     [1, 2, 3, 4, 5, 6].every(n => L.goalOf(n) === 'door'),
+     [1, 2, 3, 4, 5, 6].map(n => L.goalOf(n)).join(","));
+  ck("第 7 关 = 寻宝（第 7 关正好是「骨架第二轮」的开头）",
+     L.goalOf(7) === 'collect', L.goalOf(7));
+  ck("第 13 关 = 省球", L.goalOf(13) === 'limit', L.goalOf(13));
+  ck("第 19 关回到破门（三种轮完一圈）", L.goalOf(19) === 'door', L.goalOf(19));
+  ck("★ 同一个关号永远同一个目标（纯函数，可复现）",
+     L.goalOf(7) === L.goalOf(7) && L.goalOf(31) === L.goalOf(31),
+     L.goalOf(7) + " / " + L.goalOf(31));
+  ck("★ 目标是按轮次（6 关）换的，不是每关都在跳",
+     [7, 8, 9, 10, 11, 12].every(n => L.goalOf(n) === 'collect'),
+     [7, 8, 9, 10, 11, 12].map(n => L.goalOf(n)).join(","));
+  ck("stage=null（出图工具 / 旧行为）回落到破门", L.goalOf(null) === 'door', L.goalOf(null));
+  ck("深潜（负关号）不做目标（一命到底再加目标会两头打架）",
+     L.goalOf(-3) === 'door', L.goalOf(-3));
+  ck("文案三种都有（HUD 标签 / 进关那句话）",
+     L.GOAL_LIST.every(g0 => !!L.GOAL_CN[g0] && !!L.GOAL_SAY[g0]),
+     JSON.stringify(L.GOAL_CN));
+  ck("★ 目标 id 和三星 id 不重叠（目标和星不许是同一件事）",
+     L.GOAL_LIST.every(g0 => L.STAR_LIST.indexOf(g0) < 0),
+     L.GOAL_LIST.join(",") + " vs " + L.STAR_LIST.join(","));
+}
+
+/* ---- ② 破门关：老行为一个字都不许变 ---- */
+{
+  L.startStage(1);
+  const S = L.S;
+  ck("第 1 关目标是破门", S.goal === 'door', S.goal);
+  ck("破门关一开始门是关的", !!S.door && S.door.open === false, String(S.door && S.door.open));
+  S.killed = Math.max(0, S.killedTarget - 1);
+  L.checkDoor();
+  ck("差一只 → 门不开", S.door.open === false, S.killed + "/" + S.killedTarget);
+  S.killed = S.killedTarget;
+  L.checkDoor();
+  ck("杀够 → 门开", S.door.open === true, S.killed + "/" + S.killedTarget);
+}
+
+/* ---- ③ 寻宝关：门只看金箱，不看击杀 ---- */
+{
+  L.startStage(7);
+  const S = L.S;
+  ck("第 7 关目标是寻宝", S.goal === 'collect', S.goal);
+  ck("寻宝关必有金箱（生成器兜底：没有就补一个）",
+     S.lootTotal >= 1, "lootTotal=" + S.lootTotal);
+  ck("寻宝关一开始门是关的", S.door && S.door.open === false, String(S.door && S.door.open));
+
+  /* **杀光所有怪也不该开门。** 这条是"目标真的换了"的核心证据：
+     只验"挖到金箱能开门"是不够的 —— 用击杀顺手撞开的实现也能过。 */
+  S.killed = S.killedTarget;
+  L.checkDoor();
+  ck("★ 杀够怪但没挖到金箱 → 门不开（寻宝不是「杀够」的换皮）",
+     S.door.open === false, "killed=" + S.killed + " loot=" + S.loot);
+
+  S.loot = S.lootTotal;
+  L.checkDoor();
+  ck("★ 挖到金箱 → 门开（不看击杀）", S.door.open === true,
+     "loot=" + S.loot + "/" + S.lootTotal);
+
+  /* 0 口金箱的关不能白送门开（`0 >= 0` 天然成立） */
+  L.startStage(7);
+  const S2 = L.S;
+  S2.lootTotal = 0; S2.loot = 0; S2.killed = S2.killedTarget;
+  L.checkDoor();
+  ck("★ lootTotal=0 不许白送门开", S2.door.open === false, "0/0");
+}
+
+/* ---- ④ 省球关：前 3 颗满球，之后是残球，且不硬禁（防死局） ---- */
+{
+  L.startStage(13);
+  const S = L.S;
+  ck("第 13 关目标是省球", S.goal === 'limit', S.goal);
+  ck("省球关开局已造球数为 0", S.ballUsed === 0, String(S.ballUsed));
+  ck("省球关的门开条件仍是杀够（改的是资源，不是判据）",
+     S.door && S.door.open === false, String(S.door && S.door.open));
+
+  const full = L.NUM.ball.life;
+  const mkFoe = () => ({ x: 120, y: 100, w: 30, h: 30, dead: false, hits: 0 });
+  const made = [];
+  for (let i = 0; i < 4; i++) {
+    const n0 = S.balls.length;
+    L.makeBallFrom(mkFoe());
+    made.push(S.balls[n0]);
+  }
+  ck("造了 4 颗（第 4 颗没被拦住 —— 硬禁就会死局）",
+     made.length === 4 && made.every(b => !!b), String(made.length));
+  ck("前 3 颗是满球",
+     made.slice(0, 3).every(b => !b.weak && b.life === full),
+     made.slice(0, 3).map(b => b.life + "/" + (b.weak ? "残" : "满")).join(" "));
+  ck("★ 第 4 颗是残球：寿命 ×0.45", made[3].weak === true && near(made[3].life, full * 0.45, 0.001),
+     made[3].life + " (full=" + full + ")");
+  ck("★ 额度按「造了几颗」数，不按饱食度反推", S.ballUsed === 4, String(S.ballUsed));
+
+  /* 吃碎片回饱食度**不该**把额度刷回来 —— 这条是"反推实现"的照妖镜。 */
+  const usedBefore = S.ballUsed;
+  S.belly = 100;
+  ck("★ 吃碎片回饱食不会刷回球额度", S.ballUsed === usedBefore, String(S.ballUsed));
+
+  L.startStage(14);
+  ck("换关重置球额度", L.S.ballUsed === 0, String(L.S.ballUsed));
+  ck("第 14 关仍是省球（同一轮 6 关同目标）", L.S.goal === 'limit', L.S.goal);
+}
+
+/* ---- ⑤ 深潜不受影响：仍按破门走 ---- */
+{
+  L.startDive(20261030);
+  ck("深潜第 1 层目标是破门", L.S.goal === 'door', L.S.goal);
+  ck("深潜有独立深度计数（目标没把它搅乱）", L.S.dive && L.S.dive.depth === 1,
+     JSON.stringify(L.S.dive && L.S.dive.depth));
+}
+
+/* =========================================================================
    汇总
    ========================================================================= */
 console.log("\n" + "=".repeat(56));

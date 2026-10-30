@@ -18196,14 +18196,20 @@ function readSnowSave() {
    但 **Cocos 构建产物里没有这个 html** —— 那边推球是 SnowlabBattle 组件。
    写死 `location.href` 的后果是：原型跑得好好的，打包之后点第三扇门 404，
    而且不是报错，是白页 —— 最难查的那一类。
-   所以入口留成变量：GroveBattle 在 onLoad 里调 `GROVE.setSnowlabEntry(fn)`
+   所以入口留成变量：GroveBattle 在 onLoad 里调 `setSnowlabEntry(fn)`
    换成"切到推球组件"，原型侧一个字都不用改。 */
-let snowEntry = function () {
+function snowEntryDefault() {
   try {
     if (typeof location !== "undefined" && location.href) location.href = "snowlab.html?from=grove";
   } catch (e) { /* 无头环境没有 location，静默 */ }
-};
-function setSnowlabEntry(fn) { if (typeof fn === "function") snowEntry = fn; }
+}
+let snowEntry = snowEntryDefault;
+/* **传 null = 还原成默认实现**（Cocos 侧组件 onDestroy 时调）。
+   原来只认 function，传 null 是静默不改 —— 那会留一个指向已销毁组件的闭包，
+   下次再进出征页点这扇门，调的是上一个场景里那个死掉的组件。 */
+function setSnowlabEntry(fn) {
+  snowEntry = (typeof fn === "function") ? fn : snowEntryDefault;
+}
 
 /** 出征页的点击出口。预览卡已删（2026-10-25 第六次），点卡就是进 ——
  *  以前还要判一次"是不是点在大立绘上"，现在整页只有卡可点，少一条分支。 */

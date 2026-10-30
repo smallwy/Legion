@@ -157,6 +157,18 @@ const NUM = {
              2 / 4 / 6，裹一只是"中"、两只才"大"。1.0 的时候门厅攒不出
              能破冰墙的球 —— 这是数值上过不去，不是玩家操作问题。 */
           absorbFoe: 2.0, absorbBox: 0,
+          /* ---- 球与球（2026-10-30）----
+             以前球和球之间完全不相干：能重叠、能互相穿过。而球是**唯一的
+             攻击手段**，它们之间不互相作用，等于关掉了所有"摆两颗"的玩法 ——
+             玩家能做的永远只有"推一颗去撞怪"。
+
+             pairBounce 0.86（不是 1.0）：完全弹性会让两颗球永远弹不停，
+             场上越滚越乱；0.86 是"撞一下明显传递、四五下就停"。
+             fuseSpeed 70：快球撞上来只做弹性碰撞，**合体必须靠玩家把两颗
+             推到一起停住** —— 撞一下就白捡的大球不叫策略，叫漏配。
+             fuseHold 0.28 秒：给玩家一个"发现贴住了、想反悔还能推开"的窗口，
+             低于 0.15 秒时手指还没反应过来就合了。 */
+          pairBounce: 0.86, fuseSpeed: 70, fuseHold: 0.28,
 
           /* **落砸的起判速度（2026-10-28 第四轮）。**
              用户：「球掉下去 是可以杂碎箱子」。
@@ -3506,6 +3518,137 @@ function pushBalls(dt) {
 }
 
 /* ---------------------------------------------------------------- 球 */
+/* ---------------------------------------------------------------- 球与球 */
+/* **两颗球现在会撞、会合成一颗。**（2026-10-30）
+
+   为什么加这个：球是全场唯一的攻击手段，而它此前是一个**孤立**的物理体 ——
+   能滚、能砸箱、能反弹，但球与球之间既不碰也不让，可以完全重叠着滚。
+   于是"推球"这个动词只有一种用法：挑一颗，推过去，看它撞死几只。
+   48 关都是这一件事，只是地形不同 —— 这就是"关与关没区别"的物理层原因。
+
+   加了两件事，都是**玩家自己布置出来的**：
+     · **撞**：快球撞慢球，动量按质量分过去。一颗球可以把另一颗打到场地
+       另一头 —— "先把一颗推到左边、再从右边撞它"变成一条能扫一整排的线路。
+     · **合**：两颗都慢下来、贴住 0.28 秒，合成一颗（absorbed 相加）。
+       这是"放弃两条线路、换一颗特大球去破冰墙"的代价选择。
+       必须慢才合 —— 跑着的球撞一下就吞掉，那就不叫布置。
+
+   为什么不写在 pushBalls 里：推球是"玩家 → 球"的单向操作，
+   而球球关系跟玩家在不在场无关（两颗球自己滚到一起也该撞）。 */
+function stepBallPairs(dt) {
+  const B = S.balls;
+  for (let i = 0; i < B.length; i++) {
+    const a = B[i];
+    if (a.dead) continue;
+    /* **这里不做衰减。** 第一版写的是"每帧先乘 0.66 再累加"，本意是让
+       松开手后进度条回落 —— 但"没贴住"这件事已经由下面的 aTouch 分支
+       直接清零了，衰减只剩下一个作用：把 0.28 秒的实际阈值拖成 0.42 秒，
+       和常量上写的时间对不上。断言按 0.28 秒写就会红，而看代码很像
+       是断言算错了。 */
+    let aTouch = false;
+    for (let j = i + 1; j < B.length; j++) {
+      const c = B[j];
+      if (c.dead) continue;
+      const dx = c.x - a.x, dy = c.y - a.y;
+      const d = Math.hypot(dx, dy);
+      const minD = a.r + c.r;
+
+      /* ============ "挨着"比"重叠"宽 3px —— 这条决定合体能不能发生 ============
+         位置分离会把两颗球推到**正好相切**（d == minD），下一帧 `d < minD`
+         就不成立了。如果合体判定挂在"重叠"上，计时会被逐帧清零：
+         画面上两颗球安安静静地挨在一起，永远合不上。
+         第一版就是这么写的，而且 ⑤⑥ 两条断言还是绿的 ——
+         因为那两条只验了"合出来那颗的 absorbed"，没验"合出了几颗"。
+         所以：**碰撞按重叠算，合体按挨着算**。 */
+      if (d >= minD + 3) continue;
+      aTouch = true;
+
+      /* **完全重叠也要处理。** 原写法在 d < 0.001 时直接跳过，两颗球
+         正好同心时永远分不开，之后每一帧都跳过 —— 画面上是一颗"双色球"
+         粘在一起滚，而且再也拆不开。同一只怪在两格之间被连续裹两次就会
+         生成在同一点。方向给确定的 +x 而不是随机：随机的话每次跑出来的
+         轨迹都不一样，断言没法复现。 */
+      let nx, ny;
+      if (d < 0.001) { nx = 1; ny = 0; }
+      else { nx = dx / d; ny = dy / d; }
+
+      /* 质量按**半径三次方**。用半径平方（面积）的话，一颗差一档的球
+         撞起来像两个一样重的东西 —— 大球推小球该像推保龄球。 */
+      const ma = a.r * a.r * a.r, mc = c.r * c.r * c.r;
+
+      if (d < minD) {
+        /* **先分离位置。** 不分离的话重叠会逐帧累积，最后两颗球叠在一起滚，
+           画面上是"一颗双色球"，而不是"两颗撞了一下"。 */
+        const push = (minD - d) * 0.5;
+        const ka = mc / (ma + mc), kc = ma / (ma + mc);
+        a.x -= nx * push * ka * 2; a.y -= ny * push * ka * 2;
+        c.x += nx * push * kc * 2; c.y += ny * push * kc * 2;
+
+        const rvn = (c.vx - a.vx) * nx + (c.vy - a.vy) * ny;
+        /* rvn > 0 = 两者已经在分开，不能再给冲量（否则会自己加速）。
+           这一条漏了的话，两颗贴住的球会"弹开 → 追上 → 再弹开"地抖个不停。 */
+        if (rvn < 0) {
+          const imp = -(1 + NUM.ball.pairBounce) * rvn / (1 / ma + 1 / mc);
+          a.vx -= imp * nx / ma; a.vy -= imp * ny / ma;
+          c.vx += imp * nx / mc; c.vy += imp * ny / mc;
+          /* 至少给一点横向位移：正上方垂直叠住时法线是纯竖直的，
+             冲量全在 y 上，两颗球会在原地上下弹而不分开。 */
+          if (Math.abs(nx) < 0.12) {
+            const side = (a.x + c.x) / 2 < (WALL_L + WALL_R) / 2 ? 1 : -1;
+            a.vx += side * 90 * ka; c.vx += side * 90 * kc;
+          }
+        }
+      }
+
+      const slow = Math.abs(a.vx) < NUM.ball.fuseSpeed
+                && Math.abs(c.vx) < NUM.ball.fuseSpeed;
+      if (slow && a.onGround && c.onGround) {
+        const t = Math.max(a.fuseT || 0, c.fuseT || 0) + dt;
+        a.fuseT = c.fuseT = t;
+        if (t >= NUM.ball.fuseHold) { fuseBalls(a, c); break; }
+      } else {
+        a.fuseT = 0; c.fuseT = 0;
+      }
+    }
+    if (!aTouch) a.fuseT = 0;
+  }
+}
+
+/** 两颗球合成一颗。
+ *  位置取**面积加权**（大球的位置更有分量）—— 取中点会让结果看着
+ *  "往小球那边偏了一下"，因为大球本来就该主导。
+ *  速度取平均**再乘 0.5**：两个慢球的动量加起来也没多少，直接相加的话
+ *  一次合体会把球弹出去撞墙，玩家反而控制不住它去哪。 */
+function fuseBalls(a, c) {
+  const n = Math.min(NUM.ball.maxAbsorb, a.absorbed + c.absorbed);
+  const ma = a.r * a.r, mc = c.r * c.r, m = ma + mc;
+  const x = (a.x * ma + c.x * mc) / m;
+  const y = (a.y * ma + c.y * mc) / m;
+  const weak = !!(a.weak || c.weak);
+  a.dead = true; c.dead = true;
+  /* **当场从数组里移走，不等下一帧的 filter。**
+     合体是一帧内死两颗、加一颗，如果只标 dead：
+       · 本帧绘制会多画两颗旧球（画面上"合完了还站着原来的"）；
+       · 出图工具不跑 stepBalls，那两颗会**永远**留在图上。
+     先取索引再 splice，第二次用 indexOf 重取 —— 删掉第一颗之后索引会移。 */
+  const ia = S.balls.indexOf(a);
+  if (ia >= 0) S.balls.splice(ia, 1);
+  const ic = S.balls.indexOf(c);
+  if (ic >= 0) S.balls.splice(ic, 1);
+  const b = {
+    x, y, vx: (a.vx + c.vx) * 0.5, vy: Math.min(a.vy, c.vy),
+    r: ballR(n), absorbed: n, weak,
+    life: NUM.ball.life, onGround: true, chain: 0, hitCd: 0,
+    dead: false, fuseT: 0, pushT: 0,
+  };
+  S.balls.push(b);
+  addText(x, y - b.r - 14, '合成大球', '#9EE0FF', 17, 1.0);
+  addFrag(x, y, 10, '#CFE9F7', 200);
+  kickShake(2.6, 'fuse');
+  hitStop(0.05);
+  return b;
+}
+
 function stepBalls(dt) {
   for (const b of S.balls) {
     if (b.dead) continue;
@@ -5228,6 +5371,10 @@ function step(dt) {
   stepShots(dt);
   pushBalls(dt);
   stepBalls(dt);
+  /* **放在 stepBalls 之后**：球这一帧的位置刚结算完（落箱顶、贴坡、撞墙），
+     球球碰撞要基于最终位置算，否则会出现"先判碰撞再被墙推开"的错序，
+     表现为球从箱子边上挤进去一格。 */
+  stepBallPairs(dt);
   stepBoxFall(dt);
   stepShards(dt);
   stepDoor(dt);
@@ -6309,7 +6456,11 @@ function draw() {
   for (const b of S.ebullets) if (vis(b.y - 40, b.y + 40)) drawEBullet(g, b);
 
   // 球
-  for (const b of S.balls) if (vis(b.y - b.r * 2, b.y + b.r * 2)) drawBall(g, b);
+  /* **必须过滤 dead。** 数组里 dead 的球要等到下一帧 `stepBalls` 末尾才被
+     filter 掉，所以在"这一帧死掉"的球会多画一帧。平时看不出来（爆球有碎片
+     盖着），但合体会**同一帧死两颗**，画面上就是"合完了还站着一颗原来的"。
+     出图工具尤其明显：它不跑 stepBalls，旧球会永远留在图上。 */
+  for (const b of S.balls) if (!b.dead && vis(b.y - b.r * 2, b.y + b.r * 2)) drawBall(g, b);
 
   // 雪弹
   for (const s of S.shots) if (vis(s.y - 40, s.y + 40)) drawShot(g, s);
@@ -10007,6 +10158,11 @@ const API = {
   bellyTier, snowNeed, ballTier, ballR, ballPow,
   coatFoe, makeBallFrom, ballHitBox, shotBox, breakBox, hurtPlayer,
   checkDoor, doorBlocked, groundAt, stepDoor,
+  /* 球与球（2026-10-30）。**三个都必须导出** —— 球球碰撞是纯几何 + 动量，
+     只有把两颗球摆到指定坐标、调一次 stepBallPairs 才能问
+     "动量传没传过去""该不该合体"。出图只能看到结果，看不到
+     "两颗慢球贴住 0.2 秒时还没合、0.3 秒才合"这条边界。 */
+  stepBalls, stepBallPairs, fuseBalls,
   /* 井梯攀爬。**导出是为了量"爬上去有没有瞬移"** ——
      这条路径历史上是 `p.x = cw.x; p.y = cw.y` 一帧到位，
      光看代码能看出"没有过渡"，看不出多大的跳变。 */

@@ -3070,6 +3070,123 @@ group("四十七、关卡目标（破门 / 寻宝 / 省球）");
 }
 
 /* =========================================================================
+   四十八. 球与球：撞（动量传递）与合（两颗慢球粘成一颗）
+   -------------------------------------------------------------------------
+   为什么要专门一组：这一步给的是**新的动词**，不是新的数值。
+   加之前"推球"只有一种用法（推一颗、撞几只），关与关的差别只剩地形；
+   加之后玩家能把两颗球摆成一条线路、或者放弃两条线路换一颗特大球破冰墙。
+   这类改动最怕"看起来能玩"—— 所以每条都钉在可数的量上：
+   速度传了多少、贴几帧才合、合出来 absorbed 是几。
+   ========================================================================= */
+console.log("\n=== 四十八. 球与球：撞 / 合 ===");
+{
+  L.startStage(25);
+  const S = L.S;
+  const NB = L.NUM.ball;
+
+  /* **不走 makeBallFrom。** 那要从怪身上裹，球落在怪的坐标上，
+     没法精确控制"两颗差 40px"这种测试条件。直接造球对象。 */
+  const put = (x, vx, absorb) => {
+    const b = {
+      x, y: 300, vx, vy: 0, r: L.ballR(absorb), absorbed: absorb,
+      life: NB.life, onGround: true, chain: 0, hitCd: 0,
+      dead: false, pushT: 0, fuseT: 0,
+    };
+    S.balls.push(b);
+    return b;
+  };
+  const wipe = () => { S.balls.length = 0; };
+  const alive = () => S.balls.filter(b => !b.dead);
+  const run = (n) => { for (let i = 0; i < n; i++) L.stepBallPairs(1 / 60); };
+
+  /* ---- ① 重叠就分开 ---- */
+  wipe();
+  const o1 = put(400, 0, 4), o2 = put(405, 0, 4);
+  run(1);
+  {
+    const gap = Math.hypot(o2.x - o1.x, o2.y - o1.y);
+    /* 第一版在 d < 0.001 时直接 continue，两颗**同心**的球永远分不开 ——
+       画面上变成一颗双色球，而且再也拆不开。同一只怪在两格之间被连续
+       裹两次就会生成在同一点，现实中会碰到。 */
+    ck("★ 近乎同心的两颗球会被推开（否则永远粘成一颗双色球）",
+       gap > 1, "间距 " + gap.toFixed(2));
+  }
+
+  /* ---- ② 撞：动量从快球传给慢球 ---- */
+  wipe();
+  const fast = put(400, 900, 4), slow = put(460, 0, 4);
+  run(1);
+  ck("★ 快球撞慢球 → 慢球被推出去", slow.vx > 300, "slow.vx=" + slow.vx.toFixed(0));
+  ck("快球自己也减速（动量不是凭空来的）", fast.vx < 900, "fast.vx=" + fast.vx.toFixed(0));
+  /* 这条防的是"撞一下就吞掉"的实现 —— 那样"合成大球"就成了白送，
+     玩家不需要布置，只要往球堆里推一颗就行。 */
+  ck("★ 撞一下不会合体（合体必须两边都慢）", alive().length === 2,
+     "活球 " + alive().length);
+
+  /* ---- ③ 已经在分开的两颗不会被弹得更快 ---- */
+  {
+    wipe();
+    const a = put(400, -200, 4), c = put(440, 200, 4);
+    const b0 = [a.vx, c.vx];
+    run(6);
+    ck("★ 已在分开的两颗不会自己加速（rvn > 0 不给冲量）",
+       a.vx <= b0[0] + 1 && c.vx >= b0[1] - 1,
+       b0.join("/") + " → " + [a.vx, c.vx].map(v => v.toFixed(1)).join("/"));
+  }
+
+  /* ---- ④ 合：贴够时间才合 ---- */
+  {
+    wipe();
+    put(400, 0, 2); put(430, 0, 2);
+    run(Math.floor(NB.fuseHold * 60 * 0.5));
+    ck("贴住一半时间还**没**合（留一个反悔窗口）", alive().length === 2,
+       "活球 " + alive().length + "，阈值 " + NB.fuseHold + "s");
+    run(Math.ceil(NB.fuseHold * 60) + 1);
+    const live = alive();
+    ck("★ 贴够时间 → 合成一颗", live.length === 1, "活球 " + live.length);
+    ck("★ 合成后 absorbed 相加", live[0] && live[0].absorbed === 4,
+       live[0] ? String(live[0].absorbed) : "无");
+    ck("合成后半径按吸收量重算", live[0] && live[0].r === L.ballR(4),
+       live[0] ? live[0].r + " vs " + L.ballR(4) : "无");
+  }
+
+  /* ---- ⑤ 上限 ---- */
+  {
+    wipe();
+    put(400, 0, NB.maxAbsorb); put(430, 0, NB.maxAbsorb);
+    run(Math.ceil(NB.fuseHold * 60) + 1);
+    const live = alive();
+    /* **必须先验"合成了几颗"。** 只验 absorbed 的话，两颗都是 maxAbsorb
+       时"没合成、还是原来那颗"也会通过 —— 第一版这两条就是这么假通过的，
+       而真正该红的 ④ 也一起红，看起来像同一个 bug 的两个症状。 */
+    ck("合成的是**一颗**（不是两颗都没动）", live.length === 1, "活球 " + live.length);
+    ck("★ 合体不会超过 absorbed 上限",
+       live[0] && live[0].absorbed === NB.maxAbsorb,
+       live[0] ? String(live[0].absorbed) + " / " + NB.maxAbsorb : "无");
+    ck("合体后半径不超过 maxR", live[0] && live[0].r <= NB.maxR,
+       live[0] ? String(live[0].r) + " / " + NB.maxR : "无");
+  }
+
+  /* ---- ⑥ 残球合出来还是残球 ---- */
+  {
+    wipe();
+    const a = put(400, 0, 2); a.weak = true;
+    put(430, 0, 2);
+    run(Math.ceil(NB.fuseHold * 60) + 1);
+    const live = alive();
+    /* 省球关第 4 颗起是残球（寿命 ×0.45）。如果合体把 weak 洗掉，
+       玩家只要"造两颗残球、推到一起"就白得一颗满球 —— 额度形同虚设。 */
+    ck("残球那组也真的合成了", live.length === 1, "活球 " + live.length);
+    ck("★ 残球 + 满球 = 残球（合体不能把额度洗白）",
+       live[0] && live[0].weak === true,
+       live[0] ? "weak=" + live[0].weak : "无");
+  }
+
+  wipe();
+  L.startStage(1);
+}
+
+/* =========================================================================
    汇总
    ========================================================================= */
 console.log("\n" + "=".repeat(56));

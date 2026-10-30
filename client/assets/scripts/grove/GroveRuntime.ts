@@ -18170,7 +18170,7 @@ let snowEntry = snowEntryDefault;
 /* **传 null = 还原成默认实现**（Cocos 侧组件 onDestroy 时调）。
    原来只认 function，传 null 是静默不改 —— 那会留一个指向已销毁组件的闭包，
    下次再进出征页点这扇门，调的是上一个场景里那个死掉的组件。 */
-function setSnowlabEntry(fn) {
+export function setSnowlabEntry(fn: any): void {
   snowEntry = (typeof fn === "function") ? fn : snowEntryDefault;
 }
 

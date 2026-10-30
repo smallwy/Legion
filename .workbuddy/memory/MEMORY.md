@@ -11,7 +11,10 @@
 ## 环境
 - Cocos 3.8.8 在 `C:/ProgramData/cocos/editors/Creator/3.8.8`；沙箱启不了预览，验收走出图/断言。
 - 依赖按 `$HOME` 展开（两台机器分别是 `yu.wang` / `汪宇`）：`NODE_PATH="$HOME/.workbuddy/binaries/node/workspace/node_modules"`。
-- 离屏出图读**编译产物**，改完 `.ts` 先 `tsc -p tools/tsconfig.homeruntime.build.json`。
+- 离屏出图读**编译产物**，改完 `.ts` 先跑 `node tools/build-rt.js`（清空 `_rt-build` 再 tsc）。
+  **别直接 `tsc -p tools/tsconfig.homeruntime.build.json`** —— 它只增不删，
+  2026-10-30 实测那份产物停在 10-23，`Roster.heroIndexOf`（10-27 加的）根本不在里面，
+  下游检查却一片绿。
 - Cocos 常驻后台会回写 `Home.scene` / `.meta`：提交前确认 diff 是**纯增量**。
 
 ## 两条铁律
@@ -23,17 +26,22 @@
 | 目标 | 命令 |
 |---|---|
 | snowlab 结构+玩法 | `_snowlab-check.js`（354 项） |
-| 运行时等价 | `snowlab-runtime-check.js`（14 项 / 900 帧 0 偏差） |
+| 运行时等价 | `snowlab-runtime-check.js`（14 项 / 900 帧 0 偏差）、`grove-runtime-check.js`（39 项） |
+| 玩法冒烟 | `grove-smoke.js`（1488 项） |
+| **跨模块导出** | `import-export-check.js`（39 文件 / 0.2 秒，**提交前必跑**） |
+| **组件挂载 + 换手** | `_battle-mount-smoke.js`（cc 桩 + 真画布，验「点出发不黑屏」「点第三扇门能换到推球」） |
 | 出征页三扇门接线 | `_entry-wire.js`（11 项） |
 | 难度离散 / 形状 | `_diff-audit.js [N]`、`_shape-probe.js [N]` |
 | 行为 | `_jitter-probe.js`、`_foe-bounce.js`、`_ball-chaos.js` |
 | 性能 | `_ab-perf.js`（同进程 A/B，**只看比值**） |
 | 出图 | `_floors-shot.js`（锁镜 + `BEFORE=`）、`_goal-shot.js`（三种目标 + 残球特写）、`_entry-shot.js`（真浏览器验入口） |
+| CJS 产物 | `build-rt.js`（**清完再编**；别直接 tsc，只增不删） |
 | 存量对照 | `_legacy-audit.js`（只读，两套关卡参数表） |
 
 TS 语法检查要用 **Cocos 自带 typescript**（隔离 workspace 里没装）：
 `NODE_PATH="C:/ProgramData/cocos/editors/Creator/3.8.8/resources/app.asar.unpacked/node_modules"`。
 它现在自动扫全部 39 个 `.ts` —— 以前写死 4 个，`SnowlabBattle.ts` 从没被查过。
+**但 `transpileModule` 只查语法、不解析模块** —— 所以还需要 import-export-check。
 
 性能尖峰先做**最小复现**（剥到只剩画布）—— 唯一能钉死「环境还是我们」。
 
@@ -59,6 +67,11 @@ TS 语法检查要用 **Cocos 自带 typescript**（隔离 workspace 里没装�
 - 两套玩法换手走 `BattleSwitch.ts`（**中介，不许互相 import**）。
   `Component.destroy()` 是延迟销毁 → 必须等 `isValid` 变 false 再挂新的，
   否则两台 ClearCamera + 两块 DOM 层，症状是"画面定住"。
+- **给 Cocos 用的函数必须 `export`**。原型里 `setSnowlabEntry` 只是文件内部用的，
+  抽取时没加 export → `import` 拿到 undefined → **ESM 链接阶段就抛**，
+  `addComponent` 拿不到类 → 一台相机都没建 → 点出发**纯黑屏、零日志**
+  （连 onLoad 里的 log 都不打）。2026-10-30 实际踩到。
+  → 凡是将要被 import 的名字，改原型时就想清楚，跑 `import-export-check.js`。
 
 ## 关卡目标（`2026-10-30` 第 2 步）
 - 三种：`door` 破门 / `collect` 寻宝（挖出全部金箱，不看击杀）/ `limit` 省球（前 3 颗满球，之后残球）。

@@ -194,8 +194,12 @@ export class SnowlabBattle extends Component {
         this._unmountStage();
         assetManager.loadAny(HOME_UUID, (err: Error | null, asset: unknown) => {
             if (!err && asset instanceof SceneAsset) {
-                director.runScene((asset as SceneAsset).scene!);
-                return;
+                /* `scene` 的类型是 `Scene | null`。原来写的是 `scene!` ——
+                   类型上糊过去了，真拿到 null 时 `runScene(null)` 不动声色，
+                   玩家看到的是"按了 Esc 没反应"。落到下面的 loadScene 兜底
+                   比赌它非空好（和 GroveBattle 那边同步改的）。 */
+                const sc = (asset as SceneAsset).scene;
+                if (sc) { director.runScene(sc); return; }
             }
             console.warn('[SnowlabBattle] 按 uuid 回主界面失败，回退 loadScene：', err);
             director.loadScene('Home', (e2) => {

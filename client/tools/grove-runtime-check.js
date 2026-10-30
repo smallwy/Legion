@@ -51,12 +51,32 @@ function toJs(ts) {
            都不合法于 JS，必须跟着剥。注意这里剥的是**形参标注**，
            不是把整个函数删掉：这个函数本身要被真的跑到。 */
         ['function nudgeOutOfStumps(f: any): void {', 'function nudgeOutOfStumps(f) {'],
+        /* 出征页第三扇门的出口。2026-10-30 抽取脚本才开始给它加 export +
+           类型标注（不导出的话 Cocos 侧 import 拿到 undefined，点出发黑屏）。
+           这张清单是手写的，**每加一个带类型的 export 就要加一条** ——
+           漏了的话下面 new Function 会抛 "Unexpected token ':'"，
+           行号指向生成物，看不出是这张表漏了。所以末尾加了兜底扫描。 */
+        ['function setSnowlabEntry(fn: any): void {', 'function setSnowlabEntry(fn) {'],
         ['const stumps = (S.stumps as any[]);', 'const stumps = S.stumps;'],
         ['const p0 = (S.p as any);', 'const p0 = S.p;'],
     ];
     for (const [a, b] of subs) {
         if (s.indexOf(a) < 0) throw new Error('剥类型失败，找不到：' + a);
         s = s.split(a).join(b);
+    }
+
+    /* 兜底扫一遍残留的类型注解。
+       上面那张 subs 是**手写清单**，抽取脚本每新增一个带类型的 export
+       就要记得同步加一条 —— 忘了的话表现是 `new Function` 抛
+       "Unexpected token ':'"，行号指向生成物中间某行，完全看不出真因
+       （2026-10-30 加 setSnowlabEntry 时就是这样）。
+       这里主动找出来，把**出问题的代码片段**打出来。 */
+    const left = /(\([^()\n]*:\s*(?:any|number|string|boolean|void)\b)|(\)\s*:\s*(?:any|void|number|string|boolean)\s*\{)/.exec(s);
+    if (left) {
+        throw new Error(
+            '还有类型注解没剥（subs 清单漏了一条）：\n  ' +
+            s.slice(Math.max(0, left.index - 60), left.index + 90).replace(/\n/g, '\n  '),
+        );
     }
     return s;
 }

@@ -150,6 +150,10 @@ def main():
     a = next(i for i, l in enumerate(lines) if l.strip() == '<script>')
     b = next(i for i, l in enumerate(lines) if l.strip() == '</script>')
     body = '\n'.join(lines[a + 1:b])
+    # 先记下源行数：后面 ④b 段会把 a/b 覆盖成 body 内的**字符索引**，
+    # 末尾那句 print 就变成"源 script 行数 363"（实际两万多行）。
+    # 纯显示 bug，但它会让人以为抽取只吃了开头一小段。
+    src_lines = b - a - 1
 
     # ① 画布改由外部注入
     body = must(
@@ -244,6 +248,24 @@ def main():
     #    新函数的形参在 .ts 里会报 implicit any（原型里其余函数是历史遗留，同理）。
     body = must(body, 'function nudgeOutOfStumps(f) {', 'function nudgeOutOfStumps(f: any): void {')
 
+    # ⑥ 出征页第三扇门的出口必须**导出**。
+    #
+    #    原型里 `setSnowlabEntry` 只是同文件内部用的普通函数（页面里
+    #    `snowEntry` 是个变量，改它就够了），抽取时忘了加 export。
+    #    后果不是"点了没反应"，是 **Cocos 的模块链接阶段**就抛
+    #    `The requested module './GroveRuntime' does not provide an export named
+    #    'setSnowlabEntry'` —— 整个 GroveBattle 模块加载失败，
+    #    `addComponent(GroveBattle)` 拿到 undefined，一台相机都没建，
+    #    点「出发」之后**纯黑屏、控制台一行日志都没有**（模块根本没跑起来，
+    #    连 onLoad 里的 console.log 都没机会打）。
+    #    2026-10-30 实际踩到一次。判据：凡是 Cocos 侧 `import { X }` 的名字，
+    #    这里必须有 export —— 现在由 tools/import-export-check.js 兜底。
+    body = must(
+        body,
+        'function setSnowlabEntry(fn) {',
+        'export function setSnowlabEntry(fn: any): void {',
+    )
+
     out = HEADER + '\n' + body.rstrip() + TAIL
 
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
@@ -251,7 +273,7 @@ def main():
 
     print('生成 %s' % OUT)
     print('  源 script 行数 %d -> 输出 %d 行 / %d 字节'
-          % (b - a - 1, out.count('\n') + 1, len(out.encode('utf-8'))))
+          % (src_lines, out.count('\n') + 1, len(out.encode('utf-8'))))
 
 
 if __name__ == '__main__':

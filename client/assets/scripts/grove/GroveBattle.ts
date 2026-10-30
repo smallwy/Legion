@@ -698,8 +698,12 @@ export class GroveBattle extends Component {
 
         assetManager.loadAny(HOME_UUID, (err: Error | null, asset: unknown) => {
             if (!err && asset instanceof SceneAsset) {
-                director.runScene((asset as SceneAsset).scene);
-                return;
+                /* `SceneAsset.scene` 的类型是 `Scene | null`（引擎允许"资产还没
+                   实例化"）。直接传进 `runScene` 类型不过 —— 而且真拿到 null 时
+                   会静默不动，玩家看到的是"收工按了没反应"。落到下面的
+                   loadScene 兜底比赌它非空好。 */
+                const sc = (asset as SceneAsset).scene;
+                if (sc) { director.runScene(sc); return; }
             }
             console.warn('[GroveBattle] 按 uuid 回主界面失败，回退 loadScene：', err);
             director.loadScene('Home', (e2) => {

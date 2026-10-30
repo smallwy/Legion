@@ -277,7 +277,13 @@ export function snowlabBoot(seed?: number): void {
     # build-rt / runtime-check 读的正是那份没更新的 .ts —— 所以它们全绿。
     # 这个坑栽过两次（cce5c23 卡四轮、2026-10-30 加音效时又踩一次）。
     # 指纹让"过期"变成可判定的：runtime-check 拿原型的 md5 对一次就知道。
-    _fp = hashlib.md5(io.open(SRC, 'rb').read()).hexdigest()
+    #
+    # **必须先把行尾归一成 LF 再算，否则跨机器必假红。** 仓库存 LF、工作区
+    # CRLF（core.autocrlf=true），所以两台机器的同一份原型字节不同 → md5 不同
+    # → 门禁报"原型改过"。2026-10-30 实际踩到：公司机器算出 dcab99d9，
+    # 本机算出 0f0d8839，两边都是干净工作区、同一个提交。
+    # 归一之后指纹只反映**内容**，才符合它的本意。
+    _fp = hashlib.md5(io.open(SRC, 'rb').read().replace(b'\r\n', b'\n')).hexdigest()
     _stamp = '/* @src-md5 %s @src-lines %d */\n' % (_fp, len(html.split('\n')))
     out = _stamp + HEADER + '\n' + body.rstrip() + '\n' + TAIL
     os.makedirs(OUT_DIR, exist_ok=True)

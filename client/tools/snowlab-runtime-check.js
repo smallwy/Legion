@@ -87,7 +87,12 @@ const _need = ['bg', 'pet-cat', 'foe-moss', 'foe-fang', 'foe-grub'];
    "生成物没更新"时报警的判据，其余所有断言都跑在产物上。 */
 {
   const crypto = require('crypto');
-  const md5 = crypto.createHash('md5').update(fs.readFileSync(PROTO)).digest('hex');
+  /* **先归一成 LF 再算，和抽取脚本保持一致。** 仓库存 LF、工作区 CRLF，
+     直接按字节算会让两台机器对同一份原型得出不同 md5 —— 门禁变成
+     "看你在哪台机器上跑"，而不是"原型改没改"。2026-10-30 踩到：
+     公司机器 dcab99d9 / 本机 0f0d8839，工作区都干净。 */
+  const raw = fs.readFileSync(PROTO, 'utf8').replace(/\r\n/g, '\n');
+  const md5 = crypto.createHash('md5').update(raw).digest('hex');
   const gen = fs.readFileSync(path.join(TS_DIR, 'SnowlabRuntime.ts'), 'utf8');
   const m = gen.match(/@src-md5 ([0-9a-f]{32})/);
   ok('★ 生成物没过期（原型改过就必须重抽）',

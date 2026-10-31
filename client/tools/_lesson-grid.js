@@ -77,7 +77,7 @@ const LES_COLOR = {
   const picks = [5, 6, 7, 8, 9, 18];
   const shots = picks.map(n => shotOf(inst, n));
 
-  const COLS = 3, PAD = 16, SW = (W / 2) | 0, SH = (H / 2) | 0, TOP = 108;
+  const COLS = 3, PAD = 16, SW = (W / 2) | 0, SH = (H / 2) | 0, TOP = 120;
   const CW = PAD + COLS * (SW + PAD);
   const CH = TOP + 2 * (SH + 74 + PAD) + 20;
   const cv = createCanvas(CW, CH);
@@ -89,7 +89,7 @@ const LES_COLOR = {
   g.font = "13px " + FONT; g.fillStyle = "#5B6B7B";
   g.fillText("六格全是真实生成的关卡 + 真实 draw()，镜头一律放在地表层（tier 都是 0），只差考点一个变量。", PAD, 62);
   g.fillStyle = "#E05A2B";
-  g.fillText("左上角是无考点的基线 —— 有对照才能说是考点改的。悬台那格是熔炉场景，底色不同是场景不是考点。", PAD, 84);
+  g.fillText("左上：无考点基线（有对照才敢说是考点改的）。悬台在熔炉场景，底色不同是换地方。", PAD, 84);
 
   shots.forEach((s, i) => {
     const cx = PAD + (i % COLS) * (SW + PAD);

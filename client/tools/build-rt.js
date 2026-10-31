@@ -38,8 +38,23 @@ function req(name, absDir) {
    覆盖示例：
      TSC_DIR="$HOME/.workbuddy/binaries/node/workspace/node_modules/typescript" \
        node client/tools/build-rt.js */
-const TSC_DIR = process.env.TSC_DIR ||
-  "C:/ProgramData/cocos/editors/Creator/3.8.8/resources/app.asar.unpacked/node_modules/typescript";
+/* **改成按顺序探测（2026-10-31）。** 写死单一路径的结果就是上面说的那种
+   事故 —— 而且它已经在另一台机器上复现了：Cocos 装在
+   `C:/CocosCreator/v3.8.8`，`C:/ProgramData/cocos/...` 根本不存在。
+   候选里 `TSC_DIR` 排第一，所以临时覆盖仍然有效；
+   最后一项是隔离 workspace 自带的 typescript，前面几个都没有时它一定在。 */
+const TSC_CANDIDATES = [
+  process.env.TSC_DIR,
+  "C:/ProgramData/cocos/editors/Creator/3.8.8/resources/app.asar.unpacked/node_modules/typescript",
+  "C:/CocosCreator/v3.8.8/resources/app.asar.unpacked/node_modules/typescript",
+  path.join(process.env.USERPROFILE || process.env.HOME || "",
+    ".workbuddy/binaries/node/workspace/node_modules/typescript"),
+].filter(Boolean);
+const TSC_DIR = TSC_CANDIDATES.find(p => fs.existsSync(path.join(p, "bin", "tsc")));
+if (!TSC_DIR) {
+  console.log("✗ 找不到 typescript，试过的路径：\n  " + TSC_CANDIDATES.join("\n  "));
+  process.exit(1);
+}
 
 /* ① 清干净。**这一步是重点**，不是顺手 —— 不清就等于允许"过期产物"存在。 */
 if (fs.existsSync(OUT)) {

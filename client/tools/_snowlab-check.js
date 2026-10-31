@@ -2483,17 +2483,46 @@ group("四十二、深潜（无尽模式）");
   ck("深潜的关卡也过了 validateLevel", L.validateLevel(L.S.level, true),
      "骨架 " + L.S.level.skel + " seed " + L.S.level.seed);
 
-  /* ③ 资源带过去。**hp 每关只回 1，弹药不减不给** —— 这条不成立，
-     深潜就退化成"一关一关重开"，一点压力都没有。 */
+  /* ③ 过门是一次选择，不是自动结算。
+     **这一整段在 2026-10-31 第 5 刀被重写**：旧版验的是"过门自动回 1 血 +
+     资源原样带过"，而"自动"正是深潜和主线没区别的原因 —— 玩家站在门口
+     什么都不用想，因为门口没有任何东西需要他想。 */
   S.hp = 1; S.belly = 37; S.ammo = 9;
   const d0 = S.dive.depth;
-  L.diveNext();
-  ck("过门之后深度 +1", S.dive.depth === d0 + 1, S.dive.depth + " vs " + (d0 + 1));
-  ck("过门之后弹药原样带过去（没有满弹）", S.ammo === 9, String(S.ammo));
-  ck("过门之后饱食原样带过去", Math.abs(S.belly - 37) < 0.01, String(S.belly));
-  ck("过门之后 hp = min(上限, 旧 + 1)", S.hp === Math.min(L.NUM.hpStart, 2), String(S.hp));
+  L.openGate();
+  ck("★ 深潜进门进的是选牌（phase='gate'），不是直接下一层",
+     S.phase === 'gate' && S.dive.depth === d0, S.phase + " 深度 " + S.dive.depth);
+  ck("★ 过门给 3 张牌", (S.gateCards || []).length === 3, (S.gateCards || []).length + " 张");
+  const gIds = (S.gateCards || []).map(c => c.id);
+  ck("★ 三张牌各不相同", new Set(gIds).size === gIds.length, gIds.join("/"));
+  const eatI = gIds.indexOf('eat');
+  ck("★ 补给牌里必有「咽下」（保底：玩家不会被一手烂牌卡死）", eatI >= 0, gIds.join("/"));
+  ck("★ 选牌之前资源一分没动", S.hp === 1 && S.ammo === 9 && Math.abs(S.belly - 37) < 0.01,
+     S.hp + " / " + S.belly + " / " + S.ammo);
+  L.pickGate(eatI);
+  ck("选完才进下一层", S.dive.depth === d0 + 1 && S.phase === 'play',
+     S.dive.depth + " " + S.phase);
+  ck("★ 选「咽下」饱食回满", Math.abs(S.belly - 100) < 0.01, String(S.belly));
+  ck("★ 不选「固守」就一分血都拿不到（hp 原样带过去）", S.hp === 1, String(S.hp));
+  ck("★ 不选「囤弹」就不给弹药", S.ammo === 9, String(S.ammo));
   ck("过门之后还是 5 层、还是合法关卡",
      L.S.level.nFloors === 5 && L.validateLevel(L.S.level), L.S.level.nFloors + " 层");
+
+  /* ★ 真的把玩家走进去。**上面那些 openGate() 都是手工调的，手工调的东西
+     证明不了调用点在** —— 实测把 stepDoor 里的 `openGate()` 换成 `diveNext()`
+     （也就是改回改造前的行为），不压这条的话 572 项依然全绿。
+     判据必须是"玩家自己走进门之后 phase 是什么"。 */
+  L.startDive(20261031);
+  S.boxes.length = 0;
+  S.foes.length = 0;
+  S.door.open = true;
+  L.placePlayer(S.door.x + 2, S.door.y - S.p.h);
+  const dGate = S.dive.depth;
+  for (let i = 0; i < 6; i++) L.step(DT);
+  ck("★ 玩家真的走进深潜的门，进的是选牌（不是被直接送到下一层）",
+     S.phase === 'gate' && S.dive.depth === dGate, S.phase + " 深度 " + S.dive.depth);
+  ck("★ 走进去之后门口真的摆了三张牌", (S.gateCards || []).length === 3,
+     (S.gateCards || []).length + " 张");
 
   /* ④ 骨架在换。**这是深潜唯一的「内容」** —— 如果连续几关都是同一个形状，
      那它只是"同一关重开 N 次"。判据用"深度 1~12 里至少出现 4 种"。 */
@@ -4489,24 +4518,157 @@ group("五十三、雪晶 / 图鉴 / 裂壳 / 悬台 / 态度");
        tested && kited, why);
   }
 
-  /* ---- 深潜词条 ---- */
-  ck("词条按深度解锁（1 层没有、5 层有重石）",
-     L.diveMods(1).length === 0 && L.diveMods(5).indexOf('heavy') >= 0,
-     JSON.stringify(L.diveMods(5)));
-  ck("词条是递增的（20 层四条全开）", L.diveMods(20).length === 4, JSON.stringify(L.diveMods(20)));
+  /* ---- 深潜词条（2026-10-31 第 5 刀：从"到层数自动生效"改成"玩家自己选"）----
+     旧版验的是"深度到几层就有几条"。可自动生效意味着玩家没有任何决定 ——
+     那不是词条，是难度旋钮，而且四条都拧同一个方向（变难），
+     在玩家眼里就是一条词条的四个名字。新版判据全部是"选了才有"。 */
+  L.startDive(99);
+  ck("没选词条时一条都没有", L.diveMods().length === 0, JSON.stringify(L.diveMods()));
+
   {
-    /* **词条必须真的改数**，不能只是显示一行字。 */
-    L.startDive(99);
-    const base = L.snowNeed();
-    S.dive.depth = 10;                       // 厚甲
-    const thick = L.snowNeed();
-    ck("★ 深潜 10 层「厚甲」真的让裹一只更费", thick > base, base + " → " + thick);
-    S.dive.depth = 1;
-    ck("★ 回到第 1 层就恢复（词条不写死进 NUM）", L.snowNeed() === base, L.snowNeed() + "");
+    const need0 = L.snowNeed();
+    S.dive.picks = ['thick'];
+    const needT = L.snowNeed();
+    ck("★ 选了「厚甲」裹一只真的更费", needT > need0, need0 + " → " + needT);
+    S.dive.picks = ['heavy'];
+    const needH = L.snowNeed();
+    ck("★ 选了「重石」裹一只真的更省（收益那一半不是文案）",
+       needH < need0, need0 + " → " + needH);
+    S.dive.picks = [];
+    ck("★ 不选就恢复（词条不写死进 NUM）", L.snowNeed() === need0, L.snowNeed() + "");
+
+    /* 四条各改一个乘数。**直接验乘数**，因为推球力度和弹速都是局部变量，
+       取不到就只能读源码 —— 而读源码验不了"调用点有没有接上"。
+       所以下面还有一条：真关卡的怪是不是全变追兵 / 真关卡有没有冰墙。 */
+    const kOf = picks => {
+      S.dive.picks = picks;
+      return { need: L.diveNeedK(), push: L.divePushK(), life: L.diveLifeK(), spd: L.diveSpeedK() };
+    };
+    const k0 = kOf([]);
+    ck("★ 不选词条时四个乘数都是 1",
+       k0.need === 1 && k0.push === 1 && k0.life === 1 && k0.spd === 1, JSON.stringify(k0));
+    const kH = kOf(['heavy']);
+    ck("★ 重石：推球 −15% / 裹料 −20%（镜像的省料那一半）",
+       Math.abs(kH.push - 0.85) < 1e-9 && Math.abs(kH.need - 0.80) < 1e-9, JSON.stringify(kH));
+    const kT = kOf(['thick']);
+    ck("★ 厚甲：推球 +20% / 裹料 +30%（镜像的推力那一半）",
+       Math.abs(kT.push - 1.20) < 1e-9 && Math.abs(kT.need - 1.30) < 1e-9, JSON.stringify(kT));
+    const kC = kOf(['cold']);
+    ck("★ 急冻：球寿命 −30% / 弹速 +18%",
+       Math.abs(kC.life - 0.70) < 1e-9 && Math.abs(kC.spd - 1.18) < 1e-9, JSON.stringify(kC));
+    /* 「互斥」不是靠 if-else 保证的，是靠**发牌时不会发已选的**（见下面的词条池）。
+       这里不测连乘，因为 picks 里根本不可能同时有两条 —— 测一个不会发生的
+       情况，红了只能说明"我编了一个不存在的约束"。 */
+  }
+
+  /* 饥肠的两半都要测。**只测代价的话这条就是纯惩罚，没人会选** ——
+     而那正是上一版四条词条的共同毛病。 */
+  {
+    S.dive.picks = ['hunger'];
+    S.belly = 60;
+    L.diveNext();
+    ck("★ 饥肠：过门掉 15 饱食", Math.abs(S.belly - 45) < 0.01, String(S.belly));
+    S.belly = 50;
+    L.killFoe({ x: 100, y: 100, w: 40, h: 50, dead: false, breed: 'crawler' }, null);
+    ck("★ 饥肠：杀一只 +4 饱食", Math.abs(S.belly - 54) < 0.01, String(S.belly));
+    S.belly = 99;
+    L.killFoe({ x: 100, y: 100, w: 40, h: 50, dead: false, breed: 'crawler' }, null);
+    ck("★ 饥肠的饱食不封顶到 100 以上（HUD 饱食条只有三段）",
+       S.belly <= 100, String(S.belly));
+    S.dive.picks = [];
+  }
+
+  /* 词条牌池：选过的不再出；池子空了退回补给牌，不会发空卡。 */
+  {
+    S.dive.picks = ['heavy', 'thick', 'cold'];
+    ck("★ 词条池里不再出现已选的",
+       L.diveModPool().map(m => m.id).join(",") === 'hunger',
+       L.diveModPool().map(m => m.id).join(","));
+    S.dive.picks = ['heavy', 'thick', 'cold', 'hunger'];
+    ck("★ 四条选完之后池子是空的", L.diveModPool().length === 0,
+       L.diveModPool().length + "");
+    S.dive.depth = 5;
+    L.openGate();
+    ck("★ 池子空了也不发空卡（退回补给牌）",
+       S.gateKind === 'supply' && S.gateCards.length === 3, S.gateKind + " / " + S.gateCards.length);
+    S.phase = 'play';
+    S.dive.picks = [];
+  }
+
+  /* 每 5 层是构筑关，其余是补给关。 */
+  {
+    const gateKindAt = depth => {
+      S.dive.depth = depth; S.dive.picks = [];
+      L.openGate();
+      const k = S.gateKind;
+      S.phase = 'play';
+      return k;
+    };
+    ck("★ 深度 1~4 过门是补给牌",
+       [1, 2, 3, 4].every(d => gateKindAt(d) === 'supply'),
+       [1, 2, 3, 4].map(d => gateKindAt(d)).join(","));
+    ck("★ 深度 5 / 10 过门是词条牌",
+       gateKindAt(5) === 'mod' && gateKindAt(10) === 'mod',
+       gateKindAt(5) + "/" + gateKindAt(10));
+    ck("★ 同一个深度出的三张牌是固定的（不是每次打开都洗牌）",
+       (function () {
+         S.dive.depth = 5; S.dive.picks = []; L.openGate();
+         const a = S.gateCards.map(c => c.id).join(",");
+         S.phase = 'play'; L.openGate();
+         const b = S.gateCards.map(c => c.id).join(",");
+         S.phase = 'play';
+         return a === b;
+       })(), "");
+  }
+
+  /* ---- 深潜的考点（第 5 刀的第三件事）----
+     **上一版深潜的 lesson 恒为 null** —— 一个考点都没有，比主线还单调。
+     "两个玩法一样"有一半就是这条造成的：主线有 48 关的手写节奏，
+     深潜什么都没有，只有越来越少的饱食。 */
+  {
+    ck("★ 深潜考点按深度轮换（1 空场 / 2 追兵 / 3 封关 / 4 回到空场）",
+       L.diveLesson(-1) === 'bare' && L.diveLesson(-2) === 'rush' &&
+       L.diveLesson(-3) === 'seal' && L.diveLesson(-4) === 'bare',
+       [-1, -2, -3, -4].map(L.diveLesson).join(","));
+    ck("★ 深潜只用不依赖骨架形状的三类考点（narrow/perch 会生成无解关）",
+       L.DIVE_LESSONS.every(id => ['bare', 'rush', 'seal'].indexOf(id) >= 0),
+       L.DIVE_LESSONS.join(","));
+
+    /* 真的落在关卡上，不只看函数返回值。 */
+    let runnerOK = 0, runnerTot = 0, iceOK = 0, iceTot = 0;
+    /* **`diveNext` 自己会 `depth++`，所以起点要比目标深度小 1。**
+       第一版写的是 `depth = 2; diveNext()`，结果造出来的是深度 3 的关，
+       测的是"深度 3 全是追兵"—— 必然假红，而代码一点没坏。 */
+    /* **口径和主线那条一致：只看 tier >= 0.30 的层。**
+       runner 是"越深越会追"的机制，第 0 层放追兵等于把这个解锁顺序改掉；
+       主线那边（第 3991 行附近）也是这么验的，两边口径不一样会让
+       "深潜的追兵关和主线的追兵关不是同一个东西"。 */
+    /* **要用 `genLevel` 的 spawns，不能用 `S.foes`** —— `makeFoe` 不保留
+       `layer`，从运行态里的怪反推它在哪一层是做不到的（字段是 undefined，
+       一筛就是空数组，`every()` 对空数组恒真 → 断言假绿）。 */
+    const deepAllRunner = () => {
+      const g = L.genLevel(L.SEED, -2);
+      const deep = g.spawns.filter(sp => ((g.layers[sp.layer] || {}).tier || 0) >= 0.30);
+      return deep.length > 0 && deep.every(sp => sp.kind === 'runner');
+    };
+    for (const sd of [31337, 4242, 777]) {
+      L.startDive(sd);
+      S.dive.depth = 1; L.diveNext();          // → 深度 2
+      runnerTot++;
+      if (deepAllRunner()) runnerOK++;
+      L.startDive(sd);
+      S.dive.depth = 2; L.diveNext();          // → 深度 3
+      iceTot++;
+      if ((L.S.level.layers || []).some(l => l.holes.some(h => h.cover === 'ice'))) iceOK++;
+    }
+    ck("★ 深度 2 的深潜关真的全是追兵（考点接上了）",
+       runnerTot > 0 && runnerOK === runnerTot, runnerOK + "/" + runnerTot);
+    ck("★ 深度 3 的深潜关真的有冰墙封口（seal 接上了）",
+       iceTot > 0 && iceOK === iceTot, iceOK + "/" + iceTot);
+
     /* 种子派生：同深度必须同一张图、不同深度必须不同图。
-       **两次都要从同一个深度起跳**（`diveNext` 自己 +1，所以起点写 5
-       两次才都是"第 6 层"）。第一版一次写 5 一次写 4，测的是两个深度，
-       红了还以为派生坏了。 */
+       **两次都要从同一个深度起跳**（`diveNext` 自己 +1）。 */
+    L.startDive(99);
     S.dive.depth = 5; L.diveNext(); const s5a = L.SEED;
     S.dive.depth = 5; L.diveNext(); const s5b = L.SEED;
     ck("★ 同一 base 同一深度 → 同一张图", s5a === s5b, s5a + " vs " + s5b);

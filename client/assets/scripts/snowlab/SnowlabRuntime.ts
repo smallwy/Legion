@@ -1,4 +1,4 @@
-/* @src-md5 d828c7743534898d16e42823127140f9 @src-lines 12856 */
+/* @src-md5 ffff226dac063ec07a17035f1ebac1e9 @src-lines 13064 */
 // @ts-nocheck
 /* ⚠ 自动生成，勿手改 —— 源：client/prototype/snowlab.html
    重新生成：python client/tools/extract_snowlab_runtime.py
@@ -837,12 +837,23 @@ const LESSON_TABLE = [
   'rush', 'maze', 'seal', 'bare', 'narrow', 'rush', 'maze', 'seal', // 33-40
   'perch', 'narrow', 'perch', 'rush', 'bare', 'maze', 'seal', 'bare', // 41-48
 ];
-/** 第 stage 关考什么。`null` = 教学关（没有考点）。深潜不给考点。 */
+/** 第 stage 关考什么。`null` = 教学关（没有考点）。深潜走另一个入口。 */
 function lessonOf(stage) {
   if (!(stage > 0)) return null;
   const n = stage | 0;
   if (n > LESSON_TABLE.length) return null;
   return LESSON_TABLE[n - 1] || null;
+}
+/** 深潜的考点节奏。**按深度轮换，不按种子** ——
+ *  按种子的话同一个深度每次进都不一样，玩家读不出"越往下越有花样"；
+ *  按深度又只放三个（而不是把 48 关的表搬过来）是因为深潜的骨架是
+ *  随机发的：narrow 要求洞位和锚点对齐、perch 要求目标是"寻宝"，
+ *  这两样深潜都没有，硬塞会生成出"看起来正常、实际无解"的关。
+ *  bare 放在第一位是故意的：深度 1 永远不教学，先让玩家把资源攒起来。 */
+const DIVE_LESSONS = ['bare', 'rush', 'seal'];
+function diveLesson(stage) {
+  const d = -stage;
+  return DIVE_LESSONS[(d - 1) % DIVE_LESSONS.length];
 }
 
 function genLevel(seed, stage) {
@@ -859,7 +870,13 @@ function genLevel(seed, stage) {
   /* **本关考点。** 只作用于主线（深潜是另一套节奏，见 DIVE_MODS）。
      `lx` 是"这一关的修饰词"：空对象 = 一个修饰都不加（教学关 / 深潜）。
      所有读取都写成 `lx.x || 默认值`，所以不给考点时行为逐字节不变。 */
-  const les = (stage != null && stage > 0) ? lessonOf(stage) : null;
+  /* 深潜也要有考点。**上一版这里是写死的 null** —— 于是深潜不但和主线
+     同一种玩法，还比主线少掉 48 关的全部修饰，是"削弱版主线"。
+     只发不依赖骨架形状的三个：bare（空场）/ rush（追兵）/ seal（封关）。
+     narrow 要求洞位和锚点对齐、perch 要求目标本来是"寻宝"——深潜两样都没有，
+     硬塞会生成出"洞在口上但洞不够窄"这种看起来正常、实际无解的关。 */
+  const les = (stage != null && stage > 0) ? lessonOf(stage)
+    : (stage != null && stage < 0) ? diveLesson(stage) : null;
   const lx = (les && LESSONS[les]) || {};
   const nF = dive ? 5 : (cfg ? cfg.floors
     : 3 + (chance(0.55) ? 1 : 0) + (chance(0.45) ? 1 : 0));
@@ -3063,7 +3080,11 @@ function buildLevel(seed, stage) {
 /* ---------------------------------------------------------------- 状态 */
 const S = {
   t: 0,
-  phase: 'play',            // play | clear
+  phase: 'play',            // play | clear | gate | dead
+  /* 深潜过门的三张牌。**必须在这里有初值** —— 出图工具会直接调 draw()
+     画一帧，那时 `S.gateCards` 是 undefined 会让 drawGate 画三张空卡片，
+     而"没牌"和"牌画坏了"在截图里长得完全一样。 */
+  gateT: 0, gateKind: 'supply', gateCards: [],
   /* 镜头。世界高 1560，屏幕 600 —— 只有跟着人往下走，才谈得上"纵深"。
      只做纵向（横向世界正好一屏宽），这样玩家永远看得见整张地图的宽度，
      不会因为横向滚动而丧失方位感。
@@ -3746,7 +3767,7 @@ function bellyTier() {
    0 发就能裹住 = 一按吐弹直接变球。 */
 function snowNeed() {
   const base = NUM.snowShots[bellyTier()];
-  return Math.max(1, Math.round(base * THEME.medium.needK * (diveHas('thick') ? 1.3 : 1)));
+  return Math.max(1, Math.round(base * THEME.medium.needK * diveNeedK()));
 }
 const TIER_CN = { full: '满饱', half: '半饱', hungry: '全饿' };
 
@@ -4165,7 +4186,7 @@ function shoot() {
     /* **只乘速度，不乘 `life`。** 乘了 life 射程 = 速度×寿命 会乘两次，
        熔炉的射程直接变成 1.39 倍 —— 那不是"火种飞得快"，是"火种能打
        到屏幕外面"，两侧高台的取舍全部作废。 */
-    vx: p.face * cfg.speed * THEME.medium.speedK,
+    vx: p.face * cfg.speed * THEME.medium.speedK * diveSpeedK(),
     /* **横向丢出去，但要掉下来。** vy0 轻微上扬让弹道先平后坠 ——
        没有这一下，子弹读起来是"射出去的激光"；有了它才是"扔出去的东西"。
        重力 520 是角色重力（2100）的四分之一：子弹比人轻，但不该飘。 */
@@ -4285,7 +4306,7 @@ function makeBallFrom(f) {
   S.balls.push({
     x: f.x + f.w / 2, y: f.y + f.h / 2,
     vx: 0, vy: 0, r: ballR(n), absorbed: n,
-    life: NUM.ball.life * (weak ? 0.45 : 1) * (diveHas('cold') ? 0.70 : 1),
+    life: NUM.ball.life * (weak ? 0.45 : 1) * diveLifeK(),
     weak: weak,
     onGround: false, chain: 0, hitCd: 0, dead: false,
   });
@@ -4344,7 +4365,7 @@ function pushBalls(dt) {
   const runUp = clamp((p.runD || 0) / NUM.push.runFull, 0, 1);
   /* 深潜词条「重石」：推球力度 ×0.85。**乘在这里，不改 NUM** ——
      `NUM` 是全模式共用的，改它会在深潜结束之后继续生效（同一份表）。 */
-  const pow = NUM.push.base * (1 + NUM.push.runGain * runUp) * (diveHas('heavy') ? 0.85 : 1);
+  const pow = NUM.push.base * (1 + NUM.push.runGain * runUp) * divePushK();
 
   for (const b of S.balls) {
     if (b.dead) continue;
@@ -5284,6 +5305,10 @@ function killFoe(f, byBall) {
     byBall.absorbed = Math.min(NUM.ball.maxAbsorb, byBall.absorbed + NUM.ball.absorbFoe);
     byBall.r = ballR(byBall.absorbed);
   }
+  /* 词条「饥肠」的收益：每杀一只 +4 饱食。**上限封 100** —— 不封的话
+     一关刷十几只就能把饱食顶到 140，而 HUD 的饱食条只有 0~100 三段，
+     超出部分看不见却真的在生效（`bellyTier()` 会一直判 full）。 */
+  if (diveHas('hunger')) S.belly = Math.min(100, S.belly + 4);
   checkDoor();
 }
 
@@ -5908,28 +5933,193 @@ function separateFoes() {
      厚甲 裹一只 needK ×1.3 —— 弹药消耗加快，且它和饥肠叠加
      急冻 球寿命 ×0.70      —— 推球的窗口变短，"先推还是先等"更有分量
      饥肠 过门时饱食 −15    —— 唯一一条"过关反而变弱"的，逼玩家在关内吃回来 */
+/* **第 5 刀：词条从"系统塞给你的惩罚"改成"你自己选的交易"（2026-10-31）。**
+
+   上一版这四条是纯 debuff —— 深度到 5 就自动生效，玩家一件事都不用做。
+   后果是三重的：
+     · 唯一的交互是"我什么时候死"，不是"我怎么打"；
+     · 四条全改同一个东西（变难），在玩家眼里就是一条词条的四个名字；
+     · 过门是自动的 `hp+1`，于是深潜和主线的差别只剩"不能死"。
+
+   用户 2026-10-31 的原话：「深巢无尽和雪原玩法一样？哪有什么好玩的啊」——
+   他说得对。**深潜唯一能给主线给不了的东西是跨关资源，而跨关资源
+   只有在"过门时要花掉它"的时候才成立**，否则它只是一条更长的血条。
+
+   所以四条全部成对：一条代价、一条收益，两边都改手感。
+   两条是镜像（省料 vs 推力、快 vs 吃），选了一条另一条不再出现。
+   乘数收口成四个函数 —— 断言从此验的是"选了 heavy 之后 needK 是多少"，
+   而不是"深度到 5 之后 needK 是多少"，后者根本没有玩家参与。 */
 const DIVE_MODS = [
-  { at: 5,  id: 'heavy',  cn: '重石', say: '推球力度 −15%' },
-  { at: 10, id: 'thick',  cn: '厚甲', say: '裹一只多要三成' },
-  { at: 15, id: 'cold',   cn: '急冻', say: '球的寿命 −30%' },
-  { at: 20, id: 'hunger', cn: '饥肠', say: '过门掉 15 饱食' },
+  { id: 'heavy',  cn: '重石', cost: '推球 −15%',   gain: '裹一只省两成',
+    say: '推不动的球，就用弹去裹' },
+  { id: 'thick',  cn: '厚甲', cost: '裹一只多三成', gain: '推球 +20%',
+    say: '不靠弹，靠推' },
+  { id: 'cold',   cn: '急冻', cost: '球寿命 −30%', gain: '弹速 +18%',
+    say: '快打快收，别让球停在半路' },
+  { id: 'hunger', cn: '饥肠', cost: '过门掉 15 饱食', gain: '每杀一只 +4 饱食',
+    say: '边打边吃，停不下来' },
 ];
-/** 当前深度已经生效的词条 id 列表。**按深度算，不存进 S.dive** ——
- *  存一份数组就要在 reset / diveNext / 断言三处同步，而它是深度的纯函数。 */
-function diveMods(depth) {
-  const d = depth == null ? (S.dive ? S.dive.depth : 0) : depth;
-  const out = [];
-  for (const m of DIVE_MODS) if (d >= m.at) out.push(m.id);
-  return out;
+/** 已经选中的词条 id 列表。**这一版存进 `S.dive.picks`，不再是深度的纯函数** ——
+ *  纯函数意味着玩家没有选择，而"选择"正是这个模式唯一的内容。 */
+function diveMods() {
+  return (S.dive && S.dive.picks) ? S.dive.picks.slice() : [];
 }
 function diveHas(id) {
-  if (!S.dive) return false;
-  return diveMods(S.dive.depth).indexOf(id) >= 0;
+  return !!S.dive && (S.dive.picks || []).indexOf(id) >= 0;
+}
+/** 还没选过的词条。池子空了就退回补给牌，不会发一张空卡。 */
+function diveModPool() {
+  const p = diveMods();
+  return DIVE_MODS.filter(m => p.indexOf(m.id) < 0);
+}
+/* 四条词条的数值全部走这四个函数。**放在一处，不散在调用点** ——
+   原来 `diveHas('thick') ? 1.3 : 1` 直接写在 `snowNeed()` 里，
+   加收益的时候要在三个文件位置找乘数，漏一处就是"选了但没生效"，
+   而且外观和"这个功能没做"完全一样。
+   heavy 和 thick 互斥（picks 去重），但写成 if-else 而不是连乘：
+   万一以后允许同时选，连乘会让两个镜像互相抵消成 1，玩家白选两次。 */
+function diveNeedK() {
+  if (diveHas('thick')) return 1.30;
+  if (diveHas('heavy')) return 0.80;
+  return 1;
+}
+function divePushK() {
+  if (diveHas('heavy')) return 0.85;
+  if (diveHas('thick')) return 1.20;
+  return 1;
+}
+function diveLifeK() { return diveHas('cold') ? 0.70 : 1; }
+function diveSpeedK() { return diveHas('cold') ? 1.18 : 1; }
+
+/* ---- 过门牌（第 5 刀）--------------------------------------------------
+   **深潜的过门是一次选择，主线不是。** 主线进门就下一关，因为它没有
+   可带走的东西；深潜把 hp / 饱食 / 弹药带过门，那就必须在门口花掉它。
+
+   三张牌全部动同一条资源（饱食），换三种东西 —— 这是"经营"的最小形状：
+   玩家每一层只需要回答一个问题「我的饱食该换成什么」。
+   `固守` 不再白给：原来过门自动 +1 血，所以"回血"根本不是一个选项；
+   现在自动回血砍掉了，「固守」才第一次真的被人选。
+   代价是深潜变难，所以 `咽下` 是无代价的保底牌 —— 玩家永远不会被
+   一张牌卡死，只会被自己的选择卡住。 */
+const GATE_SUPPLY = [
+  { id: 'eat',  cn: '咽下', gain: '饱食回满',         cost: '不回血 · 不加弹',
+    apply() { S.belly = 100; } },
+  { id: 'mend', cn: '固守', gain: '生命 +1',          cost: '饱食 −40',
+    apply() { S.hp = Math.min(NUM.hpStart, S.hp + 1); S.belly = Math.max(0, S.belly - 40); } },
+  { id: 'ammo', cn: '囤弹', gain: '弹药 +4',          cost: '饱食 −25',
+    apply() { S.ammo += 4; S.belly = Math.max(0, S.belly - 25); } },
+];
+/** 每 5 层是构筑关，其余是补给关。 */
+const GATE_MOD_EVERY = 5;
+
+function openGate() {
+  const d = S.dive;
+  if (!d) return;
+  S.gateT = 0;
+  const pool = diveModPool();
+  if (d.depth % GATE_MOD_EVERY === 0 && pool.length) {
+    /* 洗牌用**本局种子 + 深度**，不用 Math.random：同一局同一层
+       出同样的三张牌。不断言这一点的话，"重开一局看到不同的牌"
+       和"洗牌写错了"在出图里长得一样。 */
+    const R = rngFrom(mix32((d.base ^ (d.depth * 1337)) >>> 0));
+    const bag = pool.slice();
+    for (let i = bag.length - 1; i > 0; i--) {
+      const j = Math.floor(R() * (i + 1));
+      const t = bag[i]; bag[i] = bag[j]; bag[j] = t;
+    }
+    S.gateKind = 'mod';
+    S.gateCards = bag.slice(0, 3).map(m => ({
+      id: m.id, cn: m.cn, gain: m.gain, cost: m.cost, say: m.say,
+      apply() { (S.dive.picks = S.dive.picks || []).push(m.id); },
+    }));
+  } else {
+    S.gateKind = 'supply';
+    S.gateCards = GATE_SUPPLY.map(c => ({
+      id: c.id, cn: c.cn, gain: c.gain, cost: c.cost, say: '', apply: c.apply,
+    }));
+  }
+  S.phase = 'gate';
+  sfx('door');
+}
+
+function pickGate(i) {
+  if (S.phase !== 'gate') return;
+  const c = (S.gateCards || [])[i];
+  if (!c) return;
+  c.apply();
+  S.phase = 'play';
+  diveNext();
+}
+
+/* 过门卡。**三张并排、编号在左上角** —— 和别处的"芯片"不同，
+   这里必须让玩家一眼看出"1、2、3 三个键对应三个东西"，
+   所以编号做成实心方块而不是小字：手里按键的时候眼睛不找字，找块。 */
+function drawGate(g) {
+  g.fillStyle = 'rgba(10,18,24,.86)';
+  g.fillRect(0, 0, W, H);
+  const d = S.dive || { depth: 1 };
+  const isMod = S.gateKind === 'mod';
+  const head = isMod ? '#FF9E8E' : '#FFE08A';
+  g.textAlign = 'center';
+  g.fillStyle = head;
+  g.font = '800 32px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillText(isMod ? '词 条' : '过 门', W / 2, 80);
+  g.font = '600 14px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillStyle = 'rgba(200,220,230,.75)';
+  g.fillText(isMod
+    ? ('深度 ' + d.depth + ' · 选一条带上，代价一起带')
+    : ('深度 ' + d.depth + ' · 下一层之前，选一样带走'), W / 2, 106);
+
+  const cards = S.gateCards || [];
+  const cw = 240, chh = 296, gap = 26;
+  const x0 = (W - (cards.length * cw + (cards.length - 1) * gap)) / 2;
+  const y0 = 138;
+  for (let i = 0; i < cards.length; i++) {
+    const c = cards[i];
+    const x = x0 + i * (cw + gap);
+    g.fillStyle = '#16232B';
+    rr(g, x, y0, cw, chh, 16); g.fill();
+    g.strokeStyle = isMod ? 'rgba(255,158,142,.40)' : 'rgba(255,224,138,.34)';
+    g.lineWidth = 2;
+    rr(g, x, y0, cw, chh, 16); g.stroke();
+
+    g.fillStyle = head;
+    rr(g, x + 16, y0 + 16, 30, 30, 9); g.fill();
+    g.fillStyle = '#12202A';
+    g.font = '800 17px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillText(String(i + 1), x + 31, y0 + 37);
+
+    g.fillStyle = '#EAF8FF';
+    g.font = '800 30px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillText(c.cn, x + cw / 2, y0 + 100);
+
+    g.fillStyle = '#9BE86E';
+    g.font = '700 17px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillText(c.gain, x + cw / 2, y0 + 150);
+
+    g.strokeStyle = 'rgba(255,255,255,.10)';
+    g.lineWidth = 1;
+    g.beginPath(); g.moveTo(x + 34, y0 + 176); g.lineTo(x + cw - 34, y0 + 176); g.stroke();
+
+    g.fillStyle = '#FF8A78';
+    g.font = '700 16px "PingFang SC","Microsoft YaHei",sans-serif';
+    g.fillText(c.cost, x + cw / 2, y0 + 210);
+
+    if (c.say) {
+      g.fillStyle = 'rgba(200,220,230,.58)';
+      g.font = '600 13px "PingFang SC","Microsoft YaHei",sans-serif';
+      g.fillText(c.say, x + cw / 2, y0 + 252);
+    }
+  }
+
+  g.fillStyle = '#7FA3B5';
+  g.font = '600 15px "PingFang SC","Microsoft YaHei",sans-serif';
+  g.fillText('按 1 / 2 / 3 选', W / 2, y0 + chh + 44);
 }
 
 function startDive(seed) {
   const base = (seed == null ? (Math.random() * 1e9) : seed) >>> 0;
-  S.dive = { depth: 1, score: 0, best: S.diveBest || 0, kills: 0, base };
+  S.dive = { depth: 1, score: 0, best: S.diveBest || 0, kills: 0, base, picks: [] };
   S.deadT = 0;
   reset(base, -1);
   addText(W / 2, 220, '深潜 · 一命到底', '#FFE08A', 24, 1.8);
@@ -5938,11 +6128,13 @@ function startDive(seed) {
 
 function diveNext() {
   const d = S.dive;
-  const prevMods = diveMods(d.depth);
   d.depth++;
   d.kills += S.killed;
   /* 资源原样带进下一关 —— 这是深潜和主线的核心差别。 */
-  const keep = { hp: Math.min(NUM.hpStart, S.hp + 1), belly: S.belly, ammo: S.ammo };
+  /* **过门不再自动 +1 血。** 原来这一行是深潜唯一的续命手段，于是
+     "回不回血"不是一个决定 —— 它每次都回。现在它变成过门牌里的一张，
+     玩家要用 40 点饱食去换。少这一条，深潜才是"经营"而不是"上班"。 */
+  const keep = { hp: S.hp, belly: S.belly, ammo: S.ammo };
   /* **种子：`mix32(base ^ (depth*7919))`。**
      旧版是 `base + depth*7919`（直接相加），问题不是"会重复"，
      而是**相邻深度只差一个固定量** —— 生成器的第一层随机数几乎一样，
@@ -5959,12 +6151,8 @@ function diveNext() {
   /* 新词条第一次生效的那一层，**必须单独报一句** ——
      "推球变轻了"这件事如果不报，玩家只会觉得"我这一关推得不对劲"，
      然后怀疑自己手感出了问题。报在前面加个「·」和颜色区分。 */
-  for (const m of DIVE_MODS) {
-    if (d.depth === m.at && prevMods.indexOf(m.id) < 0) {
-      addText(W / 2, 238, '词条 · ' + m.cn + ' —— ' + m.say, '#FF9E8E', 20, 2.6);
-      kickShake(5, 'diveMod');
-    }
-  }
+  /* 词条只在**选的时候**报，不在到达某一层时报 —— 现在没有"到达"这回事了，
+     玩家是在过门时自己挑的，挑的那一刻已经在卡片上看过代价和收益。 */
 }
 
 function endDive() {
@@ -6173,7 +6361,7 @@ function stepDoor(dt) {
   if (d.open && S.phase === 'play' && !blocked) {
     if (aabb(S.p, d)) {
       /* 深潜：进门不是通关，是**下一关**。 */
-      if (S.dive) { diveNext(); return; }
+      if (S.dive) { openGate(); return; }
       /* 进门 = 这一段唯一的"完成"反馈。**它不走 kickShake**（不震屏），
          所以必须单独发，不然通关是全游戏里唯一一个安静的时刻。 */
       sfx('clear');
@@ -6257,8 +6445,14 @@ function onKey(e, down) {
   /* 1 / 2 / 3 = 花雪晶买补给（每关各一次）。**用数字键不用字母** ——
      字母键已经排到 b/c/d/f/j/k/m/r 了，再加会和"手放在 WASD 上"打架。 */
   if (down && (k === '1' || k === '2' || k === '3')) {
-    const it = BUY_LIST.find(x => x.key === k);
-    if (it) buySupply(it.id);
+    /* 深潜过门时 1/2/3 是**选牌**，不是买补给 —— 两个动作共用一个键是
+       可以的，因为它们互斥（gate 阶段 `buySupply` 被 `phase !== 'play'` 挡掉），
+       而且"数字键 = 从列表里挑第 N 项"是同一种肌肉记忆。 */
+    if (S.phase === 'gate') pickGate(Number(k) - 1);
+    else {
+      const it = BUY_LIST.find(x => x.key === k);
+      if (it) buySupply(it.id);
+    }
   }
   /* M = 静音。**默认开声音**，但一定要给关掉的路 —— 玩家常常是
      "在地铁上/在办公室"打开这个页面的，没有静音键就只能拔耳机。
@@ -6756,6 +6950,10 @@ function step(dt) {
   if (S.hitStop > 0) { S.hitStop = Math.max(0, S.hitStop - dt); S.t += dt * 0.25; return; }
   /* 深潜结算画面：世界冻住，只让计时器走（卡片上的"再按 R"是唯一出口）。 */
   if (S.phase === 'dead') { S.deadT += dt; S.t += dt; return; }
+  /* **过门选牌时世界冻住。** 不冻的话，玩家站在门口挑牌的那几秒里
+     追兵照样追、球照样掉寿命、饱食照样扣 —— 一个"停下来思考"的时刻
+     被算成"你在挨打"，那三张牌就不是选择，是罚款。 */
+  if (S.phase === 'gate') { S.gateT += dt; S.t += dt; return; }
 
   S.t += dt;
   /* **指数衰减，不是线性。** 线性的毛病在尾段：从 14 掉到 1 和从 1 掉到 0
@@ -8463,6 +8661,7 @@ function draw() {
     g.fillRect(0, 0, W, H);
   }
   if (S.phase === 'clear') drawClear(g);
+  if (S.phase === 'gate') drawGate(g);
   if (S.phase === 'dead') drawDiveOver(g);
   /* 图鉴盖在结算卡之上：结算时也会想翻一眼"我这关收齐了什么"。 */
   if (S.codexOpen) drawCodex(g);
@@ -12102,7 +12301,7 @@ function drawHud(g) {
      到了沙塲的亮黄背景上四个字直接消失（截图里是"有字但读不出来"）。
      HUD 的一致性比"让词条显得特别"重要；"特别"靠那圈红描边和红字来说。 */
   if (S.dive) {
-    const mods = diveMods(S.dive.depth);
+    const mods = diveMods();
     if (mods.length) {
       const mr = HUD_RECTS.modChip;
       const names = DIVE_MODS.filter(m => mods.indexOf(m.id) >= 0).map(m => m.cn).join(' ');
@@ -12658,6 +12857,15 @@ const API = {
   /* 深潜三件套。导出是为了断言能走完整的"过门 → 下一关 → 死"链路，
      而不是只验 genLevel(-n) 的形状。 */
   startDive, diveNext, endDive,
+  /* 过门三选一（2026-10-31 第 5 刀）。**整条链路都要导出** ——
+     只导出 `diveNext` 的话，断言会绕过 gate 直接下一层，
+     于是"过门要不要选牌"这件事永远测不到（旧断言就是这么漏掉的）。 */
+  openGate, pickGate, GATE_SUPPLY, GATE_MOD_EVERY,
+  diveModPool, diveNeedK, divePushK, diveLifeK, diveSpeedK,
+  diveLesson, DIVE_LESSONS,
+  /* `killFoe` 要导出：饥肠的收益挂在它上面，而那条收益只有真的打死一只
+     才看得见 —— 光验乘数验不到它。 */
+  killFoe,
   /* 三星（CR-032 第 1 步）。断言要知道"判定口径是哪三条"，
      不能只测"能拿到星" —— 那样改判定阈值也不会红。 */
   judgeStars, starBits, STAR_LIST, STAR_CN, STAR_HINT, STAR_JUDGE,

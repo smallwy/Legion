@@ -47,8 +47,9 @@ const LES_COLOR = {
   swarm: "#9B4B5E",    // 红：怪
   maze: "#5E9C6B",     // 绿：口
   perch: "#8E6BC4",    // 紫：台
+  seal: "#2F8F8A",     // 青：冰
 };
-const LES_ORDER = ["bare", "narrow", "swarm", "maze", "perch"];
+const LES_ORDER = ["bare", "narrow", "swarm", "maze", "perch", "seal"];
 
 (async () => {
   const L = await boot();
@@ -62,6 +63,14 @@ const LES_ORDER = ["bare", "narrow", "swarm", "maze", "perch"];
       hpf: holes / Math.max(1, g.nFloors - 1),
       terr: (g.layers || []).reduce((a, l) => a + ((l.terrain || []).length), 0),
       perch: !!g.perch,
+      /* **封关的特征量：门厅入口封着冰墙的口数。** 它和"怪数""地形件"不一条
+         曲线 —— 那两个是"越多越难"，这个是"封得越死越难"，而且它只有
+         封关关才该是满的。 */
+      sealIce: (() => {
+        const k = g.nFloors - 2;
+        const hs = (g.layers[k] || { holes: [] }).holes;
+        return hs.length ? hs.filter(h => h.cover === "ice").length / hs.length : 0;
+      })(),
     });
   }
   const baseFoes = rows.reduce((a, r) => a + r.foes, 0) / rows.length;
@@ -72,13 +81,13 @@ const LES_ORDER = ["bare", "narrow", "swarm", "maze", "perch"];
   const COLW = 22, TOP = 150;
   const BAND_H = 54, GAP = 30;
   const W = LEFT + COLW * 48 + RIGHT;
-  const H = TOP + (BAND_H + GAP) * 3 + 96;
+  const H = TOP + (BAND_H + GAP) * 4 + 96;
   const cv = createCanvas(W, H);
   const g = cv.getContext("2d");
   g.fillStyle = "#FFFDF8"; g.fillRect(0, 0, W, H);
 
   g.font = "bold 23px " + FONT; g.fillStyle = "#1B2430";
-  g.fillText("48 关各考什么：5 个考点 + 它们真的改了数值", PAD, 40);
+  g.fillText("48 关各考什么：6 个考点 + 它们真的改了数值", PAD, 40);
   g.font = "13px " + FONT; g.fillStyle = "#5B6B7B";
   g.fillText("上一条是排班（前 5 关纯教学，之后不连考同一件事）；下面两条是同一批关的实测数值。", PAD, 64);
   g.fillStyle = "#E05A2B";
@@ -174,9 +183,32 @@ const LES_ORDER = ["bare", "narrow", "swarm", "maze", "perch"];
     }
   }
 
+  /* ---- ④ 封口比例（seal 关应该顶到 1.0） ----
+     **这条和上面两条不是同一种量**：怪数和地形件是"越多越难"，
+     这一条是"封得越死越难"，而且**只有封关关该是满的**。
+     它同时也替"普通关别动不动就封死"兜底 —— 如果哪天随机的冰墙盖满
+     了大半关，这条曲线会整片抬起来，一眼就看得见。 */
+  {
+    const top = bandTop(3);
+    g.font = "bold 13px " + FONT; g.fillStyle = "#1B2430";
+    g.fillText("封口比例", PAD, top + 20);
+    const yOf = v => top + BAND_H - 6 - v * (BAND_H - 12);
+    g.strokeStyle = "rgba(27,36,48,.22)"; g.setLineDash([5, 4]); g.lineWidth = 1;
+    g.beginPath(); g.moveTo(LEFT, yOf(1)); g.lineTo(W - RIGHT, yOf(1)); g.stroke();
+    g.setLineDash([]);
+    g.font = "10px " + FONT; g.fillStyle = "#8A97A5";
+    g.fillText("全封", LEFT + 4, yOf(1) - 5);
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      g.fillStyle = r.les === "seal" ? LES_COLOR.seal : "#D8D3C9";
+      const y = yOf(r.sealIce);
+      g.fillRect(x0(i) + 5, y, COLW - 10, top + BAND_H - 6 - y);
+    }
+  }
+
   /* ---- 底部：分布汇总 ---- */
   {
-    const y = TOP + (BAND_H + GAP) * 3 + 8;
+    const y = TOP + (BAND_H + GAP) * 4 + 8;
     const cnt = {};
     for (const r of rows) if (r.les) cnt[r.les] = (cnt[r.les] || 0) + 1;
     let x = PAD;

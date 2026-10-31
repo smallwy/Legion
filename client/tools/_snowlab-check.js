@@ -3887,7 +3887,7 @@ console.log("\n=== 五十·补. BOSS 档位（每 8 关一只） ===");
 {
   const LES = L.LESSONS;
   const keys = Object.keys(LES);
-  ck("考点表有 5 个（真做出来的，不是凑数的）", keys.length === 5, keys.join(","));
+  ck("考点表有 6 个（真做出来的，不是凑数的）", keys.length === 6, keys.join(","));
   ck("每个考点都有中文名和一句提示",
      keys.every(k => LES[k].cn && LES[k].say), keys.filter(k => !LES[k].cn || !LES[k].say).join(","));
 
@@ -3985,6 +3985,69 @@ console.log("\n=== 五十·补. BOSS 档位（每 8 关一只） ===");
      " 平均 " + (otherTerr.reduce((a, b) => a + b, 0) / otherTerr.length).toFixed(1));
   const pc = per('perch');
   ck("★ 悬台关**每一关**都有悬台", pc.n > 0 && pc.perch === pc.n, pc.perch + "/" + pc.n);
+
+  /* ---- seal：第一个"必须让球变大"的考点 ----
+     其余考点都是"把参数拉偏"，玩家照样能一路推过去（偏了就多花两发弹药）。
+     `seal` 不一样：它在门厅入口竖一道冰墙，而**中球的满速动量低于破门线**
+     —— 玩家不把球喂大就真的过不去。这是 48 关里第一处"数值上必须改变打法"
+     的地方，所以下面每条都要能从数字复算，不能只说"有效果"。 */
+  const iceDef = L.NUM.box.ice;
+  const powAt = abs => 1209 * (L.ballR(abs) / L.NUM.ball.baseR);
+  ck("★ 中球满速砸不开冰墙、大球砸得开（「必须喂球」的数值依据）",
+     powAt(2) < iceDef.minPow && powAt(4) > iceDef.minPow * 1.08,
+     "中球 " + powAt(2).toFixed(0) + " / 门槛 " + iceDef.minPow + " / 大球 " + powAt(4).toFixed(0));
+  /* 大球要裹 2 只怪（absorbFoe 2.0 → absorbed 4）。这个数决定了
+     "封口层得有几个球源"，所以它和下面的材料断言是一对。 */
+  const needAbs = 4, perFoe = L.NUM.ball.absorbFoe;
+  ck("★ 一颗大球要 " + (needAbs / perFoe) + " 只怪（不是 1 只）",
+     needAbs / perFoe === 2, String(needAbs / perFoe));
+
+  const sealNs = plan.filter(o => o.les === 'seal').map(o => o.n);
+  ck("★ 封关考点至少 2 关（有复习机会）", sealNs.length >= 2, sealNs.join(","));
+  const sealHole = [], sealMat = [], sealShallow = [];
+  for (const n of sealNs) {
+    const g = L.genLevel(L.stageSeed(n), n);
+    /* **封的是"通向门厅"那一层（nF-2）。** 封地表层没用（开局没球），
+       封中间层可能那层已被清空 —— 只有门厅入口是全关最后一个必经关口。 */
+    if (g.nFloors < 3) { sealShallow.push(n); continue; }
+    const k = g.nFloors - 2;
+    const hs = (g.layers[k] || { holes: [] }).holes;
+    /* **每一个口都要封。** 封一个留一个 = 玩家走开着那个，机制当场消失。 */
+    if (!hs.length || hs.some(h => h.cover !== 'ice')) {
+      sealHole.push(n + ":" + (hs.map(h => h.cover).join("/") || "无口"));
+    }
+    /* **材料只数怪，不数巢。** 巢本来是更稳的保底（会重生），但 6 层关的
+       封口层常常被两个口占满地面，巢根本落不下去（第 47 关实测 0 个）——
+       拿它当判据等于给一个靠不住的量写断言，而这一条守的是"不死局"。
+       所以保底放进生成器：封口层 `want + 1`，这里验的就是那个 +1 真的落地了。 */
+    const mat = g.spawns.filter(s => s.layer === k).length;
+    /* 门槛写 4 而不是 3：生成器给封口层 `want + 1`，常态是 3~4，
+       +1 之后落在 4~5。写 3 的话"把 +1 删掉"照样绿（实测过），
+       那条防御代码就永远没人验 —— 而它守的是死局。 */
+    if (mat < 4) sealMat.push(n + ":" + mat);
+  }
+  ck("★ 封关关至少 3 层（两层关封的是地表，开局没球）",
+     sealShallow.length === 0, sealShallow.join(","));
+  ck("★ 封关关**每一个**下行口都封着冰墙（留一个口就等于没封）",
+     sealHole.length === 0, sealHole.join(" "));
+  ck("★ 封口那层至少 4 只怪（攒大球要 2 只，留 2 只容错）",
+     sealMat.length === 0, sealMat.join(" "));
+
+  /* **(骨架, 考点, 目标) 三元组在 48 关里不许重复。**
+     这是"关卡不重复"唯一的硬保证，也是把排班从模运算改成手写表的**理由**
+     （6 个考点模 6 排，周期和骨架撞上，三元组会塌回 12 种 —— 详见
+     LESSON_TABLE 上方的注释）。手改表里一格就会在这里红。 */
+  {
+    const trip = new Map();
+    for (let n = 6; n <= 48; n++) {
+      const g = L.genLevel(L.stageSeed(n), n);
+      const key = g.skel + "|" + L.lessonOf(n) + "|" + L.goalOf(n);
+      trip.set(key, (trip.get(key) || 0) + 1);
+    }
+    const rep = [...trip.entries()].filter(e => e[1] > 1);
+    ck("★ (骨架, 考点, 目标) 三元组 48 关里不重复", rep.length === 0,
+       rep.map(e => e[0] + "×" + e[1]).join(" "));
+  }
 
   /* **排班表本身要能看见。** 48 关"考什么"打成一行 —— 以后每次改排班，
      这一行就是最好复核的东西（比读代码快十倍）。 */
@@ -4367,9 +4430,12 @@ group("五十三、雪晶 / 图鉴 / 裂壳 / 悬台 / 态度");
           saw = true; break;
         }
       }
-      kited = saw;
-      why = "saw=" + saw;
-      break;
+      why = "seed " + seed + " saw=" + saw;
+      /* **别在第一个样本上 break。** 这一条验的是"grub 会往回退"这个行为，
+         不是"某个特定种子里它会往回退"—— 只试一个种子的话，那个种子碰巧
+         把 grub 生成在一段被箱子夹住的台面上（走不动），断言就假红，
+         而代码一点没坏。2026-10-31 改门厅入口的封口规则时撞到过一次。 */
+      if (saw) { kited = true; break; }
     }
     ck("★ 霜甲虫真的会往回退（拉扯不是只有文案）" + (tested ? "" : "（没找到样本）"),
        tested && kited, why);

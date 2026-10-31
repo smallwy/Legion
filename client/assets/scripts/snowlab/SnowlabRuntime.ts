@@ -1,4 +1,4 @@
-/* @src-md5 0b282383c95b678e3158e6a1f546a3c5 @src-lines 12769 */
+/* @src-md5 9e6a3658e09b5de5168a58c958085e7f @src-lines 12817 */
 // @ts-nocheck
 /* ⚠ 自动生成，勿手改 —— 源：client/prototype/snowlab.html
    重新生成：python client/tools/extract_snowlab_runtime.py
@@ -746,11 +746,10 @@ function stageCfg(stage) {
 
    ---- 排班 ----
    前 5 关不给考点（那是教学：推球、下洞、箱山各一次）。
-   之后 5 个考点走拉丁方；其中 `perch` 落错位置时换成 LESSON_PLAIN 里的一个
-   （悬台离开寻宝目标就没有意义，见 LESSON_PLAIN 上方的注释）。
-   池内轮转 + 每轮整体左移一格，和骨架的周期 6、目标的周期 4 都不对齐 ——
-   **(骨架, 考点, 目标)** 三元组在 48 关里的重复次数是可以被断言钉住的。
-   这是"关卡不重复"唯一的硬保证：靠手感判断是靠不住的，靠排班才是。
+   之后 5 个考点原本走拉丁方，加了第 6 个之后周期和骨架撞上，改手写表
+   （数学原因见 LESSON_TABLE 上方的注释）。表保证 **(骨架, 考点, 目标)**
+   三元组在 48 关里一次都不重复 —— 这是"关卡不重复"唯一的硬保证：
+   靠手感判断是靠不住的，靠排班才是。
 
    `perch` 落在第 43 关是算出来的，不是钉的 —— 原来那关写死了
    `stage === PERCH_STAGE`，现在它只是这个考点的一次实例。 */
@@ -765,44 +764,67 @@ const LESSONS = {
             holes: 2 },
   perch:  { cn: '悬台', say: '金箱在悬台上 · 球可以踩实（C）当台阶',
             perch: true },
-};
-const LESSON_LIST = ['bare', 'narrow', 'swarm', 'maze', 'perch'];
-const LESSON_FIRST = 6;        // 第 6 关开始才有考点
-/* **`perch` 只能发给寻宝关。** 悬台的全部意义是"金箱在够不着的地方"，
-   而 `door` / `limit` 目标下金箱只是地上的奖励箱 —— 台子在那儿就是块装饰。
-   所以它在主排班里落错位置时，要换成 LESSON_PLAIN 里的一个。
+  /* **`seal` 是第一个"必须让球变大"的考点。**（2026-10-31）
+     之前所有考点都只是把某个参数拉偏，玩家照样一路推过去。这一个不同：
+     它把门厅入口用冰墙封死，而冰墙的破门线（1550）**比中球满速的动量
+     （1516）高**，只有大球（1824）过得去。于是玩家必须做一件事：
+     在下到门厅之前**裹住两只怪**，或者把两颗中球合体。
 
-   为什么不是"考点覆盖目标"：试过一版 `goalOf` 里
-   `if (lessonOf(n)==='perch') return 'collect'` —— 结果 collect 从 16 关
-   涨到 28 关（48 关里 58% 都在寻宝），目标排班当场没有意义了。
-   **两个维度得各有各的排班表，不能一个盖另一个。** */
-const LESSON_PLAIN = ['maze', 'narrow', 'swarm'];
-/** 主排班：5 个考点走拉丁方（池内轮转 + 每轮整体左移一格）。 */
-function lessonLat(m) {
-  const r = Math.floor(m / LESSON_LIST.length);
-  return LESSON_LIST[(m % LESSON_LIST.length + r) % LESSON_LIST.length];
-}
+     这一关真正的取舍不是"用什么球"，而是**先别开枪** ——
+     怪是唯一的造球材料，玩家平时习惯见怪就射，射完就只剩碎片球
+     （absorbed 0），永远攒不出大球。门厅入口的巢是保底，
+     但配额只有 3~5 只，杀光了还是会停。
+
+     为什么封的是"通向门厅"那一层（`nF - 2`）而不是别的层：
+       · 封第 0 层没用 —— 玩家开局没球；
+       · 封中间层，玩家可能已经在上层把怪清完了，那层没有材料；
+       · 门厅那一层的入口是**全关最后一个必须过的关口**，而它上面那层
+         永远有怪（门厅 3 只、倒数第二层 2~4 只），材料离封口最近。 */
+  seal:   { cn: '封关', say: '下去的路被冰墙封死 · 先把球喂大再砸',
+            seal: true },
+};
+const LESSON_LIST = ['bare', 'narrow', 'swarm', 'maze', 'perch', 'seal'];
+const LESSON_FIRST = 6;        // 第 6 关开始才有考点
+/* ==================== ⓪-3 为什么排班必须是一张手写表 ====================
+
+   **这不是懒，是数学。** 上一版用拉丁方：`LIST[(m % 5 + m / 5) % 5]`。
+   池里有 5 个考点，序列的周期就是 5 —— 和骨架的 6、目标的 4 互质到
+   lcm = 60 > 48，所以 **(骨架, 考点, 目标)** 在 48 关里从不重复。
+   那是这套排班唯一的价值。
+
+   现在加了 `seal`，池变成 6 个 —— **周期 6，和骨架的周期 6 完全对齐**。
+   不管怎么调偏移量（`m%6+r`、`2m%6`、二次式），模 6 的序列周期必然是 6
+   的倍数，于是"同一骨架 + 同一目标"的 4 次出现会拿到**同一个考点**，
+   三元组从 48 种塌回 12 种。`(骨架, 考点)` 变成固定配对 ——
+   这一整套东西要消灭的"每关都眼熟"会原样回来。
+
+   两条出路：
+     · 池扩到 7 个 —— 但没有第 7 个真考点。一个拉不动真实参数的考点
+       只是标签（`tower` / `flat` / `loot` 都是这么死的），凑数不行。
+     · **不靠周期，靠一张表** —— 48 行而已，每行都能肉眼检查。
+   选后者。表是用 `_lesson-plan.js` 搜出来的（贪心 + 回溯），约束四条：
+     ① 相邻两关不同考点（含跨过教学关）；
+     ② (骨架, 考点, 目标) 三元组 48 关里**一次都不重复**；
+     ③ `perch` 只落在寻宝关（离开 collect，那块台子就是装饰）；
+     ④ `seal` 只落在 3 层以上的关（两层关封的是地表层，开局没球，开不了局）。
+
+   **改这张表要跑 `_lesson-plan.js` 重算，不要手改单个格子** ——
+   一个格子动了，那个 (骨架,目标) 对的唯一性就破了，而断言只报
+   "三元组重复 1 处"，不会告诉你是哪一关改坏的。 */
+const LESSON_TABLE = [
+  null, null, null, null, null, 'bare', 'narrow', 'swarm',     // 1-8
+  'maze', 'seal', 'bare', 'narrow', 'swarm', 'maze', 'seal', 'bare', // 9-16
+  'perch', 'swarm', 'perch', 'narrow', 'maze', 'seal', 'bare', 'narrow', // 17-24
+  'swarm', 'maze', 'seal', 'bare', 'perch', 'narrow', 'perch', 'swarm', // 25-32
+  'maze', 'seal', 'bare', 'narrow', 'swarm', 'maze', 'seal', 'bare', // 33-40
+  'perch', 'narrow', 'perch', 'maze', 'swarm', 'bare', 'seal', 'swarm', // 41-48
+];
 /** 第 stage 关考什么。`null` = 教学关（没有考点）。深潜不给考点。 */
 function lessonOf(stage) {
   if (!(stage > 0)) return null;
   const n = stage | 0;
-  if (n < LESSON_FIRST) return null;
-  const m = n - LESSON_FIRST;
-  const k = lessonLat(m);
-  if (k !== 'perch') return k;
-  if (goalOf(n) === 'collect') return k;
-  /* **悬台 / 藏宝落到非寻宝关上就换掉。**
-     不用"按目标分池"那版 —— 试过，两个池各自从轮首起算，第 8 关和第 9 关
-     都是 maze（相邻重复）。现在只改**错位的那几张牌**，主排班的错峰关系
-     一点不动。
-
-     **换的时候要同时避开前后两关**：只避开上一关的话，
-     第 23 关（换出来 narrow）和第 24 关（主排班就是 narrow）会撞成连续两关
-     同一个考点 —— 而"连着两关考同一件事"正是这一整套东西要消灭的症状。 */
-  const prev = lessonOf(n - 1);
-  const next = lessonLat(m + 1);
-  for (const c of LESSON_PLAIN) if (c !== prev && c !== next) return c;
-  return LESSON_PLAIN[(m * 2) % LESSON_PLAIN.length];
+  if (n > LESSON_TABLE.length) return null;
+  return LESSON_TABLE[n - 1] || null;
 }
 
 function genLevel(seed, stage) {
@@ -986,9 +1008,23 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
            学会"口可能有盖板"，深层就该为这件事付出更多弹药。 */
         let cover = 'none';
         if (i === 0) {
-          if (tier >= 0.4 && r < 0.10 + tier * 0.30) cover = 'ice';
+          /* **通向门厅的那一层不许随机封冰墙。**（2026-10-31）
+             `seal` 之前，普通关里就有 7 关是"门厅入口整层封冰墙"——
+             于是"封关"这个考点和"随机抽到了冰墙"在玩家眼里是同一件事，
+             排班表上那条封口曲线也一片灰的顶满，读不出来。
+             现在冰墙只留给 `seal`（下面那行强制），通向门厅的口
+             最多是霜封木箱（也就是"被埋在箱子里"，不用大球）。
+             **霜封保留** —— 探索感（"这底下还有一层"）不该被这条规则带走。 */
+          if (tier >= 0.4 && k !== nF - 2 && r < 0.10 + tier * 0.30) cover = 'ice';
           else if (r < 0.34 + tier * 0.26) cover = 'frost';
         }
+        /* **封关考点（`seal`）：通向门厅的那些口**全部**封冰墙。**
+           这是唯一一个不靠概率、直接改结果的考点 —— 它要保证的是
+           "没有绕过去的路"，而概率保证不了这件事（一个口封上了、
+           另一个口开着，玩家走开着的那个，机制当场消失）。
+           `nF >= 3` 是硬条件：两层关封的是地表层，玩家开局手上一颗球
+           都没有，那不是难题，是开不了局。 */
+        if (lx.seal && nF >= 3 && k === nF - 2) cover = 'ice';
           holes.push({ x, w, cover, narrow: w < SKW, floorY: floors[k] });
           break;
         }
@@ -2049,7 +2085,13 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
        门厅那 3 只是 `killTarget` 的死局线（见 NUM.killTarget），
        加一只就等于把"一路不杀也凑得够"这条保证改掉了。 */
     const want = (k === nF - 1) ? 3
-      : 2 + (tier >= 0.22 ? 1 : 0) + (tier >= 0.60 ? 1 : 0) + (nF <= 4 ? 1 : 0) + (lx.foeK || 0);
+      : 2 + (tier >= 0.22 ? 1 : 0) + (tier >= 0.60 ? 1 : 0) + (nF <= 4 ? 1 : 0) + (lx.foeK || 0)
+        /* **封关考点在封口那层多放一只。** 冰墙要"大球"，而大球的材料只有怪；
+           这一层如果只有 2 只，玩家一发打偏（或者先把一只打死）就攒不出来，
+           而墙又退不了 —— 那是死局，不是难度。巢本来也能保底，但 6 层关
+           封口层常常两个口都把地面占满，巢落不下去（第 47 关实测 0 个）。
+           所以保底放在**怪**上，巢只当额外的一条。 */
+        + ((lx.seal && nF >= 3 && k === nF - 2) ? 1 : 0);
     /* **候选点按"列"取，不按 8px 步长扫。**
        箱子铺开之后地面几乎每一处都摞着东西，用连续扫描的话一层的候选点
        会被 200 口箱子切成几十个碎点，"取不住"就成了缺怪。
@@ -2279,10 +2321,16 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
      玩家还没学会吐雪就被围死了。 */
   const nests = [];
   {
-    const nWant = 1 + (chance(0.5) ? 1 : 0);
+    const nWant = lx.seal ? 2 : 1 + (chance(0.5) ? 1 : 0);
     const used = [];
-    for (let t = 0; t < 60 && nests.length < nWant; t++) {
-      const k = 1 + Math.floor(R() * Math.max(1, nF - 1));
+    for (let t = 0; t < 80 && nests.length < nWant; t++) {
+      /* **封关考点的第一个巢钉在封口那一层。** 冰墙要求大球，大球的唯一
+         材料是怪；如果那层刚好怪少、玩家又提前清光，就是死局。
+         巢的配额 3~5 只，等于给这一关留了一条"还能再攒一颗"的后路。
+         其余巢照旧随机 —— 这条只保底，不改变整关的刷怪节奏。 */
+      const k = (lx.seal && nests.length === 0 && nF >= 3)
+        ? nF - 2
+        : 1 + Math.floor(R() * Math.max(1, nF - 1));
       if (k >= nF) continue;
       const l = layers[k];
       const segs = l.segs.filter(s => s.w >= 144);
@@ -12605,7 +12653,7 @@ const API = {
   DIVE_MODS, diveMods, diveHas, PERCH_STAGE, PERCH_H, PERCH_W,
   /* 考点表 + 排班。**`lessonOf` 必须导出**，理由和 `goalOf` 一样：
      "第 N 关考什么"是纯函数，断言要能直接问，而不是自己再写一遍排班规则。 */
-  LESSONS, LESSON_LIST, LESSON_PLAIN, LESSON_FIRST, lessonOf, lessonLat,
+  LESSONS, LESSON_LIST, LESSON_TABLE, LESSON_FIRST, lessonOf,
   HUD_RECTS, SKELETONS,
   genLevel, validateLevel, buildLevel, surfY, unreachableCols, ballPits, ballStuckCols,
   bellyTier, snowNeed, ballTier, ballR, ballPow,

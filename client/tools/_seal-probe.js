@@ -1,0 +1,30 @@
+const fs = require('fs'); const path = require('path'); const { JSDOM } = require('jsdom');
+const ROOT = path.resolve(__dirname, '..');
+const html = fs.readFileSync(path.join(ROOT, 'prototype', 'snowlab.html'), 'utf8');
+const m = html.match(/<script>([\s\S]*?)<\/script>/);
+const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true, url: 'https://x/' });
+const { window } = dom;
+window.HTMLCanvasElement.prototype.getContext = () => null;
+window.requestAnimationFrame = () => 0;
+window.eval(m[1]);
+const L = window.SNOWLAB;
+const rows = [];
+for (let n = 1; n <= 48; n++) {
+  const les = L.lessonOf(n);
+  const g = L.genLevel(L.stageSeed(n), n);
+  const k = g.nFloors - 2;
+  const near = (g.layers[k] || { holes: [] }).holes;
+  const nearIce = near.filter(h => h.cover === 'ice').length;
+  const allHoles = g.layers.reduce((a, l) => a + l.holes.length, 0);
+  const iceAll = g.layers.reduce((a, l) => a + l.holes.filter(h => h.cover === 'ice').length, 0);
+  const spawnNear = g.spawns.filter(s => s.layer === k).length;
+  const nestNear = (g.nests || []).filter(o => o.layer === k).length;
+  rows.push({ n, les: les || '-', nF: g.nFloors, goal: L.goalOf(n), near: near.length, nearIce, allHoles, iceAll, spawnNear, nestNear });
+}
+const bad = rows.filter(r => r.les === 'seal');
+console.log('n  考点   层 目标     封口层口数 其中冰墙 全关冰墙 该层怪 该层巢');
+for (const r of bad) console.log(String(r.n).padStart(2), r.les.padEnd(6), r.nF, r.goal.padEnd(8), String(r.near).padStart(6), String(r.nearIce).padStart(8), String(r.iceAll).padStart(8), String(r.spawnNear).padStart(6), String(r.nestNear).padStart(6));
+console.log('\nseal 关总数：', bad.length);
+console.log('封口不全的关：', bad.filter(r => r.nearIce !== r.near).map(r => r.n + ':' + r.nearIce + '/' + r.near).join(' ') || '无');
+console.log('封口层怪+巢 < 2 的关：', bad.filter(r => r.spawnNear + r.nestNear < 2).map(r => r.n + '(' + r.spawnNear + '+' + r.nestNear + ')').join(' ') || '无');
+console.log('\n三元组唯一：', new Set(rows.map(r => r.les + '|' + r.goal + '|' + r.nF)).size, '/ 48');

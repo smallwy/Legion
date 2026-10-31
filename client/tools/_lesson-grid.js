@@ -67,6 +67,7 @@ function shotOf(inst, n) {
 
 const LES_COLOR = {
   bare: "#8A7B5E", narrow: "#4A7FB5", swarm: "#9B4B5E", maze: "#5E9C6B", perch: "#8E6BC4",
+  seal: "#2F8F8A",
 };
 
 (async () => {
@@ -74,10 +75,10 @@ const LES_COLOR = {
   const { L } = inst;
   /* 每个考点挑一关。**刻意选不同的关号**，因为排班本来就不让它们挨着；
      第 5 关是无考点的基线（同一档层数，做对照）。 */
-  const picks = [5, 6, 7, 8, 9, 18];
+  const picks = [5, 6, 7, 8, 9, 19];   // 5=基线 6空场 7窄洞 8虫群 9迷径 19悬台
   const shots = picks.map(n => shotOf(inst, n));
 
-  const COLS = 3, PAD = 16, SW = (W / 2) | 0, SH = (H / 2) | 0, TOP = 120;
+  const COLS = 3, PAD = 16, SW = (W / 2) | 0, SH = (H / 2) | 0, TOP = 152;
   const CW = PAD + COLS * (SW + PAD);
   const CH = TOP + 2 * (SH + 74 + PAD) + 20;
   const cv = createCanvas(CW, CH);
@@ -90,6 +91,10 @@ const LES_COLOR = {
   g.fillText("六格全是真实生成的关卡 + 真实 draw()，镜头一律放在地表层（tier 都是 0），只差考点一个变量。", PAD, 62);
   g.fillStyle = "#E05A2B";
   g.fillText("左上：无考点基线（有对照才敢说是考点改的）。悬台在熔炉场景，底色不同是换地方。", PAD, 84);
+  /* **第六个考点不在这张图里。** `seal` 封的是"通向门厅"那一层，
+     把它压到地表层拍就什么都看不见 —— 放进来会让读者以为"封关没生效"。
+     它单独一张（seal-gate.png），镜头就在封口层。 */
+  g.fillText("封关（seal）封的是倒数第二层，地表层拍不出来 —— 它单独一张：shots/seal-gate.png", PAD, 102);
 
   shots.forEach((s, i) => {
     const cx = PAD + (i % COLS) * (SW + PAD);

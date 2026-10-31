@@ -1,4 +1,4 @@
-/* @src-md5 d17ad4aafcea0ac56b688d3277b94b7c @src-lines 12638 */
+/* @src-md5 0b282383c95b678e3158e6a1f546a3c5 @src-lines 12769 */
 // @ts-nocheck
 /* ⚠ 自动生成，勿手改 —— 源：client/prototype/snowlab.html
    重新生成：python client/tools/extract_snowlab_runtime.py
@@ -709,6 +709,102 @@ function stageCfg(stage) {
   return STAGES.find(x => n <= x.to) || STAGES[STAGES.length - 1];
 }
 
+/* ==================== ⓪-2 考点（lesson）====================
+
+   用户 2026-10-31：「现在各个关卡大同小异啊」「要满足深度」。
+
+   **根因不是机制少，是生成器不会出题。** `lesson/teach/mustUse` 这几个词
+   在生成器里出现 0 次 —— 它只会把十几个参数各自掷一次骰子，每一关都落在
+   均值附近。于是 48 关的骨架虽然换了 6 种，手感全是同一档：
+   箱子差不多密、怪差不多多、洞差不多宽。
+
+   古道的 27 屏是**手写**的，所以每一屏有明确的一手；推球是**随机**的，
+   所以每一关都长得像"上一关的再抽一次"。这就是"有设计"和"没设计"的差别。
+
+   **考点的定义是"把某一个参数推到极端，其余参数给它让路"。**
+   不需要新机制 —— 现有的箱子/洞/怪/地形四个维度，每一个拉满就已经
+   是完全不同的一关。8 个维度里 5 个够撑 48 关的差异。
+
+   ---- 为什么是这 5 个 ----
+     · `bare`   空场 —— 落脚点的题（没有平台也没有坡，全靠箱子当路）
+     · `narrow` 窄洞 —— 球体积的题（小球才过得去）
+     · `swarm`  虫群 —— 弹药的题（球多得用不完，但场地被怪占满）
+     · `maze`   迷径 —— 横向的题（每层两个口，挑错要绕回来）
+     · `perch`  悬台 —— 踩实的题（球当建材，唯一一个用 C 的考点）
+
+   ---- 箱子维度的三个失败尝试（都试过，都删了）----
+     · `tower`（箱山，把预算 ×1.55）：`bpf` 17.3 → 17.6，误差内。
+     · `tower` 第二版（堆高全推 3 格）：被校验第 10 条（相邻列高差 ≤2）削平。
+     · `flat`（平地，堆高全推 1 格）：平均列高 0.85 → 0.74，"整层矮了一半"
+       在画面上读不出来 —— 因为预算不变，堆矮了就摊得更宽，总格数守恒。
+     · `loot`（藏宝，金箱 +3）：金箱是每层随机出一口，6 层关本来就有 5~6 口。
+   **结论：箱子这条路被"预算 ÷ 列数"锁死了，拉哪个旋钮总格数都在原地。**
+   一个拉不动真实参数的考点只是标签 —— 宁可 5 个真的，不要 6 个里有一个假的。
+
+   地形/材质/目标三个维度**故意不动** —— 它们已经在各层 tier 曲线里
+   随深度变化了，再叠一层考点会让"这一关考什么"读不出来。
+
+   ---- 排班 ----
+   前 5 关不给考点（那是教学：推球、下洞、箱山各一次）。
+   之后 5 个考点走拉丁方；其中 `perch` 落错位置时换成 LESSON_PLAIN 里的一个
+   （悬台离开寻宝目标就没有意义，见 LESSON_PLAIN 上方的注释）。
+   池内轮转 + 每轮整体左移一格，和骨架的周期 6、目标的周期 4 都不对齐 ——
+   **(骨架, 考点, 目标)** 三元组在 48 关里的重复次数是可以被断言钉住的。
+   这是"关卡不重复"唯一的硬保证：靠手感判断是靠不住的，靠排班才是。
+
+   `perch` 落在第 43 关是算出来的，不是钉的 —— 原来那关写死了
+   `stage === PERCH_STAGE`，现在它只是这个考点的一次实例。 */
+const LESSONS = {
+  bare:   { cn: '空场', say: '这一关没有平台也没有坡 · 落脚点只有箱子',
+            terrK: 0 },
+  narrow: { cn: '窄洞', say: '洞只够小球过 · 大球会架在口上',
+            narrow: true },
+  swarm:  { cn: '虫群', say: '这一关怪很多 · 球也多，别攒着',
+            foeK: 1, runnerK: 2.2 },
+  maze:   { cn: '迷径', say: '每层两个口 · 挑错就得绕回来',
+            holes: 2 },
+  perch:  { cn: '悬台', say: '金箱在悬台上 · 球可以踩实（C）当台阶',
+            perch: true },
+};
+const LESSON_LIST = ['bare', 'narrow', 'swarm', 'maze', 'perch'];
+const LESSON_FIRST = 6;        // 第 6 关开始才有考点
+/* **`perch` 只能发给寻宝关。** 悬台的全部意义是"金箱在够不着的地方"，
+   而 `door` / `limit` 目标下金箱只是地上的奖励箱 —— 台子在那儿就是块装饰。
+   所以它在主排班里落错位置时，要换成 LESSON_PLAIN 里的一个。
+
+   为什么不是"考点覆盖目标"：试过一版 `goalOf` 里
+   `if (lessonOf(n)==='perch') return 'collect'` —— 结果 collect 从 16 关
+   涨到 28 关（48 关里 58% 都在寻宝），目标排班当场没有意义了。
+   **两个维度得各有各的排班表，不能一个盖另一个。** */
+const LESSON_PLAIN = ['maze', 'narrow', 'swarm'];
+/** 主排班：5 个考点走拉丁方（池内轮转 + 每轮整体左移一格）。 */
+function lessonLat(m) {
+  const r = Math.floor(m / LESSON_LIST.length);
+  return LESSON_LIST[(m % LESSON_LIST.length + r) % LESSON_LIST.length];
+}
+/** 第 stage 关考什么。`null` = 教学关（没有考点）。深潜不给考点。 */
+function lessonOf(stage) {
+  if (!(stage > 0)) return null;
+  const n = stage | 0;
+  if (n < LESSON_FIRST) return null;
+  const m = n - LESSON_FIRST;
+  const k = lessonLat(m);
+  if (k !== 'perch') return k;
+  if (goalOf(n) === 'collect') return k;
+  /* **悬台 / 藏宝落到非寻宝关上就换掉。**
+     不用"按目标分池"那版 —— 试过，两个池各自从轮首起算，第 8 关和第 9 关
+     都是 maze（相邻重复）。现在只改**错位的那几张牌**，主排班的错峰关系
+     一点不动。
+
+     **换的时候要同时避开前后两关**：只避开上一关的话，
+     第 23 关（换出来 narrow）和第 24 关（主排班就是 narrow）会撞成连续两关
+     同一个考点 —— 而"连着两关考同一件事"正是这一整套东西要消灭的症状。 */
+  const prev = lessonOf(n - 1);
+  const next = lessonLat(m + 1);
+  for (const c of LESSON_PLAIN) if (c !== prev && c !== next) return c;
+  return LESSON_PLAIN[(m * 2) % LESSON_PLAIN.length];
+}
+
 function genLevel(seed, stage) {
   const R = rngFrom(seed);
   const ri = (a, b) => a + Math.floor(R() * (b - a + 1));
@@ -720,6 +816,11 @@ function genLevel(seed, stage) {
      靠的是连续出门、饱食条一路消耗、骨架每关重发。 */
   const dive = stage != null && stage < 0;
   const cfg = (stage == null || dive) ? null : stageCfg(stage);
+  /* **本关考点。** 只作用于主线（深潜是另一套节奏，见 DIVE_MODS）。
+     `lx` 是"这一关的修饰词"：空对象 = 一个修饰都不加（教学关 / 深潜）。
+     所有读取都写成 `lx.x || 默认值`，所以不给考点时行为逐字节不变。 */
+  const les = (stage != null && stage > 0) ? lessonOf(stage) : null;
+  const lx = (les && LESSONS[les]) || {};
   const nF = dive ? 5 : (cfg ? cfg.floors
     : 3 + (chance(0.55) ? 1 : 0) + (chance(0.45) ? 1 : 0));
   const floors = [];
@@ -792,7 +893,11 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
        这是"复杂度递进"里唯一一条纯空间的部分，其余都是数量。 */
     const tier = tierOf(k);
     const anchors = plan[k] || [408];
-    const want = anchors.length;
+    /* **迷径考点：每层至少 2 个口。** 骨架给的锚点通常是 1 个，
+       多出来的那个口没有锚点可用 —— 退到「离第一个锚点隔一段」的位置，
+       再用原来那套"离锚点由近及远"的候选排序去落位。放不下就算了
+       （下面的循环找不到列时什么都不 push，兜底只兜"一个都没有"）。 */
+    const want = Math.max(anchors.length, lx.holes || 0);
     const holes = [];
     for (let i = 0; i < want; i++) {
       {
@@ -824,11 +929,10 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
            一次性的惊吓，不是这一关的题。要让它成为题，就必须
            **没有绕过去的路**。
 
-           暂时按关号排（每 6 关一个），因为"这一关该考什么"的 lesson
-           体系还没落地 —— 先让机制本身跑起来、能被断言钉住，再谈排班。
-           生成器不知道自己在出题，是这游戏读起来一样的根因
-           （`lesson/teach/mustUse` 在生成器里出现 0 次）。 */
-        const narrowHere = (stage > 0 && stage % 6 === 0);
+           现在由考点驱动（`lessonOf(stage) === 'narrow'`，见 LESSONS）。
+           不再是"每 6 关一次"那种按关号硬排 —— 那种排法只能保证"均匀"，
+           保证不了"和别的考点错开"，第 12 关会同时撞上窄洞 + 第 3 轮骨架。 */
+        const narrowHere = !!lx.narrow;
         const w = narrowHere ? NARROW_W : SKW;
         /* 候选列按「离骨架锚点由近及远」排序 —— **这是骨架唯一的实现方式**。
            原来是 26 次随机重试，洞开在哪完全由骰子决定，骨架无处挂载。
@@ -837,7 +941,7 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
         const cols = [];
         const maxCol = Math.floor((912 - w) / 48);
         for (let c = 0; c <= maxCol; c++) cols.push({ x: c * 48, r: R() });
-        const anc = anchors[i];
+        const anc = anchors[i] != null ? anchors[i] : anchors[0] + 240;
         cols.sort((a, b) => (Math.abs(a.x - anc) - Math.abs(b.x - anc)) || (a.r - b.r));
         for (const cc of cols) {
           const x = cc.x;
@@ -1006,7 +1110,12 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
       /* **0.4 → 0.58。** 楼板断成两三段之后，"每层都放得下地形"的段
          少了，斜坡掉到平均 0.76 条/关。用户抱怨过"斜坡太规矩"——
          变成"几乎没有斜坡"显然更糟。 */
-      if (wide.length && chance(0.78 + tierOf(k) * 0.12)) {
+      /* **空场考点把地形概率乘 0**（`terrK: 0`）—— 整层没有平台也没有坡。
+         这是唯一一个"清零"而不是"加大"的考点：上面那段注释试了三版"把箱子
+         拉高/压低"全都拉不动（总格数被预算锁死），而地形是**独立于箱子预算**
+         的另一个维度，清零之后画面立刻是两个游戏。 */
+      const terrK = lx.terrK == null ? 1 : lx.terrK;
+      if (wide.length && terrK > 0 && chance((0.78 + tierOf(k) * 0.12) * terrK)) {
         /* **候选段池按"平台 + 坡"的总宽挑。**
            只要平台的话 240 就够，可一旦带坡，平台 96~192 + 坡 144~192
            就是 240~384 —— 从 240 宽的段里随机取位，坡**必然**跨到段尾外面，
@@ -1075,7 +1184,7 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
       /* **0.30 → 0.44。** 楼板断成两三段之后，能放"平台带坡"的段少了
          （那要求段 ≥ 240 并且整段让开洞口），坡就只剩土丘这一条来源。
          土丘一次贡献两段坡，提概率是最省的做法。 */
-      if (!placed && chance(0.72 + tierOf(k) * 0.12)) {
+      if (!placed && terrK > 0 && chance((0.72 + tierOf(k) * 0.12) * terrK)) {
         /* **孤坡必须是"上坡 + 下坡"两段,不能是一条单边楔子。**
            单边楔子的高端悬空:一堵 76px 的垂直墙(斜坡不做水平阻挡,
            因为整块包围盒会造成"坡变成墙"),玩家从高端那头走进来会直接
@@ -1544,7 +1653,12 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
        全补偿（×2）会让短关每层堆到 22 格，那是我自己都打不过去的密度；
        半补偿之后三档总量落在 34 / 48 / 56 格，差得没那么刺眼了。 */
     const szK = Math.sqrt(4 / Math.max(1, nF - 1));
-    let budget = Math.round(COLS * (0.58 + (l.tier || 0) * 0.22) * szK);
+    /* **箱山考点（`tower`）：预算 ×1.55。**
+       `budget` 是"格"，20 列 × 0.58~0.80 就是一层 12~16 格。
+       1.55 之后落在 19~25 格 —— 平均每列 1.25 格。
+       **不能更狠**：预算 1.8 时门厅层的喂球箱会被挤没（校验第 6 条要 ≥3 口），
+       而喂球箱是"怪清光之后的唯一活路"，它不是密度问题，是死局问题。 */
+    let budget = Math.round(COLS * (0.58 + (l.tier || 0) * 0.22) * szK * (lx.boxK || 1));
     l.boxBudget = budget;          // 只给断言看：这是"难度预算"，和实际的箱子数略有出入
     for (const run of runs) {
       const a = run[0], b = run[1];
@@ -1558,7 +1672,9 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
            门厅才允许整层都是 3 格。跳高 123、一格 48 ——
            2 格差 96 随便跳，3 格差 144 跳不上去，必须绕。
            "绕"就是深度换来的复杂度，而且它不需要加任何新机制。 */
-        const peak = Math.min(3, (l.tier || 0) < 0.34
+        /* 考点可以直接指定堆高分布（`tower` 的 [2,3,3,3]），
+           这时候 tier 的分配让路 —— 一关只考一件事。 */
+        const peak = lx.peak ? pickOne(lx.peak) : Math.min(3, (l.tier || 0) < 0.34
           ? pickOne([1, 1, 2, 2])
           : (l.tier || 0) < 0.67 ? pickOne([1, 2, 2, 3, 3])
             : pickOne([2, 2, 3, 3, 3]));
@@ -1929,8 +2045,11 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
     const tier = l.tier || 0;
     /* **层数补偿**：3~4 层关每层多一只（见 ②-2 里箱子预算的同一段注释）。
        门厅不动 —— 门厅那 3 只是 killTarget 的死局线。 */
+    /* **虫群考点（`swarm`）：普通层 +1 只。门厅不动** ——
+       门厅那 3 只是 `killTarget` 的死局线（见 NUM.killTarget），
+       加一只就等于把"一路不杀也凑得够"这条保证改掉了。 */
     const want = (k === nF - 1) ? 3
-      : 2 + (tier >= 0.22 ? 1 : 0) + (tier >= 0.60 ? 1 : 0) + (nF <= 4 ? 1 : 0);
+      : 2 + (tier >= 0.22 ? 1 : 0) + (tier >= 0.60 ? 1 : 0) + (nF <= 4 ? 1 : 0) + (lx.foeK || 0);
     /* **候选点按"列"取，不按 8px 步长扫。**
        箱子铺开之后地面几乎每一处都摞着东西，用连续扫描的话一层的候选点
        会被 200 口箱子切成几十个碎点，"取不住"就成了缺怪。
@@ -2140,7 +2259,10 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
            巡逻型只看距离 —— 前者是"复杂"，后者只是"多"。
            **不用 `k > 1` 判**：3 层关的 k 只有 0/1/2，按 k 判的话
            短关一只 fang 都没有，同一份难度曲线在 3 层和 5 层上不一样。 */
-        kind: (tier >= 0.30 && chance(0.10 + tier * 0.50)) ? 'runner' : 'crawler',
+        /* **虫群考点（`swarm`）把追击型概率 ×2.2。**
+           它不只是"怪多"：一堆 crawler 站桩挨打，一堆 runner 逼你换位，
+           两者的题完全不同 —— 前者的题是"弹药够不够"，后者是"站哪里"。 */
+        kind: (tier >= 0.30 && chance((0.10 + tier * 0.50) * (lx.runnerK || 1))) ? 'runner' : 'crawler',
       });
     }
   });
@@ -2497,7 +2619,7 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
 
      落地判定：跳歪了就落回门厅地板，可以再试 —— 不惩罚、不死局。 */
   let perch = null;
-  if (stage === PERCH_STAGE) {
+  if (lx.perch) {
     const k = nF - 1;
     const fy = floors[k];
     /* 上一层洞的落点带要让开：平台架在那儿会被当成"落点被接住"，
@@ -2582,6 +2704,10 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
 
   return {
     seed, nFloors: nF, stage: (stage == null ? null : stage), skel,
+    /* **考点要跟着关卡数据走。** `validateLevel` 要按它判"悬台关有没有悬台"，
+       提示语和 HUD 芯片要按它出中文名 —— 从 `L.stage` 反推的话，
+       第 43 关以外的悬台关（现在每 25 关就有一关）全都会被漏掉。 */
+    lesson: les || null,
     floors, layers, plats, boxes, deco, door, spawns, nests, boss, husk, perch,
     start: { x: startX, y: GEN.topY - PLAYER_H },
     worldH: WORLD_H, groundY: GROUND_Y,
@@ -2764,8 +2890,8 @@ function validateLevel(L, verbose) {
      "没有悬台"和"悬台坏了"在图上看起来一模一样（都是一张普通关），
      而这一关的全部意义就是那块台子 —— 所以缺了要让 `buildLevel`
      换种子重掷，而不是悄悄退化成一张普通图。 */
-  if (L.stage === PERCH_STAGE) {
-    if (!L.perch) bad.push('第 43 关没有悬台');
+  if (L.lesson === 'perch') {
+    if (!L.perch) bad.push('悬台关没有悬台');
     else {
       const pb = L.perch;
       if (Math.abs((F[N - 1] - pb.y) - PERCH_H) > 1) bad.push('悬台高度不对');
@@ -3296,12 +3422,14 @@ function startStage(n) {
      "这关要走哪种路"，正好把六种骨架从"内部实现"变成"玩家认得出的东西"。 */
   const sk = S.level && S.level.skel;
   const cn = (sk && SKELETONS[sk]) ? (' · ' + SKELETONS[sk].cn) : '';
-  addText(W / 2, 200, '第 ' + k + ' 关' + cn, '#EAF8FF', 26, 1.2);
-  /* 第 43 关单独给一句提示。**不教"按 C 能踩实"这条通用操作**（那在开局
-     提示里），教的是"这一关要用它" —— 后者才是这一关成立的原因。 */
-  if (k === PERCH_STAGE) {
-    addText(W / 2, 240, '金箱在悬台上 · 球可以踩实（C）当台阶', '#FFE08A', 17, 3.2);
-  }
+  const les = S.level && S.level.lesson;
+  const lz = (les && LESSONS[les]) || null;
+  addText(W / 2, 200, '第 ' + k + ' 关' + cn + (lz ? ' · ' + lz.cn : ''), '#EAF8FF', 26, 1.2);
+  /* **考点自带一句"这关考什么"。**
+     原来只有第 43 关写死了悬台那句 —— 一关有提示、另外 47 关没有，
+     读起来像"这一关特殊"。现在每个考点都有一句，第 43 关只是其中之一。
+     它教的是"这一关要用什么"，不是"按 C 能踩实"（那在开局通用提示里）。 */
+  if (lz) addText(W / 2, 240, lz.say, '#FFE08A', 17, 3.2);
 }
 
 function reset(seed, stage) {
@@ -12475,6 +12603,9 @@ const API = {
   snowCoins, addSnowCoins, spendSnowCoins, BUY_LIST, buySupply,
   codexSeen, codexMark, relicCount, addRelic, RELIC_STAGES, RELIC_TOTAL, relicOf,
   DIVE_MODS, diveMods, diveHas, PERCH_STAGE, PERCH_H, PERCH_W,
+  /* 考点表 + 排班。**`lessonOf` 必须导出**，理由和 `goalOf` 一样：
+     "第 N 关考什么"是纯函数，断言要能直接问，而不是自己再写一遍排班规则。 */
+  LESSONS, LESSON_LIST, LESSON_PLAIN, LESSON_FIRST, lessonOf, lessonLat,
   HUD_RECTS, SKELETONS,
   genLevel, validateLevel, buildLevel, surfY, unreachableCols, ballPits, ballStuckCols,
   bellyTier, snowNeed, ballTier, ballR, ballPow,

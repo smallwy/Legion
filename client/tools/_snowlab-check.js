@@ -3100,6 +3100,9 @@ group("四十七、关卡目标（破门 / 寻宝 / 省球）");
 
   L.startStage(10);
   ck("换关重置球额度", L.S.ballUsed === 0, String(L.S.ballUsed));
+  /* **考点不许覆盖目标。**（2026-10-31）试过让 `perch` 把目标改成 collect，
+     结果 collect 从 16 关涨到 28 关 —— 48 关里 58% 都在寻宝，目标排班
+     当场没有意义。现在改成"悬台/藏宝只发给本来就是寻宝的关"。 */
   ck("第 10 关仍是省球（同一段 4 关同目标）", L.S.goal === 'limit', L.S.goal);
 }
 
@@ -3797,15 +3800,23 @@ console.log("\n=== 五十·补. BOSS 档位（每 8 关一只） ===");
    ========================================================================= */
 {
   const NAR = 72;
+  /* **排班表由 `lessonOf` 说，不由关号取模说。**
+     2026-10-31 加考点系统之后，窄洞是 `lessonOf(n) === 'narrow'` 的一种实例，
+     周期从「每 6 关」变成「拉丁方 5 周期」（7,12,17,22,27,32,37,42,47）。
+     断言跟着纯函数走，排班规则再改一次也不会假红。 */
   const narrowList = [];
+  const expectNarrow = n => L.lessonOf(n) === 'narrow';
   for (let n = 1; n <= 48; n++) {
     const g = L.genLevel(L.stageSeed(n), n);
     const hs = (g.layers || []).reduce((a, l) => a.concat(l.holes || []), []);
     const nar = hs.filter(h => h.narrow).length;
     if (nar) narrowList.push({ n, nar, all: hs.length, ws: hs.map(h => h.w) });
   }
-  ck("★ 窄洞关存在且数量固定（8 关：6/12/18/24/30/36/42/48）",
-     narrowList.length === 8, narrowList.map(o => o.n).join(","));
+  const wantNarrow = [];
+  for (let n = 1; n <= 48; n++) if (expectNarrow(n)) wantNarrow.push(n);
+  ck("★ 窄洞关和考点排班一致（" + wantNarrow.length + " 关：" + wantNarrow.join("/") + "）",
+     narrowList.map(o => o.n).join(",") === wantNarrow.join(","),
+     narrowList.map(o => o.n).join(","));
   /* **整关所有口都窄。** 只窄一个口的话玩家会绕到旁边那个口去，
      机制变成一次性惊吓而不是这一关的题。 */
   const partial = narrowList.filter(o => o.nar !== o.all);
@@ -3816,7 +3827,7 @@ console.log("\n=== 五十·补. BOSS 档位（每 8 关一只） ===");
   /* 反向：不是窄洞关的，一个窄洞都不该有（否则排班表就乱了） */
   let stray = [];
   for (let n = 1; n <= 48; n++) {
-    if (n % 6 === 0) continue;
+    if (expectNarrow(n)) continue;
     const g = L.genLevel(L.stageSeed(n), n);
     const hs = (g.layers || []).reduce((a, l) => a.concat(l.holes || []), []);
     if (hs.some(h => h.narrow)) stray.push(n);
@@ -3825,7 +3836,7 @@ console.log("\n=== 五十·补. BOSS 档位（每 8 关一只） ===");
 
   /* ---- 行为：球的落地结果 ---- */
   const drop = (abs) => {
-    L.startStage(6);
+    L.startStage(wantNarrow[0]);
     const S = L.S;
     const ly = S.level.layers[0];
     const h = ly.holes.filter(x => x.narrow)[0];
@@ -3853,6 +3864,130 @@ console.log("\n=== 五十·补. BOSS 档位（每 8 关一只） ===");
   ck("★ 卡住阈值只要 " + needFoe + " 只怪（一关 3~9 只，够得到）",
      needFoe <= 3, "absorbed " + needAbs + " / 每只 +" + L.NUM.ball.absorbFoe);
   L.startStage(6);
+}
+
+/* =========================================================================
+   五十·四. 考点（lesson）：让生成器知道自己在出题
+   -------------------------------------------------------------------------
+   2026-10-31 用户：「现在各个关卡大同小异啊」「要满足深度」。
+
+   根因不是机制少 —— `lesson/teach/mustUse` 这几个词在生成器里出现 0 次，
+   它只会把十几个参数各自掷一次骰子，每一关都落在均值附近。
+
+   考点 = **把某一个参数推到极端，其余让路**。这一组断言守三件事：
+
+     ① **排班**：不重复、不连考同一件事、前 5 关是纯教学。
+        没有排班，"考点"就只是随机标签。
+     ② **效果**：每个考点的特征量必须真的偏出去（怪多 / 洞多 / 金箱多 /
+        洞窄 / 有悬台）。只验"字段存在"是自欺 —— 字段在、参数没接上，
+        关卡照样是均值，图上完全看不出来。
+     ③ **门槛不越线**：寻宝专属的两个考点只能落在 collect 关。
+        验的是"目标排班没被考点盖掉"（曾经盖掉过，collect 涨到 28 关）。
+   ========================================================================= */
+{
+  const LES = L.LESSONS;
+  const keys = Object.keys(LES);
+  ck("考点表有 5 个（真做出来的，不是凑数的）", keys.length === 5, keys.join(","));
+  ck("每个考点都有中文名和一句提示",
+     keys.every(k => LES[k].cn && LES[k].say), keys.filter(k => !LES[k].cn || !LES[k].say).join(","));
+
+  const plan = [];
+  for (let n = 1; n <= 48; n++) plan.push({ n, les: L.lessonOf(n), goal: L.goalOf(n) });
+
+  ck("★ 前 5 关是纯教学（一个考点都不加）",
+     plan.slice(0, 5).every(o => o.les === null), plan.slice(0, 5).map(o => o.les).join(","));
+  ck("第 6 关起每关都有考点",
+     plan.slice(5).every(o => !!o.les), plan.filter(o => o.n >= 6 && !o.les).map(o => o.n).join(","));
+  ck("★ 排班是纯函数（同一关问两次答案一样）",
+     plan.every(o => L.lessonOf(o.n) === o.les));
+  ck("深潜没有考点（那是另一套节奏）",
+     L.lessonOf(-3) === null && L.lessonOf(0) === null && L.lessonOf(null) === null);
+
+  /* **相邻两关不许考同一件事。** 这是"大同小异"最直接的度量：
+     连着两关考点一样，玩家感受到的就是一关。 */
+  const dup = [];
+  for (let i = 1; i < plan.length; i++) {
+    if (plan[i].les && plan[i].les === plan[i - 1].les) dup.push(plan[i].n);
+  }
+  ck("★ 没有相邻两关考同一个考点", dup.length === 0, dup.join(","));
+
+  /* **每个考点至少 2 关。** 只出现 1 次等于"某个机制只被考了一遍"——
+     玩家没机会复习，也读不出它是一个反复出现的题型。 */
+  const cnt = {};
+  for (const o of plan) if (o.les) cnt[o.les] = (cnt[o.les] || 0) + 1;
+  const rare = keys.filter(k => (cnt[k] || 0) < 2);
+  ck("★ 每个考点至少 2 关（有复习机会）", rare.length === 0,
+     keys.map(k => k + ":" + (cnt[k] || 0)).join(" "));
+
+  /* **悬台 / 藏宝只发给寻宝关。** 这两个考点离开 collect 就没有意义。 */
+  const mism = plan.filter(o => (o.les === 'perch' || o.les === 'loot') && o.goal !== 'collect');
+  ck("★ 悬台/藏宝只出现在寻宝关", mism.length === 0, mism.map(o => o.n + ":" + o.goal).join(" "));
+  /* 反向：目标排班没被考点盖掉（16/16/16 那条断言在别处，这里只验不是一边倒） */
+  const gc = { door: 0, collect: 0, limit: 0 };
+  for (const o of plan) gc[o.goal]++;
+  ck("★ 考点没把目标排班盖掉（三种目标都 ≥12 关）",
+     gc.door >= 12 && gc.collect >= 12 && gc.limit >= 12,
+     JSON.stringify(gc));
+
+  /* ---- 效果：特征量必须真的偏出去 ---- */
+  const stat = {};
+  for (const o of plan) {
+    if (!o.les) continue;
+    const g = L.genLevel(L.stageSeed(o.n), o.n);
+    const holes = g.layers.reduce((a, l) => a + l.holes.length, 0);
+    const s = stat[o.les] || (stat[o.les] = { n: 0, foes: 0, hpf: 0, loot: 0, nar: 0, perch: 0, holes: 0 });
+    s.n++;
+    s.foes += g.spawns.length;
+    s.holes += holes;
+    s.hpf += holes / Math.max(1, g.nFloors - 1);
+    s.loot += g.boxes.filter(b => b.loot).length;
+    s.nar += (g.layers.reduce((a, l) => a + l.holes.filter(h => h.narrow).length, 0) > 0) ? 1 : 0;
+    s.perch += g.perch ? 1 : 0;
+  }
+  /* 基线：同一批关如果"没有考点"会是多少 —— 用全部 48 关的均值，
+     因为考的正是"这一关比平均值偏出去多少"。 */
+  const base = { foes: 0, hpf: 0 };
+  { let n = 0; for (let k = 1; k <= 48; k++) {
+      const g = L.genLevel(L.stageSeed(k), k);
+      base.foes += g.spawns.length; base.hpf += g.layers.reduce((a, l) => a + l.holes.length, 0) / Math.max(1, g.nFloors - 1);
+      n++;
+    } base.foes /= n; base.hpf /= n; }
+  const per = k => stat[k] || { n: 0, foes: 0, hpf: 0, loot: 0, nar: 0, perch: 0, holes: 0 };
+
+  const sw = per('swarm');
+  ck("★ 虫群关的怪比平均多 25% 以上",
+     sw.foes / Math.max(1, sw.n) > base.foes * 1.25,
+     "虫群 " + (sw.foes / Math.max(1, sw.n)).toFixed(1) + " vs 平均 " + base.foes.toFixed(1));
+  const mz = per('maze');
+  ck("★ 迷径关每层的口比平均多 30% 以上",
+     mz.hpf / Math.max(1, mz.n) > base.hpf * 1.30,
+     "迷径 " + (mz.hpf / Math.max(1, mz.n)).toFixed(2) + " vs 平均 " + base.hpf.toFixed(2));
+  const nr = per('narrow');
+  ck("★ 窄洞关**每一关**都有窄洞，别的关一关都没有",
+     nr.n > 0 && nr.nar === nr.n,
+     nr.nar + "/" + nr.n);
+  /* **空场：整关一处地形都没有。**
+     这是唯一一个"清零"型考点（其余都是"加大"），所以判据可以写成恒等式：
+     平台/坡的件数 = 0。其他关必须 >= 1 —— 两边一起测，才排除
+     "把地形维度整个关掉"这种"生效了但伤了别人"的情况。 */
+  const terrOf = n => {
+    const g = L.genLevel(L.stageSeed(n), n);
+    return g.layers.reduce((a, l) => a + (l.terrain ? l.terrain.length : 0), 0);
+  };
+  const bareNs = plan.filter(o => o.les === 'bare').map(o => o.n);
+  const bareTerr = bareNs.map(terrOf);
+  const otherTerr = plan.filter(o => o.les && o.les !== 'bare').map(o => terrOf(o.n));
+  ck("★ 空场关一处地形都没有（其他关都有）",
+     bareNs.length > 0 && Math.max(...bareTerr) === 0
+       && otherTerr.filter(v => v > 0).length >= otherTerr.length * 0.9,
+     "空场 " + bareTerr.join(",") + " / 其他最小 " + Math.min(...otherTerr) +
+     " 平均 " + (otherTerr.reduce((a, b) => a + b, 0) / otherTerr.length).toFixed(1));
+  const pc = per('perch');
+  ck("★ 悬台关**每一关**都有悬台", pc.n > 0 && pc.perch === pc.n, pc.perch + "/" + pc.n);
+
+  /* **排班表本身要能看见。** 48 关"考什么"打成一行 —— 以后每次改排班，
+     这一行就是最好复核的东西（比读代码快十倍）。 */
+  console.log("    排班：" + plan.filter(o => o.les).map(o => o.n + LES[o.les].cn).join(" "));
 }
 
 /* =========================================================================

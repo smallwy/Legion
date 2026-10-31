@@ -2445,28 +2445,38 @@ console.log("\n=== 27. 出征页进门语义 / 全通存档语义（挑一屏 20
        "★ 命中用常态矩形（放大不抢邻居的点击）");
   }
 
-  /* ②b 主流程三扇门（2026-10-30 晚第二次打回：
-     「还有和深巢呢」「最初的那2个玩法完全丢弃吗」）。
+  /* ②b 出征页两扇门（2026-10-31 主线定了）
 
-     中间有过一版"只留一扇门"，理由是"三扇门并排像两个游戏"。理由不错，
-     结论错了：**藏起来 ≠ 收得住**。玩家看不到深巢只会以为内容没了。
-     现在三门并列，推球第一（主线），后面是两套存量玩法。
-     代价：h=150 < detailMinH(170)，卡上第三行不画 —— 这是公式设计好的降级。 */
-  eq(P.GATES.length, 3, "★ 出征页三扇门（推球 + 古道 + 深巢）");
-  eq(P.GATES[0].id, "snow", "★ 第一扇是推球（主线放最前）");
-  eq(P.GATES.map(g => g.id).join(","), "snow,trail,nest", "门的顺序：推球/古道/深巢");
-  eq(P.GATE.scale, 1.2, "★ 三卡时悬停放大 1.2（单卡才关掉）");
+     用户：「我现在的主线玩法是推球 解谜 之前的那个玩法不是主线玩法吧
+     我需要你融合下啊 主线做深度 叠加深巢无尽」。
+
+     所以门从三门变两门，而**两扇门进的是同一个玩法** ——
+     区别只有 `?mode=dive` 一个参数。古道和它自己的深巢没删，
+     收在 GATES_LEGACY 里；「不摆出来」和「坏掉了」在界面上长得一样，
+     所以下面测它们的时候要临时插回去。 */
+  eq(P.GATES.length, 2, "★ 出征页两扇门（同一个玩法的两种跑法）");
+  eq(P.GATES.map(g => g.id).join(","), "snow,deep", "门的顺序：主线 / 无尽");
+  eq(P.GATES[0].id, "snow", "★ 第一扇是主线（推球 48 关）");
+  eq(P.GATES[1].id, "deep", "★ 第二扇是深巢无尽（同一套物理，一命到底）");
   {
-    /* 三门 = 266×150：`floor((840-2*20)/3)`，16:9 反推。同一水平线、三等分。 */
-    const c0 = P.gateRect(0), c1 = P.gateRect(1), c2 = P.gateRect(2);
-    ok(c0.w === 266 && c0.h === 150, "★ 三卡 266×150（公式按门数自动算）", c0.w + "×" + c0.h);
-    ok(c0.y === c1.y && c1.y === c2.y, "三张卡同一水平线", c0.y + "/" + c1.y + "/" + c2.y);
-    const z0 = P.gateZoomRect(0), z2 = P.gateZoomRect(2);
-    ok(z0.x >= 0 && z0.y >= 0 && z2.x + z2.w <= 960 && z2.y + z2.h <= 600,
-       "★ 两头那两张放大后仍不出画布（命中区不越界）",
-       z0.x + " .. " + (z2.x + z2.w));
-    eq(P.GATE.detailMinH > c0.h, true,
-       "★ 三卡高度装不下第三行（detailMinH 该生效，别再往前塞字）");
+    /* 两卡：`floor((840-20)/2)` = 410 宽，16:9 反推 —— 和三门 266 同一个公式。 */
+    const c0 = P.gateRect(0), c1 = P.gateRect(1);
+    ok(c0.w > 266 && c0.h > 150, "★ 两卡比三卡大（公式按门数自动算）", c0.w + "×" + c0.h);
+    ok(c0.y === c1.y, "两张卡同一水平线", c0.y + "/" + c1.y);
+    const z0 = P.gateZoomRect(0), z1 = P.gateZoomRect(1);
+    ok(z0.x >= 0 && z0.y >= 0 && z1.x + z1.w <= 960 && z1.y + z1.h <= 600,
+       "★ 两张放大后仍不出画布", z0.x + " .. " + (z1.x + z1.w));
+  }
+  {
+    /* **存量玩法还在，只是不摆出来。** 临时插回 GATES 测一遍再拔掉 ——
+       不测的话，"收起古道"和"古道坏了"在仓库里长得一模一样。 */
+    P.GATES.push.apply(P.GATES, P.GATES_LEGACY);
+    eq(P.GATES.length, 4, "存量两门进 GATES 后是 4 张卡");
+    const ids = P.GATES.map(g => g.id);
+    ok(ids.indexOf("trail") >= 0, "★ 古道在存量里（没被删）", ids.join(","));
+    ok(ids.indexOf("nest") >= 0, "★ 深巢（grove 那套）在存量里（没被删）", ids.join(","));
+    P.GATES.length = 2;
+    eq(P.GATES.length, 2, "测完恢复成两门（后续断言依赖这个）");
   }
 
   /* ②c 出征页的星数（2026-10-30）。出征页是出门前**唯一**能读到"我打到哪了"
@@ -2504,6 +2514,11 @@ console.log("\n=== 27. 出征页进门语义 / 全通存档语义（挑一屏 20
      **门表里本来就有古道**（GATES = 推球 + 古道 + 深巢），以前那句
      `unshift(...GATES_LEGACY)` 会把门数撑到 5、并触发"id 不重复"红。 */
 
+  /* **古道不摆出来了（2026-10-31），但它没坏。** 下面④~⑥ 测的是古道
+     的行为，所以先临时插回来，测完再拔掉 —— 「收起来」和「坏掉了」
+     在仓库里长得一模一样，只能靠这样分开验。 */
+  P.GATES.push.apply(P.GATES, P.GATES_LEGACY);
+
   /* ④ 点开着的门 → 直接进**当前进度那一屏**（挑一屏已删，没有中间选择页）。 */
   S.progress = 3;
   P.openGates();
@@ -2525,6 +2540,9 @@ console.log("\n=== 27. 出征页进门语义 / 全通存档语义（挑一屏 20
   P.openGates();
   P.enterGate(P.GATES.findIndex(g => g.id === "trail"));
   eq(S.stage, N - 1, "全通时进最后一屏（不越界）", "stage=" + S.stage);
+
+  /* 拔掉存量两门，恢复成主线 + 无尽（后面的断言按两门算）。 */
+  P.GATES.length = 2;
 
   /* ⑦ 全通后 `goHome(true)` 不许把进度清零 —— 这是那句
      "通关了怎么又重新开始了"的原始病根。 */
@@ -4449,6 +4467,7 @@ console.log("\n=== 40. 出征页交互：点门直达当前进度 / 没开的门
   /* **按 id 取古道那张卡。** 门表顺序是 [推球, 古道, 深巢]，
      写死 `gateRect(0)` 点到的是推球 —— 沙箱里没有 setSnowlabEntry，
      点了什么都不会发生，而症状只是"phase 还是 portals"，看不出点错了门。 */
+  P.GATES.push.apply(P.GATES, P.GATES_LEGACY);   // 古道收起来了，临时插回
   const g0 = P.gateRect(P.GATES.findIndex(g => g.id === "trail"));
   P.gateTap(g0.x + g0.w / 2, g0.y + g0.h / 2);
   eq(P.S.phase, "play", "★ 点苔原古道直接开打（没有挑一屏中间层）");
@@ -4650,6 +4669,9 @@ console.log("\n=== 41. 出征页：门表契约 / 点开着的门进玩法 / 没
 
   /* ---- D. 语义 ---- */
   {
+    /* 这里验的是古道那扇门的行为；它 2026-10-31 之后不摆出来了，
+       所以要临时插回来。**每段测试是独立 load 的**，数组不能靠上一段带过来。 */
+    P.GATES.push.apply(P.GATES, P.GATES_LEGACY);
     /* 开着的门：**直接进当前进度那一屏**（挑一屏 2026-10-26 删除，
        用户：「这个界面也不需要吧 显示当前进度就可以了」） */
     P.S.progress = 5;
@@ -4719,15 +4741,23 @@ console.log("\n=== 41. 出征页：门表契约 / 点开着的门进玩法 / 没
 
   /* ---- E2. 横排卡片：宽度按玩法数算、垂直居中、悬停放大 ---- */
   {
-    for (const g of G41) {
-      ok(!!g.art, `${g.id} 有背景立绘的 ART key`);
-    }
-    /* 立绘清单真的加载了这两张（路径写错不会报错，只会静默回退） */
+    /* **每扇门要么有立绘（且在清单里），要么有画法回退。**
+       `gate-deep` 没有立绘，是 `drawDeepArt` 画的 —— 在清单里挂一个
+       不存在的 png 不会报错，只会静默 404 再回退，等于记了一条
+       永远查不出来的账。所以判据是二选一，不是"必须有 art"。 */
     const gb41b = fs.readFileSync(
       path.join(__dirname, "..", "assets", "scripts", "grove", "GroveBattle.ts"), "utf8");
+    const gateSrc = fs.readFileSync(
+      path.join(__dirname, "..", "prototype", "grove.html"), "utf8");
     for (const g of G41) {
-      ok(gb41b.indexOf("'" + g.art + "'") >= 0,
-         `★ ${g.art} 在 ART_MANIFEST 里（不进清单 = 真机永远看不到立绘）`);
+      if (g.art) {
+        ok(gb41b.indexOf("'" + g.art + "'") >= 0,
+           `★ ${g.art} 在 ART_MANIFEST 里（不进清单 = 真机永远看不到立绘）`);
+      } else {
+        const fn = "draw" + g.id.charAt(0).toUpperCase() + g.id.slice(1) + "Art";
+        ok(gateSrc.indexOf("function " + fn) >= 0 && gateSrc.indexOf(fn + "(g, x, y, w, h)") >= 0,
+           `★ ${g.id} 没立绘，但有 ${fn} 兜底（否则出征页是一块空色）`);
+      }
     }
     /* 2026-10-25 第六次：**横排 + 悬停放大**（用户：「鼠标放在上面原图就
        放大就可以了啊」）。宽度由玩法数算出、不是常量 —— 加一个玩法只往

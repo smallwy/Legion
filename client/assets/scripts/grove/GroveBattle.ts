@@ -48,7 +48,7 @@ import {
     groveAttachCanvas, groveBoot, grovePointer, groveRender, groveSetArt,
     groveSetExitHook, groveTick, GROVE, setSnowlabEntry,
 } from './GroveRuntime';
-import { battleSwitch, battleSetCurrent } from '../BattleSwitch';
+import { battleSwitch, battleSetCurrent, battleSetEntryMode } from '../BattleSwitch';
 import { loadSave, saveSave, LEVEL_COUNT } from '../config/SaveData';
 import { heroIndexOf } from '../config/Roster';
 import { applyRunReward, payoutFromRun, judgeTripGoals, tripReward } from '../config/HomeBiz';
@@ -235,7 +235,16 @@ export class GroveBattle extends Component {
          * 换成切组件：`battleSwitch` 会先销毁本组件（摘 DOM 层 + 拆相机），
          * 死透之后再把 SnowlabBattle 挂到同一个 BattleRoot 上。
          */
-        setSnowlabEntry(() => { battleSwitch('snowlab'); });
+        /* **接住第二扇门带来的 `mode`。**（2026-10-31）
+           出征页现在两扇门进同一个玩法：主线（`mode` 为空）和深巢无尽
+           （`mode === 'dive'`）。参数不能直接传进 `battleSwitch` ——
+           它只管"换谁"，不管"换过去之后干什么"，硬塞进去会让这个
+           中介开始懂业务。所以走 `battleSetEntryMode`，由 SnowlabBattle
+           在 onLoad 里自己取。 */
+        setSnowlabEntry((mode?: string) => {
+            battleSetEntryMode(mode === 'dive' ? 'dive' : null);
+            battleSwitch('snowlab');
+        });
         /* 登记"当前活着的是我"——换手的起点靠这个，不靠外部去猜。
            必须排在 setSnowlabEntry **之后**：登记会把 switching 复位，
            反过来写的话"点门那一瞬间还处于换手中"会被这条登记提前放行。 */

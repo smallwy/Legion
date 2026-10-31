@@ -34,8 +34,8 @@
  * ⚠ 只有 Web 平台能跑（依赖 document）。原生/小游戏要重写渲染层。
  */
 import { _decorator, Component, Node, Camera, Color, director, assetManager, SceneAsset } from 'cc';
-import { snowlabAttachCanvas, snowlabBoot, snowlabRender, snowlabTick } from './SnowlabRuntime';
-import { battleSwitch, battleSetCurrent } from '../BattleSwitch';
+import { snowlabAttachCanvas, snowlabBoot, snowlabRender, snowlabTick, SNOWLAB } from './SnowlabRuntime';
+import { battleSwitch, battleSetCurrent, battleTakeEntryMode } from '../BattleSwitch';
 
 const { ccclass } = _decorator;
 
@@ -80,6 +80,13 @@ export class SnowlabBattle extends Component {
            （hud 要读字体、tips 要排位置），顺序反了就是第一帧画到 null 上。 */
         snowlabAttachCanvas(cv);
         snowlabBoot();
+        /* **深巢无尽从这里进来。**（2026-10-31）
+           两扇门进的是同一个玩法，区别只有这一个参数：主线照旧 `reset`
+           到存档那一关，无尽直接 `startDive()`（一命到底、比下到第几层）。
+           取走即清空 —— 留着的话下次从别处进推球会莫名其妙掉进无尽。 */
+        if (battleTakeEntryMode() === 'dive') {
+            SNOWLAB.startDive();
+        }
 
         this._bindEsc();
         this._ready = true;

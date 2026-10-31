@@ -3894,10 +3894,30 @@ console.log("\n=== 五十·补. BOSS 档位（每 8 关一只） ===");
   const plan = [];
   for (let n = 1; n <= 48; n++) plan.push({ n, les: L.lessonOf(n), goal: L.goalOf(n) });
 
-  ck("★ 前 5 关是纯教学（一个考点都不加）",
-     plan.slice(0, 5).every(o => o.les === null), plan.slice(0, 5).map(o => o.les).join(","));
-  ck("第 6 关起每关都有考点",
-     plan.slice(5).every(o => !!o.les), plan.filter(o => o.n >= 6 && !o.les).map(o => o.n).join(","));
+  /* ---- 开头几关：这里栽过一次，值得单独守 ----
+     原来是「1~3 关全是 1 层 + 无考点 + 目标全是 door」，而 1 层关没有洞
+     （洞只存在于层与层之间）—— 三个维度一起被砍掉。玩家前十分钟看到的
+     就是同一关玩三遍，原话是「我进去玩 没变化啊」。
+     **考点表里 48 行全对，前 3 关照样可以一模一样** —— 排班断言只验
+     "每关有考点"，验不了"玩家前十分钟有没有东西看"。 */
+  ck("★ 只有第 1 关是纯教学（推球 + 进门，一次就够）",
+     plan[0].les === null && plan.slice(1).every(o => !!o.les),
+     "无考点的关：" + plan.filter(o => !o.les).map(o => o.n).join(","));
+  {
+    /* 前 5 关的 (层数, 考点) 必须两两不同 —— 层数变了就是另一张图。 */
+    const head = [];
+    for (let n = 1; n <= 5; n++) {
+      const g = L.genLevel(L.stageSeed(n), n);
+      head.push({ n, nF: g.nFloors, les: L.lessonOf(n) });
+    }
+    const sig = head.map(o => o.nF + "|" + o.les);
+    ck("★ 前 5 关的 (层数, 考点) 两两不同（前十分钟不能是同一关玩三遍）",
+       new Set(sig).size === 5, head.map(o => o.n + ":" + o.nF + "层/" + (o.les || "无")).join(" "));
+    /* 而且第 2 关就得往下走 —— 停在 1 层等于没有洞、没有窄洞、没有迷径。 */
+    ck("★ 第 2 关就下到 2 层（1 层关没有洞，机制少一半）",
+       head[1].nF >= 2, "第 2 关 " + head[1].nF + " 层");
+  }
+
   ck("★ 排班是纯函数（同一关问两次答案一样）",
      plan.every(o => L.lessonOf(o.n) === o.les));
   ck("深潜没有考点（那是另一套节奏）",
@@ -3955,10 +3975,38 @@ console.log("\n=== 五十·补. BOSS 档位（每 8 关一只） ===");
     } base.foes /= n; base.hpf /= n; }
   const per = k => stat[k] || { n: 0, foes: 0, hpf: 0, loot: 0, nar: 0, perch: 0, holes: 0 };
 
-  const sw = per('swarm');
-  ck("★ 虫群关的怪比平均多 25% 以上",
-     sw.foes / Math.max(1, sw.n) > base.foes * 1.25,
-     "虫群 " + (sw.foes / Math.max(1, sw.n)).toFixed(1) + " vs 平均 " + base.foes.toFixed(1));
+  /* ---- 追兵：特征是**恒等式**，不是比例 ----
+     这一条取代了原来的「虫群（怪更多）」。虫群试过三版全部拉不动：
+     `foeK:+1`（6 层关只多 3.2 只，台面按容量算）、巢加到 3 个（只落得下 1.63 个）、
+     巢配额翻倍（总配额 1.14 倍）。和 tower / flat / loot 一个死法。
+     `rush` 换了个维度：不是「多几只」，是「全都是追人的」——这个不需要任何
+     空间，只要把 kind 钉死就行，所以判据可以写成 every()。 */
+  const rushNs = plan.filter(o => o.les === 'rush').map(o => o.n);
+  const runnerShare = n => {
+    const g = L.genLevel(L.stageSeed(n), n);
+    /* 只看 tier >= 0.30 的层 —— runner 本来就是那之后才登场的机制，
+       要求低层也全是 runner 等于把「机制按深度解锁」这条改掉。 */
+    const deep = g.spawns.filter(sp => ((g.layers[sp.layer] || {}).tier || 0) >= 0.30);
+    if (!deep.length) return null;
+    return deep.filter(sp => sp.kind === 'runner').length / deep.length;
+  };
+  const notAllRunner = [];
+  for (const n of rushNs) {
+    const v = runnerShare(n);
+    if (v !== null && v < 1) notAllRunner.push(n + ":" + v.toFixed(2));
+  }
+  const allRunnerElsewhere = [];
+  for (let n = 1; n <= 48; n++) {
+    if (L.lessonOf(n) === 'rush') continue;
+    if (runnerShare(n) === 1) allRunnerElsewhere.push(n);
+  }
+  ck("★ 追兵关里，深层每一只都是 runner（不是「多一点」）",
+     rushNs.length >= 4 && notAllRunner.length === 0, notAllRunner.join(" "));
+  /* 反向：普通关不能也全是追兵 —— 否则「追兵关」和「普通关」没有区别，
+     而「没生效」和「全都生效」在截图上长得一样。 */
+  ck("★ 普通关不会全是 runner（追兵是这一关的招牌）",
+     allRunnerElsewhere.length <= 2, allRunnerElsewhere.join(","));
+
   const mz = per('maze');
   ck("★ 迷径关每层的口比平均多 30% 以上",
      mz.hpf / Math.max(1, mz.n) > base.hpf * 1.30,

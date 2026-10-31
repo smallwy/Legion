@@ -15,7 +15,7 @@ window.eval(m[1]);
 const L = window.SNOWLAB;
 
 const POOL = ['bare', 'narrow', 'swarm', 'maze', 'perch', 'seal'];
-const FIRST = 6;
+const FIRST = 2;
 const info = [];
 for (let n = 1; n <= 48; n++) {
   const g = L.genLevel(L.stageSeed(n), n);

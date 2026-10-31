@@ -18207,24 +18207,47 @@ const GATES_LEGACY = [
   },
 ];
 
-/* 主流程三扇门：推球放第一（它是主线），后面接两套存量玩法。 */
+/* **主线定了：雪原推球，深巢无尽是它的叠加模式。**（2026-10-31）
+
+   用户原话：「我现在的主线玩法是推球 解谜 之前的那个玩法不是主线玩法吧
+   我需要你融合下啊 主线做深度 叠加深巢无尽」。
+
+   所以出征页只摆两扇门，而**两扇门进的是同一个玩法** ——
+   区别只有 `?mode=dive` 一个参数：主线是 48 关、有存档、接着上次打；
+   无尽是一命到底、比下到第几层。这不是"两个游戏"，是同一套物理的两种
+   玩法：球、怪、箱子、地形、七个考点，两边一模一样。
+
+   古道的 27 屏和它自己的深巢（`nest`）**没有删**，收进 GATES_LEGACY。
+   「不摆出来」和「坏掉了」在界面上长得一样 —— 断言要测它们时
+   必须临时 `unshift(...GATES_LEGACY)`（这条踩过一次）。 */
 const GATES = [
   {
     /* 2026-10-30 第三扇门。**推球玩法（snowlab）此前没有任何入口** ——
        它是独立的一个 html，game.html / index.html / HomeRuntime 对它的引用
        是 0 次。48 关主线、六种骨架、深潜全都做完了却没有门能走进去，
        用户原话：「最初的出征 又玩法界面 我需要你用上」。
-       和前两扇门的区别：它们都是 grove 内部的 phase（切状态，不换页），
-       这个真的跳页 —— 推球的物理/动画是另一套循环，塞进 grove 只会
-       让两边都变慢，而且它自己已经能独立跑。
        跳转带 `?from=grove`：snowlab 靠它决定"显示返回按钮 + 接着存档那一关打"。 */
     id: "snow",
     name: "雪原推球",
-    sub: "把球顶进洞 · 一层层往下",
+    sub: "48 关 · 一层层往下",
     art: "gate-snow",
     open: true,
   },
-  ...GATES_LEGACY,
+  {
+    /* **同一套玩法的第二种玩法。** 不是又一个独立游戏 —— 这条线
+       和主线共用物理、`LESSONS`、`THEMES`、存档格式，只是不存关号、
+       只存"下到过第几层"。所以它不配单独一套内容，配的是
+       `DIVE_MODS`（重石 / 厚甲 / 急冻 / 饥肠）：每 5 层多一条词条，
+       同一条命里越往下越难，而打不过只丢这一趟。 */
+    id: "deep",
+    name: "深巢无尽",
+    sub: "主线之后 · 一命到底比深度",
+    /* **没有立绘，走 drawDeepArt 画。** 立绘清单里挂一个不存在的 png
+       不会报错，只会静默 404 然后回退 —— 那等于记了一条永远查不出来的账。
+       要么有图、要么承认是画的，不留中间态。 */
+    art: null,
+    open: true,
+  },
 ];
 
 /** snowlab 的进度存档（和它那边同 key、同结构 —— 两个文件都在浏览器里跑，
@@ -18270,9 +18293,13 @@ function snowStarCount(o) {
    而且不是报错，是白页 —— 最难查的那一类。
    所以入口留成变量：GroveBattle 在 onLoad 里调 `setSnowlabEntry(fn)`
    换成"切到推球组件"，原型侧一个字都不用改。 */
-function snowEntryDefault() {
+function snowEntryDefault(mode) {
   try {
-    if (typeof location !== "undefined" && location.href) location.href = "snowlab.html?from=grove";
+    if (typeof location !== "undefined" && location.href) {
+      /* 无尽模式只多一个参数。**不要给它单独开一个 html** ——
+         那样两套物理迟早分叉，而它们本来就该是同一套。 */
+      location.href = "snowlab.html?from=grove" + (mode === "dive" ? "&mode=dive" : "");
+    }
   } catch (e) { /* 无头环境没有 location，静默 */ }
 }
 let snowEntry = snowEntryDefault;
@@ -18361,6 +18388,11 @@ function enterGate(i) {
        跳转走 `snowEntry()` 而不是直接写 location —— 见那个变量的注释：
        Cocos 构建里没有 snowlab.html，那边要把这个口换成"切组件"。 */
     snowEntry();
+  } else if (p.id === "deep") {
+    /* 同一个入口，多带一个 mode。**Cocos 侧接 `snowEntry(fn)` 时
+       fn 必须能接住这个参数** —— 接不住的话深巢门会静默变成"进主线"，
+       而"降级进主线"和"这扇门坏了"在界面上完全一样。 */
+    snowEntry("dive");
   }
 }
 
@@ -18843,6 +18875,99 @@ function drawSnowArt(g, x, y, w, h) {
   }
 }
 
+/* 「深巢无尽」那扇门的画。
+   **它必须和雪原门一眼分得开。** 这两扇门进的是同一个玩法，如果两张卡
+   长得像，玩家会以为是同一件事的两个入口（那正是我们刚从"三个独立游戏"
+   改掉的东西）；而它们真正的关系是"同一个游戏，一个按关、一个按命"。
+   所以：雪原是横着的地表 + 一个洞，深巢是竖着的井 + 一层层往下 ——
+   构图方向本身就相反。 */
+function drawDeepArt(g, x, y, w, h) {
+  const bg = g.createLinearGradient(x, y, x, y + h);
+  bg.addColorStop(0, "#1E1630");
+  bg.addColorStop(0.5, "#150F24");
+  bg.addColorStop(1, "#080512");
+  g.fillStyle = bg;
+  g.fillRect(x, y, w, h);
+
+  /* 竖井：越往下越窄，底部那点紫光是"下面还有东西"的唯一暗示。
+     **不做成对称的洞。** 对称会读成"隧道"，而这个玩法是越往下越挤。 */
+  const win = w * 0.30;
+  const shaftL = iy => x + w * 0.5 - win * (1 - iy / h * 0.42);
+  const shaftR = iy => x + w * 0.5 + win * (1 - iy / h * 0.42);
+  g.fillStyle = "#04030A";
+  g.beginPath();
+  g.moveTo(shaftL(0), y - 4);
+  g.lineTo(shaftR(0), y - 4);
+  g.lineTo(shaftR(h), y + h + 4);
+  g.lineTo(shaftL(h), y + h + 4);
+  g.closePath();
+  g.fill();
+
+  /* 井壁：两侧各切几道**斜的**岩层。
+     第一版画的是竖直方块，放大到 492 宽时读出来是"马赛克拼贴"，
+     完全没有石头的意思 —— 方块是"贴图没加载"的视觉语言。
+     斜的梯形才像被凿开的岩面，而且方向要左右镜像，否则像两排梳子。 */
+  for (let i = 0; i < 5; i++) {
+    const iy = y + h * (0.10 + i * 0.19);
+    const dep = 6 + (i % 3) * 5;
+    const th = h * 0.075;
+    g.fillStyle = i % 2 ? "rgba(104,80,146,.50)" : "rgba(126,98,172,.38)";
+    /* 左壁：从井内向外斜插 */
+    g.beginPath();
+    g.moveTo(shaftL(iy), iy);
+    g.lineTo(shaftL(iy) - dep, iy + th * 0.55);
+    g.lineTo(shaftL(iy) - dep * 0.45, iy + th);
+    g.lineTo(shaftL(iy), iy + th * 0.62);
+    g.closePath(); g.fill();
+    /* 右壁：镜像 */
+    g.beginPath();
+    g.moveTo(shaftR(iy + th * 0.3), iy + th * 0.3);
+    g.lineTo(shaftR(iy + th * 0.3) + dep, iy + th * 0.85);
+    g.lineTo(shaftR(iy + th * 0.3) + dep * 0.45, iy + th * 1.3);
+    g.lineTo(shaftR(iy + th * 0.3), iy + th * 0.92);
+    g.closePath(); g.fill();
+  }
+
+  /* 层：三级错落的台面，**一定不对称** —— 就是"每层地形都不一样"这句话 */
+  const tier = (iy, from, to) => {
+    g.fillStyle = "rgba(120,96,164,.42)";
+    g.fillRect(x + w * from, y + iy, w * (to - from), Math.max(3, h * 0.028));
+    g.fillStyle = "rgba(178,150,224,.30)";
+    g.fillRect(x + w * from, y + iy, w * (to - from), 1.4);
+  };
+  tier(h * 0.30, 0.06, 0.40);
+  tier(h * 0.58, 0.60, 0.94);
+  tier(h * 0.84, 0.10, 0.46);
+
+  /* 底光 */
+  const glow = g.createRadialGradient(x + w * 0.5, y + h * 0.97, 2, x + w * 0.5, y + h * 0.97, w * 0.34);
+  glow.addColorStop(0, "rgba(190,140,255,.55)");
+  glow.addColorStop(1, "rgba(190,140,255,0)");
+  g.fillStyle = glow;
+  g.fillRect(x, y + h * 0.6, w, h * 0.4);
+
+  /* 球：正在往下掉。拖一条短尾 —— 静态图里唯一能表达"在动"的东西。 */
+  const br = Math.max(7, Math.min(w, h) * 0.085);
+  const bx = x + w * 0.5, by = y + h * 0.40;
+  const trail = g.createLinearGradient(bx, by - br * 3.4, bx, by);
+  trail.addColorStop(0, "rgba(226,240,255,0)");
+  trail.addColorStop(1, "rgba(226,240,255,.55)");
+  g.fillStyle = trail;
+  g.fillRect(bx - br * 0.45, by - br * 3.4, br * 0.9, br * 3.4);
+  const ball = g.createRadialGradient(bx - br * 0.35, by - br * 0.35, br * 0.2, bx, by, br);
+  ball.addColorStop(0, "#FFFFFF");
+  ball.addColorStop(1, "#B9CEE6");
+  g.fillStyle = ball;
+  g.beginPath(); g.arc(bx, by, br, 0, 6.283); g.fill();
+
+  /* 底部压暗带：和另外两张卡同一处起（h*0.52），跨卡文字基线才对齐 */
+  const shade = g.createLinearGradient(x, y + h * 0.52, x, y + h);
+  shade.addColorStop(0, "rgba(6,6,14,0)");
+  shade.addColorStop(1, "rgba(6,6,14,.80)");
+  g.fillStyle = shade;
+  g.fillRect(x, y + h * 0.52, w, h * 0.48);
+}
+
 function drawNestArt(g, x, y, w, h) {
   const bg = g.createLinearGradient(x, y, x, y + h);
   bg.addColorStop(0, "#241E2E");
@@ -18905,6 +19030,7 @@ function drawGateArt(g, p, x, y, w, h) {
   else if (p.id === "trail") drawTrailArt(g, x, y, w, h);
   else if (p.id === "nest") drawNestArt(g, x, y, w, h);
   else if (p.id === "snow") drawSnowArt(g, x, y, w, h);
+  else if (p.id === "deep") drawDeepArt(g, x, y, w, h);
   else { g.fillStyle = "#1A2E2A"; g.fillRect(x, y, w, h); }
   /* 没开放的玩法只**在图上**盖一层薄纱，不整张卡压暗 ——
      整卡压暗后立绘变成一团黑，这张画就白出了；而文字压暗会让
@@ -18959,7 +19085,8 @@ function gateDetailLine(p) {
   /* 推球的两条规矩：一命到底（深潜）、箱子里埋着宝物（探索）。
      卡高够（h>=170）时才是玩家的决策依据；3 张卡时 h=150 不画，
      但先写好 —— 以后加第 4 门卡更窄，这里反而是唯一能读到的规则。 */
-  if (p.id === "snow") return "推球下洞 · 深潜一命到底";
+  if (p.id === "snow") return "推球下洞 · 48 关 · 接着上次打";
+  if (p.id === "deep") return "同一套物理 · 一命到底 · 每 5 层加一条词条";
   const cur = clamp(S.progress, 0, LEVELS.length - 1);
   const row = STAR_OF_STAGE[cur] || [];
   if (!row.length) return "";

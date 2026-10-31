@@ -44,12 +44,12 @@ async function boot() {
 const LES_COLOR = {
   bare: "#8A7B5E",     // 土：地形
   narrow: "#4A7FB5",   // 蓝：洞
-  swarm: "#9B4B5E",    // 红：怪
+  rush: "#9B4B5E",    // 红：怪
   maze: "#5E9C6B",     // 绿：口
   perch: "#8E6BC4",    // 紫：台
   seal: "#2F8F8A",     // 青：冰
 };
-const LES_ORDER = ["bare", "narrow", "swarm", "maze", "perch", "seal"];
+const LES_ORDER = ["bare", "narrow", "rush", "maze", "perch", "seal"];
 
 (async () => {
   const L = await boot();
@@ -89,7 +89,7 @@ const LES_ORDER = ["bare", "narrow", "swarm", "maze", "perch", "seal"];
   g.font = "bold 23px " + FONT; g.fillStyle = "#1B2430";
   g.fillText("48 关各考什么：6 个考点 + 它们真的改了数值", PAD, 40);
   g.font = "13px " + FONT; g.fillStyle = "#5B6B7B";
-  g.fillText("上一条是排班（前 5 关纯教学，之后不连考同一件事）；下面两条是同一批关的实测数值。", PAD, 64);
+  g.fillText("上一条是排班（只有第 1 关是教学，之后不连考同一件事）；下面两条是同一批关的实测数值。", PAD, 64);
   g.fillStyle = "#E05A2B";
   g.fillText("看点：涨上去的那些峰正好落在对应颜色的格子上 —— 排班不是标签，是真的接在生成器上。", PAD, 86);
 
@@ -129,7 +129,7 @@ const LES_ORDER = ["bare", "narrow", "swarm", "maze", "perch", "seal"];
     for (let i = 0; i < 48; i += 4) g.fillText(String(i + 1), x0(i) + 3, top + BAND_H + 12);
   }
 
-  /* ---- ② 怪数曲线（swarm 应该在红格子上凸起） ---- */
+  /* ---- ② 怪数曲线（追兵关配额更高，该在红格子上凸起） ---- */
   {
     const top = bandTop(1);
     const maxV = Math.max(...rows.map(r => r.foes));
@@ -148,7 +148,7 @@ const LES_ORDER = ["bare", "narrow", "swarm", "maze", "perch", "seal"];
       /* **只给"这条曲线对应的考点"上色，其余灰掉。**
          第一版按各自考点着色，48 根柱子五颜六色，"峰落在同色格子上"
          这件事反而看不出来 —— 图要证明的是一个对应关系，不是好看。 */
-      g.fillStyle = r.les === "swarm" ? LES_COLOR.swarm : "#D8D3C9";
+      g.fillStyle = r.les === "rush" ? LES_COLOR.rush : "#D8D3C9";
       const y = yOf(r.foes);
       g.fillRect(x0(i) + 5, y, COLW - 10, top + BAND_H - 6 - y);
     }

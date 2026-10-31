@@ -1,4 +1,4 @@
-/* @src-md5 9e6a3658e09b5de5168a58c958085e7f @src-lines 12817 */
+/* @src-md5 d828c7743534898d16e42823127140f9 @src-lines 12856 */
 // @ts-nocheck
 /* ⚠ 自动生成，勿手改 —— 源：client/prototype/snowlab.html
    重新生成：python client/tools/extract_snowlab_runtime.py
@@ -697,11 +697,17 @@ function mix32(x) {
    封顶之后靠**骨架不再按 6 循环**继续分（见 pickSkeleton 的拉丁方）——
    层数只能涨到 6，剩下的差异得从空间走向上出。 */
 const STAGES = [
-  { to: 3,  floors: 1, cn: '第一课' },   // 只有一层：学会推球
-  { to: 6,  floors: 2, cn: '教学' },     // 下洞 / 井梯
-  { to: 10, floors: 3, cn: '入门' },     // 石箱 / 斜坡
-  { to: 15, floors: 4, cn: '进阶' },     // 追人 / 霜封 / 投掷
-  { to: 22, floors: 5, cn: '硬核' },     // 冰墙 / 铁箱
+  /* **只有第 1 关是 1 层。**（2026-10-31 改）
+     原来是 1~3 关全是 1 层 —— 而 1 层关**没有洞**（洞只存在于层与层之间），
+     于是一次性砍掉三个维度：层数、洞口、以及所有依赖洞的考点（窄洞/迷径）。
+     实测那三关是「1 层 · 0 洞 · 无考点 · 目标全是破门 · 同一场景」，
+     玩家前十分钟看到的就是同一关玩三遍，然后说「进去玩没变化」。
+     **第一关只该有一个：学会推球。** 从第二关起就得往下走。 */
+  { to: 1,  floors: 1, cn: '第一课' },   // 只有一层：学会推球
+  { to: 4,  floors: 2, cn: '教学' },     // 下洞 / 井梯
+  { to: 8,  floors: 3, cn: '入门' },     // 石箱 / 斜坡
+  { to: 13, floors: 4, cn: '进阶' },     // 追人 / 霜封 / 投掷
+  { to: 20, floors: 5, cn: '硬核' },     // 冰墙 / 铁箱
   { to: 48, floors: 6, cn: '深层' },     // 下穿 / 窄洞 / 压门 / 竖井
 ];
 function stageCfg(stage) {
@@ -758,8 +764,16 @@ const LESSONS = {
             terrK: 0 },
   narrow: { cn: '窄洞', say: '洞只够小球过 · 大球会架在口上',
             narrow: true },
-  swarm:  { cn: '虫群', say: '这一关怪很多 · 球也多，别攒着',
-            foeK: 1, runnerK: 2.2 },
+  /* **`rush` 取代了原来的 `swarm`（虫群）。**（2026-10-31）
+     虫群想表达"怪很多"，但**这个生成器里怪的数量拉不动** —— 试过三版：
+       · `foeK: +1` 每层多一只：6 层关实测只多 3.2 只（台面按容量算，放不下）；
+       · 巢加到 3 个：实测只落得下 1.63 个（巢位要"空列 + 离洞 240 + 彼此 240"）；
+       · 巢配额翻倍：总配额只有其他关的 1.14 倍。
+     和 tower / flat / loot 一个死法。**换个维度就不一样了：不是"多几只"，
+     是"全都是追人的"。** 这是恒等式，不受任何容量约束 ——
+     玩家不能再站着慢慢攒球（`seal` 教的"先别开枪"在这里正好反着用）。 */
+  rush:   { cn: '追兵', say: '这一关的怪全冲你来 · 边跑边推，别停',
+            runnerAll: true },
   maze:   { cn: '迷径', say: '每层两个口 · 挑错就得绕回来',
             holes: 2 },
   perch:  { cn: '悬台', say: '金箱在悬台上 · 球可以踩实（C）当台阶',
@@ -783,8 +797,12 @@ const LESSONS = {
   seal:   { cn: '封关', say: '下去的路被冰墙封死 · 先把球喂大再砸',
             seal: true },
 };
-const LESSON_LIST = ['bare', 'narrow', 'swarm', 'maze', 'perch', 'seal'];
-const LESSON_FIRST = 6;        // 第 6 关开始才有考点
+const LESSON_LIST = ['bare', 'narrow', 'rush', 'maze', 'perch', 'seal'];
+/* **第 2 关就有考点。**（2026-10-31 改，原为 6）
+   考点是这游戏「每关不一样」的唯一来源，把它推到第 6 关等于让前十分钟
+   全部落在均值上。教学只需要第 1 关（推球 + 进门），第二关起就该有一手
+   不同的题 —— 玩家不用等到第 6 关才发现「哦，每关不一样」。 */
+const LESSON_FIRST = 2;
 /* ==================== ⓪-3 为什么排班必须是一张手写表 ====================
 
    **这不是懒，是数学。** 上一版用拉丁方：`LIST[(m % 5 + m / 5) % 5]`。
@@ -812,12 +830,12 @@ const LESSON_FIRST = 6;        // 第 6 关开始才有考点
    一个格子动了，那个 (骨架,目标) 对的唯一性就破了，而断言只报
    "三元组重复 1 处"，不会告诉你是哪一关改坏的。 */
 const LESSON_TABLE = [
-  null, null, null, null, null, 'bare', 'narrow', 'swarm',     // 1-8
-  'maze', 'seal', 'bare', 'narrow', 'swarm', 'maze', 'seal', 'bare', // 9-16
-  'perch', 'swarm', 'perch', 'narrow', 'maze', 'seal', 'bare', 'narrow', // 17-24
-  'swarm', 'maze', 'seal', 'bare', 'perch', 'narrow', 'perch', 'swarm', // 25-32
-  'maze', 'seal', 'bare', 'narrow', 'swarm', 'maze', 'seal', 'bare', // 33-40
-  'perch', 'narrow', 'perch', 'maze', 'swarm', 'bare', 'seal', 'swarm', // 41-48
+  null, 'bare', 'narrow', 'rush', 'maze', 'perch', 'seal', 'bare',   // 1-8
+  'narrow', 'rush', 'maze', 'seal', 'bare', 'narrow', 'rush', 'maze', // 9-16
+  'perch', 'bare', 'perch', 'seal', 'narrow', 'rush', 'maze', 'seal', // 17-24
+  'bare', 'narrow', 'rush', 'maze', 'perch', 'seal', 'bare', 'narrow', // 25-32
+  'rush', 'maze', 'seal', 'bare', 'narrow', 'rush', 'maze', 'seal', // 33-40
+  'perch', 'narrow', 'perch', 'rush', 'bare', 'maze', 'seal', 'bare', // 41-48
 ];
 /** 第 stage 关考什么。`null` = 教学关（没有考点）。深潜不给考点。 */
 function lessonOf(stage) {
@@ -2304,7 +2322,11 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
         /* **虫群考点（`swarm`）把追击型概率 ×2.2。**
            它不只是"怪多"：一堆 crawler 站桩挨打，一堆 runner 逼你换位，
            两者的题完全不同 —— 前者的题是"弹药够不够"，后者是"站哪里"。 */
-        kind: (tier >= 0.30 && chance((0.10 + tier * 0.50) * (lx.runnerK || 1))) ? 'runner' : 'crawler',
+        /* `runnerAll` 放在 `||` **右边**：`chance()` 必须每只都调用一次，
+           否则这一关整条随机流会和普通关错位，下游所有行为断言跟着漂。
+           短路求值的顺序在这里是功能的一部分，不是风格。 */
+        kind: (tier >= 0.30 && (chance((0.10 + tier * 0.50) * (lx.runnerK || 1)) || lx.runnerAll))
+          ? 'runner' : 'crawler',
       });
     }
   });
@@ -2321,7 +2343,13 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
      玩家还没学会吐雪就被围死了。 */
   const nests = [];
   {
-    const nWant = lx.seal ? 2 : 1 + (chance(0.5) ? 1 : 0);
+    /* **虫群考点加的是巢，不是散怪。**（2026-10-31）
+       原来只加 `foeK: +1`（每层多放一只），实测落在 6 层关上只有 +3.2 只
+       —— 因为台面容量有限，`want` 加上去之后常常放不下。
+       巢不一样：一个巢的配额 3~5 只，而且是**持续**的，三个巢的关和
+       一个巢的关在节奏上完全是两种。这也更贴"虫群"这个字面：
+       不是这一屏多站着两只，是这儿有个一直在吐的口子。 */
+    const nWant = lx.rush ? 3 : (lx.seal ? 2 : 1 + (chance(0.5) ? 1 : 0));
     const used = [];
     for (let t = 0; t < 80 && nests.length < nWant; t++) {
       /* **封关考点的第一个巢钉在封口那一层。** 冰墙要求大球，大球的唯一
@@ -2360,7 +2388,13 @@ const NARROW_W = 72;;                                    // 骨架统一洞宽�
       used.push(x);
       nests.push({
         x, y: l.floorY, layer: k,
-        left: 3 + Math.floor(R() * 3),       // 3~5 只配额
+        /* **虫群的真正手段是配额，不是巢位。**（2026-10-31）
+           这里试过两版：先加 `foeK: +1` 散怪（6 层关实测只多 3.2 只，
+           台面容量放不下），再想加到 3 个巢（实测只落得下 1.63 个 ——
+           巢位受"必须空列 / 离洞 240 / 彼此 240"三重约束，和 tower/flat
+           一个死法）。**配额不受位置约束**：同样的巢，吐 6~8 只和吐 3~5 只
+           是两种节奏，而且改这里不动 `R()` 的调用次数，下游随机流不变。 */
+        left: (lx.rush ? 6 : 3) + Math.floor(R() * 3),
         cd: 1.4 + R() * 1.2,                 // 开局先缓一下
         dir: R() < 0.5 ? -1 : 1,
         seed: Math.floor(R() * 1000),

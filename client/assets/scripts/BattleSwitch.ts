@@ -55,6 +55,31 @@ let switching = false;
 /** 换手失败时的兜底节点：只在 `curComp` 已经被销毁、拿不到 node 时用 */
 let host: Node | null = null;
 
+/**
+ * 换手时要带给目标组件的"入场参数"。
+ *
+ * **为什么放在这里，不让两个组件互相 import。** 出征页现在有两扇门进的是
+ * 同一个玩法（主线 48 关 / 深巢无尽），区别只有 `mode` 一个参数。GroveBattle
+ * 要把这个参数交给 SnowlabBattle，而它们之间**只能通过本文件说话** ——
+ * 互相 import 会在 Cocos 里绕出循环依赖，编译期不一定报，运行时是
+ * undefined 组件，症状和"门坏了"一模一样。
+ *
+ * 只在换手这一瞬间有值，取走就清空 —— 留着的话下次从别的路径进推球，
+ * 会莫名其妙掉进无尽模式。
+ */
+let entryMode: string | null = null;
+
+export function battleSetEntryMode(m: string | null): void {
+    entryMode = m || null;
+}
+
+/** 取走（并清空）入场参数。没设置过就是 null。 */
+export function battleTakeEntryMode(): string | null {
+    const m = entryMode;
+    entryMode = null;
+    return m;
+}
+
 export function battleRegister(kind: BattleKind, add: Adder): void {
     adders[kind] = add;
 }

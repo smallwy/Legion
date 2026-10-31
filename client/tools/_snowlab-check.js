@@ -3919,9 +3919,10 @@ console.log("\n=== 五十·补. BOSS 档位（每 8 关一只） ===");
   ck("★ 每个考点至少 2 关（有复习机会）", rare.length === 0,
      keys.map(k => k + ":" + (cnt[k] || 0)).join(" "));
 
-  /* **悬台 / 藏宝只发给寻宝关。** 这两个考点离开 collect 就没有意义。 */
-  const mism = plan.filter(o => (o.les === 'perch' || o.les === 'loot') && o.goal !== 'collect');
-  ck("★ 悬台/藏宝只出现在寻宝关", mism.length === 0, mism.map(o => o.n + ":" + o.goal).join(" "));
+  /* **悬台只发给寻宝关。** 离开 collect，那块台子就只是块装饰。 */
+  const mism = plan.filter(o => o.les === 'perch' && o.goal !== 'collect');
+  ck("★ 悬台只出现在寻宝关（离开寻宝，那块台子就是装饰）",
+     mism.length === 0, mism.map(o => o.n + ":" + o.goal).join(" "));
   /* 反向：目标排班没被考点盖掉（16/16/16 那条断言在别处，这里只验不是一边倒） */
   const gc = { door: 0, collect: 0, limit: 0 };
   for (const o of plan) gc[o.goal]++;
